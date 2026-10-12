@@ -8,11 +8,13 @@ on:
       version:
         description: Version to build, without the leading v
         required: true
+      publish:
+        description: Publish GitHub release (and npm when enabled); false rehearses
+        type: boolean
+        default: false
 
 permissions:
-  contents: write
-  id-token: write   # required to sign the build-provenance attestation
-  attestations: write
+  contents: read
 
 env:
   CARGO_TERM_COLOR: always
@@ -144,13 +146,72 @@ jobs:
           if-no-files-found: error
           compression-level: 0
 
+  # A manual dispatch defaults to an artifact-producing rehearsal. It exercises the same build
+  # matrix as publication, then verifies and packs the downloaded outputs without creating a tag,
+  # GitHub Release or npm version.
+  rehearse:
+    name: Rehearse release artifacts
+    needs: [resolve, build]
+    if: github.event_name == 'workflow_dispatch' && inputs.publish != true
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: binary-*
+          path: native
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: release-*
+          path: release-assets
+          merge-multiple: true
+      - name: Verify versions and binary identity
+        env:
+          EXPECTED_VERSION: ${{ needs.resolve.outputs.version }}
+          RELEASE_TAG: v${{ needs.resolve.outputs.version }}
+        run: |
+          node scripts/release/check-release-version.mjs
+          node scripts/release/verify-npm-binaries.mjs \
+            --binaries native --archives release-assets --version "$EXPECTED_VERSION"
+      - name: Install and run the packed host distribution
+        env:
+          VITEST_DEDUP_REQUIRE_INSTALL_SIM: "1"
+        run: |
+          mkdir -p target/release
+          cp native/binary-x86_64-unknown-linux-gnu/vitest-dedup target/release/vitest-dedup
+          node --test npm/test/install-simulation.test.mjs
+      - name: Pack every npm package
+        run: |
+          node scripts/release/prepare-npm-packages.mjs native
+          node scripts/release/check-release-version.mjs
+          mkdir -p rehearsal-packages
+          for package in npm/platforms/* .; do
+            npm pack "$package" --pack-destination rehearsal-packages --json > /dev/null
+          done
+          expected=$(find npm/platforms -mindepth 1 -maxdepth 1 -type d | wc -l)
+          actual=$(find rehearsal-packages -maxdepth 1 -name '*.tgz' | wc -l)
+          test "$actual" -eq "$((expected + 1))"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: npm-rehearsal-packages
+          path: rehearsal-packages/*.tgz
+          if-no-files-found: error
+
   publish:
     name: Publish release
     needs: [resolve, build]
     # Check both identities: `actor` owns the original run's privileges, while
     # `triggering_actor` identifies someone who re-runs it later.
-    if: github.actor == github.repository_owner && github.triggering_actor == github.repository_owner
+    if: github.actor == github.repository_owner && github.triggering_actor == github.repository_owner && (github.event_name == 'push' || inputs.publish == true)
     runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
