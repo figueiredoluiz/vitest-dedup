@@ -58,6 +58,16 @@ test('manual dispatch rehearses by default and publishing requires an explicit c
   assert.match(publish, /permissions:\s*\n\s*contents: write\s*\n\s*id-token: write\s*\n\s*attestations: write/)
 })
 
+test('release builds install each target for the repository toolchain', () => {
+  const start = release.indexOf('\n  build:')
+  const end = release.indexOf('\n  rehearse:', start)
+  assert.ok(start > -1 && end > start, 'release.yml has no bounded build job')
+  const build = release.slice(start, end)
+  const install = build.indexOf('rustup target add "$RUST_TARGET"')
+  const compile = build.indexOf('cargo build --release --locked --target "$RUST_TARGET"')
+  assert.ok(install > -1 && compile > install, 'target must be installed for the active toolchain before compilation')
+})
+
 test('npm publishing authenticates with OIDC and never a stored token', () => {
   const job = release.slice(release.indexOf('\n  publish-npm:'))
   assert.match(job, /permissions:\s*\n\s*contents: read\s*\n\s*id-token: write/)
