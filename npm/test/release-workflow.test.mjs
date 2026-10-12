@@ -73,6 +73,22 @@ test('CI runs the npm suite, the version gate, and the install simulation', () =
   assert.match(ci, /os: \[ubuntu-22\.04, windows-latest\]/)
 })
 
+test('the JavaScript coverage job provisions gitleaks before running scanner tests', () => {
+  const start = ci.indexOf('\n  quality-gates:')
+  const end = ci.indexOf('\n  memory:', start)
+  const job = ci.slice(start, end)
+  assert.ok(start > -1 && end > start, 'ci.yml has no bounded quality-gates job')
+  const install = job.indexOf('name: Install gitleaks')
+  const coverage = job.indexOf('npm run check:coverage:js')
+  assert.ok(install > -1, 'the coverage suite exercises the secret scanner but installs no gitleaks')
+  assert.ok(install < coverage, 'gitleaks must be available before the coverage suite starts')
+  const setup = job.slice(install, coverage)
+  assert.match(setup, /GITLEAKS_VERSION: \d+\.\d+\.\d+/)
+  assert.match(setup, /GITLEAKS_SHA256: [a-f0-9]{64}/)
+  assert.match(setup, /sha256sum --check --strict/)
+  assert.match(setup, /GITHUB_PATH/)
+})
+
 test('every npm script CI invokes exists in package.json', () => {
   const invoked = [...ci.matchAll(/run: npm run ([a-z:-]+)/g)].map((match) => match[1])
   assert.ok(invoked.length >= 2, `found ${invoked.length} npm script invocations in ci.yml`)
