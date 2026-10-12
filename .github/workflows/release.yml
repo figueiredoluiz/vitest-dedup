@@ -147,6 +147,9 @@ jobs:
   publish:
     name: Publish release
     needs: [resolve, build]
+    # Check both identities: `actor` owns the original run's privileges, while
+    # `triggering_actor` identifies someone who re-runs it later.
+    if: github.actor == github.repository_owner && github.triggering_actor == github.repository_owner
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v7
@@ -212,7 +215,7 @@ jobs:
   publish-npm:
     name: Publish npm packages
     needs: [resolve, build, publish]
-    if: vars.PUBLISH_NPM == 'true'
+    if: github.actor == github.repository_owner && github.triggering_actor == github.repository_owner && vars.PUBLISH_NPM == 'true'
     runs-on: ubuntu-22.04
     timeout-minutes: 20
     environment: npm

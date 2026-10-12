@@ -22,6 +22,20 @@ test('npm publishing runs only after the GitHub release exists', () => {
   assert.doesNotMatch(job, /npm publish/)
 })
 
+test('only the repository owner can publish or rerun a publication', () => {
+  const publishStart = release.indexOf('\n  publish:')
+  const npmStart = release.indexOf('\n  publish-npm:')
+  assert.ok(publishStart > -1 && npmStart > publishStart, 'release.yml has no bounded publish jobs')
+
+  const githubReleaseJob = release.slice(publishStart, npmStart)
+  const npmReleaseJob = release.slice(npmStart)
+  const ownerGate =
+    /github\.actor == github\.repository_owner && github\.triggering_actor == github\.repository_owner/
+  assert.match(githubReleaseJob, ownerGate)
+  assert.match(npmReleaseJob, ownerGate)
+  assert.match(npmReleaseJob, /vars\.PUBLISH_NPM == 'true'/)
+})
+
 test('npm publishing authenticates with OIDC and never a stored token', () => {
   const job = release.slice(release.indexOf('\n  publish-npm:'))
   assert.match(job, /permissions:\s*\n\s*contents: read\s*\n\s*id-token: write/)
