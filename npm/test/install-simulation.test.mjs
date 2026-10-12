@@ -48,6 +48,13 @@ test('beta', () => {
 })
 `
 
+const CLEAN = `import { test, expect } from 'vitest'
+
+test('adds two values', () => {
+  expect(1 + 1).toBe(2)
+})
+`
+
 test('the packed distribution installs and runs from node_modules', async (t) => {
   if (!existsSync(builtBinary)) {
     assert.ok(!required, `VITEST_DEDUP_REQUIRE_INSTALL_SIM=1 but ${builtBinary} is missing`)
@@ -119,9 +126,12 @@ test('the packed distribution installs and runs from node_modules', async (t) =>
       encoding: 'utf8',
     })
 
-  // 3. Exit code 0: a clean tree.
+  // 3. Exit code 0: an analyzed tree with no findings. An empty directory is intentionally not
+  //    the control here: zero analyzed tests is an operational error, because it cannot prove the
+  //    project is clean.
   const clean = join(scratch, 'clean')
   await mkdir(clean, { recursive: true })
+  await writeFile(join(clean, 'clean.test.ts'), CLEAN)
   assert.equal(cli(['.'], clean).status, 0, 'a clean tree must exit 0')
 
   // 4. Exit code 1: the quality gate failed. Anything other than 1 here -- including a launcher

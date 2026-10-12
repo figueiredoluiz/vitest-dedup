@@ -133,12 +133,11 @@ fn process_code(code: ExitCode) -> ProcessExitCode {
 /// Converts a discovered test's absolute [`Location::path`](vitest_dedup::model::Location::path)
 /// into one relative to the analysis `root`, for portable, diffable reports.
 ///
-/// Falls back to the absolute `path` unchanged when it does not fall under `root` --
-/// `path.strip_prefix(root)` fails. **Decision: that fallback is correct, not a bug to fix.** An
-/// absolute path is still an unambiguous, honest answer that points at exactly the right file; the
-/// alternatives are all worse -- silently dropping the test (a coverage gap disguised as success),
-/// or truncating/rewriting the path into something that no longer resolves. Nothing about this
-/// tool's contract promises every reported path is root-relative, only that it is accurate.
+/// Falls back to the absolute `path` unchanged when it does not fall under `root`. A direct
+/// `strip_prefix` can refuse equivalent Windows spellings when one side has the verbatim `\\?\`
+/// prefix, so existing paths get one canonical comparison before that fallback. A genuinely
+/// outside-root or missing path is still forwarded unchanged: silently dropping or inventing a
+/// relative path would be a coverage gap disguised as success.
 ///
 /// `discovery::discover` walks with `follow_links(false)` (see `discovery.rs`), so a file reached
 /// through a symlink that resolves outside `root` is not walked at all today -- this function's
@@ -189,10 +188,17 @@ fn display_relative(path: &std::path::Path, root: &std::path::Path) -> String {
 /// carries); paths outside it pass through unchanged, because no better answer exists and
 /// inventing one would be wrong in a different way.
 fn relativize_test_path(path: &std::path::Path, root: &std::path::Path) -> std::path::PathBuf {
-    match path.strip_prefix(root) {
-        Ok(relative) => relative.to_path_buf(),
-        Err(_) => path.to_path_buf(),
+    if let Ok(relative) = path.strip_prefix(root) {
+        return relative.to_path_buf();
     }
+
+    let canonical_relative = path
+        .canonicalize()
+        .and_then(|path| root.canonicalize().map(|root| (path, root)))
+        .ok()
+        .and_then(|(path, root)| path.strip_prefix(root).map(ToOwned::to_owned).ok());
+
+    canonical_relative.unwrap_or_else(|| path.to_path_buf())
 }
 
 /// Relativizes declaration, registration and hook paths against the analysis root. Both
@@ -1873,10 +1879,9 @@ mod tests {
     ///   link, so the path the frontend carries is the target's);
     /// - a **differing drive letter** -- `D:\data\...` under a `C:\repo` root shares no volume
     ///   prefix, so no relative form exists;
-    /// - a **verbatim/UNC prefix mismatch** -- `\\?\C:\repo\...` (the `\\?\` literal prefix
-    ///   Windows APIs return for long paths) is a DIFFERENT prefix kind from `C:\repo`, even
-    ///   though both name the same directory; and a UNC share root (`\\server\share\repo`)
-    ///   strips only for paths on the same share.
+    /// - a **verbatim/ordinary prefix mismatch** -- when both spellings exist and resolve to the
+    ///   same file, canonical comparison identifies the path as inside the root; and a UNC share
+    ///   root (`\\server\share\repo`) strips only for paths on the same share.
     ///
     /// The platform-neutral test at the end pins the CONTRACT itself on every OS: whatever
     /// `strip_prefix` refuses is forwarded absolute, never dropped, never rewritten to something
@@ -1895,15 +1900,30 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    fn relativize_test_path_keeps_the_absolute_path_for_a_verbatim_prefix_mismatch() {
-        // `\\?\` is the verbatim prefix; a root spelled without it is a different prefix kind
-        // even for the same directory, so stripping would be a lie about the path's form.
-        let root = std::path::Path::new(r"C:\repo");
-        let path = std::path::Path::new(r"\\?\C:\repo\src\thing.test.ts");
-        assert_eq!(
-            relativize_test_path(path, root),
-            std::path::PathBuf::from(r"\\?\C:\repo\src\thing.test.ts"),
+    fn relativize_test_path_strips_an_existing_verbatim_prefix_mismatch() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        std::fs::create_dir(root.join("src")).unwrap();
+        let ordinary = root.join("src/thing.test.ts");
+        std::fs::write(&ordinary, "// source").unwrap();
+        let verbatim = ordinary.canonicalize().unwrap();
+        assert_ne!(
+            ordinary, verbatim,
+            "the fixture needs two Windows spellings"
         );
+        assert_eq!(
+            relativize_test_path(&verbatim, root),
+            std::path::PathBuf::from(r"src\thing.test.ts"),
+            "equivalent existing paths must remain root-relative"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn relativize_test_path_keeps_a_missing_verbatim_path_unchanged() {
+        let root = std::path::Path::new(r"C:\repo");
+        let missing = std::path::Path::new(r"\\?\C:\repo\missing.test.ts");
+        assert_eq!(relativize_test_path(missing, root), missing);
     }
 
     #[cfg(windows)]

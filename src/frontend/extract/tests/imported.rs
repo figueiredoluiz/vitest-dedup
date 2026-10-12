@@ -1,5 +1,25 @@
 use super::*;
+use std::path::Path;
 use std::path::PathBuf;
+
+/// Asserts two path spellings resolve to the same file.
+///
+/// Windows' `std::fs::canonicalize` adds a verbatim `\\?\` prefix while oxc-resolver returns an
+/// ordinary absolute path. Canonicalizing both sides keeps the assertion about exact source
+/// identity without requiring those equivalent platform spellings to be byte-identical.
+fn assert_same_file(actual: &Path, expected: &Path) {
+    assert_eq!(
+        actual.canonicalize().unwrap(),
+        expected.canonicalize().unwrap()
+    );
+}
+
+fn contains_same_file<'a>(paths: impl IntoIterator<Item = &'a PathBuf>, expected: &Path) -> bool {
+    let expected = expected.canonicalize().unwrap();
+    paths
+        .into_iter()
+        .any(|path| path.canonicalize().is_ok_and(|path| path == expected))
+}
 
 #[test]
 /// Pins the shared runtime fixture's registration counts, caller ownership and source identity.
@@ -24,10 +44,7 @@ fn owned_imported_runner_matches_runtime_registration_and_source_identity() {
         ]
     );
     for case in &tests[..6] {
-        assert_eq!(
-            case.location.path,
-            root.join("runner.ts").canonicalize().unwrap()
-        );
+        assert_same_file(&case.location.path, &root.join("runner.ts"));
         assert_eq!(case.registration_file(), path);
         assert!(!case.context.unresolved);
     }
@@ -905,7 +922,7 @@ fn imported_hooks_join_the_calling_scope_and_nested_hooks_stay_isolated() {
         .unwrap();
     for index in [1, 2, 3, 4] {
         let hook = &tests[index].context.hooks[0];
-        assert_eq!(hook.location.path, runner);
+        assert_same_file(&hook.location.path, &runner);
         assert_eq!(hook.kind, HookKind::BeforeEach);
     }
     // The three scoped tests share the one hook the helper installed; the nested hook is distinct.
@@ -924,7 +941,10 @@ fn imported_hooks_join_the_calling_scope_and_nested_hooks_stay_isolated() {
         ["value"]
     );
     assert!(tests.iter().all(|case| !case.context.unresolved));
-    assert!(extraction.helper_sources.contains_key(&runner));
+    assert!(contains_same_file(
+        extraction.helper_sources.keys(),
+        &runner
+    ));
 }
 
 /// Hook kinds recorded for the first test, in effective order.
@@ -1076,10 +1096,7 @@ fn exported_arrows_expressions_defaults_and_aliases_match_the_runtime() {
         "runner.ts",
     ];
     for (case, source) in tests.iter().zip(sources) {
-        assert_eq!(
-            case.location.path,
-            root.join(source).canonicalize().unwrap()
-        );
+        assert_same_file(&case.location.path, &root.join(source));
         assert!(case.context.is_comparable());
     }
     // Repeat calls share one declaration site and body; distinct callables do not.
@@ -1179,14 +1196,11 @@ fn nested_imported_calls_share_identity_titles_hooks_and_provenance() {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("scripts/vitest-harness/imported-nested");
     let leaf = root.join("leaf.ts").canonicalize().unwrap();
     for index in [1, 3, 4, 5] {
-        assert_eq!(tests[index].location.path, leaf);
+        assert_same_file(&tests[index].location.path, &leaf);
     }
     assert_eq!(tests[1].location, tests[3].location);
     assert_eq!(tests[1].body.alpha, tests[4].body.alpha);
-    assert_eq!(
-        tests[0].location.path,
-        root.join("runner.ts").canonicalize().unwrap()
-    );
+    assert_same_file(&tests[0].location.path, &root.join("runner.ts"));
     assert!(tests.iter().all(|case| case.context.is_comparable()));
     assert_eq!(
         extraction.helper_sources.len(),
