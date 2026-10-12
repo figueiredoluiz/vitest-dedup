@@ -14,6 +14,7 @@ import {
   readmeVersionSites,
 } from "../../scripts/release/version-sites.mjs";
 
+/** Build an in-memory release tree so version planning can be tested without file writes. */
 const fixture = (overrides = {}) => ({
   "Cargo.toml":
     '[package]\nname = "vitest-dedup"\nversion = "0.1.0"\nedition = "2021"\n',
@@ -71,6 +72,19 @@ test("a patch bump rewrites every site including the exact Action ref", () => {
 test("a major bump moves the documented exact Action ref", () => {
   const { planned } = planBump("1.0.0", fixture());
   assert.deepEqual(readmeVersionSites(planned.get("README.md")).actionTags, ["1.0.0"]);
+});
+
+test("a prerelease bump accepts only versions the release workflow can publish", () => {
+  const { planned } = planBump("0.2.0-rc.1", fixture());
+  assert.deepEqual(readmeVersionSites(planned.get("README.md")), {
+    versions: ["0.2.0-rc.1"],
+    actionTags: ["0.2.0-rc.1"],
+  });
+  assert.throws(() => planBump("0.2.0-rc-1", fixture()), /not a release version/);
+  assert.deepEqual(
+    readmeVersionSites("- uses: figueiredoluiz/vitest-dedup@v0.2.0-rc-1\n  version: 0.2.0-rc-1\n"),
+    { versions: [], actionTags: [] },
+  );
 });
 
 test("malformed input is refused before anything is planned", () => {

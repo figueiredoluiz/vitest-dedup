@@ -12,7 +12,9 @@
 //     input with no default, so there is no stale value to bump. cuke-dedup defaults both to the
 //     current release and bumps them; that is a real difference in workflow design, not an
 //     oversight here.
-export const SEMVER = /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?$/
+// Keep the prerelease suffix within the format accepted by release.yml and the Action installer.
+// A second hyphen would pass npm's broader syntax but fail that workflow.
+export const SEMVER = /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[0-9A-Za-z.]+)?$/
 
 // Every multi-line pattern below matches `\r?\n`, never a bare `\n`. Git checks these files out
 // with CRLF endings on Windows by default, so a `\n`-anchored pattern silently matches nothing
@@ -29,11 +31,11 @@ export const CARGO_LOCK_VERSION =
 
 /** `version: X.Y.Z` inputs in the README's GitHub Action examples. */
 export const README_ACTION_VERSION =
-  /(^[^\S\r\n]*version: )(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)(?=\r?$)/gm
+  /(^[^\S\r\n]*version: )(\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?)(?=\r?$)/gm
 
 /** `figueiredoluiz/vitest-dedup@vX.Y.Z` -- the documented exact Action tag. */
 export const ACTION_VERSION_TAG =
-  /(figueiredoluiz\/vitest-dedup@v)(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)(?=\s|$)/g
+  /(figueiredoluiz\/vitest-dedup@v)(\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?)(?=\s|$)/g
 
 const one = (text, pattern, label) => {
   const match = text.match(pattern)
