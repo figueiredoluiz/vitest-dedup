@@ -12,6 +12,19 @@ const release = await readFile(new URL('../../.github/workflows/release.yml', im
 const ci = await readFile(new URL('../../.github/workflows/ci.yml', import.meta.url), 'utf8')
 const rootManifest = JSON.parse(await readFile(new URL('../../package.json', import.meta.url), 'utf8'))
 
+test('full release tags trigger publishing but the major Action alias does not', () => {
+  const tagPattern = /^    tags: \["([^"]+)"\]$/m.exec(release)?.[1]
+  assert.equal(tagPattern, 'v*.*.*')
+
+  // GitHub's tag filter is a glob, not a SemVer validator; the version gate below remains
+  // responsible for rejecting malformed dotted tags.
+  const tagRegex = new RegExp(`^${tagPattern.replaceAll('.', '\\.').replaceAll('*', '[^/]*')}$`)
+  assert.match('v0.1.0', tagRegex)
+  assert.match('v0.2.0-rc.1', tagRegex)
+  assert.doesNotMatch('v0', tagRegex)
+  assert.doesNotMatch('v0.1', tagRegex)
+})
+
 test('npm publishing runs only after the GitHub release exists', () => {
   const job = release.slice(release.indexOf('\n  publish-npm:'))
   assert.ok(job.length > 0, 'release.yml has no publish-npm job')
