@@ -31,8 +31,9 @@ export const CARGO_LOCK_VERSION =
 export const README_ACTION_VERSION =
   /(^[^\S\r\n]*version: )(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)(?=\r?$)/gm
 
-/** `figueiredoluiz/vitest-dedup@vN` -- the documented major-version Action pin. */
-export const ACTION_MAJOR_PIN = /(figueiredoluiz\/vitest-dedup@v)(\d+)\b/g
+/** `figueiredoluiz/vitest-dedup@vX.Y.Z` -- the documented exact Action tag. */
+export const ACTION_VERSION_TAG =
+  /(figueiredoluiz\/vitest-dedup@v)(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)(?=\s|$)/g
 
 const one = (text, pattern, label) => {
   const match = text.match(pattern)
@@ -50,10 +51,10 @@ export function cargoLockVersion(text) {
   return one(text, CARGO_LOCK_VERSION, 'the vitest-dedup entry in Cargo.lock')
 }
 
-/** Every `version:` pin and every `@vN` pin the README carries, in document order. */
+/** Every `version:` pin and exact Action tag the README carries, in document order. */
 export function readmeVersionSites(text) {
   return {
     versions: [...text.matchAll(README_ACTION_VERSION)].map((match) => match[2]),
-    majors: [...text.matchAll(ACTION_MAJOR_PIN)].map((match) => match[2]),
+    actionTags: [...text.matchAll(ACTION_VERSION_TAG)].map((match) => match[2]),
   }
 }

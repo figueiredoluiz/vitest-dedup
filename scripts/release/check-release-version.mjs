@@ -65,10 +65,11 @@ for (const pinned of readme.versions) {
   checked(`README.md pins version ${pinned}, not ${version}`, (message) =>
     assert.equal(pinned, version, message))
 }
-const major = version.split('.')[0]
-for (const pinned of readme.majors) {
-  checked(`README.md pins the Action at @v${pinned}, not @v${major}`, (message) =>
-    assert.equal(pinned, major, message))
+checked('README.md carries no exact Action tag; the pattern that finds it has drifted', (m) =>
+  assert.ok(readme.actionTags.length > 0, m))
+for (const pinned of readme.actionTags) {
+  checked(`README.md pins the Action at @v${pinned}, not @v${version}`, (message) =>
+    assert.equal(pinned, version, message))
 }
 
 

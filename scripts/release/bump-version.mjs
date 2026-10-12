@@ -21,7 +21,7 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
 import {
-  ACTION_MAJOR_PIN,
+  ACTION_VERSION_TAG,
   CARGO_LOCK_VERSION,
   CARGO_PACKAGE_VERSION,
   README_ACTION_VERSION,
@@ -84,18 +84,21 @@ export function planBump(version, files) {
   }
   planned.set('package.json', `${JSON.stringify(manifest, null, 2)}\n`)
 
-  // The README's `@vN` pins move only on a major bump; rewriting them every time would tell users
-  // to pin a major tag that the release never creates.
-  const major = version.split('.')[0]
+  // The README pins the exact release tag, so both its `uses:` ref and `version:` input must
+  // move on every bump. A major-only alias is not created by this release process.
   const readmePins = [...files['README.md'].matchAll(README_ACTION_VERSION)].length
   if (readmePins === 0) {
     throw new Error('README.md carries no Action version pin to bump')
+  }
+  const actionTags = [...files['README.md'].matchAll(ACTION_VERSION_TAG)].length
+  if (actionTags === 0) {
+    throw new Error('README.md carries no exact Action tag to bump')
   }
   planned.set(
     'README.md',
     files['README.md']
       .replace(README_ACTION_VERSION, `$1${version}`)
-      .replace(ACTION_MAJOR_PIN, `$1${major}`),
+      .replace(ACTION_VERSION_TAG, `$1${version}`),
   )
 
   return { previous, planned }
