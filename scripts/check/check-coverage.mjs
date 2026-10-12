@@ -273,6 +273,11 @@ const JS_MODULES = {
   // floor is correspondingly high rather than honestly low.
   'scripts/check/check-doc-accuracy.mjs': 95,
   'scripts/check/check-mutation-score.mjs': 98,
+  // Both modules arrived in the public-repository tree with dedicated suites but no coverage
+  // policy entry. The secret scanner's suite was also omitted from this enumerated run. Register
+  // the measured floors rather than leaving every unrelated change behind a red completeness gate.
+  'scripts/check/check-secret-scan.mjs': 82,
+  'scripts/check/lib/external-corpus-retention.mjs': 98,
   // The attribution-leak gate. A pure reader like the two above, and the floor is 100 because this
   // one has a trap worth recording: its name sweep only runs where the untracked benchmark manifest
   // is on disk, so the first floor here was measured at 88.6% on a machine that HAD the manifest and
@@ -340,6 +345,7 @@ const JS_TEST_FILES = [
   'scripts/check/check-doc-accuracy.test.mjs',
   'scripts/check/check-mutation-score.test.mjs',
   'scripts/check/check-name-leak.test.mjs',
+  'scripts/check/check-secret-scan.test.mjs',
   '.github/actions/vitest-dedup/index.test.mjs',
 ]
 
