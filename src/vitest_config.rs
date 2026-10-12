@@ -2396,6 +2396,24 @@ mod tests {
         );
     }
 
+    /// The unanimity fold must preserve a unanimous `false`, not merely detect the positive case.
+    /// This also keeps a future implementation from treating any resolved project as evidence for
+    /// ambient globals.
+    #[test]
+    fn detect_globals_reads_disabled_globals_from_a_single_projects_entry() {
+        let directory = tempfile::tempdir().unwrap();
+        write(
+            directory.path(),
+            "vitest.config.ts",
+            "export default defineConfig({ test: { projects: [{ test: { name: 'unit', globals: false } }] } });",
+        );
+        let detection = detect_globals(directory.path());
+        assert!(
+            matches!(detection, GlobalsDetection::Disabled { .. }),
+            "one disabled entry carries one negative answer: {detection:?}"
+        );
+    }
+
     /// R22: the negative twin of R21. Two entries that DISAGREE about `globals` have no single
     /// repo-wide answer, and folding to "take the first entry" would silently scope the wrong
     /// mode over every other project's files. Stays `Unknown` today and must stay `Unknown` after
