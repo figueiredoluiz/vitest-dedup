@@ -185,7 +185,7 @@ jobs:
         with:
           subject-path: dist/*.tar.gz
 
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           tag_name: v${{ needs.resolve.outputs.version }}
           name: v${{ needs.resolve.outputs.version }}
