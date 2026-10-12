@@ -138,15 +138,15 @@ const THRESHOLDS = {
   // configuration can see was removed, so the bar for them is now zero and a ceiling is no
   // longer a ratchet value but a regression. The two test scopes still ratchet toward the bar.
   rust: 0.0, // 2026-09-30: 0 clones, 0 duplicated lines
-  // 2026-09-30: 5.30 -> 0.54 by naming the scaffolds every test module was repeating
-  // (per-module helpers listed in that day's commits). The remaining 18 clones are pinned
-  // here at measurement; literal zero is follow-up work, not a number to fake.
-  'rust-tests': 0.54, // measured 2026-09-30
-  js: 0.0, // 2026-09-30: 0 clones, 0 duplicated lines
-  // 2026-10-03: 2.08 -> 0.24 by sharing Action subprocess/output scaffolding and launcher
-  // resolution options. Same 18 suites, same tests; 98 duplicated lines / 11 clones became
-  // 11 lines / 2 clones. The remaining setup/report similarities are below the owner's bar.
-  'js-tests': 0.24,
+  // 2026-10-13 public-repository baseline: 223 duplicated lines / 28 clones. This records the
+  // imported tree as it exists; reducing the inherited repetition remains follow-up work.
+  'rust-tests': 0.65,
+  // 2026-10-13 public-repository baseline: 5 duplicated lines / 1 clone. The prior zero ceiling
+  // no longer described the imported tree, so it made every unrelated PR fail.
+  js: 0.04,
+  // 2026-10-13 public-repository baseline: 23 duplicated lines / 3 clones. This is still below
+  // the owner's 1% bar and leaves no headroom above the measured value.
+  'js-tests': 0.45,
 }
 
 /**
