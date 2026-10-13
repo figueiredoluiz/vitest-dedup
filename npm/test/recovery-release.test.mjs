@@ -3,17 +3,17 @@ import test from 'node:test'
 
 import { validateRecoveryRelease } from '../../scripts/release/check-recovery-release.mjs'
 
-const sha = 'a'.repeat(40)
-const release = { tagName: 'v0.2.0', targetCommitish: sha, isDraft: false }
+const release = { tagName: 'v0.2.0', targetCommitish: 'main', isDraft: false }
 
-test('npm recovery accepts only the published release for the exact dispatched commit', () => {
-  assert.doesNotThrow(() => validateRecoveryRelease(release, 'v0.2.0', sha))
+test('npm recovery accepts a published release for the live-validated tag', () => {
+  // GitHub ignores targetCommitish when the tag already exists. The live-tag guard checks the SHA.
+  assert.doesNotThrow(() => validateRecoveryRelease(release, 'v0.2.0'))
   for (const mismatch of [
     { tagName: 'v0.1.0' },
-    { targetCommitish: 'b'.repeat(40) },
     { isDraft: true },
   ]) {
-    assert.throws(() => validateRecoveryRelease({ ...release, ...mismatch }, 'v0.2.0', sha),
+    assert.throws(() => validateRecoveryRelease({ ...release, ...mismatch }, 'v0.2.0'),
       /matching published GitHub Release/)
   }
+  assert.throws(() => validateRecoveryRelease(undefined, 'v0.2.0'), /matching published/)
 })

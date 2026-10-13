@@ -93,6 +93,14 @@ jobs:
             EVENT_REF="$EVENT_REF" EVENT_SHA="$EVENT_SHA" \
             RELEASE_SHA="$release_sha" TAG_SHA="$tag_sha" \
             node scripts/release/validate-release-context.mjs
+      - name: Verify live release tag is merged into main
+        if: inputs.publish
+        env:
+          PUBLISH_RELEASE: "true"
+          RELEASE_TAG: v${{ steps.version.outputs.version }}
+          EVENT_REF: ${{ github.ref }}
+          EVENT_SHA: ${{ github.sha }}
+        run: RELEASE_SHA=$(git rev-parse HEAD) node scripts/release/validate-release-context.mjs --remote
       # The tag and Cargo.toml must agree. A release whose binary reports a different version than
       # its tag is the kind of thing nobody notices until someone is debugging production.
       - name: Verify Cargo.toml matches the tag
@@ -110,7 +118,6 @@ jobs:
         if: inputs.publish_npm_only
         env:
           RELEASE_TAG: v${{ steps.version.outputs.version }}
-          RELEASE_SHA: ${{ github.sha }}
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: node scripts/release/check-recovery-release.mjs
@@ -271,6 +278,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           ref: ${{ github.sha }}
+          fetch-depth: 0
           persist-credentials: false
       - uses: actions/setup-node@v7
         with:

@@ -41,8 +41,9 @@ export function remoteTagCommit(output, tag) {
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   try {
     const tag = process.env.RELEASE_TAG
+    const publish = process.env.PUBLISH_RELEASE === 'true'
     let tagSha = process.env.TAG_SHA
-    if (process.argv[2] === '--remote') {
+    if (process.argv[2] === '--remote' && publish) {
       const ref = `refs/tags/${tag}`
       const refs = execFileSync('git', ['ls-remote', '--exit-code', 'origin', ref, `${ref}^{}`], {
         encoding: 'utf8',
@@ -51,7 +52,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       tagSha = remoteTagCommit(refs, tag)
     }
     validateReleaseContext({
-      publish: process.env.PUBLISH_RELEASE === 'true',
+      publish,
       npmOnly: process.env.PUBLISH_NPM_ONLY === 'true',
       tag,
       ref: process.env.EVENT_REF,
@@ -59,6 +60,16 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       releaseSha: process.env.RELEASE_SHA,
       tagSha,
     })
+    if (process.argv[2] === '--remote' && publish) {
+      try {
+        execFileSync('git', ['fetch', '--no-tags', '--quiet', 'origin', 'main'],
+          { stdio: ['ignore', 'pipe', 'pipe'] })
+        execFileSync('git', ['merge-base', '--is-ancestor', tagSha, 'FETCH_HEAD'],
+          { stdio: ['ignore', 'pipe', 'pipe'] })
+      } catch {
+        throw new Error('the release tag commit must be reachable from origin/main')
+      }
+    }
     console.log('Release context verified.')
   } catch (error) {
     console.error(`Release context rejected: ${error.message}`)

@@ -22,6 +22,9 @@ test('release publication is manual and all jobs check out the event commit', ()
   const resolve = release.slice(release.indexOf('\n  resolve:'), release.indexOf('\n  build:'))
   assert.match(resolve, /fetch-depth: 0/)
   assert.match(resolve, /node scripts\/release\/validate-release-context\.mjs/)
+  assert.ok(resolve.indexOf('validate-release-context.mjs --remote') > -1 &&
+    resolve.indexOf('validate-release-context.mjs --remote') < resolve.indexOf('check-recovery-release.mjs'),
+    'the live tag and main ancestry must be checked before npm-only recovery')
   assert.match(resolve, /tag_sha=\$\(git rev-parse --verify "refs\/tags\/v\$\{RELEASE_VERSION\}\^\{commit\}"\)/)
 })
 
@@ -72,6 +75,7 @@ test('publication checks the live tag immediately before release creation and pi
   const finalCheck = publish.indexOf('validate-release-context.mjs --remote')
   const releaseAction = publish.indexOf('softprops/action-gh-release@v3')
   assert.ok(finalCheck > -1 && releaseAction > finalCheck)
+  assert.match(publish, /fetch-depth: 0/)
   assert.match(publish, /target_commitish: \$\{\{ github\.sha \}\}/)
   assert.match(publish.slice(publish.indexOf('Revalidate live tag'), releaseAction), /EVENT_SHA: \$\{\{ github\.sha \}\}/)
 })

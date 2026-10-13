@@ -156,13 +156,14 @@ all platform builds and npm packages without creating a release. `publish: true`
 Release with checksums, Sigstore signature bundles and build provenance, then publishes to each
 enabled registry. The `github-release`, `crates-io` and `npm` GitHub environments should allow
 only `v*` tags and have no required reviewers, as in CukeDedup. Repository write access and the
-workflow's exact-tag and version checks control dispatch; there is no owner-only or manual reviewer
-gate. Set `PUBLISH_NPM=true` and, after crates.io setup, `PUBLISH_CRATES=true` as repository
+workflow's exact-tag, merged-`main` ancestry, and version checks control dispatch; there is no
+owner-only or manual reviewer gate. Set `PUBLISH_NPM=true` and, after crates.io setup,
+`PUBLISH_CRATES=true` as repository
 variables to enable those jobs.
 
 If npm publication stops partway through, dispatch the workflow again on the same tag with
-`publish: true` and `publish_npm_only: true`. This verifies the existing GitHub Release at the
-same commit, rebuilds and checks the npm binaries against its archived binaries, then publishes
+`publish: true` and `publish_npm_only: true`. This verifies the existing GitHub Release and its
+live tag at the dispatched commit, rebuilds and checks the npm binaries against its archived binaries, then publishes
 only missing package versions. It does not recreate the GitHub Release or publish the crate.
 
 Check the individual GitHub Release, npm, and crate jobs and their registry pages before calling
