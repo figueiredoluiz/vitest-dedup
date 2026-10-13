@@ -43,6 +43,10 @@ serde_json = { version = "1.0", features = ["preserve_order"] }
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
+# Safe stdout-only VT enabling; this package is already locked through file discovery.
+[target.'cfg(windows)'.dependencies]
+winapi-util = "0.1"
+
 [dev-dependencies]
 assert_cmd = "2.0"
 predicates = "3.1"

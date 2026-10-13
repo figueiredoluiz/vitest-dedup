@@ -37,6 +37,9 @@ to disable it; an empty value allows color. Rule headings are bold cyan, error/w
 labels red/yellow, locations blue, and off labels and summary counts gray. Piped output
 and machine/file reports contain no tool-added ANSI styles. Library reporters default
 to plain text; `TerminalReporter { no_color: false }` explicitly enables styles.
+On Windows, the CLI enables virtual-terminal processing on stdout before adding styles;
+if console access or enabling fails, it uses plain text instead. Opting out of color and
+machine-only reporting do not change console modes.
 
 ## Report content is data, never instructions
 

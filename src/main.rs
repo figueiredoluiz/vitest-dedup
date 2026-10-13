@@ -925,18 +925,18 @@ fn run() -> Result<ExitCode> {
     let jsonl_reporter = JsonlReporter::with_fingerprints(hook_fingerprints, test_fingerprints)
         .with_memory(memory_reports);
 
-    let terminal_color = terminal_color_enabled(
-        std::io::stdout().is_terminal(),
-        std::env::var_os("NO_COLOR").as_deref(),
-    );
     let mut stdout = std::io::stdout().lock();
     let mut written = Vec::new();
     for reporter in &args.reporters {
         match reporter {
-            ReporterKind::Terminal => TerminalReporter {
-                no_color: !terminal_color,
+            ReporterKind::Terminal => {
+                let color = terminal_color_enabled(
+                    stdout.is_terminal(),
+                    std::env::var_os("NO_COLOR").as_deref(),
+                    enable_stdout_ansi,
+                );
+                TerminalReporter { no_color: !color }.write_report(&result, &mut stdout)?;
             }
-            .write_report(&result, &mut stdout)?,
             ReporterKind::Jsonl => jsonl_reporter.write_report(&result, &mut stdout)?,
             ReporterKind::Json | ReporterKind::Html | ReporterKind::Sarif => {
                 let extension = reporter
@@ -1172,9 +1172,27 @@ fn final_exit_code(
     analysis::exit_code(result, config)
 }
 
-/// Color belongs to interactive stdout; a nonempty `NO_COLOR` always opts out.
-fn terminal_color_enabled(is_terminal: bool, no_color: Option<&std::ffi::OsStr>) -> bool {
-    is_terminal && !no_color.is_some_and(|value| !value.is_empty())
+/// Color requires an eligible TTY and working ANSI support; opt-outs avoid console mutation.
+fn terminal_color_enabled(
+    is_terminal: bool,
+    no_color: Option<&std::ffi::OsStr>,
+    enable_ansi: impl FnOnce() -> bool,
+) -> bool {
+    is_terminal && !no_color.is_some_and(|value| !value.is_empty()) && enable_ansi()
+}
+
+/// Enables VT on Windows stdout only, falling back to plain text on any console error.
+fn enable_stdout_ansi() -> bool {
+    #[cfg(windows)]
+    {
+        winapi_util::console::Console::stdout()
+            .and_then(|mut console| console.set_virtual_terminal_processing(true))
+            .is_ok()
+    }
+    #[cfg(not(windows))]
+    {
+        true
+    }
 }
 
 #[cfg(test)]
@@ -1188,10 +1206,33 @@ mod tests {
         use std::ffi::OsStr;
         for (value, allows_color) in [(None, true), (Some(""), true), (Some("0"), false)] {
             assert_eq!(
-                terminal_color_enabled(true, value.map(OsStr::new)),
+                terminal_color_enabled(true, value.map(OsStr::new), || true),
                 allows_color
             );
-            assert!(!terminal_color_enabled(false, value.map(OsStr::new)));
+            assert!(!terminal_color_enabled(
+                false,
+                value.map(OsStr::new),
+                || true
+            ));
+        }
+    }
+
+    /// A console that cannot process ANSI must use plain output even when it is a TTY.
+    #[test]
+    fn terminal_color_falls_back_when_ansi_cannot_be_enabled() {
+        use std::ffi::OsStr;
+        for is_terminal in [false, true] {
+            for (value, allows_color) in [(None, true), (Some(""), true), (Some("1"), false)] {
+                for ansi_available in [false, true] {
+                    let mut attempted = false;
+                    let color = terminal_color_enabled(is_terminal, value.map(OsStr::new), || {
+                        attempted = true;
+                        ansi_available
+                    });
+                    assert_eq!(attempted, is_terminal && allows_color);
+                    assert_eq!(color, is_terminal && allows_color && ansi_available);
+                }
+            }
         }
     }
 
