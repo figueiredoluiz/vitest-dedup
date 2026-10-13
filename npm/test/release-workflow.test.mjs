@@ -101,10 +101,10 @@ test('the npm binaries are tied to the attested release archives before publishi
   assert.match(release, /name: release-\$\{\{ matrix\.key \}\}/)
 })
 
-test('platform packages are generated at release time, never read from the repository', () => {
+test('platform packages use checked-in workspaces and gain binaries at release time', () => {
   assert.match(release, /prepare-npm-packages\.mjs native/)
-  // `npm/platforms/` is build output. A committed manifest there is a second platform list.
-  assert.doesNotMatch(release, /npm\/platforms\/[a-z0-9-]+\/package\.json/)
+  assert.deepEqual(rootManifest.workspaces, ['npm/platforms/*'])
+  assert.match(ci, /npm ci --force --no-audit --no-fund/)
 })
 
 test('the version gate runs before anything is published', () => {

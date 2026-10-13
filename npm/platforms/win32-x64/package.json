@@ -1,0 +1,22 @@
+{
+  "name": "vitest-dedup-windows-x64-msvc",
+  "version": "0.1.0",
+  "description": "Windows x64 MSVC native binary for vitest-dedup",
+  "os": [
+    "win32"
+  ],
+  "cpu": [
+    "x64"
+  ],
+  "files": [
+    "bin/vitest-dedup.exe",
+    "README.md",
+    "LICENSE"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/figueiredoluiz/vitest-dedup.git"
+  },
+  "homepage": "https://github.com/figueiredoluiz/vitest-dedup",
+  "license": "MIT"
+}

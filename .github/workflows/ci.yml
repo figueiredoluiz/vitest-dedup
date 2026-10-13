@@ -143,7 +143,9 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 24
-      - run: npm ci --no-audit --no-fund
+      # npm treats all eight local platform workspaces as install targets. Seven have a different
+      # OS/CPU; --force permits their links while check:versions validates each manifest explicitly.
+      - run: npm ci --force --no-audit --no-fund
       - run: cargo build --release --locked
       - run: node scripts/check/verify-titles.mjs
 

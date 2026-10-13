@@ -1,6 +1,5 @@
-// The platform packages are generated, so what is worth testing is the generator's agreement with
-// the three things that must never disagree: the target manifest, npm's own metadata vocabulary,
-// and the launcher's `optionalDependencies`.
+// Tracked workspace manifests must agree with the target list, npm's metadata vocabulary, and
+// the launcher's optional dependencies.
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { mkdtemp, readFile, writeFile, chmod, mkdir, rm } from 'node:fs/promises'
@@ -14,12 +13,42 @@ import { prepareAll, writePlatformPackage } from '../../scripts/release/prepare-
 
 const rootManifest = JSON.parse(await readFile(new URL('../../package.json', import.meta.url), 'utf8'))
 
-test('a generated manifest exists for every target and nothing else', () => {
+async function writeWorkspaceFixture(root, target, version) {
+  const directory = join(root, 'npm', 'platforms', target.packageDirectory)
+  await mkdir(directory, { recursive: true })
+  await writeFile(join(directory, 'package.json'),
+    `${JSON.stringify(platformManifest(target, version), null, 2)}\n`)
+  return directory
+}
+
+async function writeCompleteArtifactSet(root, artifacts, versionForTarget) {
+  for (const target of Object.values(TARGETS)) {
+    await writeWorkspaceFixture(root, target, versionForTarget(target))
+    const directory = join(artifacts, `binary-${target.rustTarget}`)
+    await mkdir(directory, { recursive: true })
+    await writeFile(join(directory, target.binaryName), 'native binary\n')
+  }
+}
+
+async function completeSetFixture(t, versionForTarget) {
+  const root = await mkdtemp(join(tmpdir(), 'vitest-dedup-complete-set-'))
+  const artifacts = await mkdtemp(join(tmpdir(), 'vitest-dedup-complete-artifacts-'))
+  t.after(() => Promise.all([root, artifacts].map((path) => rm(path, { recursive: true, force: true }))))
+  await writeFile(join(root, 'LICENSE'), 'MIT\n')
+  await writeCompleteArtifactSet(root, artifacts, versionForTarget)
+  return { root, artifacts }
+}
+
+test('a tracked workspace manifest exists for every target and nothing else', async () => {
   const names = Object.values(TARGETS).map((target) => target.packageName)
   assert.equal(names.length, 8)
+  assert.deepEqual(rootManifest.workspaces, ['npm/platforms/*'])
   assert.deepEqual(Object.keys(rootManifest.optionalDependencies).sort(), [...names].sort())
-  for (const name of names) {
-    assert.equal(rootManifest.optionalDependencies[name], rootManifest.version)
+  for (const target of Object.values(TARGETS)) {
+    assert.equal(rootManifest.optionalDependencies[target.packageName], rootManifest.version)
+    const manifest = JSON.parse(await readFile(
+      new URL(`../../npm/platforms/${target.packageDirectory}/package.json`, import.meta.url), 'utf8'))
+    assert.deepEqual(manifest, platformManifest(target, rootManifest.version))
   }
 })
 
@@ -68,6 +97,7 @@ test('preparing a package writes exactly the allowlisted files, binary executabl
   await writeFile(source, '#!/bin/sh\nexit 0\n')
 
   const target = TARGETS['linux-x64-gnu']
+  await writeWorkspaceFixture(root, target, '9.9.9')
   const packageRoot = await writePlatformPackage({ root, target, version: '9.9.9', binary: source })
 
   const written = JSON.parse(await readFile(join(packageRoot, 'package.json'), 'utf8'))
@@ -87,6 +117,9 @@ test('an incomplete build refuses to produce a publishable set', async (t) => {
   const artifacts = await mkdtemp(join(tmpdir(), 'vitest-dedup-artifacts-'))
   t.after(() => Promise.all([root, artifacts].map((p) => rm(p, { recursive: true, force: true }))))
   await writeFile(join(root, 'LICENSE'), 'MIT\n')
+  for (const target of Object.values(TARGETS)) {
+    await writeWorkspaceFixture(root, target, '9.9.9')
+  }
 
   // One leg of the matrix succeeded; the other seven did not.
   const present = TARGETS['darwin-arm64']
@@ -99,4 +132,41 @@ test('an incomplete build refuses to produce a publishable set', async (t) => {
     prepareAll({ root, artifacts, version: '9.9.9' }),
     /missing native binaries for 7 of 8 targets/,
   )
+  assert.equal(existsSync(join(root, 'npm', 'platforms', present.packageDirectory, 'bin')), false,
+    'a partial build must not assemble even the available target')
+})
+
+test('a complete build assembles all eight validated workspaces', async (t) => {
+  const { root, artifacts } = await completeSetFixture(t, () => '9.9.9')
+  const written = await prepareAll({ root, artifacts, version: '9.9.9' })
+  assert.equal(written.length, 8)
+  for (const target of Object.values(TARGETS)) {
+    const directory = join(root, 'npm', 'platforms', target.packageDirectory)
+    assert.ok(existsSync(join(directory, 'bin', target.binaryName)))
+    assert.ok(existsSync(join(directory, 'README.md')))
+    assert.deepEqual(JSON.parse(await readFile(join(directory, 'package.json'), 'utf8')),
+      platformManifest(target, '9.9.9'))
+  }
+})
+
+test('a stale later manifest refuses the whole set before any package is assembled', async (t) => {
+  const { root, artifacts } = await completeSetFixture(t,
+    (target) => target.packageDirectory === 'win32-x64' ? '0.0.0' : '9.9.9')
+  await assert.rejects(prepareAll({ root, artifacts, version: '9.9.9' }),
+    /workspace manifest differs/)
+  assert.equal(existsSync(join(root, 'npm', 'platforms', 'darwin-arm64', 'bin')), false,
+    'an earlier platform must remain untouched when a later manifest is stale')
+})
+
+test('a stale workspace manifest is refused before package assembly', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'vitest-dedup-stale-workspace-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  await writeFile(join(root, 'LICENSE'), 'MIT\n')
+  const target = TARGETS['linux-x64-gnu']
+  const directory = await writeWorkspaceFixture(root, target, '0.0.0')
+  const binary = join(root, 'built-binary')
+  await writeFile(binary, '#!/bin/sh\nexit 0\n')
+  await assert.rejects(writePlatformPackage({ root, target, version: '9.9.9', binary }),
+    /workspace manifest differs/)
+  assert.equal(existsSync(join(directory, 'bin')), false)
 })

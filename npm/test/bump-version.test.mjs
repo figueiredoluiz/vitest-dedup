@@ -5,9 +5,13 @@
 // unrelated edit to Cargo.toml or the README.
 import assert from "node:assert/strict";
 import test from "node:test";
-import { readFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 
-import { BUMPED_FILES, planBump } from "../../scripts/release/bump-version.mjs";
+import { BUMPED_FILES, applyBump, planBump } from "../../scripts/release/bump-version.mjs";
+import { TARGETS } from "../lib/targets.mjs";
+import { platformManifest } from "../../scripts/release/platform-package.mjs";
 import {
   cargoLockVersion,
   cargoVersion,
@@ -15,6 +19,7 @@ import {
 } from "../../scripts/release/version-sites.mjs";
 
 /** Build an in-memory release tree so version planning can be tested without file writes. */
+const targets = Object.values(TARGETS);
 const fixture = (overrides = {}) => ({
   "Cargo.toml":
     '[package]\nname = "vitest-dedup"\nversion = "0.1.0"\nedition = "2021"\n',
@@ -25,17 +30,78 @@ const fixture = (overrides = {}) => ({
     {
       name: "vitest-dedup",
       version: "0.1.0",
-      optionalDependencies: {
-        "vitest-dedup-darwin-arm64": "0.1.0",
-        "vitest-dedup-linux-x64-gnu": "0.1.0",
-      },
+      workspaces: ["npm/platforms/*"],
+      optionalDependencies: Object.fromEntries(targets.map((target) => [target.packageName, "0.1.0"])),
     },
     null,
     2,
   )}\n`,
+  "package-lock.json": `${JSON.stringify({
+    name: "vitest-dedup",
+    version: "0.1.0",
+    packages: {
+      "": {
+        version: "0.1.0",
+        workspaces: ["npm/platforms/*"],
+        optionalDependencies: Object.fromEntries(targets.map((target) => [target.packageName, "0.1.0"])),
+      },
+      ...Object.fromEntries(targets.map((target) => [
+        `npm/platforms/${target.packageDirectory}`,
+        { name: target.packageName, version: "0.1.0" },
+      ])),
+      ...Object.fromEntries(targets.map((target) => [
+        `node_modules/${target.packageName}`,
+        { resolved: `npm/platforms/${target.packageDirectory}`, link: true },
+      ])),
+    },
+  }, null, 2)}\n`,
   "README.md":
     "```yaml\n- uses: figueiredoluiz/vitest-dedup@v0.1.0\n  with:\n    version: 0.1.0\n```\n",
+  ...Object.fromEntries(targets.map((target) => [
+    `npm/platforms/${target.packageDirectory}/package.json`,
+    `${JSON.stringify(platformManifest(target, "0.1.0"), null, 2)}\n`,
+  ])),
   ...overrides,
+});
+
+async function fixtureTree(t) {
+  const rootDir = await mkdtemp(join(tmpdir(), "vitest-dedup-bump-"));
+  t.after(() => rm(rootDir, { recursive: true, force: true }));
+  const files = fixture();
+  for (const [path, content] of Object.entries(files)) {
+    await mkdir(dirname(join(rootDir, path)), { recursive: true });
+    await writeFile(join(rootDir, path), content);
+  }
+  return { rootDir, files };
+}
+
+test("the version bumper writes every site in an isolated checkout", async (t) => {
+  const { rootDir } = await fixtureTree(t);
+  const { previous, written } = await applyBump("0.2.0", { rootDir });
+  assert.equal(previous, "0.1.0");
+  assert.deepEqual([...written].sort(), [...BUMPED_FILES].sort());
+  assert.equal(cargoVersion(await readFile(join(rootDir, "Cargo.toml"), "utf8")), "0.2.0");
+  const lock = JSON.parse(await readFile(join(rootDir, "package-lock.json"), "utf8"));
+  assert.equal(lock.version, "0.2.0");
+  for (const target of targets) {
+    const path = `npm/platforms/${target.packageDirectory}/package.json`;
+    assert.equal(JSON.parse(await readFile(join(rootDir, path), "utf8")).version, "0.2.0");
+    assert.equal(lock.packages[`npm/platforms/${target.packageDirectory}`].version, "0.2.0");
+  }
+});
+
+test("a failed write restores all version files", async (t) => {
+  const { rootDir, files } = await fixtureTree(t);
+  let writes = 0;
+  const write = async (path, content) => {
+    writes += 1;
+    if (writes === 4) throw new Error("injected write failure");
+    await writeFile(path, content);
+  };
+  await assert.rejects(applyBump("0.2.0", { rootDir, write }), /injected write failure/);
+  for (const [path, content] of Object.entries(files)) {
+    assert.equal(await readFile(join(rootDir, path), "utf8"), content, `${path} was not restored`);
+  }
 });
 
 test("a patch bump rewrites every site including the exact Action ref", () => {
@@ -58,6 +124,13 @@ test("a patch bump rewrites every site including the exact Action ref", () => {
   assert.equal(manifest.version, "0.1.1");
   for (const pinned of Object.values(manifest.optionalDependencies)) {
     assert.equal(pinned, "0.1.1");
+  }
+  const lock = JSON.parse(planned.get("package-lock.json"));
+  assert.equal(lock.version, "0.1.1");
+  assert.equal(lock.packages[""].version, "0.1.1");
+  for (const target of targets) {
+    assert.equal(lock.packages[`npm/platforms/${target.packageDirectory}`].version, "0.1.1");
+    assert.equal(JSON.parse(planned.get(`npm/platforms/${target.packageDirectory}/package.json`)).version, "0.1.1");
   }
 
   const readme = readmeVersionSites(planned.get("README.md"));
@@ -97,6 +170,28 @@ test("malformed input is refused before anything is planned", () => {
     () => planBump("0.2.0", missing),
     /needs the contents of README\.md/,
   );
+});
+
+test("a bump refuses stale platform manifests and broken workspace links", () => {
+  const stale = fixture();
+  const path = "npm/platforms/linux-x64-gnu/package.json";
+  const manifest = JSON.parse(stale[path]);
+  manifest.libc = ["musl"];
+  stale[path] = `${JSON.stringify(manifest, null, 2)}\n`;
+  assert.throws(() => planBump("0.2.0", stale), /differs from the target definition/);
+
+  const broken = fixture();
+  const lock = JSON.parse(broken["package-lock.json"]);
+  lock.packages["node_modules/vitest-dedup-linux-x64-gnu"].resolved =
+    "npm/platforms/linux-x64-musl";
+  broken["package-lock.json"] = `${JSON.stringify(lock, null, 2)}\n`;
+  assert.throws(() => planBump("0.2.0", broken), /not a local link/);
+
+  const mismatched = fixture();
+  const oldLock = JSON.parse(mismatched["package-lock.json"]);
+  oldLock.version = "0.0.0";
+  mismatched["package-lock.json"] = `${JSON.stringify(oldLock, null, 2)}\n`;
+  assert.throws(() => planBump("0.2.0", mismatched), /package-lock\.json differs/);
 });
 
 test("every version site is found in a CRLF checkout, as Windows produces", () => {

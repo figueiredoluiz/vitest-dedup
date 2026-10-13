@@ -6,9 +6,11 @@ node_modules
 # otherwise leave artifacts staged for commit.
 /reports
 
-# Generated npm platform packages. Built from npm/prebuilt-targets.json by
-# scripts/release/prepare-npm-packages.mjs on every release; never hand-edited, never committed.
-/npm/platforms
+# Platform manifests are tracked npm workspaces. Only the binary and accompanying
+# package documents are assembled from release artifacts.
+/npm/platforms/*/bin/
+/npm/platforms/*/README.md
+/npm/platforms/*/LICENSE
 
 # cargo-mutants working output (`mutants.out`, plus the `.old` copy it keeps of the previous run).
 # Written by scripts/check/check-mutation-score.mjs's producer; `.cargo/mutants.toml` sets

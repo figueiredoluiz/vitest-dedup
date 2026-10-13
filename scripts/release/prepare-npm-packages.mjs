@@ -1,7 +1,5 @@
-// Materializes `npm/platforms/<dir>/` for every target in `npm/prebuilt-targets.json`.
-//
-// Output, not source: the directory is gitignored and rebuilt from the manifest on every release,
-// so there is no second platform list to drift (see `platform-package.mjs`).
+// Adds native binaries and package documents to checked-in platform workspaces. The tracked
+// manifests are validated against `npm/prebuilt-targets.json`, never overwritten.
 //
 // Two modes:
 //
@@ -15,7 +13,8 @@
 //   node scripts/release/prepare-npm-packages.mjs --host <binary>
 //       Local mode, for the install simulation in `npm/test/` and for trying the launcher against
 //       a `cargo build --release` binary. Writes only the package matching the running host.
-import { chmod, copyFile, mkdir, readFile, writeFile } from 'node:fs/promises'
+import assert from 'node:assert/strict'
+import { chmod, copyFile, mkdir, readFile, readdir, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -26,18 +25,21 @@ import { platformManifest, renderPlatformReadme } from './platform-package.mjs'
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
 
-/**
- * Writes one platform package.
- *
- * Returns the directory it wrote, so callers can report exactly what was produced rather than
- * asserting it happened.
- */
-export async function writePlatformPackage({ root, target, version, binary }) {
+async function validatedManifest({ root, target, version }) {
   const packageRoot = join(root, 'npm', 'platforms', target.packageDirectory)
-  const manifest = platformManifest(target, version)
+  const manifest = JSON.parse(await readFile(join(packageRoot, 'package.json'), 'utf8'))
+  assert.deepEqual(
+    manifest,
+    platformManifest(target, version),
+    `${target.packageName} workspace manifest differs from the target definition or version`,
+  )
+  return manifest
+}
 
+/** Adds files to a package whose tracked manifest was already validated. */
+async function assemblePlatformPackage({ root, target, manifest, binary }) {
+  const packageRoot = join(root, 'npm', 'platforms', target.packageDirectory)
   await mkdir(join(packageRoot, 'bin'), { recursive: true })
-  await writeFile(join(packageRoot, 'package.json'), `${JSON.stringify(manifest, null, 2)}\n`)
   await writeFile(join(packageRoot, 'README.md'), renderPlatformReadme(manifest))
   await copyFile(join(root, 'LICENSE'), join(packageRoot, 'LICENSE'))
 
@@ -51,9 +53,21 @@ export async function writePlatformPackage({ root, target, version, binary }) {
   return packageRoot
 }
 
+/** Validate and assemble one platform package for local install simulation. */
+export async function writePlatformPackage({ root, target, version, binary }) {
+  const manifest = await validatedManifest({ root, target, version })
+  return assemblePlatformPackage({ root, target, manifest, binary })
+}
+
 /** Release mode: every target, sourced from the downloaded `binary-*` artifacts. */
 export async function prepareAll({ root = repoRoot, artifacts, version }) {
-  const written = []
+  const directories = (await readdir(join(root, 'npm', 'platforms'), { withFileTypes: true }))
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name)
+    .sort()
+  const expected = Object.values(TARGETS).map((target) => target.packageDirectory).sort()
+  assert.deepEqual(directories, expected, 'platform workspaces differ from release targets')
+
   const missing = []
   for (const target of Object.values(TARGETS)) {
     const binary = join(artifacts, `binary-${target.rustTarget}`, target.binaryName)
@@ -61,7 +75,6 @@ export async function prepareAll({ root = repoRoot, artifacts, version }) {
       missing.push(`${target.packageName}: expected ${binary}`)
       continue
     }
-    written.push(await writePlatformPackage({ root, target, version, binary }))
   }
   if (missing.length > 0) {
     throw new Error(
@@ -69,6 +82,15 @@ export async function prepareAll({ root = repoRoot, artifacts, version }) {
         'publishing an incomplete set would break installs on the missing platforms:\n  ' +
         missing.join('\n  '),
     )
+  }
+  const validated = []
+  for (const target of Object.values(TARGETS)) {
+    validated.push({ target, manifest: await validatedManifest({ root, target, version }) })
+  }
+  const written = []
+  for (const { target, manifest } of validated) {
+    const binary = join(artifacts, `binary-${target.rustTarget}`, target.binaryName)
+    written.push(await assemblePlatformPackage({ root, target, manifest, binary }))
   }
   return written
 }

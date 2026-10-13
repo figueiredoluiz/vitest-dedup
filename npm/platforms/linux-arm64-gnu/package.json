@@ -1,0 +1,25 @@
+{
+  "name": "vitest-dedup-linux-arm64-gnu",
+  "version": "0.1.0",
+  "description": "Linux arm64 glibc native binary for vitest-dedup",
+  "os": [
+    "linux"
+  ],
+  "cpu": [
+    "arm64"
+  ],
+  "libc": [
+    "glibc"
+  ],
+  "files": [
+    "bin/vitest-dedup",
+    "README.md",
+    "LICENSE"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/figueiredoluiz/vitest-dedup.git"
+  },
+  "homepage": "https://github.com/figueiredoluiz/vitest-dedup",
+  "license": "MIT"
+}

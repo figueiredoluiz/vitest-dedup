@@ -12,7 +12,7 @@
 //   EXPECTED_VERSION  the version being released; must equal Cargo.toml's.
 //   RELEASE_TAG       the tag being released; must be `v<version>`.
 import assert from 'node:assert/strict'
-import { existsSync, readFileSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -36,6 +36,8 @@ checked('Cargo.lock disagrees with Cargo.toml', (message) =>
 const manifest = JSON.parse(read('package.json'))
 checked('package.json version differs from Cargo.toml', (message) =>
   assert.equal(manifest.version, version, message))
+checked('platform workspaces must be local links', (message) =>
+  assert.deepEqual(manifest.workspaces, ['npm/platforms/*'], message))
 
 // The launcher's optional dependencies ARE the platform matrix. A name here that no release job
 // builds is a package that will never exist; a target with no entry here is a platform the
@@ -49,6 +51,45 @@ checked('package.json optionalDependencies do not match npm/prebuilt-targets.jso
 for (const [name, declared] of Object.entries(manifest.optionalDependencies)) {
   checked(`${name} is pinned to ${declared}, not ${version}`, (message) =>
     assert.equal(declared, version, message))
+}
+
+const lock = JSON.parse(read('package-lock.json'))
+checked('package-lock.json version differs from Cargo.toml', (message) =>
+  assert.equal(lock.version, version, message))
+checked('package-lock.json root version differs from Cargo.toml', (message) =>
+  assert.equal(lock.packages?.['']?.version, version, message))
+checked('package-lock.json optional pins differ from package.json', (message) =>
+  assert.deepEqual(lock.packages?.['']?.optionalDependencies, manifest.optionalDependencies, message))
+checked('package-lock.json workspace declaration differs from package.json', (message) =>
+  assert.deepEqual(lock.packages?.['']?.workspaces, manifest.workspaces, message))
+
+const targets = Object.values(TARGETS)
+const expectedDirectories = targets.map((target) => target.packageDirectory).sort()
+checked('platform workspace directories differ from release targets', (message) =>
+  assert.deepEqual(
+    readdirSync(join(root, 'npm', 'platforms'), { withFileTypes: true })
+      .filter((entry) => entry.isDirectory()).map((entry) => entry.name).sort(),
+    expectedDirectories,
+    message,
+  ))
+const workspaceEntries = Object.keys(lock.packages).filter((path) => path.startsWith('npm/platforms/'))
+const workspaceLinks = Object.keys(lock.packages).filter((path) => path.startsWith('node_modules/vitest-dedup-'))
+checked('package-lock.json workspace entries differ from release targets', (message) =>
+  assert.deepEqual(workspaceEntries.sort(), expectedDirectories.map((dir) => `npm/platforms/${dir}`).sort(), message))
+checked('package-lock.json platform links differ from release targets', (message) =>
+  assert.deepEqual(workspaceLinks.sort(), targets.map((target) => `node_modules/${target.packageName}`).sort(), message))
+for (const target of targets) {
+  const directory = `npm/platforms/${target.packageDirectory}`
+  const expected = platformManifest(target, version)
+  checked(`${directory}/package.json differs from the target definition`, (message) =>
+    assert.deepEqual(JSON.parse(read(`${directory}/package.json`)), expected, message))
+  checked(`${directory} lock entry differs from the manifest`, (message) =>
+    assert.deepEqual(lock.packages[directory], {
+      name: expected.name, version, cpu: expected.cpu, ...(expected.libc && { libc: expected.libc }),
+      license: expected.license, os: expected.os,
+    }, message))
+  checked(`${directory} is not a local lock link`, (message) =>
+    assert.deepEqual(lock.packages[`node_modules/${expected.name}`], { resolved: directory, link: true }, message))
 }
 
 checked('package.json bin does not point at the launcher', (message) =>
@@ -73,15 +114,6 @@ for (const pinned of readme.actionTags) {
 }
 
 
-// Generated output, present only after `prepare-npm-packages.mjs` has run. Checking it when it
-// exists is what makes this gate usable as the last step before publishing.
-for (const target of Object.values(TARGETS)) {
-  const path = join('npm', 'platforms', target.packageDirectory, 'package.json')
-  if (!existsSync(join(root, path))) continue
-  checked(`${path} does not match what platform-package.mjs generates at ${version}`, (message) =>
-    assert.deepEqual(JSON.parse(read(path)), platformManifest(target, version), message))
-}
-
 if (process.env.EXPECTED_VERSION) {
   checked(`Cargo.toml is ${version} but the release is ${process.env.EXPECTED_VERSION}`, (m) =>
     assert.equal(version, process.env.EXPECTED_VERSION, m))
@@ -99,7 +131,8 @@ if (process.env.RELEASE_TAG) {
 // history (`generate_release_notes` in release.yml), so the two checks that asserted a dated
 // CHANGELOG section are gone along with the file. The floor tracks the checks that remain, and
 // re-measuring it is the only honest way to keep it meaningful.
-const MIN_CHECKS = 18
+// Includes three independent checks for each of the eight tracked platform workspaces.
+const MIN_CHECKS = 51
 assert.ok(
   checks >= MIN_CHECKS,
   `only performed ${checks} version comparisons, expected at least ${MIN_CHECKS}`,

@@ -15,7 +15,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { spawnSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { mkdtemp, mkdir, readFile, writeFile, rm } from 'node:fs/promises'
+import { chmod, mkdtemp, mkdir, readFile, rmdir, stat, writeFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -69,18 +69,31 @@ test('the packed distribution installs and runs from node_modules', async (t) =>
   assert.ok(target, `no release target for ${process.platform}-${process.arch}`)
 
   const scratch = await mkdtemp(join(tmpdir(), 'vitest-dedup-install-'))
+  const platformRoot = join(root, 'npm', 'platforms', target.packageDirectory)
+  const binDirectory = join(platformRoot, 'bin')
+  const generated = [join(platformRoot, 'README.md'), join(platformRoot, 'LICENSE'),
+    join(binDirectory, target.binaryName)]
+  const binExisted = existsSync(binDirectory)
+  const saved = await Promise.all(generated.map(async (path) => existsSync(path)
+    ? { path, bytes: await readFile(path), mode: (await stat(path)).mode }
+    : { path }))
   t.after(async () => {
     await rm(scratch, { recursive: true, force: true })
-    await rm(join(root, 'npm', 'platforms', target.packageDirectory), {
-      recursive: true,
-      force: true,
-    })
+    for (const item of saved) {
+      if (item.bytes) {
+        await writeFile(item.path, item.bytes)
+        await chmod(item.path, item.mode)
+      } else {
+        await rm(item.path, { force: true })
+      }
+    }
+    if (!binExisted && existsSync(binDirectory)) await rmdir(binDirectory)
   })
 
   // 1. Build the platform package from the manifest and the locally compiled binary, then pack
   //    both tarballs exactly as the release would.
   const version = JSON.parse(await readFile(join(root, 'package.json'), 'utf8')).version
-  const platformRoot = await writePlatformPackage({ root, target, version, binary: builtBinary })
+  await writePlatformPackage({ root, target, version, binary: builtBinary })
 
   const packed = {}
   for (const [label, directory] of [['platform', platformRoot], ['launcher', root]]) {

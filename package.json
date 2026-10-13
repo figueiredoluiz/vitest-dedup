@@ -47,7 +47,7 @@
     "skills:check": "node scripts/check/check-agent-skills.mjs",
     "corpus:external": "cargo build --release --locked && node scripts/check/run-external-corpus.mjs",
     "bump:version": "node scripts/release/bump-version.mjs",
-    "pack:check": "npm pack --dry-run"
+    "pack:check": "npm pack --dry-run --workspaces=false"
   },
   "engines": {
     "node": ">=20"
@@ -66,6 +66,9 @@
   "homepage": "https://github.com/figueiredoluiz/vitest-dedup",
   "bugs": "https://github.com/figueiredoluiz/vitest-dedup/issues",
   "license": "MIT",
+  "workspaces": [
+    "npm/platforms/*"
+  ],
   "keywords": [
     "vitest",
     "testing",

@@ -1,0 +1,22 @@
+{
+  "name": "vitest-dedup-darwin-arm64",
+  "version": "0.1.0",
+  "description": "macOS arm64 native binary for vitest-dedup",
+  "os": [
+    "darwin"
+  ],
+  "cpu": [
+    "arm64"
+  ],
+  "files": [
+    "bin/vitest-dedup",
+    "README.md",
+    "LICENSE"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/figueiredoluiz/vitest-dedup.git"
+  },
+  "homepage": "https://github.com/figueiredoluiz/vitest-dedup",
+  "license": "MIT"
+}

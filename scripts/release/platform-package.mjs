@@ -1,11 +1,6 @@
-// Derives each platform package entirely from `npm/prebuilt-targets.json`.
-//
-// cuke-dedup, the sibling project this distribution is modelled on, checks its eight platform
-// manifests into the repository and bumps them with everything else. That works, but it is a
-// second hand-maintained copy of the target list -- precisely the drift `prebuilt-targets.json`
-// exists to prevent, and the reason `npm/lib/targets.mjs` refuses to restate it. Here the
-// manifests are generated instead: `npm/platforms/` is build output, gitignored, and a platform
-// added to the manifest gets a package without anyone remembering to write one.
+// Derives the expected workspace manifest from `npm/prebuilt-targets.json`. The eight platform
+// manifests are tracked so npm can lock local workspace links before a new version is published.
+// The version gate compares every tracked manifest with this derived form, preventing drift.
 //
 // The mapping that needs care is `libc`. The manifest says `gnu`/`musl` because that is Rust's
 // vocabulary and what the target triple uses; npm's `libc` field takes `glibc`/`musl`. Getting
