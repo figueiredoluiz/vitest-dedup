@@ -1,6 +1,6 @@
 {
   "name": "vitest-dedup-linux-arm64-musl",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Linux arm64 musl native binary for vitest-dedup",
   "os": [
     "linux"
