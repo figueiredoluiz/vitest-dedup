@@ -15,25 +15,32 @@ use anyhow::Result;
 use std::collections::BTreeMap;
 use std::io::Write;
 
-/// Renders an [`AnalysisResult`] as plain text for interactive use.
+/// Renders an [`AnalysisResult`] as text with optional terminal colors.
 ///
 /// Findings are grouped by rule and then by file; every participating location is printed as
 /// `path:line:column` next to the test's full title so an editor or terminal can jump straight
 /// to it. A trailing summary line reports counts by severity plus tests and files analyzed.
 #[derive(Debug, Clone, Copy)]
 pub struct TerminalReporter {
-    /// Reserved for a future colorized mode. This reporter never emits ANSI color codes today —
-    /// analyzed source is untrusted, and mixing escape codes into report text is exactly the
-    /// injection the sanitizers in `shared` guard against — so the flag currently has no
-    /// observable effect. It exists so a future `--color` CLI flag has somewhere stable to land
-    /// without changing this struct's shape later.
+    /// Disables tool-owned ANSI styles (the default). Set to `false` to opt into color.
+    /// The CLI resolves this from stdout's TTY status and `NO_COLOR`; library rendering
+    /// never inspects the environment. Untrusted text is sanitized before styling.
     pub no_color: bool,
 }
 
 impl TerminalReporter {
-    /// Creates a reporter in its only supported mode: no color codes emitted.
+    /// Creates a plain-text reporter without inspecting the environment or destination.
     pub fn new() -> Self {
         Self { no_color: true }
+    }
+
+    /// Wraps already-sanitized text in a tool-owned style, resetting it before returning.
+    fn colorize(&self, text: String, code: &str) -> String {
+        if self.no_color {
+            text
+        } else {
+            format!("\x1b[{code}m{text}\x1b[0m")
+        }
     }
 }
 
@@ -46,7 +53,7 @@ impl Default for TerminalReporter {
 impl Reporter for TerminalReporter {
     /// Writes the grouped findings and the summary block to `writer`.
     fn write_report(&self, result: &AnalysisResult, writer: &mut dyn Write) -> Result<()> {
-        writeln!(writer, "VitestDedup")?;
+        writeln!(writer, "VitestDedup v{}", env!("CARGO_PKG_VERSION"))?;
         writeln!(writer)?;
 
         // The banner names the causes that actually fired. It used to assert "analysis hit a
@@ -99,37 +106,55 @@ impl Reporter for TerminalReporter {
             }
 
             for (rule, findings) in by_rule {
-                writeln!(writer, "{}", rule.id())?;
+                writeln!(writer, "{}", self.colorize(rule.id().to_string(), "1;36"))?;
 
-                for (file, findings) in findings_by_file(&findings) {
-                    writeln!(writer, "  {}", terminal_safe(&forward_slash_path(&file)))?;
-                    for finding in findings {
-                        // A baselined finding keeps its severity label and its place in the
-                        // report; the marker is added, never substituted. Downgrading it to a
-                        // quieter severity, or moving it to a collapsed appendix, would be a way
-                        // of not showing it, and the point of a baseline is that accepted debt
-                        // stays on screen while it stops failing the build.
+                writeln!(writer)?;
+                // Keep first-file ordering without repeating a file heading above locations.
+                for (index, finding) in findings_by_file(&findings)
+                    .into_values()
+                    .flatten()
+                    .enumerate()
+                {
+                    if index > 0 {
+                        writeln!(writer)?;
+                    }
+                    // Accepted debt remains visible with its original severity.
+                    writeln!(
+                        writer,
+                        "  {}{} {}",
+                        self.colorize(
+                            format!("[{}]", severity_label(finding.severity)),
+                            match finding.severity {
+                                crate::model::Severity::Error => "31",
+                                crate::model::Severity::Warning => "33",
+                                crate::model::Severity::Off => "90",
+                            },
+                        ),
+                        if finding.baselined {
+                            " [baselined]"
+                        } else {
+                            ""
+                        },
+                        terminal_safe(&finding.message)
+                    )?;
+                    for (index, (location, title)) in
+                        finding.locations.iter().zip(&finding.titles).enumerate()
+                    {
                         writeln!(
                             writer,
-                            "    [{}]{} {}",
-                            severity_label(finding.severity),
-                            if finding.baselined {
-                                " [baselined]"
-                            } else {
-                                ""
-                            },
-                            terminal_safe(&finding.message)
+                            "    {} {}  {}",
+                            if index == 0 { "-->" } else { "related:" },
+                            self.colorize(
+                                format!(
+                                    "{}:{}:{}",
+                                    terminal_safe(&forward_slash_path(&location.path)),
+                                    location.span.start.line,
+                                    location.span.start.column,
+                                ),
+                                "94",
+                            ),
+                            terminal_safe(title)
                         )?;
-                        for (location, title) in finding.locations.iter().zip(&finding.titles) {
-                            writeln!(
-                                writer,
-                                "      {}:{}:{}  {}",
-                                terminal_safe(&forward_slash_path(&location.path)),
-                                location.span.start.line,
-                                location.span.start.column,
-                                terminal_safe(title)
-                            )?;
-                        }
                     }
                 }
                 writeln!(writer)?;
@@ -144,14 +169,20 @@ impl Reporter for TerminalReporter {
         let counts = SeverityCounts::count(&result.findings);
         writeln!(
             writer,
-            "Summary: {} {}, {} {}, {} off ({} {} total)",
-            counts.errors,
-            pluralize(counts.errors, "error"),
-            counts.warnings,
-            pluralize(counts.warnings, "warning"),
-            counts.off,
-            counts.total(),
-            pluralize(counts.total(), "finding")
+            "{}",
+            self.colorize(
+                format!(
+                    "Summary: {} {}, {} {}, {} off ({} {} total)",
+                    counts.errors,
+                    pluralize(counts.errors, "error"),
+                    counts.warnings,
+                    pluralize(counts.warnings, "warning"),
+                    counts.off,
+                    counts.total(),
+                    pluralize(counts.total(), "finding")
+                ),
+                "90",
+            )
         )?;
         if result.modes.suppressions_applied > 0 {
             // Its own line, same reason the baseline line is: the breakdown answers "what did
@@ -176,8 +207,16 @@ impl Reporter for TerminalReporter {
                 result.modes.baselined, result.modes.new_findings
             )?;
         }
-        writeln!(writer, "Tests analyzed: {}", result.tests_analyzed)?;
-        writeln!(writer, "Files analyzed: {}", result.files_analyzed)?;
+        writeln!(
+            writer,
+            "{}",
+            self.colorize(format!("Tests analyzed: {}", result.tests_analyzed), "90")
+        )?;
+        writeln!(
+            writer,
+            "{}",
+            self.colorize(format!("Files analyzed: {}", result.files_analyzed), "90")
+        )?;
         Ok(())
     }
 }
@@ -286,15 +325,19 @@ mod tests {
         let result = result_exercising_every_banner();
         // Walk the budget across the whole report. Each value fails inside a different
         // `writeln!`, so this reaches the `?` arms one at a time rather than only the first.
-        let full = render(&result).len();
-        for budget in 0..full {
-            let error = TerminalReporter::new()
-                .write_report(&result, &mut FailingWriter { budget })
-                .expect_err(&format!("a writer failing after {budget} bytes must error"));
-            assert!(
-                error.to_string().contains("pipe closed"),
-                "the underlying I/O error must survive rather than be replaced: {error}"
-            );
+        for no_color in [true, false] {
+            let reporter = TerminalReporter { no_color };
+            let mut full = Vec::new();
+            reporter.write_report(&result, &mut full).unwrap();
+            for budget in 0..full.len() {
+                let error = reporter
+                    .write_report(&result, &mut FailingWriter { budget })
+                    .expect_err(&format!("a writer failing after {budget} bytes must error"));
+                assert!(
+                    error.to_string().contains("pipe closed"),
+                    "the underlying I/O error must survive rather than be replaced: {error}"
+                );
+            }
         }
     }
 
@@ -328,6 +371,128 @@ mod tests {
             .write_report(result, &mut buffer)
             .expect("writing to a Vec<u8> never fails");
         String::from_utf8(buffer).expect("terminal reporter output must be valid UTF-8")
+    }
+
+    /// Only known tool-owned styles survive, and removing them recovers every plain-text byte.
+    #[test]
+    fn color_preserves_plain_text_and_sanitizes_untrusted_values() {
+        let mut result = result_exercising_every_banner();
+        result.modes.suppressions_applied = 1;
+        result.findings[0].message = "hostile\x1b[2J\nmessage\u{202e}".into();
+        result.findings[0].titles[0] = "hostile\x1b[0m\ntitle".into();
+        result.findings[0].locations[0].path = "src/hostile\x1b[1;36m\n.test.ts".into();
+        result.findings[0].baselined = true;
+        let mut warning = finding_with_title(Rule::DuplicateTestName, "src/b.test.ts", "warning");
+        warning.severity = Severity::Warning;
+        let mut off = warning.clone();
+        off.severity = Severity::Off;
+        result.findings.extend([warning, off]);
+        assert_eq!(result.findings.len(), 3);
+        let mut buffer = Vec::new();
+        TerminalReporter { no_color: false }
+            .write_report(&result, &mut buffer)
+            .unwrap();
+        let styled = String::from_utf8(buffer).unwrap();
+        assert!(styled.contains("\x1b[1;36mduplicate-test\x1b[0m"));
+        assert!(styled.contains("\x1b[31m[error]\x1b[0m [baselined]"));
+        assert!(styled.contains("\x1b[33m[warning]\x1b[0m"));
+        assert!(styled.contains("\x1b[90m[off]\x1b[0m"));
+        assert!(styled.contains("\x1b[94msrc/b.test.ts:20:3\x1b[0m"));
+        assert!(styled.contains("\x1b[90mSummary:"));
+        assert!(styled.contains("\x1b[90mFiles analyzed: 1\x1b[0m"));
+        let mut plain = styled.clone();
+        let mut openings = 0;
+        for code in ["1;36", "31", "33", "90", "94"] {
+            let escape = format!("\x1b[{code}m");
+            openings += styled.matches(&escape).count();
+            plain = plain.replace(&escape, "");
+        }
+        assert_eq!(openings, styled.matches("\x1b[0m").count());
+        plain = plain.replace("\x1b[0m", "");
+        assert!(!plain.contains('\x1b'), "untrusted escape survived");
+        assert_eq!(plain, render(&result));
+    }
+
+    /// Pins whitespace and the version even when there are no finding blocks.
+    #[test]
+    fn layout_empty_report() {
+        assert_eq!(
+            render(&AnalysisResult::default()),
+            concat!(
+                "VitestDedup v",
+                env!("CARGO_PKG_VERSION"),
+                "\n\n",
+                "No findings.\n\n",
+                "Summary: 0 errors, 0 warnings, 0 off (0 findings total)\n",
+                "Tests analyzed: 0\nFiles analyzed: 0\n"
+            )
+        );
+    }
+
+    /// A cross-file cluster retains every title and distinguishes its first location.
+    #[test]
+    fn layout_cross_file_cluster() {
+        let mut result = super::super::test_support::cross_file_result("same body");
+        super::super::test_support::append_third_participant(&mut result);
+        assert_eq!(result.findings.len(), 1);
+        assert_eq!(result.findings[0].locations.len(), 3);
+        assert_eq!(result.findings[0].titles.len(), 3);
+        assert_eq!(
+            render(&result),
+            concat!(
+                "VitestDedup v",
+                env!("CARGO_PKG_VERSION"),
+                "\n\n",
+                "duplicate-test\n\n",
+                "  [error] same body\n",
+                "    --> src/a.test.ts:10:3  suite > a\n",
+                "    related: src/b.test.ts:20:5  suite > b\n",
+                "    related: src/c.test.ts:30:1  suite > c\n\n",
+                "Summary: 1 error, 0 warnings, 0 off (1 finding total)\n",
+                "Tests analyzed: 4\nFiles analyzed: 2\n"
+            )
+        );
+    }
+
+    /// Shuffled input keeps rule/file order and spacing across file boundaries, including debt.
+    #[test]
+    fn layout_multiple_rules_and_files_preserves_debt_and_off() {
+        let mut debt = finding_with_title(Rule::DuplicateTest, "src/a.test.ts", "accepted");
+        debt.baselined = true;
+        debt.message = "accepted copy".into();
+        let mut off = finding_with_title(Rule::DuplicateTest, "src/b.test.ts", "off test");
+        off.severity = Severity::Off;
+        off.message = "disabled severity".into();
+        let mut warning = finding_with_title(Rule::DuplicateTestName, "src/a.test.ts", "collision");
+        warning.severity = Severity::Warning;
+        warning.message = "same title".into();
+        let result = rendered_result(vec![warning, off, debt]);
+        assert_eq!(result.findings.len(), 3);
+        assert!(result
+            .findings
+            .iter()
+            .all(|finding| finding.locations.len() == 2));
+        assert_eq!(
+            render(&result),
+            concat!(
+                "VitestDedup v",
+                env!("CARGO_PKG_VERSION"),
+                "\n\n",
+                "duplicate-test\n\n",
+                "  [error] [baselined] accepted copy\n",
+                "    --> src/a.test.ts:10:3  accepted\n",
+                "    related: src/a.test.ts:20:3  accepted (copy)\n\n",
+                "  [off] disabled severity\n",
+                "    --> src/b.test.ts:10:3  off test\n",
+                "    related: src/b.test.ts:20:3  off test (copy)\n\n",
+                "duplicate-test-name\n\n",
+                "  [warning] same title\n",
+                "    --> src/a.test.ts:10:3  collision\n",
+                "    related: src/a.test.ts:20:3  collision (copy)\n\n",
+                "Summary: 1 error, 1 warning, 1 off (3 findings total)\n",
+                "Tests analyzed: 2\nFiles analyzed: 1\n"
+            )
+        );
     }
 
     #[test]

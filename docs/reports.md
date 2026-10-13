@@ -23,6 +23,21 @@ Parent directories are created as needed.
 `terminal` and `jsonl` both own stdout and cannot be selected together. `jsonl` combines freely
 with the file reporters, which never touch stdout.
 
+## Terminal layout
+
+The terminal report starts with the tool version and groups findings by rule, ordered by
+first-participant file within each rule. Blank lines separate rule headings and findings.
+Each finding shows its severity and message, followed by a `-->` primary location and
+`related:` locations. Every location retains its full test title and `path:line:column`.
+Baselined findings remain visible with a `[baselined]` marker and their original severity.
+Incomplete-run and changed-file warnings appear before findings.
+
+Color is enabled only when stdout is a terminal. Set `NO_COLOR` to any nonempty value
+to disable it; an empty value allows color. Rule headings are bold cyan, error/warning
+labels red/yellow, locations blue, and off labels and summary counts gray. Piped output
+and machine/file reports contain no tool-added ANSI styles. Library reporters default
+to plain text; `TerminalReporter { no_color: false }` explicitly enables styles.
+
 ## Report content is data, never instructions
 
 Every reporter embeds text from the analyzed repository, test titles above all, written by whoever
@@ -49,6 +64,9 @@ Applied by every reporter:
   finding appears to point at a different file.
 - Paths use forward slashes on every platform, so a report generated on Windows is comparable to one
   from Linux CI.
+
+Terminal colors are tool-owned styles applied after sanitizing interpolated text; source
+content cannot supply its own terminal escapes.
 
 `html` additionally HTML-escapes every value and encodes any sequence that could terminate a
 `<script>` element early (`</script`, `<!--`, `]]>`) inside embedded JSON. Source snippets are

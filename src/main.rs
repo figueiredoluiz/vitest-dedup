@@ -6,7 +6,7 @@
 
 use anyhow::{Context, Result};
 use std::collections::BTreeSet;
-use std::io::Write;
+use std::io::{IsTerminal, Write};
 use std::path::PathBuf;
 use std::process::ExitCode as ProcessExitCode;
 use vitest_dedup::cli::{ExitCode, ParsedArgs, ReporterKind};
@@ -925,11 +925,18 @@ fn run() -> Result<ExitCode> {
     let jsonl_reporter = JsonlReporter::with_fingerprints(hook_fingerprints, test_fingerprints)
         .with_memory(memory_reports);
 
+    let terminal_color = terminal_color_enabled(
+        std::io::stdout().is_terminal(),
+        std::env::var_os("NO_COLOR").as_deref(),
+    );
     let mut stdout = std::io::stdout().lock();
     let mut written = Vec::new();
     for reporter in &args.reporters {
         match reporter {
-            ReporterKind::Terminal => TerminalReporter::new().write_report(&result, &mut stdout)?,
+            ReporterKind::Terminal => TerminalReporter {
+                no_color: !terminal_color,
+            }
+            .write_report(&result, &mut stdout)?,
             ReporterKind::Jsonl => jsonl_reporter.write_report(&result, &mut stdout)?,
             ReporterKind::Json | ReporterKind::Html | ReporterKind::Sarif => {
                 let extension = reporter
@@ -1165,10 +1172,28 @@ fn final_exit_code(
     analysis::exit_code(result, config)
 }
 
+/// Color belongs to interactive stdout; a nonempty `NO_COLOR` always opts out.
+fn terminal_color_enabled(is_terminal: bool, no_color: Option<&std::ffi::OsStr>) -> bool {
+    is_terminal && !no_color.is_some_and(|value| !value.is_empty())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use vitest_dedup::config::ConfigOverrides;
+
+    /// Every TTY/NO_COLOR combination follows the same policy as CukeDedup.
+    #[test]
+    fn terminal_color_requires_tty_and_respects_no_color() {
+        use std::ffi::OsStr;
+        for (value, allows_color) in [(None, true), (Some(""), true), (Some("0"), false)] {
+            assert_eq!(
+                terminal_color_enabled(true, value.map(OsStr::new)),
+                allows_color
+            );
+            assert!(!terminal_color_enabled(false, value.map(OsStr::new)));
+        }
+    }
 
     // -- End-to-end: carrying an `includeSource` project's `globals` through to analysis -----
     //
