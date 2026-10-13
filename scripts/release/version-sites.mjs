@@ -6,12 +6,8 @@
 // here, which is what lets `npm/test/` exercise every pattern without a working tree, a tag, or
 // cargo.
 //
-// Sites deliberately NOT included:
-//
-//   - `action.yml` and `.github/workflows/release.yml` -- both declare `version` as a *required*
-//     input with no default, so there is no stale value to bump. cuke-dedup defaults both to the
-//     current release and bumps them; that is a real difference in workflow design, not an
-//     oversight here.
+// `action.yml` deliberately remains a required input without a default; the manual release
+// workflow defaults its version to the current Cargo version and must be bumped with it.
 // Keep the prerelease suffix within the format accepted by release.yml and the Action installer.
 // A second hyphen would pass npm's broader syntax but fail that workflow.
 export const SEMVER = /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[0-9A-Za-z.]+)?$/
@@ -28,6 +24,10 @@ export const CARGO_PACKAGE_VERSION = /(^\[package\]\r?\n(?:.*\r?\n)*?version = "
 /** The workspace crate's own entry in Cargo.lock. */
 export const CARGO_LOCK_VERSION =
   /(^\[\[package\]\]\r?\nname = "vitest-dedup"\r?\nversion = ")([^"]+)(")/m
+
+/** The default version shown by the manual Release workflow dispatch. */
+export const RELEASE_WORKFLOW_DEFAULT =
+  /(^ {6}version:\r?\n(?: {8}.*\r?\n)*? {8}default: )(\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?)(?=\r?$)/m
 
 /** `version: X.Y.Z` inputs in the README's GitHub Action examples. */
 export const README_ACTION_VERSION =
@@ -51,6 +51,10 @@ export function cargoVersion(text) {
 
 export function cargoLockVersion(text) {
   return one(text, CARGO_LOCK_VERSION, 'the vitest-dedup entry in Cargo.lock')
+}
+
+export function releaseWorkflowVersion(text) {
+  return one(text, RELEASE_WORKFLOW_DEFAULT, 'the Release workflow default version')
 }
 
 /** Every `version:` pin and exact Action tag the README carries, in document order. */

@@ -28,8 +28,8 @@ cargo install --git https://github.com/figueiredoluiz/vitest-dedup
 `VITEST_DEDUP_BINARY` points the launcher at a specific executable, such as a local build.
 
 Packages are published from this repository's release workflow with npm trusted publishing, so
-`npm audit signatures` verifies them. Release archives carry SHA-256 checksums and a build
-provenance attestation.
+`npm audit signatures` verifies them. Release archives carry SHA-256 checksums, keyless Sigstore
+signature bundles, and a build provenance attestation.
 
 ## Usage
 

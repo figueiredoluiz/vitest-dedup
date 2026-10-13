@@ -146,5 +146,42 @@ question is what most fixtures here exist to answer.
 
 ## Releases
 
-Tag-driven, from `main`, by the maintainer. `npm run check:versions` asserts every version site
-agrees before a release can proceed.
+Tag-driven, from `main`. Run `npm run bump:version -- <version>` on a release-preparation branch,
+review and merge that change, and create `v<version>` at the merged commit. The bump updates Cargo,
+the npm workspaces and lockfile, the documented Action pin, and the Release workflow's default
+version. `npm run check:versions` asserts those sites agree before a release can proceed.
+
+Run the `Release` workflow manually against that exact tag. Its default `publish: false` rehearses
+all platform builds and npm packages without creating a release. `publish: true` creates the GitHub
+Release with checksums, Sigstore signature bundles and build provenance, then publishes to each
+enabled registry. The `github-release`, `crates-io` and `npm` GitHub environments should allow
+only `v*` tags and have no required reviewers, as in CukeDedup. Repository write access and the
+workflow's exact-tag and version checks control dispatch; there is no owner-only or manual reviewer
+gate. Set `PUBLISH_NPM=true` and, after crates.io setup, `PUBLISH_CRATES=true` as repository
+variables to enable those jobs.
+
+If npm publication stops partway through, dispatch the workflow again on the same tag with
+`publish: true` and `publish_npm_only: true`. This verifies the existing GitHub Release at the
+same commit, rebuilds and checks the npm binaries against its archived binaries, then publishes
+only missing package versions. It does not recreate the GitHub Release or publish the crate.
+
+Check the individual GitHub Release, npm, and crate jobs and their registry pages before calling
+the release complete; a skipped registry job did not publish anything. The npm website may cache
+an older version even when the registry's `latest` tag has advanced.
+
+The first crate version must be published manually by a crates.io owner before trusted publishing
+can be configured. For v0.2.0, use a clean checkout of the existing, immutable tag, authenticate
+with your own crates.io token using `cargo login`, and run:
+
+```sh
+git switch --detach v0.2.0
+cargo publish --dry-run --locked
+cargo publish --locked
+```
+
+The dry run has already passed on the v0.2.0 tag. After crates.io lists that version, configure a
+trusted publisher for `figueiredoluiz/vitest-dedup`, workflow `release.yml`, and GitHub environment
+`crates-io`. Create that tag-restricted GitHub environment, then enable `PUBLISH_CRATES=true`. Later release
+dispatches use a short-lived crates.io credential from OIDC; no registry token belongs in GitHub
+secrets. The already-published v0.2.0 tag cannot gain this new workflow; the automated crate job
+applies to later tags.

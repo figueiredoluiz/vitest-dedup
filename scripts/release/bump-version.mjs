@@ -23,15 +23,18 @@ import {
   CARGO_LOCK_VERSION,
   CARGO_PACKAGE_VERSION,
   README_ACTION_VERSION,
+  RELEASE_WORKFLOW_DEFAULT,
   SEMVER,
   cargoVersion,
+  releaseWorkflowVersion,
 } from './version-sites.mjs'
 import { TARGETS } from '../../npm/lib/targets.mjs'
 import { platformManifest } from './platform-package.mjs'
 
 const targets = Object.values(TARGETS)
 const platformFiles = targets.map((target) => `npm/platforms/${target.packageDirectory}/package.json`)
-export const BUMPED_FILES = ['Cargo.toml', 'Cargo.lock', 'package.json', 'package-lock.json', 'README.md', ...platformFiles]
+export const BUMPED_FILES = ['Cargo.toml', 'Cargo.lock', 'package.json', 'package-lock.json',
+  'README.md', '.github/workflows/release.yml', ...platformFiles]
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
 
@@ -127,6 +130,11 @@ export function planBump(version, files) {
       .replace(README_ACTION_VERSION, `$1${version}`)
       .replace(ACTION_VERSION_TAG, `$1${version}`),
   )
+  const workflow = files['.github/workflows/release.yml']
+  assert.equal(releaseWorkflowVersion(workflow), previous,
+    'release workflow default differs from Cargo.toml before the bump')
+  planned.set('.github/workflows/release.yml',
+    replaceOnce(workflow, RELEASE_WORKFLOW_DEFAULT, '.github/workflows/release.yml', `$1${version}`))
 
   return { previous, planned }
 }

@@ -50,6 +50,14 @@ test('checkout and workflow event must match even for rehearsals', () => {
   assert.doesNotThrow(() => validateReleaseContext({ ...tagged, publish: false, ref: 'refs/heads/main', tagSha: '' }))
 })
 
+test('npm-only recovery requires a publishing dispatch on the exact tag', () => {
+  assert.throws(() => validateReleaseContext({ ...tagged, publish: false, npmOnly: true }),
+    /npm-only recovery requires publishing/)
+  assert.doesNotThrow(() => validateReleaseContext({ ...tagged, npmOnly: true }))
+  assert.throws(() => validateReleaseContext({ ...tagged, npmOnly: true, ref: 'refs/heads/main' }),
+    /matching release tag/)
+})
+
 test('workflow environment adapter accepts the exact tag and rejects a branch', () => {
   const env = {
     ...process.env,

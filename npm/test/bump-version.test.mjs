@@ -15,6 +15,7 @@ import { platformManifest } from "../../scripts/release/platform-package.mjs";
 import {
   cargoLockVersion,
   cargoVersion,
+  releaseWorkflowVersion,
   readmeVersionSites,
 } from "../../scripts/release/version-sites.mjs";
 
@@ -57,6 +58,8 @@ const fixture = (overrides = {}) => ({
   }, null, 2)}\n`,
   "README.md":
     "```yaml\n- uses: figueiredoluiz/vitest-dedup@v0.1.0\n  with:\n    version: 0.1.0\n```\n",
+  ".github/workflows/release.yml":
+    "name: Release\non:\n  workflow_dispatch:\n    inputs:\n      version:\n        description: Version to build\n        required: true\n        default: 0.1.0\n",
   ...Object.fromEntries(targets.map((target) => [
     `npm/platforms/${target.packageDirectory}/package.json`,
     `${JSON.stringify(platformManifest(target, "0.1.0"), null, 2)}\n`,
@@ -140,6 +143,7 @@ test("a patch bump rewrites every site including the exact Action ref", () => {
     ["0.1.1"],
     "the Action ref must move with the exact version input",
   );
+  assert.match(planned.get(".github/workflows/release.yml"), /default: 0\.1\.1/);
 });
 
 test("a major bump moves the documented exact Action ref", () => {
@@ -192,6 +196,10 @@ test("a bump refuses stale platform manifests and broken workspace links", () =>
   oldLock.version = "0.0.0";
   mismatched["package-lock.json"] = `${JSON.stringify(oldLock, null, 2)}\n`;
   assert.throws(() => planBump("0.2.0", mismatched), /package-lock\.json differs/);
+
+  const staleWorkflow = fixture({ ".github/workflows/release.yml":
+    fixture()[".github/workflows/release.yml"].replace("default: 0.1.0", "default: 0.0.9") });
+  assert.throws(() => planBump("0.2.0", staleWorkflow), /release workflow default differs/);
 });
 
 test("every version site is found in a CRLF checkout, as Windows produces", () => {
@@ -216,6 +224,9 @@ test("every version site is found in a CRLF checkout, as Windows produces", () =
     "the CRLF README version pin should be found",
   );
   assert.deepEqual(actionTags, ["1.2.3"], "the CRLF README exact tag should be found");
+
+  const workflow = crlf(fixture()[".github/workflows/release.yml"]);
+  assert.equal(releaseWorkflowVersion(workflow), "0.1.0");
 });
 
 test("a Cargo.toml whose shape changed fails loudly instead of partially bumping", () => {

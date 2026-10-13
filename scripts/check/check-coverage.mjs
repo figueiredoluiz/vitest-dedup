@@ -308,6 +308,9 @@ const JS_MODULES = {
   // (the exactly-one-site check, `cargoLockVersion` by name) now have direct tests, which is the
   // part of this drop that was real.
   'scripts/release/bump-version.mjs': 79,
+  // The pure release identity guard is imported by recovery-release.test.mjs (15/30 lines).
+  // The gh CLI adapter runs as a separate process in the workflow, outside this coverage run.
+  'scripts/release/check-recovery-release.mjs': 50,
   'scripts/release/platform-package.mjs': 100,
   'scripts/release/prepare-npm-packages.mjs': 65,
   'scripts/release/publish-npm-packages.mjs': 97,

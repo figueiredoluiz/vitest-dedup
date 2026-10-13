@@ -6,9 +6,12 @@ import { pathToFileURL } from 'node:url'
 const shaPattern = /^[0-9a-f]{40}$/
 
 /** Rejects publication unless the event, checkout, and exact release tag identify one commit. */
-export function validateReleaseContext({ publish, tag, ref, eventSha, releaseSha, tagSha }) {
+export function validateReleaseContext({ publish, npmOnly = false, tag, ref, eventSha, releaseSha, tagSha }) {
   if (!shaPattern.test(eventSha) || !shaPattern.test(releaseSha) || eventSha !== releaseSha) {
     throw new Error('the checked-out commit must equal the workflow event commit')
+  }
+  if (npmOnly && !publish) {
+    throw new Error('npm-only recovery requires publishing to be enabled')
   }
   if (!publish) return
 
@@ -49,6 +52,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     }
     validateReleaseContext({
       publish: process.env.PUBLISH_RELEASE === 'true',
+      npmOnly: process.env.PUBLISH_NPM_ONLY === 'true',
       tag,
       ref: process.env.EVENT_REF,
       eventSha: process.env.EVENT_SHA,

@@ -18,7 +18,7 @@ import { fileURLToPath } from 'node:url'
 
 import { TARGETS } from '../../npm/lib/targets.mjs'
 import { platformManifest } from './platform-package.mjs'
-import { cargoLockVersion, cargoVersion, readmeVersionSites } from './version-sites.mjs'
+import { cargoLockVersion, cargoVersion, readmeVersionSites, releaseWorkflowVersion } from './version-sites.mjs'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
 const read = (relative) => readFileSync(join(root, relative), 'utf8')
@@ -32,6 +32,8 @@ const checked = (message, assertion) => {
 
 checked('Cargo.lock disagrees with Cargo.toml', (message) =>
   assert.equal(cargoLockVersion(read('Cargo.lock')), version, message))
+checked('Release workflow default differs from Cargo.toml', (message) =>
+  assert.equal(releaseWorkflowVersion(read('.github/workflows/release.yml')), version, message))
 
 const manifest = JSON.parse(read('package.json'))
 checked('package.json version differs from Cargo.toml', (message) =>
@@ -132,7 +134,7 @@ if (process.env.RELEASE_TAG) {
 // CHANGELOG section are gone along with the file. The floor tracks the checks that remain, and
 // re-measuring it is the only honest way to keep it meaningful.
 // Includes three independent checks for each of the eight tracked platform workspaces.
-const MIN_CHECKS = 51
+const MIN_CHECKS = 52
 assert.ok(
   checks >= MIN_CHECKS,
   `only performed ${checks} version comparisons, expected at least ${MIN_CHECKS}`,
