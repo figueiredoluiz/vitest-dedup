@@ -2,8 +2,8 @@
 //!
 //! Findings are grouped by rule and then by the file of their first location, because that is
 //! how a developer scanning output decides what to fix next: pick a rule, pick a file, follow
-//! the locations. The summary line at the end answers "did this run pass" without scrolling
-//! back through every group, and an incomplete run says so before the findings, not after —
+//! the locations. The footer separates the threshold from the caller's analysis-policy decision,
+//! and an incomplete run says so before the findings, not after —
 //! nothing here may let the reader assume that no findings means no duplicates.
 
 use super::shared::{
@@ -11,6 +11,7 @@ use super::shared::{
 };
 use super::Reporter;
 use crate::model::{AnalysisResult, Rule};
+use crate::{analysis, cli::ExitCode, config::Config};
 use anyhow::Result;
 use std::collections::BTreeMap;
 use std::io::Write;
@@ -28,6 +29,20 @@ pub struct TerminalReporter {
     pub no_color: bool,
 }
 
+/// CLI policy supplied explicitly; library rendering never invents configuration or success.
+#[derive(Debug, Clone, Copy)]
+pub struct TerminalReportContext<'a> {
+    config: &'a Config,
+    exit_code: ExitCode,
+}
+
+impl<'a> TerminalReportContext<'a> {
+    /// Borrows the effective config and the caller's analysis-policy decision before report I/O.
+    pub fn new(config: &'a Config, exit_code: ExitCode) -> Self {
+        Self { config, exit_code }
+    }
+}
+
 impl TerminalReporter {
     /// Creates a plain-text reporter without inspecting the environment or destination.
     pub fn new() -> Self {
@@ -42,17 +57,26 @@ impl TerminalReporter {
             format!("\x1b[{code}m{text}\x1b[0m")
         }
     }
-}
 
-impl Default for TerminalReporter {
-    fn default() -> Self {
-        Self::new()
+    /// Writes findings with the supplied threshold and analysis-policy outcome.
+    ///
+    /// # Errors
+    /// Returns the underlying writer error without suppressing a failed report.
+    pub fn write_report_with_context(
+        &self,
+        result: &AnalysisResult,
+        context: &TerminalReportContext<'_>,
+        writer: &mut dyn Write,
+    ) -> Result<()> {
+        self.write_report_inner(result, Some(context), writer)
     }
-}
 
-impl Reporter for TerminalReporter {
-    /// Writes the grouped findings and the summary block to `writer`.
-    fn write_report(&self, result: &AnalysisResult, writer: &mut dyn Write) -> Result<()> {
+    fn write_report_inner(
+        &self,
+        result: &AnalysisResult,
+        context: Option<&TerminalReportContext<'_>>,
+        writer: &mut dyn Write,
+    ) -> Result<()> {
         writeln!(writer, "VitestDedup v{}", env!("CARGO_PKG_VERSION"))?;
         writeln!(writer)?;
 
@@ -162,25 +186,29 @@ impl Reporter for TerminalReporter {
             }
         }
 
-        // `off`-severity findings still occupy a spot in `counts.total()` (a rule configured to
-        // `off` still detected something), so they are reported explicitly here rather than
-        // folded silently into the total: an off-only result would otherwise print
-        // "0 errors, 0 warnings (1 finding total)", which is not honest about where that one
-        // finding went missing from the breakdown.
         let counts = SeverityCounts::count(&result.findings);
+        let omitted = result.incomplete_causes.findings_truncated;
         writeln!(
             writer,
             "{}",
             self.colorize(
                 format!(
-                    "Summary: {} {}, {} {}, {} off ({} {} total)",
+                    "Analyzed {} {} in {} {}{}{} {}, {} {}, {} off; {} suppressed",
+                    result.tests_analyzed,
+                    pluralize(result.tests_analyzed, "test"),
+                    result.files_analyzed,
+                    pluralize(result.files_analyzed, "file"),
+                    if omitted > 0 {
+                        "; shown findings: "
+                    } else {
+                        ": "
+                    },
                     counts.errors,
                     pluralize(counts.errors, "error"),
                     counts.warnings,
                     pluralize(counts.warnings, "warning"),
                     counts.off,
-                    counts.total(),
-                    pluralize(counts.total(), "finding")
+                    result.modes.suppressions_applied,
                 ),
                 "90",
             )
@@ -208,17 +236,73 @@ impl Reporter for TerminalReporter {
                 result.modes.baselined, result.modes.new_findings
             )?;
         }
-        writeln!(
-            writer,
-            "{}",
-            self.colorize(format!("Tests analyzed: {}", result.tests_analyzed), "90")
-        )?;
-        writeln!(
-            writer,
-            "{}",
-            self.colorize(format!("Files analyzed: {}", result.files_analyzed), "90")
-        )?;
+        if result.tests_analyzed == 0 {
+            writeln!(
+                writer,
+                "No executable tests analyzed; a test-level duplication rate is unavailable."
+            )?;
+        }
+        if let Some(context) = context {
+            if result.tests_analyzed == 0 {
+                writeln!(
+                    writer,
+                    "Error-level duplication: unavailable (no executable tests), threshold {:.2}%",
+                    f64::from(context.config.threshold)
+                )?;
+            } else {
+                let rate =
+                    result.error_finding_locations as f64 / result.tests_analyzed as f64 * 100.0;
+                writeln!(writer,
+                    "Error-level duplication: {} unique finding locations / {} analyzed tests ({:.2}%), threshold {:.2}% — {}",
+                    result.error_finding_locations, result.tests_analyzed, rate,
+                    f64::from(context.config.threshold),
+                    if analysis::threshold_passed(result, context.config) { "PASS" } else { "FAIL" },
+                )?;
+            }
+            let policy = match context.exit_code {
+                ExitCode::Success => "PASS",
+                ExitCode::QualityGateFailed => "FAIL",
+                ExitCode::OperationalError => "UNAVAILABLE",
+            };
+            writeln!(
+                writer,
+                "Analysis policy: {policy}{}",
+                if result.incomplete() {
+                    " (incomplete coverage)"
+                } else {
+                    ""
+                }
+            )?;
+        }
+        writeln!(writer)?;
+        let found = if omitted > 0 {
+            format!(
+                "Found {} shown {}; {} additional findings omitted.",
+                counts.total(),
+                pluralize(counts.total(), "finding"),
+                omitted
+            )
+        } else {
+            format!(
+                "Found {} {}.",
+                counts.total(),
+                pluralize(counts.total(), "finding")
+            )
+        };
+        writeln!(writer, "{}", self.colorize(found, "90"))?;
         Ok(())
+    }
+}
+
+impl Default for TerminalReporter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Reporter for TerminalReporter {
+    fn write_report(&self, result: &AnalysisResult, writer: &mut dyn Write) -> Result<()> {
+        self.write_report_inner(result, None, writer)
     }
 }
 
@@ -432,8 +516,8 @@ mod tests {
         assert!(styled.contains("\x1b[33m[warning]\x1b[0m"));
         assert!(styled.contains("\x1b[90m[off]\x1b[0m"));
         assert!(styled.contains("\x1b[94msrc/b.test.ts:20:3\x1b[0m"));
-        assert!(styled.contains("\x1b[90mSummary:"));
-        assert!(styled.contains("\x1b[90mFiles analyzed: 1\x1b[0m"));
+        assert!(styled.contains("\x1b[90mAnalyzed"));
+        assert!(styled.contains("\x1b[90mFound 3 findings.\x1b[0m"));
         let mut plain = styled.clone();
         let mut openings = 0;
         for code in ["1;36", "31", "33", "90", "94"] {
@@ -445,6 +529,138 @@ mod tests {
         plain = plain.replace("\x1b[0m", "");
         assert!(!plain.contains('\x1b'), "untrusted escape survived");
         assert_eq!(plain, render(&result));
+    }
+
+    /// Explicit owned configuration keeps renderer tests independent of filesystem config.
+    fn config_with_threshold(threshold: u8) -> Config {
+        Config {
+            root: ".".into(),
+            include: Vec::new(),
+            include_is_explicit: false,
+            exclude: Vec::new(),
+            rules: BTreeMap::new(),
+            threshold,
+            source: "test".into(),
+        }
+    }
+
+    /// Render the caller's policy without teaching the renderer to reconstruct CLI flags.
+    fn render_with_policy(result: &AnalysisResult, config: &Config, exit: ExitCode) -> String {
+        let mut output = Vec::new();
+        TerminalReporter::new()
+            .write_report_with_context(
+                result,
+                &TerminalReportContext::new(config, exit),
+                &mut output,
+            )
+            .unwrap();
+        String::from_utf8(output).unwrap()
+    }
+
+    /// Boundaries and omitted participants use recorded unique locations, not visible pairs.
+    #[test]
+    fn threshold_footer_uses_full_counters_and_exact_boundary() {
+        let mut result = super::super::test_support::cross_file_result("same body");
+        result.error_finding_locations = 2;
+        result.had_error_finding = true;
+        assert_eq!(result.findings.len(), 1);
+        assert_eq!(result.findings[0].locations.len(), 2);
+        for (threshold, label) in [(49, "FAIL"), (50, "PASS"), (51, "PASS")] {
+            let config = config_with_threshold(threshold);
+            let output =
+                render_with_policy(&result, &config, analysis::exit_code(&result, &config));
+            assert!(output.contains(&format!("2 unique finding locations / 4 analyzed tests (50.00%), threshold {threshold}.00% — {label}")));
+        }
+        let mut overlapping_finding = result.findings[0].clone();
+        overlapping_finding.rule = Rule::DuplicateTestName;
+        result.findings.push(overlapping_finding);
+        let config = config_with_threshold(50);
+        let overlapping = render_with_policy(&result, &config, ExitCode::Success);
+        assert!(overlapping.contains("2 errors, 0 warnings"));
+        assert!(overlapping.contains("2 unique finding locations / 4 analyzed tests (50.00%)"));
+        result.findings.truncate(1);
+        result.error_finding_locations = 3;
+        result.incomplete_causes.findings_truncated = 7;
+        let config = config_with_threshold(50);
+        let output = render_with_policy(&result, &config, ExitCode::QualityGateFailed);
+        assert!(output.contains("shown findings: 1 error, 0 warnings, 0 off"));
+        assert!(output.contains(
+            "3 unique finding locations / 4 analyzed tests (75.00%), threshold 50.00% — FAIL"
+        ));
+        assert!(output.contains("Found 1 shown finding; 7 additional findings omitted."));
+        assert!(output.contains("Analysis policy: FAIL (incomplete coverage)"));
+        // Error locations may represent hooks/suites too; don't silently clamp the existing rate.
+        result.error_finding_locations = 6;
+        let output = render_with_policy(&result, &config, ExitCode::QualityGateFailed);
+        assert!(output.contains("6 unique finding locations / 4 analyzed tests (150.00%)"));
+        result.tests_analyzed = 100_000;
+        result.error_finding_locations = 2;
+        let config = config_with_threshold(0);
+        let output = render_with_policy(&result, &config, ExitCode::QualityGateFailed);
+        assert!(output.contains("(0.00%), threshold 0.00% — FAIL"));
+    }
+
+    /// Visible accepted debt and suppressed counts do not inflate the new-error numerator.
+    #[test]
+    fn baseline_and_zero_work_keep_policy_separate_from_findings() {
+        let mut result = rendered_result(vec![finding_with_title(
+            Rule::DuplicateTest,
+            "a.test.ts",
+            "a",
+        )]);
+        result.findings[0].baselined = true;
+        result.modes.baseline_applied = true;
+        result.modes.baselined = 1;
+        result.modes.suppressions_applied = 2;
+        let config = config_with_threshold(0);
+        let output = render_with_policy(&result, &config, ExitCode::Success);
+        assert!(output.contains("1 error, 0 warnings, 0 off; 2 suppressed"));
+        assert!(output.contains("Baseline: 1 accepted"));
+        assert!(output.contains("0 unique finding locations / 2 analyzed tests (0.00%)"));
+        assert!(output.contains("Analysis policy: PASS"));
+        let mut result = AnalysisResult::default();
+        for exit in [ExitCode::OperationalError, ExitCode::QualityGateFailed] {
+            if exit == ExitCode::QualityGateFailed {
+                let mut suite = finding_with_title(Rule::DuplicateSuite, "a.test.ts", "suite");
+                suite.severity = Severity::Error;
+                result.findings.push(suite);
+                result.had_error_finding = true;
+                result.error_finding_locations = 2;
+                assert_eq!(analysis::exit_code(&result, &config), exit);
+            }
+            let output = render_with_policy(&result, &config, exit);
+            assert!(output.contains("Error-level duplication: unavailable (no executable tests)"));
+            assert!(!output.contains("% — PASS"));
+            assert!(output.contains(if exit == ExitCode::OperationalError {
+                "Analysis policy: UNAVAILABLE"
+            } else {
+                "Analysis policy: FAIL"
+            }));
+        }
+    }
+
+    /// Every additional policy/footer write propagates errors in styled and plain output.
+    #[test]
+    fn context_footer_propagates_writer_failures() {
+        let mut result = result_exercising_every_banner();
+        result.incomplete_causes.findings_truncated = 1;
+        let config = config_with_threshold(0);
+        let context = TerminalReportContext::new(&config, ExitCode::OperationalError);
+        for tests in [0, 2] {
+            result.tests_analyzed = tests;
+            for no_color in [true, false] {
+                let reporter = TerminalReporter { no_color };
+                let mut full = Vec::new();
+                reporter
+                    .write_report_with_context(&result, &context, &mut full)
+                    .unwrap();
+                for budget in 0..full.len() {
+                    assert!(reporter
+                        .write_report_with_context(&result, &context, &mut FailingWriter { budget })
+                        .is_err());
+                }
+            }
+        }
     }
 
     /// Final output must retain the distinct remedies and uncertainty of all nine rules.
@@ -550,6 +766,23 @@ mod tests {
         }
     }
 
+    /// Library output summarizes facts without guessing the CLI policy.
+    #[test]
+    fn concise_footer_reports_counts_without_inventing_policy() {
+        let result = rendered_result(vec![finding_with_title(
+            Rule::DuplicateTest,
+            "a.test.ts",
+            "a",
+        )]);
+        assert_eq!(result.findings.len(), 1);
+        let output = render(&result);
+        assert!(
+            output.contains("Analyzed 2 tests in 1 file: 1 error, 0 warnings, 0 off; 0 suppressed")
+        );
+        assert!(output.ends_with("Found 1 finding.\n"));
+        assert!(!output.contains("threshold") && !output.contains("Analysis policy:"));
+    }
+
     /// Pins whitespace and the version even when there are no finding blocks.
     #[test]
     fn layout_empty_report() {
@@ -560,8 +793,9 @@ mod tests {
                 env!("CARGO_PKG_VERSION"),
                 "\n\n",
                 "No findings.\n\n",
-                "Summary: 0 errors, 0 warnings, 0 off (0 findings total)\n",
-                "Tests analyzed: 0\nFiles analyzed: 0\n"
+                "Analyzed 0 tests in 0 files: 0 errors, 0 warnings, 0 off; 0 suppressed\n",
+                "No executable tests analyzed; a test-level duplication rate is unavailable.\n\n",
+                "Found 0 findings.\n"
             )
         );
     }
@@ -586,8 +820,8 @@ mod tests {
                 "    related: src/b.test.ts:20:5  suite > b\n",
                 "    related: src/c.test.ts:30:1  suite > c\n",
                 "    action: Review whether to remove a redundant test or repair a test whose body misses its named behavior.\n\n",
-                "Summary: 1 error, 0 warnings, 0 off (1 finding total)\n",
-                "Tests analyzed: 4\nFiles analyzed: 2\n"
+                "Analyzed 4 tests in 2 files: 1 error, 0 warnings, 0 off; 0 suppressed\n\n",
+                "Found 1 finding.\n"
             )
         );
     }
@@ -630,8 +864,8 @@ mod tests {
                 "    --> src/a.test.ts:10:3  collision\n",
                 "    related: src/a.test.ts:20:3  collision (copy)\n",
                 "    action: Rename tests to distinguish their intent while preserving all test bodies.\n\n",
-                "Summary: 1 error, 1 warning, 1 off (3 findings total)\n",
-                "Tests analyzed: 2\nFiles analyzed: 1\n"
+                "Analyzed 2 tests in 1 file: 1 error, 1 warning, 1 off; 0 suppressed\n\n",
+                "Found 3 findings.\n"
             )
         );
     }
@@ -640,9 +874,9 @@ mod tests {
     fn empty_result_produces_a_clear_success_line_not_empty_output() {
         let output = render(&AnalysisResult::default());
         assert!(output.contains("No findings."));
-        assert!(output.contains("0 errors, 0 warnings, 0 off (0 findings total)"));
-        assert!(output.contains("Tests analyzed: 0"));
-        assert!(output.contains("Files analyzed: 0"));
+        assert!(output.contains("0 errors, 0 warnings, 0 off; 0 suppressed"));
+        assert!(output.contains("Analyzed 0 tests in 0 files"));
+        assert!(output.contains("Found 0 findings."));
     }
 
     #[test]
@@ -660,7 +894,7 @@ mod tests {
         assert!(output.contains("src/math.test.ts:20:3"));
         assert!(output.contains("suite > adds two numbers"));
         assert!(output.contains("suite > adds two numbers (copy)"));
-        assert!(output.contains("1 error, 0 warnings, 0 off (1 finding total)"));
+        assert!(output.contains("1 error, 0 warnings, 0 off; 0 suppressed"));
     }
 
     #[test]
@@ -827,7 +1061,7 @@ mod tests {
         finding.severity = Severity::Off;
         let result = rendered_result(vec![finding]);
         let output = render(&result);
-        assert!(output.contains("0 errors, 0 warnings, 1 off (1 finding total)"));
+        assert!(output.contains("0 errors, 0 warnings, 1 off; 0 suppressed"));
     }
 
     #[test]

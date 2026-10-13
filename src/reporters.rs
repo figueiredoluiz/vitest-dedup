@@ -5,8 +5,9 @@
 //! rejected by the CLI rather than silently interleaving a human report into a machine-parsed
 //! stream.
 //!
-//! Every reporter is a pure function of the extracted IR: it reads an `AnalysisResult` and
-//! writes to any [`std::io::Write`], with no knowledge of stdout, files, or the CLI. That
+//! Every reporter consumes the extracted IR and writes to any [`std::io::Write`], with no
+//! knowledge of stdout or files. The terminal reporter can additionally accept explicit CLI
+//! policy metadata; rendering itself never loads configuration or inspects the environment. That
 //! decoupling is what lets tests assert on a `Vec<u8>` buffer instead of process output, and
 //! what lets the orchestrator redirect a report to a file without either reporter knowing it.
 
@@ -25,7 +26,7 @@ pub use html::HtmlReporter;
 pub use json::{JsonReporter, JSON_SCHEMA_VERSION};
 pub use jsonl::{JsonlReporter, JSONL_SCHEMA_VERSION};
 pub use sarif::SarifReporter;
-pub use terminal::TerminalReporter;
+pub use terminal::{TerminalReportContext, TerminalReporter};
 
 /// Strips control characters, ANSI escapes, and bidi/invisible formatting from untrusted text.
 ///

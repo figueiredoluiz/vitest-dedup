@@ -16,7 +16,7 @@ use vitest_dedup::model::{AnalysisResult, IncompleteCauses};
 use vitest_dedup::modes;
 use vitest_dedup::reporters::{
     terminal_safe, HtmlReporter, JsonReporter, JsonlReporter, Reporter, SarifReporter,
-    TerminalReporter,
+    TerminalReportContext, TerminalReporter,
 };
 use vitest_dedup::vitest_config::{self, GlobalsDetection};
 use vitest_dedup::vitest_projects;
@@ -925,6 +925,8 @@ fn run() -> Result<ExitCode> {
     let jsonl_reporter = JsonlReporter::with_fingerprints(hook_fingerprints, test_fingerprints)
         .with_memory(memory_reports);
 
+    let exit_code = final_exit_code(args.fail_on_incomplete, args.fail_on_new, &result, &config);
+    let terminal_context = TerminalReportContext::new(&config, exit_code);
     let mut stdout = std::io::stdout().lock();
     let mut written = Vec::new();
     for reporter in &args.reporters {
@@ -935,7 +937,11 @@ fn run() -> Result<ExitCode> {
                     std::env::var_os("NO_COLOR").as_deref(),
                     enable_stdout_ansi,
                 );
-                TerminalReporter { no_color: !color }.write_report(&result, &mut stdout)?;
+                TerminalReporter { no_color: !color }.write_report_with_context(
+                    &result,
+                    &terminal_context,
+                    &mut stdout,
+                )?;
             }
             ReporterKind::Jsonl => jsonl_reporter.write_report(&result, &mut stdout)?,
             ReporterKind::Json | ReporterKind::Html | ReporterKind::Sarif => {
@@ -1103,12 +1109,7 @@ fn run() -> Result<ExitCode> {
         }
     }
 
-    Ok(final_exit_code(
-        args.fail_on_incomplete,
-        args.fail_on_new,
-        &result,
-        &config,
-    ))
+    Ok(exit_code)
 }
 
 /// Determines the final process exit code for a completed run, applying `--fail-on-incomplete` on
