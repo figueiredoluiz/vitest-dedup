@@ -311,6 +311,9 @@ const JS_MODULES = {
   'scripts/release/platform-package.mjs': 100,
   'scripts/release/prepare-npm-packages.mjs': 65,
   'scripts/release/publish-npm-packages.mjs': 97,
+  // The pure tag/ref/commit guard is exercised by release-context.test.mjs. Its CLI environment
+  // adapter runs in the workflow, outside the in-process coverage run (21/36 lines measured).
+  'scripts/release/validate-release-context.mjs': 58,
   'scripts/release/verify-npm-binaries.mjs': 76,
   'scripts/release/version-sites.mjs': 97,
 }

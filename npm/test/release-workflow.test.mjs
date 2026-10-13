@@ -1,5 +1,5 @@
 // The release and CI workflows are configuration, so nothing type-checks them and nothing runs
-// them until a tag is pushed. These assertions pin the properties whose violation is silent and
+// them until a dispatch. These assertions pin the properties whose violation is silent and
 // expensive: publishing out of order, publishing with a long-lived token, or shipping a gate that
 // no workflow invokes.
 import assert from 'node:assert/strict'
@@ -12,17 +12,16 @@ const release = await readFile(new URL('../../.github/workflows/release.yml', im
 const ci = await readFile(new URL('../../.github/workflows/ci.yml', import.meta.url), 'utf8')
 const rootManifest = JSON.parse(await readFile(new URL('../../package.json', import.meta.url), 'utf8'))
 
-test('full release tags trigger publishing but the major Action alias does not', () => {
-  const tagPattern = /^    tags: \["([^"]+)"\]$/m.exec(release)?.[1]
-  assert.equal(tagPattern, 'v*.*.*')
-
-  // GitHub's tag filter is a glob, not a SemVer validator; the version gate below remains
-  // responsible for rejecting malformed dotted tags.
-  const tagRegex = new RegExp(`^${tagPattern.replaceAll('.', '\\.').replaceAll('*', '[^/]*')}$`)
-  assert.match('v0.1.0', tagRegex)
-  assert.match('v0.2.0-rc.1', tagRegex)
-  assert.doesNotMatch('v0', tagRegex)
-  assert.doesNotMatch('v0.1', tagRegex)
+test('release publication is manual and all jobs check out the event commit', () => {
+  const trigger = release.slice(release.indexOf('\non:'), release.indexOf('\npermissions:'))
+  assert.match(trigger, /workflow_dispatch:/)
+  assert.doesNotMatch(trigger, /\n  push:/)
+  assert.equal((release.match(/- uses: actions\/checkout@v7/g) ?? []).length, 5)
+  assert.equal((release.match(/ref: \$\{\{ github\.sha \}\}/g) ?? []).length, 5)
+  const resolve = release.slice(release.indexOf('\n  resolve:'), release.indexOf('\n  build:'))
+  assert.match(resolve, /fetch-depth: 0/)
+  assert.match(resolve, /node scripts\/release\/validate-release-context\.mjs/)
+  assert.match(resolve, /tag_sha=\$\(git rev-parse --verify "refs\/tags\/v\$\{RELEASE_VERSION\}\^\{commit\}"\)/)
 })
 
 test('npm publishing runs only after the GitHub release exists', () => {
@@ -58,7 +57,7 @@ test('manual dispatch rehearses by default and publishing requires an explicit c
   assert.ok(rehearseStart > -1 && publishStart > rehearseStart && npmStart > publishStart)
   const rehearse = release.slice(rehearseStart, publishStart)
   const publish = release.slice(publishStart, npmStart)
-  assert.match(rehearse, /github\.event_name == 'workflow_dispatch' && inputs\.publish != true/)
+  assert.match(rehearse, /if: inputs\.publish != true/)
   assert.match(rehearse, /needs: \[resolve, build\]/)
   assert.match(rehearse, /verify-npm-binaries\.mjs/)
   assert.match(rehearse, /install-simulation\.test\.mjs/)
@@ -66,7 +65,7 @@ test('manual dispatch rehearses by default and publishing requires an explicit c
   assert.match(rehearse, /npm pack/)
   assert.match(rehearse, /actions\/upload-artifact@/)
   assert.doesNotMatch(rehearse, /action-gh-release|npm publish|publish-npm-packages\.mjs/)
-  assert.match(publish, /github\.event_name == 'push' \|\| inputs\.publish == true/)
+  assert.match(publish, /&& inputs\.publish == true/)
   assert.match(release, /permissions:\s*\n\s*contents: read/)
   assert.match(publish, /permissions:\s*\n\s*contents: write\s*\n\s*id-token: write\s*\n\s*attestations: write/)
 })

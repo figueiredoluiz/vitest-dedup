@@ -1,8 +1,6 @@
 name: Release
 
 on:
-  push:
-    tags: ["v*.*.*"]
   workflow_dispatch:
     inputs:
       version:
@@ -28,6 +26,9 @@ jobs:
       matrix: ${{ steps.matrix.outputs.matrix }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
       - uses: actions/setup-node@v7
         with:
           node-version: 24
@@ -59,6 +60,26 @@ jobs:
             exit 1
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
+      # A publish dispatch must start on an existing tag at the exact commit being built. A branch
+      # dispatch is still allowed for artifact-only rehearsals.
+      - name: Verify publication context
+        shell: bash
+        env:
+          PUBLISH_RELEASE: ${{ inputs.publish }}
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+          EVENT_REF: ${{ github.ref }}
+          EVENT_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          release_sha=$(git rev-parse HEAD)
+          tag_sha=""
+          if [ "$PUBLISH_RELEASE" = "true" ]; then
+            tag_sha=$(git rev-parse --verify "refs/tags/v${RELEASE_VERSION}^{commit}")
+          fi
+          PUBLISH_RELEASE="$PUBLISH_RELEASE" RELEASE_TAG="v$RELEASE_VERSION" \
+            EVENT_REF="$EVENT_REF" EVENT_SHA="$EVENT_SHA" \
+            RELEASE_SHA="$release_sha" TAG_SHA="$tag_sha" \
+            node scripts/release/validate-release-context.mjs
       # The tag and Cargo.toml must agree. A release whose binary reports a different version than
       # its tag is the kind of thing nobody notices until someone is debugging production.
       - name: Verify Cargo.toml matches the tag
@@ -93,6 +114,8 @@ jobs:
       matrix: ${{ fromJSON(needs.resolve.outputs.matrix) }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
       - uses: dtolnay/rust-toolchain@stable
       # rust-toolchain.toml overrides the action's default `stable` inside this checkout. Install
       # the target into that active toolchain, which is the one `cargo build` actually invokes.
@@ -157,11 +180,13 @@ jobs:
   rehearse:
     name: Rehearse release artifacts
     needs: [resolve, build]
-    if: github.event_name == 'workflow_dispatch' && inputs.publish != true
+    if: inputs.publish != true
     runs-on: ubuntu-22.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
       - uses: actions/setup-node@v7
         with:
           node-version: 24
@@ -211,7 +236,7 @@ jobs:
     needs: [resolve, build]
     # Check both identities: `actor` owns the original run's privileges, while
     # `triggering_actor` identifies someone who re-runs it later.
-    if: github.actor == github.repository_owner && github.triggering_actor == github.repository_owner && (github.event_name == 'push' || inputs.publish == true)
+    if: github.actor == github.repository_owner && github.triggering_actor == github.repository_owner && inputs.publish == true
     runs-on: ubuntu-22.04
     permissions:
       contents: write
@@ -219,6 +244,8 @@ jobs:
       attestations: write
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
       - uses: actions/setup-node@v7
         with:
           node-version: 24
@@ -292,6 +319,8 @@ jobs:
       VERSION: ${{ needs.resolve.outputs.version }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
       - uses: actions/setup-node@v7
         with:
           node-version: 24

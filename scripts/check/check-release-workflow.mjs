@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// Guard for `.github/workflows/release.yml`, which is otherwise exercised for the first time only
-// when a tag is pushed -- the worst possible moment to discover it is broken.
+// Guard for `.github/workflows/release.yml`, whose publication path is otherwise exercised only
+// by a manual dispatch from a release tag -- the worst moment to discover it is broken.
 //
 // This checks two independent things that nothing in CI previously touched:
 //
