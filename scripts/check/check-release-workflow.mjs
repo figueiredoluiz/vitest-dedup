@@ -47,6 +47,7 @@ const targetsMjsPath = join(repoRoot, 'npm', 'lib', 'targets.mjs')
 const prebuiltTargetsPath = join(repoRoot, 'npm', 'prebuilt-targets.json')
 
 const failures = []
+/** Records each workflow or target-manifest violation for one consolidated failure report. */
 const fail = (msg) => failures.push(msg)
 
 const releaseYml = readFileSync(releaseYmlPath, 'utf8')
@@ -95,6 +96,7 @@ if (payloads.length === 0) {
   console.log(`extracted ${payloads.length} 'node -e' payload(s) from release.yml`)
 }
 
+/** Executes an extracted workflow payload in its real working-directory shape. */
 function runPayload(label, invocation, cwd) {
   let stdout
   try {

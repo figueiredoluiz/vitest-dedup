@@ -361,7 +361,9 @@ const JS_PRODUCTION_GLOBS = [
   '.github/actions/vitest-dedup/index.js',
 ]
 
+/** Normalizes paths from platform-specific coverage reports to the recorded POSIX keys. */
 const posix = (path) => path.split(sep).join('/')
+/** Aligns numeric coverage columns without changing their values. */
 const pad = (value, width) => String(value).padStart(width)
 /** Renders a percentage for the table without throwing when the report did not supply one. */
 const pct = (value) => (Number.isFinite(value) ? value.toFixed(2) : String(value))
@@ -413,6 +415,7 @@ function checkFloor(failures, label, measured, floor) {
 // Rust
 // ---------------------------------------------------------------------------------------------
 
+/** Runs instrumented Rust tests and checks each measured module against its recorded floor. */
 function checkRust(failures) {
   const work = mkdtempSync(join(tmpdir(), 'vitest-dedup-cov-rust-'))
   const reportPath = join(work, 'rust-cov.json')
@@ -569,6 +572,7 @@ function parseLcov(text) {
   return files
 }
 
+/** Runs the enumerated JS suites and checks line coverage without treating missing files as zero. */
 function checkJs(failures) {
   const work = mkdtempSync(join(tmpdir(), 'vitest-dedup-cov-js-'))
   const lcovPath = join(work, 'js-cov.lcov')
@@ -702,6 +706,7 @@ function checkJs(failures) {
   }
 }
 
+/** Selects requested coverage gates and reports all floor failures together. */
 function main() {
   const argv = process.argv.slice(2)
   const unknown = argv.filter((flag) => flag !== '--rust' && flag !== '--js')

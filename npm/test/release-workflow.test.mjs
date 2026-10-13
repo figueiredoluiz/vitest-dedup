@@ -35,6 +35,15 @@ test('npm publishing runs only after the GitHub release exists', () => {
   assert.doesNotMatch(job, /npm publish/)
 })
 
+test('publication checks the live tag immediately before release creation and pins its target', () => {
+  const publish = release.slice(release.indexOf('\n  publish:'), release.indexOf('\n  publish-npm:'))
+  const finalCheck = publish.indexOf('validate-release-context.mjs --remote')
+  const releaseAction = publish.indexOf('softprops/action-gh-release@v3')
+  assert.ok(finalCheck > -1 && releaseAction > finalCheck)
+  assert.match(publish, /target_commitish: \$\{\{ github\.sha \}\}/)
+  assert.match(publish.slice(publish.indexOf('Revalidate live tag'), releaseAction), /EVENT_SHA: \$\{\{ github\.sha \}\}/)
+})
+
 test('only the repository owner can publish or rerun a publication', () => {
   const publishStart = release.indexOf('\n  publish:')
   const npmStart = release.indexOf('\n  publish-npm:')
