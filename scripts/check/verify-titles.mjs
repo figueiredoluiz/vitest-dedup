@@ -26,7 +26,7 @@
 // empty lists would pass while measuring nothing.
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { defaultBinary, runAnalyzerJsonl } from './lib/run-analyzer.mjs'
 
@@ -85,7 +85,10 @@ const outDir = mkdtempSync(join(tmpdir(), 'vitest-dedup-titles-'))
 const vitestJson = join(outDir, 'vitest.json')
 const vitestRun = spawnSync(
   process.execPath,
-  [vitestEntry, 'run', FIXTURE, IMPORTED_FIXTURE, '--reporter=json', `--outputFile=${vitestJson}`],
+  // Cargo's shared target cache can contain an unpacked package with copies of these fixtures.
+  // Vitest treats the file arguments as filters, so exclude that generated tree at discovery.
+  [vitestEntry, 'run', FIXTURE, IMPORTED_FIXTURE, '--exclude', '**/target/**',
+    '--reporter=json', `--outputFile=${vitestJson}`],
   { encoding: 'utf8' },
 )
 if (vitestRun.error || vitestRun.status !== 0 || !existsSync(vitestJson)) {
@@ -100,12 +103,21 @@ if (vitestRun.error || vitestRun.status !== 0 || !existsSync(vitestJson)) {
   process.exit(2)
 }
 const vitestReport = JSON.parse(readFileSync(vitestJson, 'utf8'))
+const normalizePath = (path) => path.replaceAll('\\', '/')
+const [titleFile, importedFile] = [FIXTURE, IMPORTED_FIXTURE].map((path) => normalizePath(resolve(path)))
+const expectedFiles = [titleFile, importedFile].sort()
+const reportedFiles = vitestReport.testResults.map((result) => normalizePath(result.name)).sort()
+if (JSON.stringify(reportedFiles) !== JSON.stringify(expectedFiles)) {
+  console.error(`FAIL: Vitest reported unexpected fixture files: ${JSON.stringify(reportedFiles)}`)
+  rmSync(outDir, { recursive: true, force: true })
+  process.exit(2)
+}
 const vitestTitles = vitestReport.testResults
-  .filter((result) => result.name.replaceAll('\\', '/').endsWith('/title-values.test.ts'))
+  .filter((result) => normalizePath(result.name) === titleFile)
   .flatMap((result) => result.assertionResults)
   .map((assertion) => assertion.title)
 const importedTitles = vitestReport.testResults
-  .filter((result) => result.name.replaceAll('\\', '/').endsWith('/imported.test.ts'))
+  .filter((result) => normalizePath(result.name) === importedFile)
   .flatMap((result) => result.assertionResults)
   .map((assertion) => [...assertion.ancestorTitles, assertion.title].join(' > '))
 rmSync(outDir, { recursive: true, force: true })
