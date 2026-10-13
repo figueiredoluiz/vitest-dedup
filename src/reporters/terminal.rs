@@ -15,6 +15,7 @@ use crate::{analysis, cli::ExitCode, config::Config};
 use anyhow::Result;
 use std::collections::BTreeMap;
 use std::io::Write;
+use std::time::Duration;
 
 /// Renders an [`AnalysisResult`] as text with optional terminal colors.
 ///
@@ -29,17 +30,55 @@ pub struct TerminalReporter {
     pub no_color: bool,
 }
 
+/// Monotonic phase durations supplied by the caller, excluding report generation and I/O.
+#[derive(Debug, Clone, Copy)]
+pub struct DetectionTiming {
+    discovery: Duration,
+    parsing: Duration,
+    analysis: Duration,
+}
+
+impl DetectionTiming {
+    /// Records discovery, primary parsing/extraction, and analysis durations.
+    pub fn new(discovery: Duration, parsing: Duration, analysis: Duration) -> Self {
+        Self {
+            discovery,
+            parsing,
+            analysis,
+        }
+    }
+
+    fn total(self) -> Duration {
+        self.discovery
+            .saturating_add(self.parsing)
+            .saturating_add(self.analysis)
+    }
+}
+
 /// CLI policy supplied explicitly; library rendering never invents configuration or success.
 #[derive(Debug, Clone, Copy)]
 pub struct TerminalReportContext<'a> {
     config: &'a Config,
     exit_code: ExitCode,
+    timing: Option<DetectionTiming>,
 }
 
 impl<'a> TerminalReportContext<'a> {
     /// Borrows the effective config and the caller's analysis-policy decision before report I/O.
     pub fn new(config: &'a Config, exit_code: ExitCode) -> Self {
-        Self { config, exit_code }
+        Self {
+            config,
+            exit_code,
+            timing: None,
+        }
+    }
+}
+
+impl TerminalReportContext<'_> {
+    /// Adds optional phase timings; omission keeps library output deterministic.
+    pub fn with_timing(mut self, timing: Option<DetectionTiming>) -> Self {
+        self.timing = timing;
+        self
     }
 }
 
@@ -290,6 +329,19 @@ impl TerminalReporter {
             )
         };
         writeln!(writer, "{}", self.colorize(found, "90"))?;
+        if let Some(timing) = context.and_then(|context| context.timing) {
+            writeln!(
+                writer,
+                "{}",
+                self.colorize(
+                    format!(
+                        "Detection time: {:.1} ms",
+                        timing.total().as_secs_f64() * 1_000.0
+                    ),
+                    "90",
+                )
+            )?;
+        }
         Ok(())
     }
 }
@@ -639,13 +691,62 @@ mod tests {
         }
     }
 
+    /// Each phase participates in the terminal total, with controlled precision and styling.
+    #[test]
+    fn detection_time_sums_supplied_phases_and_styles_only_when_requested() {
+        let config = config_with_threshold(0);
+        let result = AnalysisResult::default();
+        for (phases, expected) in [
+            ([0, 0, 0], "0.0"),
+            ([100_000, 0, 0], "100.0"),
+            ([0, 200_000, 0], "200.0"),
+            ([0, 0, 300_000], "300.0"),
+            ([100_000, 200_000, 300_000], "600.0"),
+            ([100, 100, 175], "0.4"),
+        ] {
+            let timing = DetectionTiming::new(
+                Duration::from_micros(phases[0]),
+                Duration::from_micros(phases[1]),
+                Duration::from_micros(phases[2]),
+            );
+            let context = TerminalReportContext::new(&config, ExitCode::OperationalError)
+                .with_timing(Some(timing));
+            for no_color in [true, false] {
+                let mut bytes = Vec::new();
+                TerminalReporter { no_color }
+                    .write_report_with_context(&result, &context, &mut bytes)
+                    .unwrap();
+                let text = String::from_utf8(bytes).unwrap();
+                let line = format!("Detection time: {expected} ms");
+                assert!(text.ends_with(&if no_color {
+                    format!("{line}\n")
+                } else {
+                    format!("\x1b[90m{line}\x1b[0m\n")
+                }));
+                assert_eq!(text.matches("Detection time:").count(), 1);
+            }
+        }
+        let context =
+            TerminalReportContext::new(&config, ExitCode::OperationalError).with_timing(None);
+        let mut bytes = Vec::new();
+        TerminalReporter::new()
+            .write_report_with_context(&result, &context, &mut bytes)
+            .unwrap();
+        assert!(!String::from_utf8(bytes)
+            .unwrap()
+            .contains("Detection time:"));
+    }
+
     /// Every additional policy/footer write propagates errors in styled and plain output.
     #[test]
     fn context_footer_propagates_writer_failures() {
         let mut result = result_exercising_every_banner();
         result.incomplete_causes.findings_truncated = 1;
         let config = config_with_threshold(0);
-        let context = TerminalReportContext::new(&config, ExitCode::OperationalError);
+        let context =
+            TerminalReportContext::new(&config, ExitCode::OperationalError).with_timing(Some(
+                DetectionTiming::new(Duration::ZERO, Duration::ZERO, Duration::ZERO),
+            ));
         for tests in [0, 2] {
             result.tests_analyzed = tests;
             for no_color in [true, false] {

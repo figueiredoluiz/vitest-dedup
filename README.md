@@ -132,7 +132,7 @@ the published checksum before running it. `version` is required and exact, so th
 the code it runs.
 
 The inputs are `path`, `config`, `threshold`, `reporters`, `output`, `rule`, `globals`,
-`fail-on-incomplete`, `baseline`, `fail-on-new`, `changed-since`, and `version`. `path` is the
+`no-metrics`, `fail-on-incomplete`, `baseline`, `fail-on-new`, `changed-since`, and `version`. `path` is the
 positional argument, `version` selects the release binary, and each of the others maps to the
 flag of the same name. `rule` accepts several overrides separated by newlines or commas. The JSON
 reporter is always enabled so the outputs below can be read. `--update-baseline` is deliberately

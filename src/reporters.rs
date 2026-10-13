@@ -26,7 +26,7 @@ pub use html::HtmlReporter;
 pub use json::{JsonReporter, JSON_SCHEMA_VERSION};
 pub use jsonl::{JsonlReporter, JSONL_SCHEMA_VERSION};
 pub use sarif::SarifReporter;
-pub use terminal::{TerminalReportContext, TerminalReporter};
+pub use terminal::{DetectionTiming, TerminalReportContext, TerminalReporter};
 
 /// Strips control characters, ANSI escapes, and bidi/invisible formatting from untrusted text.
 ///

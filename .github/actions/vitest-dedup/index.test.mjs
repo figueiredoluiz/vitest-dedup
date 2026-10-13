@@ -105,6 +105,11 @@ describe("detectLibc", () => {
 });
 
 describe("buildArguments", () => {
+  for (const value of [undefined, "", "false", "FALSE", "TRUE", true, "true"]) {
+    test(`forwards no-metrics only for exact true string: ${JSON.stringify(value)}`, () => {
+      assert.equal(buildArguments({ path: ".", noMetrics: value }).includes("--no-metrics"), value === "true");
+    });
+  }
   test("uses defaults when every input is empty/absent", () => {
     const args = buildArguments({
       path: "",
@@ -538,6 +543,18 @@ describe("runAction", () => {
       },
       outputs: () => parseGithubOutput(readFileSync(githubOutputPath, "utf8")),
     };
+  }
+
+  for (const value of ["false", "true"]) {
+    test(`reads no-metrics action input ${value} and forwards it to the binary`, async (t) => {
+      const fixture = actionFixture(t);
+      const argvPath = join(fixture.dir, "argv.json");
+      const report = { schemaVersion: "0.1", testsAnalyzed: 1, filesAnalyzed: 1, incomplete: false, findings: [] };
+      const script = reportWriter(fixture.reportPath, report,
+        `writeFileSync(${JSON.stringify(argvPath)}, JSON.stringify(process.argv.slice(2)));`);
+      assert.equal(await fixture.run(script, { "INPUT_NO-METRICS": value }), 0);
+      assert.equal(JSON.parse(readFileSync(argvPath, "utf8")).includes("--no-metrics"), value === "true");
+    });
   }
 
   // Keep the payload and optional extra writes visible in each case; this only quotes a script.

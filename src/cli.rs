@@ -179,6 +179,10 @@ struct RawOptions {
     #[arg(long, global = true)]
     debug_memory: bool,
 
+    /// Omit the terminal detection-time footer for reproducible output.
+    #[arg(long, global = true)]
+    no_metrics: bool,
+
     /// Override one rule's severity, e.g. `--rule duplicate-test=warning`. Repeatable; the last
     /// occurrence for a given rule wins.
     #[arg(
@@ -308,6 +312,8 @@ pub struct ParsedArgs {
     /// Whether the `jsonl` stream should carry a per-phase retained-heap record
     /// (`--debug-memory`). Only ever `true` alongside `ReporterKind::Jsonl`.
     pub debug_memory: bool,
+    /// Whether to omit terminal timing; machine reports never include these metrics.
+    pub no_metrics: bool,
     /// Rule severity overrides parsed from repeated `--rule` flags.
     pub rule_overrides: BTreeMap<Rule, Severity>,
     /// Whether an incomplete analysis should be treated as an operational error, and which
@@ -460,6 +466,7 @@ impl ParsedArgs {
             output: cli.options.output,
             emit_test_fingerprints: cli.options.emit_test_fingerprints,
             debug_memory: cli.options.debug_memory,
+            no_metrics: cli.options.no_metrics,
             rule_overrides: cli.options.rule.into_iter().collect(),
             fail_on_incomplete: cli.options.fail_on_incomplete,
             globals: cli.options.globals,
@@ -590,6 +597,20 @@ mod tests {
             ParsedArgs::parse_from(["vitest-dedup", "--rule", "duplicate-test=critical"]).is_err()
         );
         assert!(ParsedArgs::parse_from(["vitest-dedup", "--rule", "duplicate-test"]).is_err());
+    }
+
+    #[test]
+    fn no_metrics_is_global_and_off_by_default() {
+        assert!(!ParsedArgs::parse_from(["vitest-dedup"]).unwrap().no_metrics);
+        for argv in [
+            vec!["vitest-dedup", "--no-metrics", "."],
+            vec!["vitest-dedup", ".", "--no-metrics"],
+            vec!["vitest-dedup", "check", ".", "--no-metrics"],
+            vec!["vitest-dedup", "--no-metrics", "check", "."],
+            vec!["vitest-dedup", "--reporters", "jsonl", "--no-metrics"],
+        ] {
+            assert!(ParsedArgs::parse_from(argv).unwrap().no_metrics);
+        }
     }
 
     #[test]

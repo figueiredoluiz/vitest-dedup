@@ -23,7 +23,7 @@ fn terminal_layout_preserves_duplicate_outcome() {
     let run = Command::cargo_bin("vitest-dedup")
         .unwrap()
         .arg(dir.path())
-        .args(["--reporters", "terminal,json", "--output"])
+        .args(["--no-metrics", "--reporters", "terminal,json", "--output"])
         .arg(&prefix)
         .output()
         .unwrap();
@@ -238,4 +238,93 @@ fn report_io_failure_still_exits_operationally_after_analysis_passes() {
     assert!(String::from_utf8(run.stderr)
         .unwrap()
         .contains("creating report directory"));
+}
+
+/// Timings are terminal-only; opt-out preserves exact output and every machine artifact.
+#[test]
+fn detection_timing_optout_preserves_machine_reports_and_deterministic_terminal() {
+    let dir = duplicate_project();
+    let prefix = dir.path().join("report");
+    for stdout_reporter in ["terminal", "jsonl", ""] {
+        let reporters = if stdout_reporter.is_empty() {
+            "json,html,sarif".to_owned()
+        } else {
+            format!("{stdout_reporter},json,html,sarif")
+        };
+        let mut reference = None;
+        let mut disabled_stdout = None;
+        for disabled in [false, true, true] {
+            let mut cmd = Command::cargo_bin("vitest-dedup").unwrap();
+            cmd.arg(dir.path())
+                .args(["--reporters", &reporters, "--output"])
+                .arg(&prefix);
+            if disabled {
+                cmd.arg("--no-metrics");
+            }
+            let run = cmd.output().unwrap();
+            assert_eq!(run.status.code(), Some(1));
+            let json = std::fs::read(prefix.with_extension("json")).unwrap();
+            let report: Value = serde_json::from_slice(&json).unwrap();
+            assert_eq!(report["testsAnalyzed"], 2);
+            assert_eq!(report["filesAnalyzed"], 1);
+            assert_eq!(report["findings"].as_array().unwrap().len(), 1);
+            let artifacts = [
+                json,
+                std::fs::read(prefix.with_extension("html")).unwrap(),
+                std::fs::read(prefix.with_extension("sarif")).unwrap(),
+            ];
+            assert_eq!(reference.get_or_insert(artifacts.clone()), &artifacts);
+            let text = String::from_utf8(run.stdout.clone()).unwrap();
+            let timing_lines: Vec<_> = text
+                .lines()
+                .filter(|line| line.starts_with("Detection time:"))
+                .collect();
+            assert_eq!(
+                timing_lines.len(),
+                usize::from(stdout_reporter == "terminal" && !disabled)
+            );
+            if let Some(line) = timing_lines.first() {
+                let value = line
+                    .strip_prefix("Detection time: ")
+                    .unwrap()
+                    .strip_suffix(" ms")
+                    .unwrap();
+                assert!(value.parse::<f64>().unwrap().is_finite());
+                assert!(value.parse::<f64>().unwrap() >= 0.0);
+                assert_eq!(value.split('.').nth(1).unwrap().len(), 1);
+                assert!(text.ends_with(&format!("{line}\n")));
+            }
+            if disabled {
+                assert_eq!(
+                    disabled_stdout.get_or_insert(run.stdout.clone()),
+                    &run.stdout
+                );
+            }
+        }
+    }
+}
+
+/// A completed report still has real timing when no executable work or full coverage was possible.
+#[test]
+fn detection_timing_does_not_change_zero_work_or_incomplete_policy() {
+    let dir = tempfile::tempdir().unwrap();
+    for invalid_file in [false, true] {
+        if invalid_file {
+            std::fs::write(dir.path().join("unreadable.test.ts"), [0xff]).unwrap();
+        }
+        for disabled in [false, true] {
+            let flags = if disabled {
+                vec!["--no-metrics", "--fail-on-incomplete"]
+            } else {
+                vec!["--fail-on-incomplete"]
+            };
+            let (run, report) = policy_report(dir.path(), &flags);
+            assert_eq!(run.status.code(), Some(2));
+            assert_eq!(report["testsAnalyzed"], 0);
+            assert_eq!(report["findings"].as_array().unwrap().len(), 0);
+            let text = String::from_utf8(run.stdout).unwrap();
+            assert_eq!(text.contains("Detection time:"), !disabled);
+            assert!(text.contains("Analysis policy: UNAVAILABLE"));
+        }
+    }
 }

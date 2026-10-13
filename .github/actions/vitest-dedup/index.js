@@ -133,6 +133,9 @@ export function buildArguments(inputs) {
   // Boolean CLI flags take no value, so the only sound test is exact string equality against
   // "true" -- GitHub Actions always passes boolean-looking inputs through as strings, and anything
   // else (empty, "false", "1", a typo) must not silently turn the flag on.
+  if (inputs.noMetrics === "true") {
+    args.push("--no-metrics");
+  }
   if (inputs.globals === "true") {
     args.push("--globals");
   }
@@ -492,6 +495,7 @@ export async function runAction({ env = process.env, cwd = process.cwd() } = {})
     output: readInput(env, "output", "reports/vitest-dedup"),
     rule: readInput(env, "rule", ""),
     globals: readInput(env, "globals", "false"),
+    noMetrics: readInput(env, "no-metrics", "false"),
     failOnIncomplete: readInput(env, "fail-on-incomplete", "false"),
     baseline: readInput(env, "baseline", ""),
     failOnNew: readInput(env, "fail-on-new", ""),

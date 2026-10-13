@@ -51,6 +51,15 @@ not certify the whole repository. This is the analysis decision before report wr
 a later output error still exits operationally. Library `write_report` omits threshold
 and policy labels; callers can supply `TerminalReportContext` to `write_report_with_context`.
 
+The CLI appends `Detection time: N.N ms` after the finding count, matching the sum of
+monotonic discovery, primary parsing/extraction and analysis durations. Discovery includes
+project resolution and globals detection. Baseline preparation (including a ref-baseline
+analysis), baseline writes and report generation/I/O are excluded. Use `--no-metrics` for
+byte-stable terminal output across equivalent runs. The Action exposes the same `no-metrics`
+input (default `false`). This is a CLI presentation option, not a configuration-file key.
+Machine reports contain no timing fields and are unchanged by the flag. Library reports omit
+timing unless the caller supplies `DetectionTiming` through `TerminalReportContext::with_timing`.
+
 Color is enabled only when stdout is a terminal. Set `NO_COLOR` to any nonempty value
 to disable it; an empty value allows color. Rule headings are bold cyan, error/warning
 labels red/yellow, locations blue, and off labels and summary counts gray. Piped output

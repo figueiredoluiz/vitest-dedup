@@ -38,6 +38,9 @@ inputs:
       discovered file's only declarations are statically empty `.each`/`.for` tables, a shape
       Vitest itself also runs zero times, in which case a distinct message names that instead).
     default: "false"
+  no-metrics:
+    description: Omit the terminal detection-time footer for reproducible logs
+    default: "false"
   fail-on-incomplete:
     description: >-
       Fail when the analysis could not fully cover the discovered corpus. "true" (or "any")

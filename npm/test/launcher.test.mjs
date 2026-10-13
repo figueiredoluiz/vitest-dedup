@@ -147,7 +147,7 @@ test('VITEST_DEDUP_BINARY overrides platform resolution entirely', async () => {
 
 test('argv is forwarded verbatim', () => {
   let seen
-  run(['check', 'src', '--rule', 'duplicate-test=warning', '--', '--not-a-flag'], {
+  run(['check', 'src', '--no-metrics', '--rule', 'duplicate-test=warning', '--', '--not-a-flag'], {
     binary: '/controlled/vitest-dedup',
     spawn(binary, args, options) {
       seen = { binary, args, options }
@@ -156,7 +156,7 @@ test('argv is forwarded verbatim', () => {
   })
   assert.deepEqual(seen, {
     binary: '/controlled/vitest-dedup',
-    args: ['check', 'src', '--rule', 'duplicate-test=warning', '--', '--not-a-flag'],
+    args: ['check', 'src', '--no-metrics', '--rule', 'duplicate-test=warning', '--', '--not-a-flag'],
     options: { stdio: 'inherit' },
   })
 })

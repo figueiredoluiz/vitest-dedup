@@ -9,14 +9,15 @@ use std::collections::BTreeSet;
 use std::io::{IsTerminal, Write};
 use std::path::PathBuf;
 use std::process::ExitCode as ProcessExitCode;
+use std::time::Instant;
 use vitest_dedup::cli::{ExitCode, ParsedArgs, ReporterKind};
 use vitest_dedup::config::Config;
 use vitest_dedup::frontend::{self, Globals};
 use vitest_dedup::model::{AnalysisResult, IncompleteCauses};
 use vitest_dedup::modes;
 use vitest_dedup::reporters::{
-    terminal_safe, HtmlReporter, JsonReporter, JsonlReporter, Reporter, SarifReporter,
-    TerminalReportContext, TerminalReporter,
+    terminal_safe, DetectionTiming, HtmlReporter, JsonReporter, JsonlReporter, Reporter,
+    SarifReporter, TerminalReportContext, TerminalReporter,
 };
 use vitest_dedup::vitest_config::{self, GlobalsDetection};
 use vitest_dedup::vitest_projects;
@@ -301,6 +302,11 @@ fn run() -> Result<ExitCode> {
         _ => None,
     };
 
+    // Collect only for a terminal report that requested timing. Phase boundaries exclude
+    // baseline preparation and report generation, so slow output cannot inflate detection time.
+    let metrics_enabled = !args.no_metrics && args.reporters.contains(&ReporterKind::Terminal);
+    let discovery_started = metrics_enabled.then(Instant::now);
+
     // Per-project resolution first: a monorepo's `test.projects` entries each resolve their own
     // config and can diverge via `extends: false`, so a single repo-wide answer is wrong for at
     // least one project. Falls back to the single-project detector when no projects are declared.
@@ -398,6 +404,8 @@ fn run() -> Result<ExitCode> {
             _ => Globals::Disabled,
         }
     };
+    let discovery_time = discovery_started.map(|started| started.elapsed());
+
     // `--baseline-from-ref`: the baseline is the base revision's own finding set, computed by a
     // contained second analysis pass over git blobs (see `modes::revision_sources` for the
     // containment design -- no checkout, no repository-controlled code runs). Built before the
@@ -455,6 +463,8 @@ fn run() -> Result<ExitCode> {
         }
         None => None,
     };
+
+    let parsing_started = metrics_enabled.then(Instant::now);
 
     // Each cause is counted where it is detected, and `discovered.incomplete` is NOT one cause
     // -- it is the aggregate of several. Reading it as `discovery_failed` printed "directory
@@ -856,6 +866,8 @@ fn run() -> Result<ExitCode> {
         Vec::new()
     };
 
+    let parsing_time = parsing_started.map(|started| started.elapsed());
+    let analysis_started = metrics_enabled.then(Instant::now);
     let mut result = analysis::analyze_with_modes(
         tests,
         &config,
@@ -869,6 +881,12 @@ fn run() -> Result<ExitCode> {
             suppressions: &inline_suppressions,
         },
     )?;
+
+    let timing = discovery_time.zip(parsing_time).zip(analysis_started).map(
+        |((discovery, parsing), started)| {
+            DetectionTiming::new(discovery, parsing, started.elapsed())
+        },
+    );
 
     // `--update-baseline` records this run as the accepted state. Everything it records is
     // therefore baselined by definition, which is what the reports below should show.
@@ -926,7 +944,7 @@ fn run() -> Result<ExitCode> {
         .with_memory(memory_reports);
 
     let exit_code = final_exit_code(args.fail_on_incomplete, args.fail_on_new, &result, &config);
-    let terminal_context = TerminalReportContext::new(&config, exit_code);
+    let terminal_context = TerminalReportContext::new(&config, exit_code).with_timing(timing);
     let mut stdout = std::io::stdout().lock();
     let mut written = Vec::new();
     for reporter in &args.reporters {
