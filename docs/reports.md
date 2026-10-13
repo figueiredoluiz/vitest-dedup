@@ -32,6 +32,12 @@ Each finding shows its severity and message, followed by a `-->` primary locatio
 Baselined findings remain visible with a `[baselined]` marker and their original severity.
 Incomplete-run and changed-file warnings appear before findings.
 
+Each finding ends with a rule-specific `action:` line. Name collisions call for renaming;
+parameterization preserves every case and assertion. Similarity and subsumption require
+review before changing tests. Exact duplicates prompt review of removal or repair of
+intended coverage; cross-file duplication may be deliberate. Actions also remain visible
+for baselined findings and rules configured at severity `off`.
+
 Color is enabled only when stdout is a terminal. Set `NO_COLOR` to any nonempty value
 to disable it; an empty value allows color. Rule headings are bold cyan, error/warning
 labels red/yellow, locations blue, and off labels and summary counts gray. Piped output

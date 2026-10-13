@@ -45,7 +45,8 @@ fn terminal_layout_preserves_duplicate_outcome() {
             "duplicate-test\n\n",
             "  [error] 2 tests have identical bodies under an equivalent context\n",
             "    --> sample.test.ts:2:1  first total\n",
-            "    related: sample.test.ts:3:1  second total\n\n",
+            "    related: sample.test.ts:3:1  second total\n",
+            "    action: Review whether to remove a redundant test or repair a test whose body misses its named behavior.\n\n",
             "Summary: 1 error, 0 warnings, 0 off (1 finding total)\n",
             "Tests analyzed: 2\nFiles analyzed: 1\n"
         )

@@ -10,7 +10,7 @@ use super::shared::{
     findings_by_file, forward_slash_path, severity_label, terminal_safe, SeverityCounts,
 };
 use super::Reporter;
-use crate::model::AnalysisResult;
+use crate::model::{AnalysisResult, Rule};
 use anyhow::Result;
 use std::collections::BTreeMap;
 use std::io::Write;
@@ -156,6 +156,7 @@ impl Reporter for TerminalReporter {
                             terminal_safe(title)
                         )?;
                     }
+                    writeln!(writer, "    action: {}", suggested_action(rule))?;
                 }
                 writeln!(writer)?;
             }
@@ -218,6 +219,39 @@ impl Reporter for TerminalReporter {
             self.colorize(format!("Files analyzed: {}", result.files_analyzed), "90")
         )?;
         Ok(())
+    }
+}
+
+/// Tool-owned remedies preserve each rule's certainty, coverage and affected construct.
+fn suggested_action(rule: Rule) -> &'static str {
+    match rule {
+        Rule::DuplicateTest => {
+            "Review whether to remove a redundant test or repair a test whose body misses its named behavior."
+        }
+        Rule::DuplicateTestName => {
+            "Rename tests to distinguish their intent while preserving all test bodies."
+        }
+        Rule::ParameterizationCandidate => {
+            "Consolidate into a parameterized table while preserving every case and assertion."
+        }
+        Rule::NearDuplicateTest => {
+            "Review equivalence before consolidating into a parameterized table or shared helper; preserve every case."
+        }
+        Rule::CrossFileDuplicate => {
+            "Review whether duplication across files is intentional before consolidating or removing a copy."
+        }
+        Rule::SubsumedTest => {
+            "Review whether the smaller test adds distinct coverage before changing either test."
+        }
+        Rule::DuplicateSuite => {
+            "Review whether to remove the duplicated describe block or repair its intended coverage."
+        }
+        Rule::DuplicateEachRow => {
+            "Review whether to remove a duplicate row while retaining every distinct case."
+        }
+        Rule::RedundantHook => {
+            "Review whether to remove the nested hook; its ancestor already provides the same setup."
+        }
     }
 }
 
@@ -413,6 +447,109 @@ mod tests {
         assert_eq!(plain, render(&result));
     }
 
+    /// Final output must retain the distinct remedies and uncertainty of all nine rules.
+    #[test]
+    fn actions_follow_every_rule_contract_including_baseline_and_off() {
+        use crate::model::Verdict;
+        let cases: &[(Rule, &[&str])] = &[
+            (
+                Rule::DuplicateTest,
+                &["redundant test", "repair", "named behavior"],
+            ),
+            (
+                Rule::DuplicateTestName,
+                &["Rename", "intent", "all test bodies"],
+            ),
+            (
+                Rule::ParameterizationCandidate,
+                &["parameterized table", "every case", "assertion"],
+            ),
+            (
+                Rule::NearDuplicateTest,
+                &[
+                    "Review equivalence",
+                    "parameterized table",
+                    "preserve every case",
+                ],
+            ),
+            (
+                Rule::CrossFileDuplicate,
+                &["across files", "intentional", "before"],
+            ),
+            (
+                Rule::SubsumedTest,
+                &["smaller test", "distinct coverage", "before changing"],
+            ),
+            (
+                Rule::DuplicateSuite,
+                &["describe block", "repair", "coverage"],
+            ),
+            (
+                Rule::DuplicateEachRow,
+                &["duplicate row", "every distinct case"],
+            ),
+            (
+                Rule::RedundantHook,
+                &["nested hook", "ancestor", "same setup"],
+            ),
+        ];
+        assert_eq!(cases.len(), Rule::ALL.len());
+        for rule in Rule::ALL {
+            assert_eq!(
+                cases
+                    .iter()
+                    .filter(|(candidate, _)| candidate == rule)
+                    .count(),
+                1
+            );
+        }
+        for &(rule, required) in cases {
+            for severity in [Severity::Error, Severity::Warning, Severity::Off] {
+                for baselined in [false, true] {
+                    let mut finding = finding_with_title(rule, "src/a.test.ts", "first");
+                    finding.severity = severity;
+                    finding.baselined = baselined;
+                    let mut result = rendered_result(vec![finding]);
+                    super::super::test_support::append_third_participant(&mut result);
+                    result.findings[0].inert.push(false);
+                    assert_eq!(result.findings.len(), 1);
+                    assert_eq!(result.findings[0].locations.len(), 3);
+                    let output = render(&result);
+                    let actions: Vec<_> = output
+                        .lines()
+                        .filter_map(|line| line.strip_prefix("    action: "))
+                        .collect();
+                    assert_eq!(actions.len(), 1, "{rule:?}: {output}");
+                    let action = actions[0];
+                    for phrase in required {
+                        assert!(
+                            action.contains(phrase),
+                            "{rule:?} missing {phrase}: {action}"
+                        );
+                    }
+                    match rule.verdict() {
+                        Verdict::Redundant | Verdict::SimilarUncertain => {
+                            assert!(action.starts_with("Review"));
+                        }
+                        Verdict::NameCollision => assert!(action.starts_with("Rename")),
+                        Verdict::Consolidatable => assert!(action.starts_with("Consolidate")),
+                    }
+                    if rule.verdict() != Verdict::Redundant {
+                        assert!(
+                            !action.contains("remov") && !action.contains("delet"),
+                            "{rule:?} must not prescribe deletion: {action}"
+                        );
+                    }
+                    assert!(
+                        output.find("related: src/c.test.ts:30:1").unwrap()
+                            < output.find("    action: ").unwrap()
+                    );
+                    assert_eq!(output.contains("[baselined]"), baselined);
+                }
+            }
+        }
+    }
+
     /// Pins whitespace and the version even when there are no finding blocks.
     #[test]
     fn layout_empty_report() {
@@ -447,7 +584,8 @@ mod tests {
                 "  [error] same body\n",
                 "    --> src/a.test.ts:10:3  suite > a\n",
                 "    related: src/b.test.ts:20:5  suite > b\n",
-                "    related: src/c.test.ts:30:1  suite > c\n\n",
+                "    related: src/c.test.ts:30:1  suite > c\n",
+                "    action: Review whether to remove a redundant test or repair a test whose body misses its named behavior.\n\n",
                 "Summary: 1 error, 0 warnings, 0 off (1 finding total)\n",
                 "Tests analyzed: 4\nFiles analyzed: 2\n"
             )
@@ -481,14 +619,17 @@ mod tests {
                 "duplicate-test\n\n",
                 "  [error] [baselined] accepted copy\n",
                 "    --> src/a.test.ts:10:3  accepted\n",
-                "    related: src/a.test.ts:20:3  accepted (copy)\n\n",
+                "    related: src/a.test.ts:20:3  accepted (copy)\n",
+                "    action: Review whether to remove a redundant test or repair a test whose body misses its named behavior.\n\n",
                 "  [off] disabled severity\n",
                 "    --> src/b.test.ts:10:3  off test\n",
-                "    related: src/b.test.ts:20:3  off test (copy)\n\n",
+                "    related: src/b.test.ts:20:3  off test (copy)\n",
+                "    action: Review whether to remove a redundant test or repair a test whose body misses its named behavior.\n\n",
                 "duplicate-test-name\n\n",
                 "  [warning] same title\n",
                 "    --> src/a.test.ts:10:3  collision\n",
-                "    related: src/a.test.ts:20:3  collision (copy)\n\n",
+                "    related: src/a.test.ts:20:3  collision (copy)\n",
+                "    action: Rename tests to distinguish their intent while preserving all test bodies.\n\n",
                 "Summary: 1 error, 1 warning, 1 off (3 findings total)\n",
                 "Tests analyzed: 2\nFiles analyzed: 1\n"
             )
