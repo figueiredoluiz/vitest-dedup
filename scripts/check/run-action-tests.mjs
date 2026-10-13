@@ -10,6 +10,7 @@
 // Same failure class the fixture corpus gate guards against, and the reason that gate asserts an
 // extraction count rather than only "no findings".
 import { execFileSync } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
 
 const FILE = '.github/actions/vitest-dedup/index.test.mjs'
 const MIN_TESTS = 40 // 49 today; a floor that catches wholesale loss, not every added test.
@@ -24,7 +25,18 @@ try {
   failed = true
 }
 
-process.stdout.write(output)
+// Negative Action tests intentionally print ::error:: and ::warning:: messages. When this
+// wrapper replays their captured stdout in Actions, those strings would become annotations on a
+// green CI job. Pause workflow-command processing only around the captured test output; the
+// wrapper's own failure diagnostics below must still be visible to the runner.
+const stopToken = randomUUID()
+process.stdout.write(`::stop-commands::${stopToken}\n`)
+try {
+  process.stdout.write(output)
+  if (!output.endsWith('\n')) process.stdout.write('\n')
+} finally {
+  process.stdout.write(`::${stopToken}::\n`)
+}
 
 const read = (label) => {
   const match = output.match(new RegExp(`^. ${label} (\\d+)$`, 'm'))
