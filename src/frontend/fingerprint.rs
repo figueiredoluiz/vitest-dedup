@@ -2800,6 +2800,9 @@ impl<'a, 'b, 's, 'm> Serializer<'a, 'b, 's, 'm> {
         format!("(block {})", parts.join(" "))
     }
 
+    /// Serialize one statement while preserving its control flow and resolved local bindings.
+    /// Function declarations emit their canonical identity before parameters, so references
+    /// retain their target even when hoisting places a call before the declaration.
     fn ser_stmt(&mut self, statement: &Statement<'a>, depth: u32) -> String {
         if depth > MAX_DEPTH {
             return self.degraded(statement.span());

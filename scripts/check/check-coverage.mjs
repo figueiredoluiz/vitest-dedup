@@ -251,6 +251,7 @@ const JS_MIN_TESTS = 100 // 235 today across the 15 enumerated suite files.
 
 const JS_MODULES = {
   'scripts/dev/verify.mjs': 100,
+  'scripts/check/check-docstrings.mjs': 100,
   // Both were in JS_NOT_MEASURED as "reached only through a gate that needs a release binary".
   // `lib/fixture-directives.test.mjs` (2026-09-27) made that false for the parser, and pulled
   // `lib/isolation.mjs` in with it. Floors are set at the measured value, as ratchets. The
@@ -348,6 +349,7 @@ const JS_NOT_MEASURED = {
 /** The JS suites the coverage run drives. Enumerated, never globbed -- see `run-npm-tests.mjs`. */
 const JS_TEST_FILES = [
   'scripts/dev/verify.test.mjs',
+  'scripts/check/check-docstrings.test.mjs',
   ...globSync('npm/test/*.test.mjs', { cwd: ROOT }).sort(),
   ...globSync('scripts/check/lib/*.test.mjs', { cwd: ROOT }).sort(),
   'scripts/check/check-doc-accuracy.test.mjs',

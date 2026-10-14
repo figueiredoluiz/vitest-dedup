@@ -38,6 +38,17 @@ npm run verify:full          # also Rust tests, npm gates and Rust coverage
 npm run hooks:install        # opt in for this checkout/worktree
 ```
 
+Both verification profiles first check documentation on touched named functions with an 80%
+minimum. `npm run check:docstrings` runs that check alone. Its scope is the diff from the branch's
+merge base with `origin/main`; commit and push hooks use the staged or proposed-commit snapshot.
+The local check covers named Rust functions/methods and JavaScript/TypeScript `function`
+declarations and named function expressions, including nested declarations. Anonymous callbacks, arrow functions and JS method
+syntax are outside this named-function check; CodeRabbit's separate docstring check remains required.
+JavaScript/TypeScript ranges come from the development-only Babel parser; Rust uses the existing
+comment/string masker. Source files that cannot be parsed fail the check.
+Use attached `///` or `/** ... */` comments to explain what a function guarantees.
+Stage new files before running the check; untracked and ignored files are outside its Git diff.
+
 The pre-commit hook checks a temporary snapshot of the staged index, so unstaged edits and local
 notes cannot make a bad staged change pass. It runs the fast profile and skips Cargo when no
 staged path affects Rust or its coverage gate; Rust deletions and file-type changes count as

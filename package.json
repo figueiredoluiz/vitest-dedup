@@ -21,7 +21,7 @@
     "verify:fast": "node scripts/dev/verify.mjs fast",
     "verify:full": "node scripts/dev/verify.mjs full",
     "hooks:install": "node scripts/dev/verify.mjs install",
-    "test:dev-checks": "node --test scripts/dev/verify.test.mjs scripts/check/run-action-tests.test.mjs",
+    "test:dev-checks": "node --test scripts/dev/verify.test.mjs scripts/check/run-action-tests.test.mjs scripts/check/check-docstrings.test.mjs",
     "test": "node scripts/check/run-npm-tests.mjs",
     "test:action": "node scripts/check/run-action-tests.mjs",
     "test:check-lib": "node --test scripts/check/lib/fixture-directives.test.mjs scripts/check/lib/external-corpus-retention.test.mjs scripts/check/lib/js-tokens.test.mjs scripts/check/lib/isolation.test.mjs scripts/check/lib/rust-test-modules.test.mjs scripts/check/lib/memory-corpus.test.mjs scripts/check/lib/memory-record.test.mjs scripts/check/lib/gate-main.test.mjs scripts/check/lib/run-analyzer.test.mjs scripts/check/check-mutation-score.test.mjs scripts/check/check-doc-accuracy.test.mjs scripts/check/check-name-leak.test.mjs scripts/check/check-secret-scan.test.mjs",
@@ -35,6 +35,7 @@
     "check:recall": "cargo build --release --locked && node scripts/check/check-recall.mjs",
     "verify:titles": "cargo build --release --locked && node scripts/check/verify-titles.mjs",
     "check:docs": "node scripts/check/check-doc-accuracy.mjs",
+    "check:docstrings": "node scripts/check/check-docstrings.mjs",
     "check:duplication": "node scripts/check/check-duplication.mjs",
     "check:memory": "cargo build --release --locked && node scripts/check/check-memory.mjs",
     "check:memory:scaling": "cargo build --release --locked && node scripts/check/check-memory-scaling.mjs",
@@ -87,6 +88,7 @@
     "vitest-dedup-windows-x64-msvc": "0.2.0"
   },
   "devDependencies": {
+    "@babel/parser": "7.29.9",
     "vitest": "5.0.3"
   }
 }

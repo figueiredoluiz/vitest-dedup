@@ -19,6 +19,21 @@ const GIT_ENV = ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_COMMON_DIR',
  */
 const git = (root, args, env = process.env) => execFileSync('git', args, { cwd: root, env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim()
 
+/** Capture the PR-wide diff, or the local change when no remote main exists. */
+export function scopeDiff(root, { revision, staged = false, env = process.env } = {}) {
+  /** Capture Git output without shell expansion or inherited terminal output. */
+  function git(args) {
+    return execFileSync('git', args, { cwd: root, env, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }).trimEnd()
+  }
+  let base
+  try { base = git(['merge-base', revision ?? 'HEAD', 'origin/main']) }
+  catch {
+    try { base = git(['rev-parse', '--verify', revision ? `${revision}^` : 'HEAD']) }
+    catch { base = execFileSync('git', ['hash-object', '-t', 'tree', '--stdin'], { cwd: root, env, input: '', encoding: 'utf8' }).trim() }
+  }
+  return git(['-c', 'core.quotePath=false', 'diff', '--no-ext-diff', '--no-color', '--no-renames', '--unified=0', ...(staged ? ['--cached'] : []), base, ...(revision ? [revision] : [])])
+}
+
 /**
  * Copy the environment without Git repository paths or command-scoped config.
  * Ordinary variables, including caller build flags, remain available to checks.
@@ -63,12 +78,14 @@ export function rustChanged(paths) {
  * Full checks always include Rust lints/tests; the rust flag selects coverage too.
  * @param {'fast'|'full'} profile Verification depth.
  * @param {boolean} [rust=true] Include conditional Rust checks or coverage.
+ * @param {string} [docDiff] Original Git diff for an exported hook snapshot.
  * @returns {string[][]} Commands represented as executable followed by arguments.
  * @throws {Error} If the profile is unsupported.
  */
-export function commands(profile, rust = true) {
+export function commands(profile, rust = true, docDiff) {
   if (!['fast', 'full'].includes(profile)) throw new Error(`Unknown verification profile: ${profile}`)
   const steps = [
+    ['node', 'scripts/check/check-docstrings.mjs', ...(docDiff ? ['--diff-file', docDiff] : [])],
     ['npm', 'run', 'check:release-workflow'],
     ['npm', 'run', 'check:versions'],
     ['npm', 'run', 'check:docs'],
@@ -288,9 +305,12 @@ export function main(args = process.argv.slice(2), { env = process.env, input, c
     const revisions = mode === 'pre-commit' ? [null] : commits
     for (const [i, revision] of revisions.entries()) {
       print(revision ? `Verifying proposed commit ${revision}` : 'Verifying the staged index')
+      mkdirSync(logs, { recursive: true })
+      const docDiff = join(logs, `docstrings-${i}.diff`)
+      writeFileSync(docDiff, scopeDiff(root, { revision: revision ?? undefined, staged: !revision, env }))
       withSnapshot(root, revision, snapshot => {
         // Full push verification includes coverage: a new ref may have no available remote base.
-        withNodeModules(snapshot, root, () => withTargetCache(snapshot, cache, () => check(snapshot, commands(mode === 'pre-commit' ? 'fast' : 'full', revision ? true : rustChanged(paths)), { env: runEnv, logRoot: join(logs, String(i)), print })))
+        withNodeModules(snapshot, root, () => withTargetCache(snapshot, cache, () => check(snapshot, commands(mode === 'pre-commit' ? 'fast' : 'full', revision ? true : rustChanged(paths), docDiff), { env: runEnv, logRoot: join(logs, String(i)), print })))
       }, env)
     }
   })

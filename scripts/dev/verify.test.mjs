@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { basename, delimiter, join, resolve } from 'node:path'
 import { test } from 'node:test'
 import { cleanEnvironment, commands, installHooks, main, pushCommits, runSteps, rustChanged, withLock, withNodeModules, withSnapshot, withTargetCache } from './verify.mjs'
+import { coverage } from '../check/check-docstrings.mjs'
 
 const oid = 'a'.repeat(40)
 const zero = '0'.repeat(40)
@@ -69,6 +70,7 @@ for (const input of ['a not-an-oid b '+zero, 'a '+oid+' b nope', 'a '+oid+' b', 
 }
 
 test('fast checks leave corpus source alone and skip Cargo for non-Rust staged changes', () => {
+  for (const profile of ['fast', 'full']) assert.deepEqual(commands(profile)[0], ['node', 'scripts/check/check-docstrings.mjs'])
   assert.equal(rustChanged(['fixtures/bad.test.ts']), false)
   for (const path of ['src/model.rs', 'Cargo.lock', 'Cargo.toml', 'scripts/check/check-coverage.mjs']) assert.equal(rustChanged([path]), true)
   assert.equal(commands('fast', false).some(step => step[0] === 'cargo'), false)
@@ -78,6 +80,44 @@ test('fast checks leave corpus source alone and skip Cargo for non-Rust staged c
   assert.equal(commands('full', false).some(step => step.includes('check:coverage:rust')), false)
   assert.throws(() => commands('unknown'), /Unknown/)
 })
+
+test('docstring pre-check uses staged bytes even when the working file has documentation', () => fixture(root => {
+  writeFileSync(join(root, 'case.rs'), 'fn missing() {}\n')
+  git(root, 'add', 'case.rs')
+  writeFileSync(join(root, 'case.rs'), '/// Perform the operation.\nfn missing() {}\n')
+  assert.throws(() => main(['pre-commit'], { root, print() {}, check(snapshot, steps) {
+    assert.equal(steps[0][1], 'scripts/check/check-docstrings.mjs')
+    const report = coverage(snapshot, readFileSync(steps[0][3], 'utf8'))
+    assert.equal(report.functions.length, 1)
+    if (!report.passed) throw new Error('missing staged docstring')
+  } }), /missing staged docstring/)
+}))
+
+test('docstring pre-check uses proposed commit bytes despite documented unstaged edits', () => fixture(root => {
+  writeFileSync(join(root, 'case.rs'), 'fn missing() {}\n')
+  git(root, 'add', 'case.rs')
+  git(root, '-c', 'core.hooksPath=/dev/null', 'commit', '--quiet', '-m', 'fixture missing docs')
+  const proposed = git(root, 'rev-parse', 'HEAD')
+  writeFileSync(join(root, 'case.rs'), '/// Perform the operation.\nfn missing() {}\n')
+  assert.throws(() => main(['pre-push'], { root, input: `refs/heads/topic ${proposed} refs/heads/topic ${zero}`, print() {}, check(snapshot, steps) {
+    assert.equal(steps[0][1], 'scripts/check/check-docstrings.mjs')
+    const report = coverage(snapshot, readFileSync(steps[0][3], 'utf8'))
+    assert.equal(report.functions.length, 1)
+    if (!report.passed) throw new Error('missing committed docstring')
+  } }), /missing committed docstring/)
+}))
+
+test('docstring scope and exported bytes use the same alternate index', () => fixture(root => {
+  const env = { ...process.env, GIT_INDEX_FILE: join(root, '.git/alternate-index') }
+  execFileSync('git', ['read-tree', 'HEAD'], { cwd: root, env })
+  writeFileSync(join(root, 'case.rs'), 'fn missing() {}\n')
+  execFileSync('git', ['add', 'case.rs'], { cwd: root, env })
+  assert.throws(() => main(['pre-commit'], { root, env, print() {}, check(snapshot, steps) {
+    const report = coverage(snapshot, readFileSync(steps[0][3], 'utf8'))
+    assert.equal(report.functions.length, 1)
+    if (!report.passed) throw new Error('missing alternate-index docstring')
+  } }), /missing alternate-index docstring/)
+}))
 
 test('snapshot checks the staged bytes and excludes dirty and untracked inputs', () => fixture(root => {
   writeFileSync(join(root, 'source.txt'), 'staged\n')
