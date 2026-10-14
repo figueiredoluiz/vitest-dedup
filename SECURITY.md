@@ -45,9 +45,14 @@ repository it describes.
 
 ## The GitHub Action downloads and executes a release binary
 
-The action fetches the release asset for the runner's platform and verifies its SHA-256 against
-the published checksum before executing it. `version` is required and exact, so the workflow pins
-the code it runs.
+The action fetches the release asset for the runner's platform and, before executing it, verifies
+its SHA-256 against the published checksum and, with `gh`, that its build provenance attestation was
+signed by this repository's release workflow building the version's tag (v0.1.0, built from
+`main`, is checked against the workflow only). The `token` input (default `github.token`) is given
+to `gh` only; the analyzer receives no token or runner credential. When `gh` is
+missing, or has no credentials at all, the attestation check is skipped with a warning; a failed
+verification, including a rejected token, always fails.
+`version` is required and exact, so the workflow pins the code it runs.
 
 ## Resource bounds
 

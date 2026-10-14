@@ -127,15 +127,20 @@ states how many findings were suppressed this way.
     threshold: "5"
 ```
 
-The action downloads the release binary for the runner's platform and verifies its SHA-256 against
-the published checksum before running it. `version` is required and exact, so the workflow pins
-the code it runs.
+The action downloads the release binary for the runner's platform, verifies its SHA-256 against
+the published checksum and, with `gh`, that its build provenance attestation comes from this
+repository's release workflow at the version's tag, and only then runs it.
+`version` is required and exact, so the workflow pins the code it runs. `token` (default
+`github.token`) is passed to `gh` alone. When `gh` is missing, or has no credentials at all, the
+attestation check is skipped with a warning; a failed verification, including a rejected token,
+always fails the step.
 
 The inputs are `path`, `config`, `threshold`, `reporters`, `output`, `rule`, `globals`,
-`no-metrics`, `fail-on-incomplete`, `baseline`, `fail-on-new`, `changed-since`, and `version`. `path` is the
-positional argument, `version` selects the release binary, and each of the others maps to the
-flag of the same name. `rule` accepts several overrides separated by newlines or commas. The JSON
-reporter is always enabled so the outputs below can be read. `--update-baseline` is deliberately
+`no-metrics`, `fail-on-incomplete`, `baseline`, `fail-on-new`, `changed-since`, `version`, and
+`token`. `path` is the positional argument, `version` selects the release binary, `token`
+authenticates the attestation check, and each of the others maps to the flag of the same name.
+`rule` accepts several overrides separated by newlines or commas. The JSON reporter is always
+enabled so the outputs below can be read. `--update-baseline` is deliberately
 not an input: rewriting a committed record of accepted debt is not a CI gate operation.
 `changed-since` needs `fetch-depth: 0` on the checkout.
 
@@ -152,6 +157,7 @@ not an input: rewriting a committed record of accepted debt is not a CI gate ope
 | `new-findings` | Findings absent from the baseline |
 | `json-report` | Path to the JSON report |
 | `html-report` | Path to the HTML report, when the html reporter was selected |
+| `attestation` | `verified`, or `unavailable` when only the checksum could be checked |
 
 ## Agent skill
 

@@ -72,6 +72,13 @@ inputs:
   version:
     description: Exact VitestDedup release version to download and verify
     required: true
+  token:
+    description: >-
+      Token the `gh` CLI uses to verify the release's build-provenance attestation. Passed only to
+      `gh`, never to the analyzer. With an empty token on a runner where `gh` is not otherwise
+      authenticated, verification is skipped with a warning; a failed verification, including a
+      rejected token, always fails.
+    default: ${{ github.token }}
 outputs:
   exit-code:
     description: Native VitestDedup exit code (0 clean, 1 quality gate failed, 2 operational error)
@@ -101,6 +108,10 @@ outputs:
     description: Path to the JSON report
   html-report:
     description: Path to the HTML report, when the html reporter was selected
+  attestation:
+    description: >-
+      "verified" when the downloaded release's build-provenance attestation was verified;
+      "unavailable" when `gh` was missing or unauthenticated and only the SHA-256 digest was checked.
 runs:
   using: node24
   main: .github/actions/vitest-dedup/index.js

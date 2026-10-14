@@ -6,6 +6,8 @@ import { join } from "node:path";
 import { createHash } from "node:crypto";
 
 import {
+  analyzerEnvironment,
+  attestationIdentity,
   buildArguments,
   describeExitCode,
   detectLibc,
@@ -24,6 +26,19 @@ import {
   verifyAttestation,
   warningAnnotation,
 } from "./index.js";
+
+/** Runs `body` with `console.log` captured and returns everything it logged, one line per call. */
+function captureStdout(body) {
+  const originalLog = console.log;
+  const logged = [];
+  console.log = (...logArgs) => logged.push(logArgs.join(" "));
+  try {
+    body();
+  } finally {
+    console.log = originalLog;
+  }
+  return logged.join("\n");
+}
 
 /**
  * Parses the `name<<delimiter\nvalue\ndelimiter\n` records `setOutput` writes to `GITHUB_OUTPUT`
@@ -569,6 +584,24 @@ describe("runAction", () => {
     "process.exit(0);",
   ].join("\n");
 
+  test("the analyzer process never receives the token input", async (t) => {
+    // The runner exposes every input as INPUT_*; only gh needs the token.
+    const previous = process.env.INPUT_TOKEN;
+    process.env.INPUT_TOKEN = "workflow-token";
+    t.after(() => {
+      if (previous === undefined) delete process.env.INPUT_TOKEN;
+      else process.env.INPUT_TOKEN = previous;
+    });
+    const fixture = actionFixture(t);
+    const seenPath = join(fixture.dir, "seen.json");
+    const report = { schemaVersion: "0.1", testsAnalyzed: 1, filesAnalyzed: 1, incomplete: false, findings: [] };
+    const script = reportWriter(fixture.reportPath, report,
+      `writeFileSync(${JSON.stringify(seenPath)}, JSON.stringify({ token: process.env.INPUT_TOKEN ?? null, path: Boolean(process.env.PATH) }));`);
+    assert.equal(await fixture.run(script), 0);
+    assert.deepEqual(JSON.parse(readFileSync(seenPath, "utf8")), { token: null, path: true });
+    assert.equal(fixture.outputs().attestation, undefined, "no attestation output for a supplied binary");
+  });
+
   test("a stale report from an earlier run is deleted upfront and never published when the binary fails before writing a fresh one", async (t) => {
     const fixture = actionFixture(t);
     writeFileSync(
@@ -698,12 +731,12 @@ describe("verifyAttestation", () => {
 
   test("reports unavailable, without throwing, when the gh CLI is absent", () => {
     const missing = () => ({ error: new Error("ENOENT"), status: null });
-    assert.equal(verifyAttestation("/tmp/a.tar.gz", "o/r", missing), "unavailable");
+    assert.equal(verifyAttestation("/tmp/a.tar.gz", "o/r", "0.2.1", missing), "unavailable");
   });
 
   test("reports verified when gh confirms the attestation", () => {
     const ok = () => ({ status: 0 });
-    assert.equal(verifyAttestation("/tmp/a.tar.gz", "o/r", ok), "verified");
+    assert.equal(verifyAttestation("/tmp/a.tar.gz", "o/r", "0.2.1", ok), "verified");
   });
 
   test("throws when gh is present and verification fails", () => {
@@ -712,7 +745,7 @@ describe("verifyAttestation", () => {
     const failing = (_cmd, args) =>
       args[0] === "--version" ? { status: 0 } : { status: 1, stderr: "no attestation found" };
     assert.throws(
-      () => verifyAttestation("/tmp/a.tar.gz", "o/r", failing),
+      () => verifyAttestation("/tmp/a.tar.gz", "o/r", "0.2.1", failing),
       /attestation failed/,
       "a failed verification must never be downgraded to a warning",
     );
@@ -725,8 +758,98 @@ describe("verifyAttestation", () => {
       if (args[0] !== "--version") seen = args;
       return { status: 0 };
     };
-    verifyAttestation("/tmp/a.tar.gz", "figueiredoluiz/vitest-dedup", capture);
-    assert.ok(seen.includes("--repo"));
-    assert.ok(seen.includes("figueiredoluiz/vitest-dedup"));
+    verifyAttestation("/tmp/a.tar.gz", "figueiredoluiz/vitest-dedup", "0.2.1", capture);
+    assert.deepEqual(seen, [
+      "attestation", "verify", "/tmp/a.tar.gz",
+      ...attestationIdentity("figueiredoluiz/vitest-dedup", "0.2.1"),
+    ]);
+  });
+});
+
+describe("attestationIdentity", () => {
+  // `--repo` alone accepts an attestation from any workflow or ref in the repository; the release
+  // identity is the release workflow building the version's tag. Measured on the published
+  // releases: all are signed by release.yml; 0.2.0 and later record refs/tags/v<version>, while
+  // 0.1.0 records refs/heads/main.
+  test("requires the release workflow and the version's tag", () => {
+    assert.deepEqual(attestationIdentity("o/r", "0.2.1"), [
+      "--repo", "o/r",
+      "--signer-workflow", "o/r/.github/workflows/release.yml",
+      "--source-ref", "refs/tags/v0.2.1",
+    ]);
+  });
+
+  test("binds a prerelease to its own tag", () => {
+    assert.ok(attestationIdentity("o/r", "1.0.0-rc.1").join(" ").endsWith("--source-ref refs/tags/v1.0.0-rc.1"));
+  });
+
+  test("checks 0.1.0, built from main, by signer workflow only", () => {
+    assert.deepEqual(attestationIdentity("o/r", "0.1.0"), [
+      "--repo", "o/r",
+      "--signer-workflow", "o/r/.github/workflows/release.yml",
+    ]);
+  });
+
+  test("gives the token to the verify call as GH_TOKEN", () => {
+    // gh refuses API calls without credentials, and a JavaScript action's environment carries no
+    // token, so the token input is the only way verification can run on a hosted runner.
+    const envs = [];
+    const capture = (_cmd, args, options) => {
+      if (args[0] !== "--version") envs.push(options.env);
+      return { status: 0 };
+    };
+    verifyAttestation("/tmp/a.tar.gz", "o/r", "0.2.1", capture, "token-value");
+    assert.equal(envs.length, 1);
+    assert.equal(envs[0].GH_TOKEN, "token-value");
+    assert.equal(envs[0].PATH, process.env.PATH, "the rest of the environment is kept");
+  });
+
+  test("injects no GH_TOKEN when the token is empty", () => {
+    let env = null;
+    const capture = (_cmd, args, options) => {
+      if (args[0] !== "--version") env = options.env;
+      return { status: 0 };
+    };
+    verifyAttestation("/tmp/a.tar.gz", "o/r", "0.2.1", capture, "");
+    assert.equal(env, process.env);
+  });
+
+  test("reports unavailable, without throwing, when gh is not authenticated", () => {
+    // Exit 4 is gh's documented "authentication required": the verifier could not run, which the
+    // advisory policy tolerates loudly. It is not a verification result.
+    const unauthenticated = (_cmd, args) => (args[0] === "--version" ? { status: 0 } : { status: 4 });
+    const warnings = captureStdout(() =>
+      assert.equal(verifyAttestation("/tmp/a.tar.gz", "o/r", "0.2.1", unauthenticated, ""), "unavailable"),
+    );
+    assert.match(warnings, /::warning::.*not authenticated/);
+  });
+
+  test("still throws on a non-auth failure when a token was given", () => {
+    // A bad or insufficient token makes gh exit 1 (HTTP 401/403), not 4: that is a failed
+    // verification and must stay fatal.
+    const rejected = (_cmd, args) =>
+      args[0] === "--version" ? { status: 0 } : { status: 1, stderr: "HTTP 401: Bad credentials" };
+    assert.throws(() => verifyAttestation("/tmp/a.tar.gz", "o/r", "0.2.1", rejected, "bad"), /attestation failed/);
+  });
+});
+
+describe("analyzerEnvironment", () => {
+  test("removes every credential variable and keeps everything else", () => {
+    const credentials = {
+      INPUT_TOKEN: "a",
+      GH_TOKEN: "b",
+      GITHUB_TOKEN: "c",
+      GH_ENTERPRISE_TOKEN: "d",
+      GITHUB_ENTERPRISE_TOKEN: "e",
+      ACTIONS_RUNTIME_TOKEN: "f",
+      ACTIONS_ID_TOKEN_REQUEST_TOKEN: "g",
+    };
+    for (const name of Object.keys(credentials)) {
+      const env = analyzerEnvironment({ [name]: "secret", INPUT_PATH: ".", PATH: "/bin" });
+      assert.deepEqual(env, { INPUT_PATH: ".", PATH: "/bin" }, `${name} must not reach the analyzer`);
+    }
+    const input = { ...credentials, PATH: "/bin" };
+    analyzerEnvironment(input);
+    assert.equal(input.GH_TOKEN, "b", "the caller's environment is not mutated");
   });
 });

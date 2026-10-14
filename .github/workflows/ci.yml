@@ -377,6 +377,42 @@ jobs:
           name: fixture-report
           path: reports/ci.json
 
+  action-hosted:
+    # The unit tests mock gh, so only a hosted runner shows whether the published Action can
+    # download, verify and run a release with its default inputs. Pinned to a published release;
+    # the Action code is this checkout's.
+    name: Run the Action (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false # the Action executes a downloaded binary; no later Git push
+      - id: dedup
+        uses: ./
+        continue-on-error: true # fixtures/duplicates holds intentional error findings (exit 1)
+        with:
+          version: 0.2.1
+          path: fixtures/duplicates
+      - name: Check the Action's outputs
+        shell: bash
+        env:
+          ATTESTATION: ${{ steps.dedup.outputs.attestation }}
+          EXIT_CODE: ${{ steps.dedup.outputs.exit-code }}
+          TESTS: ${{ steps.dedup.outputs.tests-analyzed }}
+          ERRORS: ${{ steps.dedup.outputs.errors }}
+        run: |
+          # Type, then floor: an absent output is an empty string, which must fail, not compare.
+          fail() { echo "::error::$1"; exit 1; }
+          [ "$ATTESTATION" = verified ] || fail "attestation is '$ATTESTATION', expected 'verified'"
+          [ "$EXIT_CODE" = 1 ] || fail "exit-code is '$EXIT_CODE', expected 1 (intentional findings)"
+          [[ "$TESTS" =~ ^[0-9]+$ ]] && [ "$TESTS" -ge 100 ] || fail "tests-analyzed is '$TESTS', expected >= 100"
+          [[ "$ERRORS" =~ ^[0-9]+$ ]] && [ "$ERRORS" -ge 1 ] || fail "errors is '$ERRORS', expected >= 1"
+          echo "attestation=$ATTESTATION exit-code=$EXIT_CODE tests=$TESTS errors=$ERRORS"
+
   npm-dist:
     name: npm distribution (${{ matrix.os }})
     runs-on: ${{ matrix.os }}

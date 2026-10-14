@@ -333,6 +333,25 @@ export function verifyChecksum(archivePath, checksumPath) {
   }
 }
 
+/** `gh`'s documented exit status for "authentication required"; any other failure stays fatal. */
+const GH_EXIT_AUTH_REQUIRED = 4;
+
+/** Releases built before tag-only publishing; their provenance records `refs/heads/main`. */
+const RELEASES_WITHOUT_TAG_PROVENANCE = new Set(["0.1.0"]);
+
+/**
+ * Returns the `gh attestation verify` identity flags for `version`: the attestation must come from
+ * this repository's release workflow, built from the version's tag. `--repo` alone would accept any
+ * workflow or ref in the repository.
+ */
+export function attestationIdentity(repository, version) {
+  const identity = ["--repo", repository, "--signer-workflow", `${repository}/.github/workflows/release.yml`];
+  if (!RELEASES_WITHOUT_TAG_PROVENANCE.has(version)) {
+    identity.push("--source-ref", `refs/tags/v${version}`);
+  }
+  return identity;
+}
+
 /**
  * Verifies the archive's build-provenance attestation, when the tooling to do so is present.
  *
@@ -340,14 +359,18 @@ export function verifyChecksum(archivePath, checksumPath) {
  * identity, not by the release pipeline that produced the artifact, so it still means something if
  * that pipeline is compromised.
  *
- * Deliberately advisory rather than fatal when `gh` is missing. Hosted runners ship it; self-hosted
- * ones may not, and hard-failing there would break working setups to enforce a check those runners
- * cannot perform. A FAILED verification is always fatal — only an *unavailable* verifier is
- * tolerated, and it says so loudly, so the difference is never silent.
+ * Deliberately advisory rather than fatal when the verifier cannot run: `gh` missing (self-hosted
+ * runners may not ship it) or unauthenticated (`gh` exits 4 without a token). A FAILED verification
+ * is always fatal — only an *unavailable* verifier is tolerated, and it says so loudly, so the
+ * difference is never silent.
+ *
+ * `gh` refuses every API call without credentials, and a JavaScript action's environment carries no
+ * token unless one is passed in, so `token` (the `token` input, defaulting to `github.token`) is
+ * given to the `gh` child as `GH_TOKEN` and to nothing else.
  *
  * @returns {"verified" | "unavailable" } — throws on an actual verification failure.
  */
-export function verifyAttestation(archivePath, repository, runner = spawnSync) {
+export function verifyAttestation(archivePath, repository, version, runner = spawnSync, token = "") {
   const probe = runner("gh", ["--version"], { stdio: "ignore" });
   if (probe.error || probe.status !== 0) {
     warningAnnotation(
@@ -358,9 +381,21 @@ export function verifyAttestation(archivePath, repository, runner = spawnSync) {
   }
   const result = runner(
     "gh",
-    ["attestation", "verify", archivePath, "--repo", repository],
-    { stdio: "pipe", encoding: "utf8" },
+    ["attestation", "verify", archivePath, ...attestationIdentity(repository, version)],
+    {
+      stdio: "pipe",
+      encoding: "utf8",
+      env: token ? { ...process.env, GH_TOKEN: token } : process.env,
+    },
   );
+  if (result.status === GH_EXIT_AUTH_REQUIRED) {
+    warningAnnotation(
+      `build-provenance attestation not verified: the \`gh\` CLI is not authenticated. Leave the ` +
+        `\`token\` input at its default (github.token) or pass a token. The SHA-256 digest was ` +
+        `still checked, but it cannot attest to the artifact's origin.`,
+    );
+    return "unavailable";
+  }
   if (result.status !== 0) {
     throw new Error(
       `build-provenance attestation failed for ${archivePath}. The archive's digest matched its ` +
@@ -463,7 +498,8 @@ export function isValidReleaseVersion(version) {
 
 /**
  * Downloads the release archive and its checksum for `version`/`target`, verifies the archive
- * before touching it any further, extracts it, and returns the path to the executable binary.
+ * before touching it any further, extracts it, and returns the executable binary's path with the
+ * attestation verdict.
  */
 async function installRelease(rawVersion, target, env) {
   const version = rawVersion.replace(/^v/, "");
@@ -495,7 +531,7 @@ async function installRelease(rawVersion, target, env) {
   // integrity; the attestation below proves origin. Neither alone is sufficient, and both run
   // before a single byte is executed.
   verifyChecksum(archive, checksum);
-  verifyAttestation(archive, REPO);
+  const attestation = verifyAttestation(archive, REPO, version, spawnSync, readInput(env, "token", ""));
 
   const extracted = spawnSync("tar", ["-xf", archive, "-C", installDirectory], { stdio: "inherit" });
   if (extracted.error || extracted.status !== 0) {
@@ -509,7 +545,29 @@ async function installRelease(rawVersion, target, env) {
   if (target.platform !== "win32") {
     chmodSync(binary, 0o755);
   }
-  return binary;
+  return { binary, attestation };
+}
+
+/**
+ * Credentials a JavaScript action's environment can carry: the `token` input (the runner exposes
+ * inputs as `INPUT_*`), the variables `gh` authenticates with, and the runner's own service tokens.
+ * The analyzer needs none of them.
+ */
+const ANALYZER_DENIED_VARIABLES = [
+  "INPUT_TOKEN",
+  "GH_TOKEN",
+  "GITHUB_TOKEN",
+  "GH_ENTERPRISE_TOKEN",
+  "GITHUB_ENTERPRISE_TOKEN",
+  "ACTIONS_RUNTIME_TOKEN",
+  "ACTIONS_ID_TOKEN_REQUEST_TOKEN",
+];
+
+/** Returns the analyzer's environment: the given one without any credential variable. */
+export function analyzerEnvironment(env) {
+  const rest = { ...env };
+  for (const name of ANALYZER_DENIED_VARIABLES) delete rest[name];
+  return rest;
 }
 
 /**
@@ -556,8 +614,8 @@ export async function runAction({ env = process.env, cwd = process.cwd() } = {})
 
   // Escape hatch used by index.test.mjs (and available to anyone running the action against a
   // locally built binary): skip the network entirely when a binary path is provided directly.
-  const binary = env.VITEST_DEDUP_BINARY
-    ? resolve(env.VITEST_DEDUP_BINARY)
+  const { binary, attestation } = env.VITEST_DEDUP_BINARY
+    ? { binary: resolve(env.VITEST_DEDUP_BINARY), attestation: null }
     : await installRelease(
         inputs.version,
         (() => {
@@ -572,12 +630,14 @@ export async function runAction({ env = process.env, cwd = process.cwd() } = {})
         env,
       );
 
-
-
   // `stdio: "inherit"` streams the child's stdout/stderr directly to the workflow log as it is
   // produced, rather than buffering it and printing it only after the process exits -- the
   // terminal reporter is meant to be watched live, not read after the fact.
-  const result = spawnSync(binary, args, { cwd, stdio: "inherit" });
+  const result = spawnSync(binary, args, {
+    cwd,
+    stdio: "inherit",
+    env: analyzerEnvironment(process.env),
+  });
 
   let exitCode = result.status ?? 2;
   if (result.error) {
@@ -642,6 +702,9 @@ export async function runAction({ env = process.env, cwd = process.cwd() } = {})
   }
 
   const outputs = extractOutputs(report, exitCode);
+  if (attestation) {
+    outputs.attestation = attestation;
+  }
   if (reportProduced) {
     outputs["json-report"] = jsonReportPath;
   }
