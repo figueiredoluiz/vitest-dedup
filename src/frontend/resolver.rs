@@ -72,6 +72,9 @@ thread_local! {
     static CACHE: RefCell<HashMap<(PathBuf, String), Resolved>> = RefCell::new(HashMap::new());
 }
 
+/// Builds the worker resolver with parser-supported extensions, `module`/`import` conditions,
+/// `module`/`main` entry fields and automatic tsconfig discovery. Other options retain their
+/// resolver defaults.
 fn build_resolver() -> Resolver {
     Resolver::new(ResolveOptions {
         // The base `oxc_resolver` defaults only try `.js`/`.json`/`.node` -- correct for plain
