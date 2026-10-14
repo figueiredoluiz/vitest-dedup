@@ -129,7 +129,8 @@ states how many findings were suppressed this way.
 
 The action downloads the release binary for the runner's platform, verifies its SHA-256 against
 the published checksum and, with `gh`, that its build provenance attestation comes from this
-repository's release workflow at the version's tag, and only then runs it.
+repository's release workflow at the version's tag (v0.1.0, built from `main`, is checked against
+the workflow only), and only then runs it.
 `version` is required and exact, so the workflow pins the code it runs. `token` (default
 `github.token`) is passed to `gh` alone. When `gh` is missing, or has no credentials at all, the
 attestation check is skipped with a warning; a failed verification, including a rejected token,

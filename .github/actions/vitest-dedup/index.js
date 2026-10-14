@@ -385,7 +385,7 @@ export function verifyAttestation(archivePath, repository, version, runner = spa
     {
       stdio: "pipe",
       encoding: "utf8",
-      env: token ? { ...process.env, GH_TOKEN: token } : process.env,
+      env: token ? { ...withoutVariables(process.env, ["GH_TOKEN"]), GH_TOKEN: token } : process.env,
     },
   );
   // Advisory only when no token was supplied: with one, "authentication required" means the token
@@ -565,11 +565,19 @@ const ANALYZER_DENIED_VARIABLES = [
   "ACTIONS_ID_TOKEN_REQUEST_TOKEN",
 ];
 
+/**
+ * Returns a copy of `env` without the named variables. Names are matched case-insensitively because
+ * Windows environment names are, and a copied `process.env` keeps whatever casing the variable was
+ * set with (`Gh_Token` is still `GH_TOKEN` to a child).
+ */
+export function withoutVariables(env, names) {
+  const denied = new Set(names.map((name) => name.toUpperCase()));
+  return Object.fromEntries(Object.entries(env).filter(([name]) => !denied.has(name.toUpperCase())));
+}
+
 /** Returns the analyzer's environment: the given one without any credential variable. */
 export function analyzerEnvironment(env) {
-  const rest = { ...env };
-  for (const name of ANALYZER_DENIED_VARIABLES) delete rest[name];
-  return rest;
+  return withoutVariables(env, ANALYZER_DENIED_VARIABLES);
 }
 
 /**

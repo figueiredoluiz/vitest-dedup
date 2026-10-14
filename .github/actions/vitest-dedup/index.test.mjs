@@ -804,6 +804,21 @@ describe("attestationIdentity", () => {
     assert.equal(envs[0].PATH, process.env.PATH, "the rest of the environment is kept");
   });
 
+  test("replaces a differently-cased GH_TOKEN instead of adding a second one", (t) => {
+    // On Windows `Gh_Token` and `GH_TOKEN` are one variable; keeping both leaves the child's value
+    // to chance.
+    process.env.Gh_Token = "stale";
+    t.after(() => delete process.env.Gh_Token);
+    let env = null;
+    const capture = (_cmd, args, options) => {
+      if (args[0] !== "--version") env = options.env;
+      return { status: 0 };
+    };
+    verifyAttestation("/tmp/a.tar.gz", "o/r", "0.2.1", capture, "token-value");
+    assert.deepEqual(Object.keys(env).filter((name) => name.toUpperCase() === "GH_TOKEN"), ["GH_TOKEN"]);
+    assert.equal(env.GH_TOKEN, "token-value");
+  });
+
   test("injects no GH_TOKEN when the token is empty", () => {
     let env = null;
     const capture = (_cmd, args, options) => {
@@ -860,5 +875,11 @@ describe("analyzerEnvironment", () => {
     const input = { ...credentials, PATH: "/bin" };
     analyzerEnvironment(input);
     assert.equal(input.GH_TOKEN, "b", "the caller's environment is not mutated");
+  });
+
+  test("matches credential names case-insensitively", () => {
+    // Windows environment names are case-insensitive, so `Gh_Token` reaches a child as GH_TOKEN.
+    const env = analyzerEnvironment({ Gh_Token: "a", actions_runtime_token: "b", Input_Token: "c", Path: "C:\\bin" });
+    assert.deepEqual(env, { Path: "C:\\bin" });
   });
 });
