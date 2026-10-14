@@ -423,7 +423,7 @@ mod tests {
         );
     }
 
-    /// Verify path with bidi override is stripped.
+    /// Strip bidirectional formatting controls from JSON finding locations.
     #[test]
     fn path_with_bidi_override_is_stripped() {
         let mut result = sample_result();
@@ -435,7 +435,7 @@ mod tests {
         assert!(!path.contains('\u{202c}'));
     }
 
-    /// Verify path with zero width character is stripped.
+    /// Keep invisible zero-width text out of JSON document source locations.
     #[test]
     fn path_with_zero_width_character_is_stripped() {
         let mut result = sample_result();
@@ -445,7 +445,7 @@ mod tests {
         assert!(!path.contains('\u{200b}'));
     }
 
-    /// Verify path with control character is stripped.
+    /// Remove terminal control bytes from the JSON finding location field.
     #[test]
     fn path_with_control_character_is_stripped() {
         let mut result = sample_result();
