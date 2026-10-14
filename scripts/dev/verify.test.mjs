@@ -9,6 +9,17 @@ import { coverage } from '../check/check-docstrings.mjs'
 
 const oid = 'a'.repeat(40)
 const zero = '0'.repeat(40)
+
+test('CI jobs consuming the docstring parser install locked dependencies before their tests', () => {
+  const workflow = readFileSync(resolve('.github/workflows/ci.yml'), 'utf8')
+  for (const [job, command] of [['lint', 'test:dev-checks'], ['quality-gates', 'check:coverage:js']]) {
+    const section = workflow.split(`\n  ${job}:\n`)[1]?.split(/\n  [\w-]+:\n/)[0]
+    assert.ok(section, `${job}: job exists`)
+    const install = section.search(/^\s+- run: npm ci --force --ignore-scripts --no-audit --no-fund\s*$/m)
+    const consumer = section.indexOf(`- run: npm run ${command}`)
+    assert.ok(install >= 0 && consumer > install, `${job}: install dependencies before ${command}`)
+  }
+})
 /**
  * Run a fixture Git command without a shell, capturing output and propagating errors.
  * @param {string} root Fixture repository directory.

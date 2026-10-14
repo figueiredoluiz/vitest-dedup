@@ -33,6 +33,7 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 24
+      - run: npm ci --force --ignore-scripts --no-audit --no-fund
       - run: npm run test:dev-checks
 
   test:
@@ -197,6 +198,7 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 24
+      - run: npm ci --force --ignore-scripts --no-audit --no-fund
       # The coverage suite includes the secret-scanner contract tests. Provision the same pinned,
       # checksum-verified binary as the history scan below so those tests measure real behavior
       # rather than failing because this job has a different tool inventory.
