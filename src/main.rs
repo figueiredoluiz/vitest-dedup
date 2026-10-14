@@ -2098,7 +2098,7 @@ mod tests {
         );
     }
 
-    /// Regression fixture for CLI reporting: nothing analyzed is always an operational error.
+    /// Regression fixture for CLI reporting: a finding-free zero-test run is an operational error.
     #[test]
     fn nothing_analyzed_is_always_an_operational_error() {
         let config = config_with_threshold(0);
