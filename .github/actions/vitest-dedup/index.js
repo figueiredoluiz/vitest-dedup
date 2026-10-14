@@ -388,7 +388,9 @@ export function verifyAttestation(archivePath, repository, version, runner = spa
       env: token ? { ...process.env, GH_TOKEN: token } : process.env,
     },
   );
-  if (result.status === GH_EXIT_AUTH_REQUIRED) {
+  // Advisory only when no token was supplied: with one, "authentication required" means the token
+  // did not authenticate, which is a failure like any other.
+  if (result.status === GH_EXIT_AUTH_REQUIRED && !token) {
     warningAnnotation(
       `build-provenance attestation not verified: the \`gh\` CLI is not authenticated. Leave the ` +
         `\`token\` input at its default (github.token) or pass a token. The SHA-256 digest was ` +

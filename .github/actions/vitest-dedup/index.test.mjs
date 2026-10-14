@@ -831,6 +831,15 @@ describe("attestationIdentity", () => {
       args[0] === "--version" ? { status: 0 } : { status: 1, stderr: "HTTP 401: Bad credentials" };
     assert.throws(() => verifyAttestation("/tmp/a.tar.gz", "o/r", "0.2.1", rejected, "bad"), /attestation failed/);
   });
+
+  test("throws when gh reports authentication required although a token was given", () => {
+    // With a token supplied, exit 4 means it did not authenticate: a failure, not an absent verifier.
+    const unauthenticated = (_cmd, args) => (args[0] === "--version" ? { status: 0 } : { status: 4 });
+    assert.throws(
+      () => verifyAttestation("/tmp/a.tar.gz", "o/r", "0.2.1", unauthenticated, "token-value"),
+      /attestation failed/,
+    );
+  });
 });
 
 describe("analyzerEnvironment", () => {
