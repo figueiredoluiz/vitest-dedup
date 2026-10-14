@@ -67,6 +67,7 @@ const fixture = (overrides = {}) => ({
   ...overrides,
 });
 
+/** Write all version-bump fixture files into a temporary root, register cleanup, and return the root and originals. */
 async function fixtureTree(t) {
   const rootDir = await mkdtemp(join(tmpdir(), "vitest-dedup-bump-"));
   t.after(() => rm(rootDir, { recursive: true, force: true }));
@@ -250,10 +251,10 @@ test("a Cargo.toml whose shape changed fails loudly instead of partially bumping
   );
 });
 
-/// This repository's own bumped files, with the version it is on and the one after it.
-///
-/// Shared by the two tests that run the planner against the real tree rather than a fixture.
-/// Inlined in both, it was 22 duplicated lines and the duplication ratchet said so.
+/**
+ * Read this repository's version sites and return their contents, current version and next patch version.
+ * Used by the planner test that checks the real tree rather than a fixture.
+ */
 async function repositoryToday() {
   const files = Object.fromEntries(
     await Promise.all(

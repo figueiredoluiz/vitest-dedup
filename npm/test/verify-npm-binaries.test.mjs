@@ -28,8 +28,10 @@ test('checksum lines are parsed in both GNU and BSD spellings', () => {
   assert.throws(() => parseChecksumFile('not a checksum'), /unparseable checksum file/)
 })
 
-/// Builds a complete, self-consistent release for `version`: eight raw binaries and eight
-/// checksummed archives containing exactly those binaries.
+/**
+ * Build eight raw binaries and checksummed archives for version, optionally corrupting one archived binary.
+ * Return the binary/archive roots and register the temporary release tree for test cleanup.
+ */
 async function releaseFixture(t, version, { corrupt } = {}) {
   const root = await mkdtemp(join(tmpdir(), 'vitest-dedup-release-'))
   t.after(() => rm(root, { recursive: true, force: true }))

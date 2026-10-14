@@ -81,7 +81,7 @@ test('the default npm runner actually works on this machine', () => {
   assert.match(result.stdout, /^\d+\.\d+\.\d+/)
 })
 
-/// Builds a tree shaped like a prepared release, with a controllable registry.
+/** Return a temporary release root, controllable registry runner and recorded publishes; register tree cleanup. */
 async function publishFixture(t, { registry }) {
   const root = await mkdtemp(join(tmpdir(), 'vitest-dedup-publish-'))
   t.after(() => rm(root, { recursive: true, force: true }))

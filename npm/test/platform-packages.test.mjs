@@ -13,6 +13,7 @@ import { prepareAll, writePlatformPackage } from '../../scripts/release/prepare-
 
 const rootManifest = JSON.parse(await readFile(new URL('../../package.json', import.meta.url), 'utf8'))
 
+/** Write one target's workspace manifest beneath root and return its package directory. */
 async function writeWorkspaceFixture(root, target, version) {
   const directory = join(root, 'npm', 'platforms', target.packageDirectory)
   await mkdir(directory, { recursive: true })
@@ -21,6 +22,7 @@ async function writeWorkspaceFixture(root, target, version) {
   return directory
 }
 
+/** Create manifests and mock binary artifacts for every target using its requested fixture version. */
 async function writeCompleteArtifactSet(root, artifacts, versionForTarget) {
   for (const target of Object.values(TARGETS)) {
     await writeWorkspaceFixture(root, target, versionForTarget(target))
@@ -30,6 +32,7 @@ async function writeCompleteArtifactSet(root, artifacts, versionForTarget) {
   }
 }
 
+/** Return temporary workspace/artifact roots with a LICENSE and complete target set; register both for cleanup. */
 async function completeSetFixture(t, versionForTarget) {
   const root = await mkdtemp(join(tmpdir(), 'vitest-dedup-complete-set-'))
   const artifacts = await mkdtemp(join(tmpdir(), 'vitest-dedup-complete-artifacts-'))

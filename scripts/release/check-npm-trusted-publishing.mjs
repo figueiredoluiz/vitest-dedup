@@ -12,6 +12,10 @@ import { resolve } from 'node:path'
 
 export const MINIMUM_TRUSTED_PUBLISHING_NPM = '11.5.1'
 
+/**
+ * Compare a trimmed npm version's major/minor/patch components with the trusted-publishing minimum.
+ * Ignore prerelease/build suffixes, including prereleases of the minimum; reject unparseable versions.
+ */
 export function supportsTrustedPublishing(version) {
   const parsed = /^(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$/.exec(String(version).trim())
   if (!parsed) {
@@ -27,6 +31,7 @@ export function supportsTrustedPublishing(version) {
   return true
 }
 
+/** Read the installed npm version through the supplied runner; throw on command failure or an unsupported version. */
 export function installedNpmVersion(run = spawnSync) {
   const result = run('npm', ['--version'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
   if (result.error) {

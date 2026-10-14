@@ -7,6 +7,7 @@ const POSITIVE: &str = "import {test,expect} from 'vitest';\n\
     test('a',()=>{expect(Math.abs(-1)).toBe(1)});\n\
     test('b',()=>{expect(Math.abs(-1)).toBe(1)});";
 
+/// Build adversarial syntax cases that must exceed the parser safety budgets.
 fn hostile_sources() -> Vec<(&'static str, String)> {
     let deep = format!("{}1{}", "(".repeat(100_000), ")".repeat(100_000));
     vec![
@@ -41,6 +42,7 @@ fn hostile_sources() -> Vec<(&'static str, String)> {
     ]
 }
 
+/// Require an incomplete two-file report retaining both healthy tests and their duplicate finding.
 fn assert_preserved_report(report: &Value, name: &str) {
     assert_eq!(report["testsAnalyzed"], 2, "{name}");
     assert_eq!(report["filesAnalyzed"], 2, "{name}");
@@ -55,6 +57,7 @@ fn assert_preserved_report(report: &Value, name: &str) {
     );
 }
 
+/// Verify each hostile input exits with an operational error while preserving healthy-file findings.
 #[test]
 fn hostile_syntax_is_refused_without_aborting_or_losing_other_findings() {
     for (name, source) in hostile_sources() {
@@ -95,6 +98,7 @@ fn hostile_syntax_is_refused_without_aborting_or_losing_other_findings() {
     }
 }
 
+/// Verify a refused imported helper leaves the report incomplete and retains healthy-file findings.
 #[test]
 fn imported_hostile_syntax_is_refused_without_aborting_or_losing_other_findings() {
     let dir = tempfile::tempdir().unwrap();
@@ -135,6 +139,7 @@ fn imported_hostile_syntax_is_refused_without_aborting_or_losing_other_findings(
     assert!(String::from_utf8_lossy(&output.stderr).contains("helper"));
 }
 
+/// Keep bounded ambiguous syntax and wide literal data analyzable without findings or incompleteness.
 #[test]
 fn bounded_ambiguous_syntax_and_wide_literal_payload_remain_analyzable() {
     let dir = tempfile::tempdir().unwrap();
@@ -178,6 +183,7 @@ fn bounded_ambiguous_syntax_and_wide_literal_payload_remain_analyzable() {
     assert_eq!(report["findings"].as_array().unwrap().len(), 0);
 }
 
+/// Require current and historical extraction to refuse excessive syntax without claiming a proven-empty file.
 #[test]
 fn current_and_revision_extraction_share_the_same_refusal_contract() {
     use vitest_dedup::discovery::{ModuleFlavor, SourceFile, SourceLanguage};
@@ -202,6 +208,7 @@ fn current_and_revision_extraction_share_the_same_refusal_contract() {
     }
 }
 
+/// Exercise admitted deep syntax on the worker stack without aborting, losing the test or reporting findings.
 #[test]
 fn admitted_bracket_free_chains_use_the_bounded_worker_stack() {
     let cases = [

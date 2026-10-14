@@ -32,6 +32,12 @@ export function parseChecksumFile(text) {
   return { digest: match[1], name: match[2].trim() }
 }
 
+/**
+ * Check every target's raw npm binary against its checksummed release archive using the supplied extractor.
+ * Return all verified target keys; throw on missing inputs, checksum/name/layout mismatches,
+ * extraction errors, differing binary bytes or an incomplete target set.
+ * Remove each temporary extraction directory even when verification fails.
+ */
 export function verifyNpmBinaries({ binaries, archives, version, extract = extractWithTar }) {
   const checked = []
   for (const [key, target] of Object.entries(TARGETS)) {
@@ -82,6 +88,7 @@ export function verifyNpmBinaries({ binaries, archives, version, extract = extra
   return checked
 }
 
+/** Extract a gzip tar archive into the given directory; propagate tar failures with captured stderr. */
 function extractWithTar(archive, directory) {
   execFileSync('tar', ['-xzf', archive, '-C', directory], { stdio: ['ignore', 'ignore', 'pipe'] })
 }

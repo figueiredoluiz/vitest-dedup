@@ -38,6 +38,7 @@ export const BUMPED_FILES = ['Cargo.toml', 'Cargo.lock', 'package.json', 'packag
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
 
+/** Replace one required version site in file text; throw with its path unless exactly one match exists. */
 function replaceOnce(text, pattern, path, replacement) {
   const all = new RegExp(pattern.source, pattern.flags.includes('g') ? pattern.flags : `${pattern.flags}g`)
   const found = [...text.matchAll(all)].length
@@ -139,6 +140,10 @@ export function planBump(version, files) {
   return { previous, planned }
 }
 
+/**
+ * Plan and write a validated version bump under rootDir, preserving each file's line endings.
+ * Return the previous version and changed paths; on write failure, attempt to restore all attempted writes.
+ */
 export async function applyBump(version, { rootDir = root, read = readFile, write = writeFile } = {}) {
   // A Windows checkout can produce CRLF; the site patterns are written against LF. Normalize for
   // matching and restore per file, so a bump never rewrites line endings as a side effect.

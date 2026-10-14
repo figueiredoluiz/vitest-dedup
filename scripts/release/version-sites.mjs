@@ -45,14 +45,17 @@ const one = (text, pattern, label) => {
   return match[2]
 }
 
+/** Extract the package version from Cargo.toml text; throw when the package version site is absent. */
 export function cargoVersion(text) {
   return one(text, CARGO_PACKAGE_VERSION, 'the [package] version in Cargo.toml')
 }
 
+/** Extract the vitest-dedup version from Cargo.lock text; throw when its lock entry is absent. */
 export function cargoLockVersion(text) {
   return one(text, CARGO_LOCK_VERSION, 'the vitest-dedup entry in Cargo.lock')
 }
 
+/** Extract the manual release workflow default version; throw when that version site is absent. */
 export function releaseWorkflowVersion(text) {
   return one(text, RELEASE_WORKFLOW_DEFAULT, 'the Release workflow default version')
 }

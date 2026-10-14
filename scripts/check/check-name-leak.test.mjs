@@ -228,18 +228,10 @@ test("the CLI announces a skipped name sweep rather than reporting a clean one",
   );
 });
 
-/**
- * A throwaway root carrying a manifest and a watchlist, so the name sweep can be driven where the
- * real manifest is absent.
- *
- * This exists because the first version of this suite reached the sweep only by reading the
- * developer's own untracked manifest. Coverage then differed by environment -- 88.6% locally, 84.2%
- * in CI -- and the floor recorded from the local run was one CI could never meet. A branch whose
- * coverage depends on which machine ran it is not covered.
- */
 // The local-source scaffolding, shared by every test that drives the name sweep on a throwaway
 // root. Extracted when the fifth copy tripped the duplication gate: each test needs the same
-// two directories and files, differing only in the manifest's project list.
+// directories and fixture files built by these helpers, differing in the manifest's project list.
+/** Create a temporary name-sweep root with the required scripts/check and docs directories. */
 function tempRoot(label) {
   const root = mkdtempSync(join(tmpdir(), label));
   mkdirSync(join(root, "scripts", "check"), { recursive: true });
@@ -247,6 +239,7 @@ function tempRoot(label) {
   return root;
 }
 
+/** Write the supplied project list to the temporary root's corpus manifest. */
 function writeManifest(root, projects) {
   writeFileSync(
     join(root, "scripts", "check", "corpus-projects.json"),
@@ -256,6 +249,7 @@ function writeManifest(root, projects) {
 
 const MINIMAL_WATCHLIST = ["| Repository | Notes |", "| --- | --- |", ""].join("\n");
 
+/** Write a fixture watchlist beneath root, defaulting to an empty repository table. */
 function writeWatchlist(root, text = MINIMAL_WATCHLIST) {
   writeFileSync(join(root, "docs", "corpus-watchlist.local.md"), text);
 }
@@ -263,6 +257,15 @@ function writeWatchlist(root, text = MINIMAL_WATCHLIST) {
 /** 60 absent names so the work-performed floor is satisfied on a root with no real files. */
 const ABSENT_NAMES = Array.from({ length: 60 }, (_, index) => `absent-${index}.md`);
 
+/**
+ * Return a temporary root with a manifest/watchlist and a runner listing 60 NUL-separated file names.
+ * Optionally add the requested leak; pad the listing with absent names to satisfy the work-performed floor.
+ *
+ * This exists because the first version of this suite reached the sweep only by reading the
+ * developer's own untracked manifest. Coverage then differed by environment -- 88.6% locally, 84.2%
+ * in CI -- and the floor recorded from the local run was one CI could never meet. A branch whose
+ * coverage depends on which machine ran it is not covered.
+ */
 function rootWithManifest({ leak = null } = {}) {
   const root = tempRoot("name-leak-");
   writeManifest(root, [
