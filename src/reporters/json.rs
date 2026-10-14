@@ -112,12 +112,15 @@ impl JsonReporter {
 }
 
 impl Default for JsonReporter {
+    /// Construct the default pretty-printed JSON reporter.
     fn default() -> Self {
         Self::new()
     }
 }
 
 impl Reporter for JsonReporter {
+    /// Serialize the analysis result as pretty or compact JSON, propagating serialization and
+    /// writer errors.
     fn write_report(&self, result: &AnalysisResult, writer: &mut dyn Write) -> Result<()> {
         let report = JsonReport::from(result);
         if self.pretty {
@@ -140,6 +143,7 @@ struct JsonReport {
 }
 
 impl From<&AnalysisResult> for JsonReport {
+    /// Build the versioned JSON document from the analysis summary and findings.
     fn from(result: &AnalysisResult) -> Self {
         Self {
             schema_version: JSON_SCHEMA_VERSION,
@@ -178,6 +182,8 @@ struct JsonFinding {
 }
 
 impl From<&Finding> for JsonFinding {
+    /// Convert a finding to its JSON fields, sanitizing report text and retaining structured
+    /// provenance.
     fn from(finding: &Finding) -> Self {
         Self {
             rule: finding.rule,
@@ -213,10 +219,13 @@ mod tests {
             .unwrap()
     }
 
+    /// Build a representative cross-file duplicate result for JSON reporter assertions.
     fn sample_result() -> AnalysisResult {
         cross_file_result("identical bodies under an equivalent context")
     }
 
+    /// Render the result through the JSON reporter and parse it, panicking on serialization or
+    /// JSON errors.
     fn render_value(result: &AnalysisResult) -> Value {
         let mut buffer = Vec::new();
         JsonReporter::new()
@@ -225,6 +234,7 @@ mod tests {
         serde_json::from_slice(&buffer).expect("reporter must emit valid JSON")
     }
 
+    /// Verify inert flags are emitted per participant.
     #[test]
     fn inert_flags_are_emitted_per_participant() {
         let mut result = sample_result();
@@ -236,6 +246,7 @@ mod tests {
         );
     }
 
+    /// Verify round trips through serde json value with exact structure.
     #[test]
     fn round_trips_through_serde_json_value_with_exact_structure() {
         let value = render_value(&sample_result());
@@ -296,6 +307,7 @@ mod tests {
         );
     }
 
+    /// Verify finding key set matches the documented schema including inert.
     #[test]
     fn finding_key_set_matches_the_documented_schema_including_inert() {
         // R4: the module doc's schema example previously omitted `inert`, even though it is
@@ -325,6 +337,7 @@ mod tests {
         );
     }
 
+    /// Verify zero findings serializes a clear empty array not null.
     #[test]
     fn zero_findings_serializes_a_clear_empty_array_not_null() {
         let value = render_value(&AnalysisResult::default());
@@ -334,6 +347,7 @@ mod tests {
         assert_eq!(value["incomplete"], false);
     }
 
+    /// Verify incomplete flag round trips.
     #[test]
     fn incomplete_flag_round_trips() {
         let mut result = sample_result();
@@ -342,6 +356,7 @@ mod tests {
         assert_eq!(value["incomplete"], true);
     }
 
+    /// Verify finding with more than two locations serializes all of them.
     #[test]
     fn finding_with_more_than_two_locations_serializes_all_of_them() {
         let mut result = sample_result();
@@ -353,6 +368,7 @@ mod tests {
         assert_eq!(value["findings"][0]["titles"][2], "suite > c");
     }
 
+    /// Verify very long title is preserved in full.
     #[test]
     fn very_long_title_is_preserved_in_full() {
         let mut result = sample_result();
@@ -365,6 +381,7 @@ mod tests {
         );
     }
 
+    /// Verify title with newlines and ansi escapes stays valid json with escapes stripped.
     #[test]
     fn title_with_newlines_and_ansi_escapes_stays_valid_json_with_escapes_stripped() {
         let mut result = sample_result();
@@ -377,6 +394,7 @@ mod tests {
         assert!(title.contains('\n'));
     }
 
+    /// Verify non ascii path and title round trip byte for byte.
     #[test]
     fn non_ascii_path_and_title_round_trip_byte_for_byte() {
         let mut result = sample_result();
@@ -393,6 +411,7 @@ mod tests {
         );
     }
 
+    /// Verify windows style backslashes are normalized to forward slashes.
     #[test]
     fn windows_style_backslashes_are_normalized_to_forward_slashes() {
         let mut result = sample_result();
@@ -404,6 +423,7 @@ mod tests {
         );
     }
 
+    /// Verify path with bidi override is stripped.
     #[test]
     fn path_with_bidi_override_is_stripped() {
         let mut result = sample_result();
@@ -415,6 +435,7 @@ mod tests {
         assert!(!path.contains('\u{202c}'));
     }
 
+    /// Verify path with zero width character is stripped.
     #[test]
     fn path_with_zero_width_character_is_stripped() {
         let mut result = sample_result();
@@ -424,6 +445,7 @@ mod tests {
         assert!(!path.contains('\u{200b}'));
     }
 
+    /// Verify path with control character is stripped.
     #[test]
     fn path_with_control_character_is_stripped() {
         let mut result = sample_result();
@@ -433,6 +455,7 @@ mod tests {
         assert!(!path.contains('\u{7}'));
     }
 
+    /// Verify compact mode produces the same structure as pretty mode.
     #[test]
     fn compact_mode_produces_the_same_structure_as_pretty_mode() {
         let mut buffer = Vec::new();
@@ -444,6 +467,7 @@ mod tests {
         assert_eq!(compact, pretty);
     }
 
+    /// Verify verdict matches the rule that produced the finding.
     #[test]
     fn verdict_matches_the_rule_that_produced_the_finding() {
         let mut result = sample_result();
@@ -452,6 +476,7 @@ mod tests {
         assert_eq!(value["findings"][0]["verdict"], "consolidatable");
     }
 
+    /// Verify verdict is emitted for every rule.
     #[test]
     fn verdict_is_emitted_for_every_rule() {
         for rule in crate::model::Rule::ALL {
@@ -472,6 +497,7 @@ mod tests {
         }
     }
 
+    /// Verify fingerprint is emitted and matches the model method.
     #[test]
     fn fingerprint_is_emitted_and_matches_the_model_method() {
         let result = sample_result();
@@ -482,6 +508,7 @@ mod tests {
         );
     }
 
+    /// Verify fingerprint is stable across two renders of the same result.
     #[test]
     fn fingerprint_is_stable_across_two_renders_of_the_same_result() {
         let result = sample_result();

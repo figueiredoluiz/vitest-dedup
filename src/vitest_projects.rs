@@ -563,6 +563,7 @@ impl ProjectSet {
     }
 }
 
+/// Return the configured project name, falling back to the path of the defining config.
 fn project_label(project: &Project) -> String {
     project
         .name
@@ -577,6 +578,8 @@ enum FileMatch {
     Maybe(String),
 }
 
+/// Combine test, benchmark and enabled typecheck glob matches; preserve uncertainty and reject
+/// paths outside the project base.
 fn match_file(project: &Project, file: &Path) -> FileMatch {
     // A file outside `base_dir` entirely cannot be one of this project's files -- its `include`/
     // `exclude` globs are resolved relative to `base_dir`, so falling back to matching the file's
@@ -640,6 +643,8 @@ fn match_file(project: &Project, file: &Path) -> FileMatch {
     }
 }
 
+/// Match one include/exclude channel against a relative path, returning uncertainty for unknown
+/// or invalid patterns.
 fn match_glob_channel(
     project: &Project,
     relative: &str,
@@ -814,6 +819,8 @@ fn read_masked_source(path: &Path, root: &Path) -> Result<(Vec<char>, Vec<char>)
     Ok((masked, source.chars().collect()))
 }
 
+/// Build an empty project set with diagnostics, marking unresolved entries only when a config
+/// was found.
 fn unresolved_set(root: &Path, diagnostics: Vec<String>, config_found: bool) -> ProjectSet {
     ProjectSet {
         root: root.to_path_buf(),
@@ -835,6 +842,7 @@ fn unresolved_set(root: &Path, diagnostics: Vec<String>, config_found: bool) -> 
     }
 }
 
+/// Return owned copies of the built-in test inclusion globs.
 fn default_include() -> GlobPatterns {
     GlobPatterns::Known(
         DEFAULT_INCLUDE_GLOBS
@@ -844,6 +852,7 @@ fn default_include() -> GlobPatterns {
     )
 }
 
+/// Return owned copies of the built-in test exclusion globs.
 fn default_exclude() -> GlobPatterns {
     GlobPatterns::Known(
         DEFAULT_EXCLUDE_GLOBS
@@ -861,6 +870,7 @@ fn default_include_source() -> GlobPatterns {
     GlobPatterns::Known(Vec::new())
 }
 
+/// Return owned copies of the built-in benchmark inclusion globs.
 fn default_benchmark_include() -> GlobPatterns {
     GlobPatterns::Known(
         DEFAULT_BENCHMARK_INCLUDE_GLOBS
@@ -870,6 +880,7 @@ fn default_benchmark_include() -> GlobPatterns {
     )
 }
 
+/// Return owned copies of the built-in benchmark exclusion globs.
 fn default_benchmark_exclude() -> GlobPatterns {
     GlobPatterns::Known(
         DEFAULT_BENCHMARK_EXCLUDE_GLOBS
@@ -879,6 +890,7 @@ fn default_benchmark_exclude() -> GlobPatterns {
     )
 }
 
+/// Return an empty benchmark in-source inclusion list; in-source admission is opt-in.
 fn default_benchmark_include_source() -> GlobPatterns {
     GlobPatterns::Known(Vec::new())
 }
@@ -935,6 +947,7 @@ fn single_project_set(
     }
 }
 
+/// Build a resolved single-project set from the root config and its effective test fields.
 fn single_project_set_from_effective(
     root: &Path,
     config_path: &Path,
@@ -994,6 +1007,8 @@ struct RawTestFields {
 }
 
 impl RawTestFields {
+    /// Initialize raw test fields with every property absent, before inheritance or defaults
+    /// apply.
     fn empty() -> Self {
         Self {
             globals: None,
@@ -1011,6 +1026,8 @@ impl RawTestFields {
         }
     }
 
+    /// Read the modeled scalar and glob fields from the supplied test-object range without
+    /// executing code.
     fn read(masked: &[char], original: &[char], range: Range<usize>) -> Self {
         let (benchmark_include, benchmark_exclude, benchmark_include_source) =
             read_benchmark_fields(masked, original, range.clone());
@@ -1043,6 +1060,8 @@ impl RawTestFields {
     }
 }
 
+/// Read the nested benchmark inclusion, exclusion and in-source fields, preserving absent or
+/// unknown values.
 fn read_benchmark_fields(
     masked: &[char],
     original: &[char],
@@ -1079,6 +1098,7 @@ fn read_benchmark_fields(
     )
 }
 
+/// Read a benchmark glob-array property with diagnostics naming its nested config path.
 fn read_benchmark_array_property(
     masked: &[char],
     original: &[char],
@@ -1129,6 +1149,7 @@ fn read_typecheck_fields(
     )
 }
 
+/// Read a typecheck glob-array property with diagnostics naming its nested config path.
 fn read_typecheck_array_property(
     masked: &[char],
     original: &[char],
@@ -1337,6 +1358,8 @@ fn resolve_effective(
     }
 }
 
+/// Prefer explicit globs; otherwise select defaults, inherited values or an unknown state
+/// according to extends mode.
 #[allow(clippy::too_many_arguments)]
 fn resolve_glob_field(
     own: &Option<GlobPatterns>,
@@ -1461,6 +1484,8 @@ fn read_spread_identifier(original: &[char], range: Range<usize>) -> Option<Stri
     (skip_trivia(original, i, range.end) >= range.end).then_some(name)
 }
 
+/// Decode a complete supported single- or double-quoted string in the range; return None for
+/// unsupported or incomplete forms.
 fn read_string_literal(original: &[char], range: Range<usize>) -> Option<String> {
     let mut i = skip_trivia(original, range.start, range.end);
     if i >= range.end {
@@ -1658,6 +1683,7 @@ fn top_level_keyword_positions(masked: &[char], keyword: &str) -> Vec<usize> {
     positions
 }
 
+/// Read a supported string module specifier after an import from-clause.
 fn import_specifier(masked: &[char], original: &[char], after_from: usize) -> Option<String> {
     let start = skip_trivia(original, after_from, original.len());
     let end = masked[start..]
@@ -1667,6 +1693,9 @@ fn import_specifier(masked: &[char], original: &[char], after_from: usize) -> Op
     read_string_literal(original, start..end)
 }
 
+/// Read the last direct array property, distinguishing absence from unknown values in diagnostics.
+/// Expand supported optional extglobs and substitute verified Vitest defaultInclude/defaultExclude
+/// spreads; unsupported forms remain unknown.
 fn read_string_array_property_with_diagnostic_key(
     masked: &[char],
     original: &[char],
@@ -1885,6 +1914,7 @@ struct Budget {
 }
 
 impl Budget {
+    /// Report whether the directory-entry walk has reached its configured budget.
     fn exhausted(&self) -> bool {
         self.entries_visited >= MAX_GLOB_WALK_ENTRIES
     }
@@ -1899,6 +1929,7 @@ fn note_unresolved_position(position: &mut Option<usize>, declared_at: usize) {
     *position = Some(position.map_or(declared_at, |current| current.max(declared_at)));
 }
 
+/// Recognize path segments containing a supported glob metacharacter.
 fn looks_like_glob(segment: &str) -> bool {
     segment.contains(['*', '?', '[', '{'])
 }
@@ -2001,6 +2032,8 @@ fn locate_config_config_object(masked: &[char], original: &[char], path: &Path) 
     ConfigObject::Found(overrides.0, overrides.1)
 }
 
+/// Recognize a mergeConfig identifier prefix at the export value; argument and import
+/// validation happen separately.
 fn merge_config_export_shape(masked: &[char], original: &[char], value_start: usize) -> bool {
     let callee_start = skip_trivia(original, value_start, original.len());
     let merge_callee: Vec<char> = "mergeConfig".chars().collect();
@@ -2134,6 +2167,8 @@ struct ImportedConfigBase {
     named_export: Option<String>,
 }
 
+/// Identify a supported default or named import for the local binding; return None when the
+/// clause cannot establish it.
 fn imported_config_binding(clause: &str, local_name: &str) -> Option<Option<String>> {
     if clause.contains(';') || clause.contains("import") || clause.trim_start().starts_with("type ")
     {
@@ -2161,6 +2196,8 @@ fn imported_config_binding(clause: &str, local_name: &str) -> Option<Option<Stri
     None
 }
 
+/// Resolve the imported base of a verified mergeConfig export, retaining any selected named
+/// export.
 fn merge_config_base_path(
     masked: &[char],
     original: &[char],
@@ -2229,6 +2266,8 @@ struct StandaloneConfigFields {
     specified: RawTestFields,
 }
 
+/// Recognize a direct nullish property value, refusing a potentially shadowed undefined
+/// binding.
 fn nullish_property(masked: &[char], original: &[char], body: Range<usize>, key: &str) -> bool {
     let Some(&start) =
         find_direct_key_value_starts_precise(masked, original, body.clone(), key).last()
@@ -2370,6 +2409,8 @@ fn normalize_merge_fields(
     }
 }
 
+/// Concatenate known base and override arrays in that order, preserving absence and propagating
+/// unknown bases or values.
 fn merge_config_array(
     own: Option<GlobPatterns>,
     base: Option<GlobPatterns>,
@@ -2392,6 +2433,7 @@ fn merge_config_array(
     }
 }
 
+/// Merge all modeled glob-array channels from the base into the override fields.
 fn merge_config_arrays(own: &mut RawTestFields, base: RawTestFields, unresolved: bool) {
     own.include = merge_config_array(own.include.take(), base.include, unresolved);
     own.exclude = merge_config_array(own.exclude.take(), base.exclude, unresolved);
@@ -2466,6 +2508,8 @@ fn named_config_literal(masked: &[char], original: &[char], name: &str) -> Optio
     None
 }
 
+/// Resolve a standalone config to its optional project name and effective fields, returning
+/// None when resolution fails.
 fn resolve_standalone_config(path: &Path) -> Option<(Option<String>, EffectiveTestFields)> {
     let mut refused = false;
     let fields = resolve_standalone_config_bounded(path, None, &mut Vec::new(), &mut refused)?;
@@ -2483,6 +2527,8 @@ pub(crate) fn resolved_config_test_scope(path: &Path) -> Result<Option<String>, 
     resolve_config_test_scope_bounded(path, None, &mut Vec::new())
 }
 
+/// Resolve comparison scope while tracking canonical config paths; return an error for cycles,
+/// excess depth or unresolved paths.
 fn resolve_config_test_scope_bounded(
     path: &Path,
     export: Option<&str>,
@@ -2503,6 +2549,8 @@ fn resolve_config_test_scope_bounded(
     result
 }
 
+/// Read a bounded config and derive its comparison scope, following supported mergeConfig bases
+/// and reporting unsupported forms.
 fn resolve_config_test_scope_inner(
     path: &Path,
     export: Option<&str>,
@@ -2588,6 +2636,8 @@ fn resolve_config_test_scope_inner(
     )))
 }
 
+/// Resolve config fields with canonical-path cycle/depth guards, marking the refusal flag when
+/// either guard is reached.
 fn resolve_standalone_config_bounded(
     path: &Path,
     export: Option<&str>,
@@ -2605,6 +2655,8 @@ fn resolve_standalone_config_bounded(
     result
 }
 
+/// Read and resolve supported standalone config fields and inheritance without executing the
+/// config.
 fn resolve_standalone_config_inner(
     path: &Path,
     export: Option<&str>,
@@ -2785,6 +2837,8 @@ fn unresolved_project(
     }
 }
 
+/// Build a project from a config file, retaining unknown effective fields when static
+/// resolution fails.
 fn build_file_project(root: &Path, path: &Path, defined_in: &Path, declared_at: usize) -> Project {
     let base_dir = path.parent().unwrap_or(root).to_path_buf();
     match resolve_standalone_config(path) {
@@ -2819,6 +2873,7 @@ fn resolve_extends_target(candidate: &Path) -> Option<EffectiveTestFields> {
     resolve_standalone_config(candidate).map(|(_, effective)| effective)
 }
 
+/// Return the canonical path when available, otherwise preserve the supplied path.
 fn canonical_or_self(path: &Path) -> PathBuf {
     path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
 }
@@ -3203,6 +3258,8 @@ fn find_const_initializer(
     None
 }
 
+/// Resolve the root config projects value into a project set, retaining diagnostics and
+/// unresolved entries.
 fn resolve_projects_array(
     root: &Path,
     config_path: &Path,
@@ -3320,9 +3377,10 @@ fn resolve_projects_array(
 /// workspace file's default export -- differ only in which file declared the array, what base
 /// fields entries inherit, and how the stop diagnostic names the array (`stop_subject`);
 /// everything else about enumerating them is this loop, and it was two copies that could drift.
-// One collaborator per parameter and no natural grouping among them -- the same rationale
-// `resolve_project_entry` below carries this allow for; this driver forwards that function's
-// own parameter family plus the two facts that vary between its two call sites.
+///
+/// One collaborator per parameter and no natural grouping among them -- the same rationale
+/// `resolve_project_entry` carries this allow for; this driver forwards that function's
+/// own parameter family plus the two facts that vary between its two call sites.
 #[allow(clippy::too_many_arguments)]
 fn resolve_elements(
     root: &Path,
@@ -3395,6 +3453,8 @@ fn locate_array_literal_or_call_argument(masked: &[char], start: usize) -> Optio
     }
 }
 
+/// Resolve a standalone workspace file through the shared project-entry resolver, retaining
+/// static-read diagnostics.
 fn resolve_from_workspace_file(
     root: &Path,
     workspace_path: &Path,
@@ -3602,6 +3662,8 @@ mod tests {
         project
     }
 
+    /// Write fixture contents beneath the root, creating parent directories and panicking on
+    /// filesystem errors.
     fn write(root: &Path, name: &str, contents: &str) {
         if let Some(parent) = root.join(name).parent() {
             fs::create_dir_all(parent).unwrap();
@@ -3609,12 +3671,15 @@ mod tests {
         fs::write(root.join(name), contents).unwrap();
     }
 
+    /// Create and return a temporary config fixture with the requested file and source.
     fn review_fixture(path: &str, source: &str) -> tempfile::TempDir {
         let directory = tempfile::tempdir().unwrap();
         write(directory.path(), path, source);
         directory
     }
 
+    /// Return references to all eight modeled glob-array channels in a stable order for merge
+    /// assertions.
     fn merge_array_channels(fields: &EffectiveTestFields) -> [&GlobPatterns; 8] {
         [
             &fields.include,
@@ -3628,10 +3693,14 @@ mod tests {
         ]
     }
 
+    /// Build a test-object literal assigning the pattern to every modeled glob-array channel,
+    /// with globals and typecheck.enabled both true.
     fn merge_all_arrays(pattern: &str) -> String {
         format!("{{ globals: true, include: ['{pattern}'], exclude: ['{pattern}'], includeSource: ['{pattern}'], benchmark: {{ include: ['{pattern}'], exclude: ['{pattern}'], includeSource: ['{pattern}'] }}, typecheck: {{ enabled: true, include: ['{pattern}'], exclude: ['{pattern}'] }} }}")
     }
 
+    /// Write base/override config fixtures and return their resolved project name and effective
+    /// fields.
     fn merged_review_fields(
         root: &Path,
         base: &str,
@@ -3646,6 +3715,7 @@ mod tests {
         resolve_standalone_config(&root.join("merged.ts")).unwrap()
     }
 
+    /// Verify merge arrays apply defaults only after explicit merging.
     #[test]
     fn review_merge_arrays_apply_defaults_only_after_explicit_merging() {
         let directory = tempfile::tempdir().unwrap();
@@ -3671,6 +3741,7 @@ mod tests {
         }
     }
 
+    /// Verify merge nullish overrides preserve arrays groups scalars and name.
     #[test]
     fn review_merge_nullish_overrides_preserve_arrays_groups_scalars_and_name() {
         let directory = tempfile::tempdir().unwrap();
@@ -3746,6 +3817,7 @@ mod tests {
         }
     }
 
+    /// Verify merge unknown arrays cannot be replaced by known overrides.
     #[test]
     fn review_merge_unknown_arrays_cannot_be_replaced_by_known_overrides() {
         let directory = tempfile::tempdir().unwrap();
@@ -3766,6 +3838,7 @@ mod tests {
         }
     }
 
+    /// Verify named import variants require the selected static export.
     #[test]
     fn review_named_import_variants_require_the_selected_static_export() {
         let directory = tempfile::tempdir().unwrap();
@@ -3843,6 +3916,7 @@ mod tests {
         assert!(imported_config_binding("} {base", "base").is_none());
     }
 
+    /// Verify merge arrays preserve every explicit base channel.
     #[test]
     fn review_merge_arrays_preserve_every_explicit_base_channel() {
         let directory = review_fixture(
@@ -3862,6 +3936,7 @@ mod tests {
         }
     }
 
+    /// Verify named merge base selects named export over default.
     #[test]
     fn review_named_merge_base_selects_named_export_over_default() {
         let directory = review_fixture("base.ts", "export const preset = { test: { name: 'named', globals: true, include: ['named/**'] } }; export default { test: { name: 'default', globals: false, include: ['wrong/**'] } };");
@@ -3876,6 +3951,7 @@ mod tests {
         );
     }
 
+    /// Verify merge base prefers the exact imported path.
     #[test]
     fn summary_merge_base_prefers_the_exact_imported_path() {
         let directory = review_fixture(
@@ -3894,6 +3970,7 @@ mod tests {
         assert!(matches!(fields.globals, GlobalsDetection::Disabled { .. }));
     }
 
+    /// Verify glob import requires the package root.
     #[test]
     fn summary_glob_import_requires_the_package_root() {
         let directory = review_fixture(
@@ -3914,12 +3991,14 @@ mod tests {
         }
     }
 
+    /// Verify merge literal base is refused.
     #[test]
     fn followup_merge_literal_base_is_refused() {
         let directory = review_fixture("merged.ts", "import { mergeConfig } from 'vitest/config'; export default mergeConfig({ test: { globals: false } }, { test: { globals: true } });");
         assert!(resolve_standalone_config(&directory.path().join("merged.ts")).is_none());
     }
 
+    /// Verify merge override requires a complete verified literal.
     #[test]
     fn followup_merge_override_requires_a_complete_verified_literal() {
         let directory = review_fixture("base.ts", "export default { test: { globals: false } }");
@@ -3939,6 +4018,7 @@ mod tests {
         }
     }
 
+    /// Verify merge wrapper provenance and export boundaries.
     #[test]
     fn followup_merge_wrapper_provenance_and_export_boundaries() {
         let directory = review_fixture(
@@ -3970,6 +4050,7 @@ mod tests {
         }
     }
 
+    /// Verify merge name inherits and own name wins.
     #[test]
     fn followup_merge_name_inherits_and_own_name_wins() {
         let directory = review_fixture(
@@ -3988,6 +4069,7 @@ mod tests {
         }
     }
 
+    /// Verify unicode before imports preserves glob and merge resolution.
     #[test]
     fn review_unicode_before_imports_preserves_glob_and_merge_resolution() {
         let directory = review_fixture("base.ts", "export default { test: { globals: true } }");
@@ -4005,6 +4087,7 @@ mod tests {
         }
     }
 
+    /// Verify merge config accepts vite and vitest exports.
     #[test]
     fn review_merge_config_accepts_vite_and_vitest_exports() {
         let directory = review_fixture("base.ts", "export default { test: { globals: true } }");
@@ -4027,6 +4110,7 @@ mod tests {
         }
     }
 
+    /// Verify merge config requires a verified import.
     #[test]
     fn review_merge_config_requires_a_verified_import() {
         let directory = review_fixture("base.ts", "export default { test: { globals: true } }");
@@ -4055,6 +4139,7 @@ mod tests {
         }
     }
 
+    /// Verify const hop requires an earlier top level binding.
     #[test]
     fn review_const_hop_requires_an_earlier_top_level_binding() {
         let directory = review_fixture("pkg/a/vitest.config.ts", "export default { test: {} }");
@@ -4069,6 +4154,7 @@ mod tests {
         }
     }
 
+    /// Verify glob call must be the complete value.
     #[test]
     fn review_glob_call_must_be_the_complete_value() {
         let directory = review_fixture("pkg/a/vitest.config.ts", "export default { test: {} }");
@@ -4081,6 +4167,7 @@ mod tests {
         }
     }
 
+    /// Verify merge cycles and empty overrides.
     #[test]
     fn review_merge_cycles_and_empty_overrides() {
         let directory = tempfile::tempdir().unwrap();
@@ -4100,6 +4187,7 @@ mod tests {
         assert!(matches!(fields.include, GlobPatterns::Unknown { .. }));
     }
 
+    /// Verify glob budget exhaustion reports truncation.
     #[test]
     fn review_glob_budget_exhaustion_reports_truncation() {
         let directory = tempfile::tempdir().unwrap();
@@ -4129,6 +4217,7 @@ mod tests {
         assert!(set.truncated);
     }
 
+    /// Verify computed shapes refuse malformed calls and declarations.
     #[test]
     fn review_computed_shapes_refuse_malformed_calls_and_declarations() {
         for expression in [
@@ -4181,6 +4270,7 @@ mod tests {
         assert!(resolve_standalone_config(missing.path()).is_none());
     }
 
+    /// Verify partial glob results keep unknown governance.
     #[test]
     fn review_partial_glob_results_keep_unknown_governance() {
         let directory = review_fixture(
@@ -4221,6 +4311,7 @@ mod tests {
         ));
     }
 
+    /// Verify merge chain is bounded.
     #[test]
     fn review_merge_chain_is_bounded() {
         let directory = tempfile::tempdir().unwrap();
@@ -4614,6 +4705,7 @@ mod tests {
         ));
     }
 
+    /// Verify root merge config resolves merged fields and projects.
     #[test]
     fn root_merge_config_resolves_merged_fields_and_projects() {
         let directory = tempfile::tempdir().unwrap();
@@ -4645,6 +4737,7 @@ mod tests {
         assert_eq!(project.include, owned(&["base/**"]));
     }
 
+    /// Verify unreadable existing merge base keeps overrides and marks arrays unknown.
     #[test]
     fn unreadable_existing_merge_base_keeps_overrides_and_marks_arrays_unknown() {
         let directory = tempfile::tempdir().unwrap();
@@ -4698,6 +4791,7 @@ mod tests {
         ));
     }
 
+    /// Verify no config at all is not unresolved.
     #[test]
     fn no_config_at_all_is_not_unresolved() {
         // Case (1): nothing was missed here -- there is no Vitest config at all, so there is no
@@ -4715,6 +4809,7 @@ mod tests {
         assert_eq!(set.governing_project(&file), ProjectGovernance::NotIncluded);
     }
 
+    /// Verify single project repo resolves like detect globals.
     #[test]
     fn single_project_repo_resolves_like_detect_globals() {
         let directory = tempfile::tempdir().unwrap();
@@ -4742,6 +4837,7 @@ mod tests {
         }
     }
 
+    /// Verify inline projects extending root inherit its globals.
     #[test]
     fn inline_projects_extending_root_inherit_its_globals() {
         // The real shape of a public Vue framework: root sets `globals: true`, each inline project sets
@@ -4774,6 +4870,7 @@ mod tests {
         assert_eq!(set.projects[1].name.as_deref(), Some("jsdom"));
     }
 
+    /// Verify extends false diverges from the root.
     #[test]
     fn extends_false_diverges_from_the_root() {
         let directory = tempfile::tempdir().unwrap();
@@ -4799,6 +4896,7 @@ mod tests {
         ));
     }
 
+    /// Verify extends by self referencing string path inherits like extends true.
     #[test]
     fn extends_by_self_referencing_string_path_inherits_like_extends_true() {
         // A real observed shape: `extends: './vitest.config.ts'` pointing back at the very file the
@@ -4823,6 +4921,7 @@ mod tests {
         ));
     }
 
+    /// Verify projects referencing separate config files are resolved independently.
     #[test]
     fn projects_referencing_separate_config_files_are_resolved_independently() {
         // A real observed shape: a directory glob (`packages/*`) plus an explicit file path.
@@ -4887,6 +4986,7 @@ mod tests {
         ));
     }
 
+    /// Verify workspace file alongside a root config is used instead of it.
     #[test]
     fn workspace_file_alongside_a_root_config_is_used_instead_of_it() {
         let directory = tempfile::tempdir().unwrap();
@@ -4919,6 +5019,7 @@ mod tests {
         ));
     }
 
+    /// Verify a file matching two projects is governed by the last declared one.
     #[test]
     fn a_file_matching_two_projects_is_governed_by_the_last_declared_one() {
         let directory = tempfile::tempdir().unwrap();
@@ -4945,6 +5046,7 @@ mod tests {
         }
     }
 
+    /// Verify a file matching no project is not included.
     #[test]
     fn a_file_matching_no_project_is_not_included() {
         let directory = tempfile::tempdir().unwrap();
@@ -4964,6 +5066,7 @@ mod tests {
         assert_eq!(set.governing_project(&file), ProjectGovernance::NotIncluded);
     }
 
+    /// Verify per project include excludes a cy file even under globals true.
     #[test]
     fn per_project_include_excludes_a_cy_file_even_under_globals_true() {
         // A `.cy.ts` file outside the resolved `include` must never be treated as governed,
@@ -4992,6 +5095,7 @@ mod tests {
         ));
     }
 
+    /// Verify unresolvable projects value forces unknown rather than not included.
     #[test]
     fn unresolvable_projects_value_forces_unknown_rather_than_not_included() {
         // A real observed shape: `projects: vitestPackages`, a variable, not a literal array.
@@ -5014,6 +5118,7 @@ mod tests {
         ));
     }
 
+    /// Verify explicit empty projects array is found but declares no projects.
     #[test]
     fn explicit_empty_projects_array_is_found_but_declares_no_projects() {
         // Case (2): the user explicitly declared zero projects. Distinct from case (1) (no config
@@ -5132,6 +5237,7 @@ mod tests {
         );
     }
 
+    /// Verify self referencing project entry reads the configs own fields without looping.
     #[test]
     fn self_referencing_project_entry_reads_the_configs_own_fields_without_looping() {
         // A real observed shape: the root config lists its own file among `test.projects`.
@@ -5171,6 +5277,7 @@ mod tests {
         );
     }
 
+    /// Verify awaited factory call entry is read as an inline project.
     #[test]
     fn awaited_factory_call_entry_is_read_as_an_inline_project() {
         // A real observed shape: `await defineVitestProject({ test: { ... } })` as an array element.
@@ -5195,6 +5302,7 @@ mod tests {
         ));
     }
 
+    /// Verify truncates rather than resolving an unbounded number of projects.
     #[test]
     fn truncates_rather_than_resolving_an_unbounded_number_of_projects() {
         let directory = tempfile::tempdir().unwrap();
@@ -5215,6 +5323,7 @@ mod tests {
 
     // -- `includeSource` (docs/vitest-surface.md, "In-source testing") ------------------------
 
+    /// Verify include source defaults to a known empty list when absent.
     #[test]
     fn include_source_defaults_to_a_known_empty_list_when_absent() {
         // Vitest's own default is `[]`, not "unknown" -- an ordinary project that never mentions
@@ -5230,6 +5339,7 @@ mod tests {
         assert_eq!(set.projects[0].include_source, GlobPatterns::Known(vec![]));
     }
 
+    /// Verify include source parses an explicit glob list.
     #[test]
     fn include_source_parses_an_explicit_glob_list() {
         let directory = tempfile::tempdir().unwrap();
@@ -5247,6 +5357,7 @@ mod tests {
         );
     }
 
+    /// Verify include source is inherited through extends true but not extends false.
     #[test]
     fn include_source_is_inherited_through_extends_true_but_not_extends_false() {
         let directory = tempfile::tempdir().unwrap();
@@ -5280,6 +5391,7 @@ mod tests {
         );
     }
 
+    /// Verify unresolvable include source value resolves to unknown not a guess.
     #[test]
     fn unresolvable_include_source_value_resolves_to_unknown_not_a_guess() {
         let directory = tempfile::tempdir().unwrap();
@@ -5298,6 +5410,7 @@ mod tests {
 
     // -- `benchmark.*` discovery -------------------------------------------------------------
 
+    /// Verify benchmark discovery fields use vitest defaults when absent.
     #[test]
     fn benchmark_discovery_fields_use_vitest_defaults_when_absent() {
         let directory = tempfile::tempdir().unwrap();
@@ -5316,6 +5429,7 @@ mod tests {
         );
     }
 
+    /// Verify benchmark discovery fields parse literal arrays and expand extglobs.
     #[test]
     fn benchmark_discovery_fields_parse_literal_arrays_and_expand_extglobs() {
         let directory = tempfile::tempdir().unwrap();
@@ -5352,6 +5466,7 @@ mod tests {
         );
     }
 
+    /// Verify unsupported benchmark include extglob diagnostic names benchmark field.
     #[test]
     fn unsupported_benchmark_include_extglob_diagnostic_names_benchmark_field() {
         let directory = tempfile::tempdir().unwrap();
@@ -5379,6 +5494,7 @@ mod tests {
         }
     }
 
+    /// Verify benchmark discovery fields follow project inheritance.
     #[test]
     fn benchmark_discovery_fields_follow_project_inheritance() {
         let directory = tempfile::tempdir().unwrap();
@@ -5427,6 +5543,7 @@ mod tests {
         );
     }
 
+    /// Verify nonliteral benchmark config is unknown in every discovery channel.
     #[test]
     fn nonliteral_benchmark_config_is_unknown_in_every_discovery_channel() {
         let directory = tempfile::tempdir().unwrap();
@@ -5451,6 +5568,7 @@ mod tests {
 
     // -- Extglob translation (a project's own `include`/`exclude`/`includeSource`) -----------
 
+    /// Verify expand extglob translates vitests own default include shape.
     #[test]
     fn expand_extglob_translates_vitests_own_default_include_shape() {
         let expanded = expand_extglob_optional_groups("**/*.{test,spec}.?(c|m)[jt]s?(x)").unwrap();
@@ -5470,6 +5588,7 @@ mod tests {
         assert_eq!(expanded.len(), 6);
     }
 
+    /// Verify expand extglob leaves a plain pattern with no extglob syntax untouched.
     #[test]
     fn expand_extglob_leaves_a_plain_pattern_with_no_extglob_syntax_untouched() {
         assert_eq!(
@@ -5478,6 +5597,7 @@ mod tests {
         );
     }
 
+    /// Verify expand extglob rejects unsupported extglob forms by name.
     #[test]
     fn expand_extglob_rejects_unsupported_extglob_forms_by_name() {
         for (pattern, operator) in [
@@ -5499,6 +5619,7 @@ mod tests {
         }
     }
 
+    /// Verify a projects entry extglob include governs its test file.
     #[test]
     fn a_projects_entry_extglob_include_governs_its_test_file() {
         // A real observed shape (found via a 3-test drop on the corpus): the `runtime` project's
@@ -5535,6 +5656,8 @@ mod tests {
         }
     }
 
+    /// Verify an unsupported extglob form in a projects include marks it unknown with a
+    /// diagnostic.
     #[test]
     fn an_unsupported_extglob_form_in_a_projects_include_marks_it_unknown_with_a_diagnostic() {
         let directory = tempfile::tempdir().unwrap();
@@ -5562,6 +5685,7 @@ mod tests {
 
     // --- Copilot review #7, item 1: an unresolved entry can still out-rank a known match. -------
 
+    /// Verify unresolved entry declared after a matching project forces unknown.
     #[test]
     fn unresolved_entry_declared_after_a_matching_project_forces_unknown() {
         // `missing-project-dir/*` never resolves to anything, so it is exactly the kind of
@@ -5592,6 +5716,7 @@ mod tests {
         }
     }
 
+    /// Verify unresolved entry declared before a matching project still governs.
     #[test]
     fn unresolved_entry_declared_before_a_matching_project_still_governs() {
         // The same unresolved entry, but declared *before* the known match this time: "later
@@ -5626,6 +5751,7 @@ mod tests {
 
     // --- Copilot review #7, item 2: escapes must be decoded correctly or refused, never mangled. -
 
+    /// Verify read string literal decodes unicode and hex escapes like javascript.
     #[test]
     fn read_string_literal_decodes_unicode_and_hex_escapes_like_javascript() {
         // `\u0074` is JavaScript's escape for `t`. The decoded value must equal what a JS engine
@@ -5644,6 +5770,7 @@ mod tests {
         assert_eq!(read_string_literal(&source, 0..len).as_deref(), Some("A-A"));
     }
 
+    /// Verify read string literal rejects an escape it does not decode instead of mangling it.
     #[test]
     fn read_string_literal_rejects_an_escape_it_does_not_decode_instead_of_mangling_it() {
         // `\v` (vertical tab) is a real JavaScript escape this scan does not translate. The earlier
@@ -5654,6 +5781,7 @@ mod tests {
         assert_eq!(read_string_literal(&source, 0..len), None);
     }
 
+    /// Verify read string literal refuses legacy octal rather than decoding its leading zero.
     #[test]
     fn read_string_literal_refuses_legacy_octal_rather_than_decoding_its_leading_zero() {
         // `\0` is NUL, but only when no digit follows. `\01` is a legacy *octal* escape that
@@ -5672,6 +5800,7 @@ mod tests {
         );
     }
 
+    /// Verify an undecodable escape in a projects include is unknown not mangled.
     #[test]
     fn an_undecodable_escape_in_a_projects_include_is_unknown_not_mangled() {
         let directory = tempfile::tempdir().unwrap();
@@ -5692,6 +5821,7 @@ mod tests {
 
     // --- Copilot review #7, item 3: a projects entry matching nothing must set the flag. --------
 
+    /// Verify a literal projects entry matching no config file sets has unresolved entries.
     #[test]
     fn a_literal_projects_entry_matching_no_config_file_sets_has_unresolved_entries() {
         let directory = tempfile::tempdir().unwrap();
@@ -5733,6 +5863,7 @@ mod tests {
         )
     }
 
+    /// Verify globals for answers from the governing project and refuses for an unmatched file.
     #[test]
     fn globals_for_answers_from_the_governing_project_and_refuses_for_an_unmatched_file() {
         // The two halves of the contract in one place: a governed file gets its project's answer
@@ -5761,6 +5892,7 @@ mod tests {
         }
     }
 
+    /// Verify governed globals for keeps not included separate from a known answer.
     #[test]
     fn governed_globals_for_keeps_not_included_separate_from_a_known_answer() {
         // `globals_for` collapses "no project governs this file" into the same `Unknown` as "the
@@ -5795,6 +5927,7 @@ mod tests {
         );
     }
 
+    /// Verify an unreadable exclude still answers when every project agrees on globals.
     #[test]
     fn an_unreadable_exclude_still_answers_when_every_project_agrees_on_globals() {
         // The real shape of a public Vue framework, reduced: governance is genuinely ambiguous (one
@@ -5823,6 +5956,7 @@ mod tests {
         assert_eq!(set.governed_globals_for(&file), GovernedGlobals::Enabled);
     }
 
+    /// Verify the unanimity shortcut also carries a unanimous false.
     #[test]
     fn the_unanimity_shortcut_also_carries_a_unanimous_false() {
         // The shortcut is about agreement, not about `true`: two projects that both disable
@@ -5842,6 +5976,7 @@ mod tests {
         assert_eq!(set.governed_globals_for(&file), GovernedGlobals::Disabled);
     }
 
+    /// Verify projects that disagree about globals leave an ambiguous file unknown.
     #[test]
     fn projects_that_disagree_about_globals_leave_an_ambiguous_file_unknown() {
         // This is the half of the shortcut that must NOT fire. When the candidates disagree,
@@ -5857,6 +5992,7 @@ mod tests {
         assert_both_globals_views_unknown(&set, &directory.path().join("a/x.test.ts"));
     }
 
+    /// Verify one project with an unreadable globals blocks the unanimity shortcut.
     #[test]
     fn one_project_with_an_unreadable_globals_blocks_the_unanimity_shortcut() {
         // The sibling of the disagreement case: everyone that *can* be read says `true`, but one
@@ -5875,6 +6011,7 @@ mod tests {
 
     // --- Matching a file against a project's glob channels --------------------------------------
 
+    /// Verify both unreadable discovery channels are reported in one reason.
     #[test]
     fn both_unreadable_discovery_channels_are_reported_in_one_reason() {
         // `include` and `benchmark.include` are independent channels and a file can be uncertain
@@ -5896,6 +6033,7 @@ mod tests {
         }
     }
 
+    /// Verify an include pattern that cannot compile leaves the file unknown not excluded.
     #[test]
     fn an_include_pattern_that_cannot_compile_leaves_the_file_unknown_not_excluded() {
         // A glob `globset` refuses outright must not read as "this project does not claim the
@@ -5918,6 +6056,7 @@ mod tests {
         }
     }
 
+    /// Verify an exclude pattern that cannot compile leaves the file unknown not included.
     #[test]
     fn an_exclude_pattern_that_cannot_compile_leaves_the_file_unknown_not_included() {
         // The sibling site of the `include` case above: a fix applied to one channel and not the
@@ -5943,6 +6082,7 @@ mod tests {
 
     // --- Root configuration files this scan has to refuse ---------------------------------------
 
+    /// Verify a root config this scan cannot read resolves no projects but stays config found.
     #[test]
     fn a_root_config_this_scan_cannot_read_resolves_no_projects_but_stays_config_found() {
         // Every refusal shape at the root shares one contract: no projects, `config_found` true
@@ -5991,6 +6131,7 @@ mod tests {
         }
     }
 
+    /// Verify a root config with no test key still resolves one project on vitest defaults.
     #[test]
     fn a_root_config_with_no_test_key_still_resolves_one_project_on_vitest_defaults() {
         // A Vite config that never mentions `test` is a perfectly ordinary Vitest project: Vitest
@@ -6018,6 +6159,7 @@ mod tests {
         GlobPatterns::Known(patterns.iter().map(|p| (*p).to_owned()).collect())
     }
 
+    /// Verify a projects array that never closes resolves nothing.
     #[test]
     fn a_projects_array_that_never_closes_resolves_nothing() {
         let directory = tempfile::tempdir().unwrap();
@@ -6030,6 +6172,7 @@ mod tests {
         assert_unresolved_with_diagnostic(&set, "never reaches a matching `]`");
     }
 
+    /// Verify an include array that never closes is unknown rather than empty.
     #[test]
     fn an_include_array_that_never_closes_is_unknown_rather_than_empty() {
         // An unclosed `[` must not read as "no patterns": an empty `include` list excludes every
@@ -6045,6 +6188,7 @@ mod tests {
         assert!(reason.contains("never reaches a matching `]`"), "{reason}");
     }
 
+    /// Verify a comment between a key and its value does not hide the value.
     #[test]
     fn a_comment_between_a_key_and_its_value_does_not_hide_the_value() {
         // The value skip runs over the *original* source, so it has to step over comments itself.
@@ -6068,6 +6212,7 @@ mod tests {
         );
     }
 
+    /// Verify a name key with no value leaves the project unnamed without disturbing globals.
     #[test]
     fn a_name_key_with_no_value_leaves_the_project_unnamed_without_disturbing_globals() {
         // A truncated `name:` yields an empty value extent. Reading that as a string would either
@@ -6090,6 +6235,7 @@ mod tests {
 
     // --- `test.projects` entries: inheritance, references, and refusals -------------------------
 
+    /// Verify an unresolvable extends value leaves every unset field unknown.
     #[test]
     fn an_unresolvable_extends_value_leaves_every_unset_field_unknown() {
         // `extends` that is neither a boolean nor a string literal is the dangerous case: the
@@ -6129,6 +6275,7 @@ mod tests {
         }
     }
 
+    /// Verify extends by string path to another file inherits that files fields.
     #[test]
     fn extends_by_string_path_to_another_file_inherits_that_files_fields() {
         // A real observed shape, except pointing at a sibling config rather than at itself: the
@@ -6153,6 +6300,7 @@ mod tests {
         );
     }
 
+    /// Verify extends by string path to a missing file is unresolvable not ignored.
     #[test]
     fn extends_by_string_path_to_a_missing_file_is_unresolvable_not_ignored() {
         let directory = tempfile::tempdir().unwrap();
@@ -6173,6 +6321,7 @@ mod tests {
         }
     }
 
+    /// Verify an inline entry with no test key inherits the whole root configuration.
     #[test]
     fn an_inline_entry_with_no_test_key_inherits_the_whole_root_configuration() {
         let directory = tempfile::tempdir().unwrap();
@@ -6192,6 +6341,8 @@ mod tests {
         );
     }
 
+    /// Verify an inline entry whose test value is unreadable resolves to an all unknown
+    /// project.
     #[test]
     fn an_inline_entry_whose_test_value_is_unreadable_resolves_to_an_all_unknown_project() {
         // The entry still exists -- it is a project, it just cannot be described -- so it is kept
@@ -6220,6 +6371,7 @@ mod tests {
         ));
     }
 
+    /// Verify a bare identifier projects entry is reported rather than skipped.
     #[test]
     fn a_bare_identifier_projects_entry_is_reported_rather_than_skipped() {
         let directory = tempfile::tempdir().unwrap();
@@ -6232,6 +6384,7 @@ mod tests {
         assert_unresolved_with_diagnostic(&set, "neither a string literal nor an inline object");
     }
 
+    /// Verify a negated projects glob is recorded as unresolved rather than matched literally.
     #[test]
     fn a_negated_projects_glob_is_recorded_as_unresolved_rather_than_matched_literally() {
         // `'!packages/private'` needs cross-entry set-difference semantics this scan does not
@@ -6263,6 +6416,7 @@ mod tests {
 
     // --- Resolving a `test.projects` string entry onto the filesystem ---------------------------
 
+    /// Verify a directory entry resolves through that directorys own config file.
     #[test]
     fn a_directory_entry_resolves_through_that_directorys_own_config_file() {
         // `'packages/a'` names a directory, not a file: the scan has to find that directory's own
@@ -6308,6 +6462,7 @@ mod tests {
         ));
     }
 
+    /// Verify a double star glob entry resolves the config files it matches.
     #[test]
     fn a_double_star_glob_entry_resolves_the_config_files_it_matches() {
         let directory = tempfile::tempdir().unwrap();
@@ -6333,6 +6488,7 @@ mod tests {
         ));
     }
 
+    /// Verify a glob entry whose leading directory does not exist matches nothing.
     #[test]
     fn a_glob_entry_whose_leading_directory_does_not_exist_matches_nothing() {
         let directory = tempfile::tempdir().unwrap();
@@ -6345,6 +6501,7 @@ mod tests {
         assert_unresolved_with_diagnostic(&set, "matched no project configuration file");
     }
 
+    /// Verify a symlink matched by a glob entry does not become a second project.
     #[cfg(unix)]
     #[test]
     fn a_symlink_matched_by_a_glob_entry_does_not_become_a_second_project() {
@@ -6375,6 +6532,7 @@ mod tests {
         );
     }
 
+    /// Verify a referenced project file this scan cannot read becomes an all unknown project.
     #[test]
     fn a_referenced_project_file_this_scan_cannot_read_becomes_an_all_unknown_project() {
         // Two different ways a referenced config can be unreadable, swept together: no recognized
@@ -6415,6 +6573,7 @@ mod tests {
         }
     }
 
+    /// Verify one glob entry expanding past the project cap stops and says so.
     #[test]
     fn one_glob_entry_expanding_past_the_project_cap_stops_and_says_so() {
         // The cap has to bite inside a single entry's expansion too, not only across entries --
@@ -6452,6 +6611,7 @@ mod tests {
 
     // --- Legacy `vitest.workspace.*` files ------------------------------------------------------
 
+    /// Verify a workspace file this scan cannot read resolves no projects.
     #[test]
     fn a_workspace_file_this_scan_cannot_read_resolves_no_projects() {
         for (name, source, needle) in [
@@ -6478,6 +6638,7 @@ mod tests {
         }
     }
 
+    /// Verify a workspace entry whose object literal never closes is reported.
     #[test]
     fn a_workspace_entry_whose_object_literal_never_closes_is_reported() {
         // Reachable only from a workspace file: the array's own `[ ... ]` matching is independent
@@ -6497,6 +6658,7 @@ mod tests {
         ));
     }
 
+    /// Verify a workspace file declaring more projects than the cap is truncated.
     #[test]
     fn a_workspace_file_declaring_more_projects_than_the_cap_is_truncated() {
         let directory = tempfile::tempdir().unwrap();
@@ -6524,6 +6686,7 @@ mod tests {
 
     // --- String-literal reading -----------------------------------------------------------------
 
+    /// Verify read string literal decodes the simple escapes javascript defines.
     #[test]
     fn read_string_literal_decodes_the_simple_escapes_javascript_defines() {
         for (source, expected) in [
@@ -6544,6 +6707,7 @@ mod tests {
         }
     }
 
+    /// Verify read string literal refuses everything that is not one plain literal.
     #[test]
     fn read_string_literal_refuses_everything_that_is_not_one_plain_literal() {
         // Each of these would, if accepted, hand a *different* glob to the matcher than the config
@@ -6568,6 +6732,7 @@ mod tests {
 
     // --- Extglob translation, continued ---------------------------------------------------------
 
+    /// Verify expand extglob rejects group shapes it cannot translate soundly.
     #[test]
     fn expand_extglob_rejects_group_shapes_it_cannot_translate_soundly() {
         // Four different ways a `?(...)` group can be untranslatable. Each has to be an `Err`
@@ -6596,6 +6761,7 @@ mod tests {
         }
     }
 
+    /// Verify expand extglob leaves an introducer that starts no group untouched.
     #[test]
     fn expand_extglob_leaves_an_introducer_that_starts_no_group_untouched() {
         // `?` here is an ordinary single-character wildcard and the parentheses are literal: there
@@ -6609,6 +6775,7 @@ mod tests {
 
     // --- Arms no configuration file can reach, pinned by direct calls ---------------------------
 
+    /// Verify an unclosed benchmark object makes every benchmark channel unknown.
     #[test]
     fn an_unclosed_benchmark_object_makes_every_benchmark_channel_unknown() {
         // Called directly: `benchmark: {` is only ever looked at inside a `test: { ... }` whose
@@ -6629,6 +6796,7 @@ mod tests {
         }
     }
 
+    /// Verify inheriting with no base configuration resolves every field to unknown.
     #[test]
     fn inheriting_with_no_base_configuration_resolves_every_field_to_unknown() {
         // Also unreachable from `resolve_projects`: the only call site that passes
@@ -6666,6 +6834,7 @@ mod tests {
         }
     }
 
+    /// Verify a projects glob globset refuses to compile matches nothing and is reported.
     #[test]
     fn a_projects_glob_globset_refuses_to_compile_matches_nothing_and_is_reported() {
         // `looks_like_glob` accepts the `[`, `globset` then refuses to compile it. Expanding to

@@ -308,6 +308,8 @@ impl JsonlReporter {
 }
 
 impl Reporter for JsonlReporter {
+    /// Write memory, hook, test, finding and summary records in that order, propagating
+    /// serialization and writer errors.
     fn write_report(&self, result: &AnalysisResult, writer: &mut dyn Write) -> Result<()> {
         // Before the findings, per `scripts/check/check-fixture-isolation.mjs`'s design note: a
         // consumer that needs to interpret a finding in terms of its participants' fingerprints
@@ -406,6 +408,8 @@ struct JsonlFindingRecord {
 }
 
 impl From<&Finding> for JsonlFindingRecord {
+    /// Build a finding record with sanitized, bounded text and explicit names for truncated
+    /// fields.
     fn from(finding: &Finding) -> Self {
         let mut truncated_fields = Vec::new();
         let message = bounded_text(&finding.message, "message", &mut truncated_fields);
@@ -499,6 +503,7 @@ struct JsonlHookRecord {
 }
 
 impl From<&HookFingerprint> for JsonlHookRecord {
+    /// Build a hook record with a sanitized, bounded source path and truncation metadata.
     fn from(record: &HookFingerprint) -> Self {
         let mut truncated_fields = Vec::new();
         let path = bounded_text(
@@ -592,6 +597,7 @@ struct JsonlMemoryFields {
 }
 
 impl From<&FieldBytes> for JsonlMemoryFields {
+    /// Copy every retained-memory field bucket into its JSONL representation.
     fn from(fields: &FieldBytes) -> Self {
         // Destructured rather than field-accessed, matching `crate::memory`'s own discipline: a
         // new bucket there must be published here or this line stops compiling. A breakdown that
@@ -632,6 +638,7 @@ struct JsonlMemoryContextFields {
 }
 
 impl From<&ContextFieldBytes> for JsonlMemoryContextFields {
+    /// Copy every retained context-memory bucket into its JSONL representation.
     fn from(fields: &ContextFieldBytes) -> Self {
         let ContextFieldBytes {
             hooks,
@@ -653,6 +660,7 @@ impl From<&ContextFieldBytes> for JsonlMemoryContextFields {
 }
 
 impl From<&MemoryReport> for JsonlMemoryRecord {
+    /// Build a memory-phase record with retained-byte accounting and optional peak RSS.
     fn from(report: &MemoryReport) -> Self {
         let MemoryReport {
             phase,
@@ -727,6 +735,8 @@ struct JsonlTestRecord {
 }
 
 impl From<&TestFingerprint> for JsonlTestRecord {
+    /// Build a test record with bounded title, source and registration paths, recording
+    /// truncated fields.
     fn from(record: &TestFingerprint) -> Self {
         let mut truncated_fields = Vec::new();
         let title = bounded_text(&record.title, "title", &mut truncated_fields);
@@ -832,6 +842,7 @@ mod tests {
             .unwrap()
     }
 
+    /// Build a representative cross-file duplicate result for JSONL reporter assertions.
     fn sample_result() -> AnalysisResult {
         cross_file_result("2 tests have identical bodies under an equivalent context")
     }
@@ -859,6 +870,7 @@ mod tests {
             .collect()
     }
 
+    /// Render the result through the default JSONL reporter and return its bytes.
     fn render_bytes(result: &AnalysisResult) -> Vec<u8> {
         let mut buffer = Vec::new();
         JsonlReporter::new()
@@ -867,6 +879,7 @@ mod tests {
         buffer
     }
 
+    /// Verify zero findings still emits a summary line.
     #[test]
     fn zero_findings_still_emits_a_summary_line() {
         let lines = render_lines(&AnalysisResult::default());
@@ -883,6 +896,7 @@ mod tests {
         assert_eq!(summary["incomplete"], false);
     }
 
+    /// Verify finding line carries every documented field.
     #[test]
     fn finding_line_carries_every_documented_field() {
         let lines = render_lines(&sample_result());
@@ -925,6 +939,7 @@ mod tests {
         assert_eq!(summary["warnings"], 0);
     }
 
+    /// Verify finding with more than two locations serializes all of them.
     #[test]
     fn finding_with_more_than_two_locations_serializes_all_of_them() {
         let mut result = sample_result();
@@ -936,6 +951,7 @@ mod tests {
         assert_eq!(lines[0]["titles"][2], "suite > c");
     }
 
+    /// Verify title of exactly the cap is not truncated.
     #[test]
     fn title_of_exactly_the_cap_is_not_truncated() {
         let mut result = sample_result();
@@ -947,6 +963,7 @@ mod tests {
         assert_eq!(lines[0]["truncatedFields"].as_array().unwrap().len(), 0);
     }
 
+    /// Verify title one over the cap is truncated and named.
     #[test]
     fn title_one_over_the_cap_is_truncated_and_named() {
         let mut result = sample_result();
@@ -964,6 +981,7 @@ mod tests {
         assert_eq!(truncated_fields, vec!["titles[0]"]);
     }
 
+    /// Verify multi byte codepoint straddling the cap still yields valid json.
     #[test]
     fn multi_byte_codepoint_straddling_the_cap_still_yields_valid_json() {
         let mut result = sample_result();
@@ -979,6 +997,7 @@ mod tests {
         assert!(title.ends_with('\u{2026}'));
     }
 
+    /// Verify title with newline and ansi escape is sanitized but still one line per record.
     #[test]
     fn title_with_newline_and_ansi_escape_is_sanitized_but_still_one_line_per_record() {
         let mut result = sample_result();
@@ -998,6 +1017,7 @@ mod tests {
         assert!(title.contains('\n'));
     }
 
+    /// Verify non ascii path is forward slashed and preserved.
     #[test]
     fn non_ascii_path_is_forward_slashed_and_preserved() {
         let mut result = sample_result();
@@ -1009,6 +1029,7 @@ mod tests {
         );
     }
 
+    /// Verify path with bidi override is stripped.
     #[test]
     fn path_with_bidi_override_is_stripped() {
         let mut result = sample_result();
@@ -1020,6 +1041,7 @@ mod tests {
         assert!(!path.contains('\u{202c}'));
     }
 
+    /// Verify path with zero width character is stripped.
     #[test]
     fn path_with_zero_width_character_is_stripped() {
         let mut result = sample_result();
@@ -1029,6 +1051,7 @@ mod tests {
         assert!(!path.contains('\u{200b}'));
     }
 
+    /// Verify path with control character is stripped.
     #[test]
     fn path_with_control_character_is_stripped() {
         let mut result = sample_result();
@@ -1038,6 +1061,7 @@ mod tests {
         assert!(!path.contains('\u{7}'));
     }
 
+    /// Verify inert participants are read from the structured field.
     #[test]
     fn inert_participants_are_read_from_the_structured_field() {
         let mut result = sample_result();
@@ -1047,6 +1071,7 @@ mod tests {
         assert_eq!(lines[0]["inert"], serde_json::json!([true, false]));
     }
 
+    /// Verify rewording the message cannot change the inert flags.
     #[test]
     fn rewording_the_message_cannot_change_the_inert_flags() {
         // The previous implementation recovered this by matching a phrase inside `message`, so a
@@ -1059,6 +1084,7 @@ mod tests {
         assert_eq!(lines[0]["inert"], serde_json::json!([true, false]));
     }
 
+    /// Verify content notice names paths as untrusted alongside message and titles.
     #[test]
     fn content_notice_names_paths_as_untrusted_alongside_message_and_titles() {
         // R3: `locations[].path` is exactly as repository-controlled as `message`/`titles` (see
@@ -1071,6 +1097,7 @@ mod tests {
         assert!(notice.contains("titles"), "{notice}");
     }
 
+    /// Verify incomplete flag round trips into the summary.
     #[test]
     fn incomplete_flag_round_trips_into_the_summary() {
         let mut result = sample_result();
@@ -1079,12 +1106,14 @@ mod tests {
         assert_eq!(lines[1]["incomplete"], true);
     }
 
+    /// Verify rendering the same result twice produces identical bytes.
     #[test]
     fn rendering_the_same_result_twice_produces_identical_bytes() {
         let result = sample_result();
         assert_eq!(render_bytes(&result), render_bytes(&result));
     }
 
+    /// Verify verdict is emitted for every rule.
     #[test]
     fn verdict_is_emitted_for_every_rule() {
         for rule in crate::model::Rule::ALL {
@@ -1105,6 +1134,7 @@ mod tests {
         }
     }
 
+    /// Verify fingerprint matches the model method and is stable across renders.
     #[test]
     fn fingerprint_matches_the_model_method_and_is_stable_across_renders() {
         let result = sample_result();
@@ -1115,6 +1145,7 @@ mod tests {
         assert_eq!(lines[0]["fingerprint"], lines_again[0]["fingerprint"]);
     }
 
+    /// Verify fingerprint is never counted as a truncated field even when the title is huge.
     #[test]
     fn fingerprint_is_never_counted_as_a_truncated_field_even_when_the_title_is_huge() {
         // `fingerprint` is a fixed-shape hash, not analyzed-repository text, so it must never
@@ -1134,6 +1165,8 @@ mod tests {
 
     // -- `--emit-test-fingerprints` ---------------------------------------------------------
 
+    /// Build a test fingerprint fixture with the supplied location/title and stable digest
+    /// values.
     fn sample_test_fingerprint(path: &str, line: u32, title: &str) -> TestFingerprint {
         TestFingerprint {
             registration_file: None,
@@ -1149,6 +1182,8 @@ mod tests {
         }
     }
 
+    /// Build a hook fingerprint fixture with the supplied location/kind and stable digest
+    /// values.
     fn sample_hook_fingerprint(path: &str, line: u32, kind: HookKind) -> HookFingerprint {
         HookFingerprint {
             location: location(path, line, 3),
@@ -1160,6 +1195,8 @@ mod tests {
         }
     }
 
+    /// Render supplied hook/test fingerprints and findings, parsing every JSONL record
+    /// independently.
     fn render_lines_with(
         hooks: Vec<HookFingerprint>,
         tests: Vec<TestFingerprint>,
@@ -1180,6 +1217,7 @@ mod tests {
             .collect()
     }
 
+    /// Verify a reporter with no fingerprints writes exactly what it always wrote.
     #[test]
     fn a_reporter_with_no_fingerprints_writes_exactly_what_it_always_wrote() {
         // The opt-in's central promise: today's stream is byte-identical, not merely
@@ -1197,6 +1235,7 @@ mod tests {
         );
     }
 
+    /// Verify test records are emitted before every finding and before the summary.
     #[test]
     fn test_records_are_emitted_before_every_finding_and_before_the_summary() {
         let lines = render_lines_with(
@@ -1216,6 +1255,7 @@ mod tests {
         );
     }
 
+    /// Verify test record carries every documented field.
     #[test]
     fn test_record_carries_every_documented_field() {
         let lines = render_lines_with(
@@ -1251,6 +1291,7 @@ mod tests {
         );
     }
 
+    /// Verify an unresolved context is recorded as not comparable.
     #[test]
     fn an_unresolved_context_is_recorded_as_not_comparable() {
         // `comparable` must pass through the reporter unchanged: `false` on the input record
@@ -1263,6 +1304,7 @@ mod tests {
         assert_eq!(lines[0]["comparable"], false);
     }
 
+    /// Verify a hostile title on a test record is sanitized bounded and named.
     #[test]
     fn a_hostile_title_on_a_test_record_is_sanitized_bounded_and_named() {
         let mut record = sample_test_fingerprint("src/a.test.ts", 1, "");
@@ -1278,6 +1320,7 @@ mod tests {
         );
     }
 
+    /// Verify test records render identically across runs.
     #[test]
     fn test_records_render_identically_across_runs() {
         let records = vec![
@@ -1296,6 +1339,8 @@ mod tests {
 
     // -- `"hook"` records ---------------------------------------------------------------------
 
+    /// Verify hook records are emitted before test records before every finding and before the
+    /// summary.
     #[test]
     fn hook_records_are_emitted_before_test_records_before_every_finding_and_before_the_summary() {
         let lines = render_lines_with(
@@ -1315,6 +1360,7 @@ mod tests {
         );
     }
 
+    /// Verify hook record carries exactly its documented fields.
     #[test]
     fn hook_record_carries_exactly_its_documented_fields() {
         let lines = render_lines_with(
@@ -1371,6 +1417,7 @@ mod tests {
         );
     }
 
+    /// Verify hook content notice names only path never title.
     #[test]
     fn hook_content_notice_names_only_path_never_title() {
         let lines = render_lines_with(
@@ -1391,6 +1438,8 @@ mod tests {
         );
     }
 
+    /// Verify a before each and an after each are distinguished by kind even with identical
+    /// bodies.
     #[test]
     fn a_before_each_and_an_after_each_are_distinguished_by_kind_even_with_identical_bodies() {
         let before = sample_hook_fingerprint("src/a.test.ts", 5, HookKind::BeforeEach);
@@ -1403,6 +1452,7 @@ mod tests {
         assert_eq!(lines[0]["alpha"], lines[1]["alpha"]);
     }
 
+    /// Verify a hostile path on a hook record is sanitized bounded and named.
     #[test]
     fn a_hostile_path_on_a_hook_record_is_sanitized_bounded_and_named() {
         let mut record = sample_hook_fingerprint("src/a.test.ts", 1, HookKind::BeforeEach);
@@ -1419,6 +1469,7 @@ mod tests {
         );
     }
 
+    /// Verify hook records render identically across runs.
     #[test]
     fn hook_records_render_identically_across_runs() {
         let hooks = vec![

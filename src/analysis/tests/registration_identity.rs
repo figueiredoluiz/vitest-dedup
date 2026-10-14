@@ -14,6 +14,8 @@ use crate::reporters::{
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
+/// Build a declaration at its source location; when owner differs from source, attach caller
+/// provenance through the serialized model contract.
 fn registered_case(source: &str, owner: &str, line: u32) -> TestCase {
     let case = TestCase {
         registration_file: None,
@@ -51,6 +53,8 @@ fn registered_case(source: &str, owner: &str, line: u32) -> TestCase {
     serde_json::from_str(&value).unwrap()
 }
 
+/// Analyze the supplied cases with default rules, assert the extracted count, and return the
+/// findings.
 fn findings(cases: Vec<TestCase>) -> Vec<crate::model::Finding> {
     let expected_count = cases.len();
     let directory = tempfile::tempdir().unwrap();
@@ -60,10 +64,12 @@ fn findings(cases: Vec<TestCase>) -> Vec<crate::model::Finding> {
     result.findings
 }
 
+/// Analyze fixture cases with only the selected rule enabled and return the full result.
 fn result_for(cases: Vec<TestCase>, rule: Rule) -> AnalysisResult {
     result_for_rules(cases, &[rule])
 }
 
+/// Analyze fixture cases with the selected rules enabled, asserting the non-suite test count.
 fn result_for_rules(cases: Vec<TestCase>, rules: &[Rule]) -> AnalysisResult {
     let expected_count = cases
         .iter()
@@ -96,6 +102,8 @@ fn result_for_rules(cases: Vec<TestCase>, rules: &[Rule]) -> AnalysisResult {
     result
 }
 
+/// Build a rule-specific declaration pair whose registration owners are either shared or
+/// distinct.
 fn scoped_pair(rule: Rule, same_caller: bool) -> Vec<TestCase> {
     let mut a = registered_case("a-runner.ts", "a.test.ts", 1);
     let mut b = registered_case(
@@ -131,6 +139,7 @@ fn scoped_pair(rule: Rule, same_caller: bool) -> Vec<TestCase> {
     vec![a, b]
 }
 
+/// Verify direct and imported declarations in one caller are same file.
 #[test]
 fn registration_identity_direct_and_imported_declarations_in_one_caller_are_same_file() {
     let result = findings(vec![
@@ -142,6 +151,7 @@ fn registration_identity_direct_and_imported_declarations_in_one_caller_are_same
     assert_eq!(result[0].locations[1].path, PathBuf::from("runner.ts"));
 }
 
+/// Verify different callers in one helper are cross file.
 #[test]
 fn registration_identity_different_callers_in_one_helper_are_cross_file() {
     let result = findings(vec![
@@ -153,6 +163,7 @@ fn registration_identity_different_callers_in_one_helper_are_cross_file() {
     assert!(result[0].message.contains("across 2 files"));
 }
 
+/// Verify repeated calls to one declaration do not pair.
 #[test]
 fn registration_identity_repeated_calls_to_one_declaration_do_not_pair() {
     let result = findings(vec![
@@ -162,6 +173,7 @@ fn registration_identity_repeated_calls_to_one_declaration_do_not_pair() {
     assert!(result.is_empty(), "{result:?}");
 }
 
+/// Verify shared declaration does not hide a cross file pair.
 #[test]
 fn registration_identity_shared_declaration_does_not_hide_a_cross_file_pair() {
     let result = result_for(
@@ -185,6 +197,7 @@ fn registration_identity_shared_declaration_does_not_hide_a_cross_file_pair() {
         .any(|path| path == std::path::Path::new("b.test.ts")));
 }
 
+/// Verify different caller configurations do not compare.
 #[test]
 fn registration_identity_different_caller_configurations_do_not_compare() {
     let a = registered_case("runner.ts", "a.test.ts", 1);
@@ -193,6 +206,7 @@ fn registration_identity_different_caller_configurations_do_not_compare() {
     assert!(findings(vec![a, b]).is_empty());
 }
 
+/// Verify every file scoped rule uses the caller.
 #[test]
 fn registration_identity_every_file_scoped_rule_uses_the_caller() {
     for rule in [
@@ -215,6 +229,7 @@ fn registration_identity_every_file_scoped_rule_uses_the_caller() {
     }
 }
 
+/// Verify table rows do not combine across callers.
 #[test]
 fn registration_identity_table_rows_do_not_combine_across_callers() {
     let mut a = registered_case("runner.ts", "a.test.ts", 1);
@@ -228,6 +243,7 @@ fn registration_identity_table_rows_do_not_combine_across_callers() {
         .is_empty());
 }
 
+/// Verify cross file representatives need not be adjacent.
 #[test]
 fn registration_identity_cross_file_representatives_need_not_be_adjacent() {
     let result = result_for(
@@ -243,6 +259,7 @@ fn registration_identity_cross_file_representatives_need_not_be_adjacent() {
     assert!(result.findings[0].message.contains("across 2 files"));
 }
 
+/// Verify collapsed callers remain visible to changed file filtering.
 #[test]
 fn registration_identity_collapsed_callers_remain_visible_to_changed_file_filtering() {
     let result = result_for(
@@ -271,6 +288,7 @@ fn registration_identity_collapsed_callers_remain_visible_to_changed_file_filter
     }
 }
 
+/// Verify suppressions and html snippets follow source locations.
 #[test]
 fn registration_identity_suppressions_and_html_snippets_follow_source_locations() {
     let mut result = result_for(scoped_pair(Rule::DuplicateTest, true), Rule::DuplicateTest);
@@ -302,6 +320,7 @@ fn registration_identity_suppressions_and_html_snippets_follow_source_locations(
     assert!(!html.contains("CALLER"));
 }
 
+/// Verify baselines distinguish callers and ignore unrelated source edits.
 #[test]
 fn registration_identity_baselines_distinguish_callers_and_ignore_unrelated_source_edits() {
     let result = result_for(scoped_pair(Rule::DuplicateTest, true), Rule::DuplicateTest);
@@ -476,6 +495,7 @@ fn registration_identity_non_unicode_paths_do_not_alias_baselines() {
     );
 }
 
+/// Verify structured reports publish sanitized caller provenance.
 #[test]
 fn registration_identity_structured_reports_publish_sanitized_caller_provenance() {
     let cases = vec![
@@ -509,6 +529,7 @@ fn registration_identity_structured_reports_publish_sanitized_caller_provenance(
     assert!(output.contains("b-runner.ts:2:1"));
 }
 
+/// Verify unresolved counts belong to callers.
 #[test]
 fn registration_identity_unresolved_counts_belong_to_callers() {
     let mut a = registered_case("runner.ts", "a.test.ts", 1);
@@ -521,6 +542,7 @@ fn registration_identity_unresolved_counts_belong_to_callers() {
     assert!(result.findings.is_empty());
 }
 
+/// Verify memory includes the retained caller path.
 #[test]
 fn registration_identity_memory_includes_the_retained_caller_path() {
     use crate::memory::HeapBytes;
@@ -533,6 +555,7 @@ fn registration_identity_memory_includes_the_retained_caller_path() {
     assert_eq!(case.heap_bytes(), ordinary + owner_bytes);
 }
 
+/// Verify copied suite suppression is scoped to the caller.
 #[test]
 fn registration_identity_copied_suite_suppression_is_scoped_to_the_caller() {
     let mut suites = scoped_pair(Rule::DuplicateSuite, true);
@@ -558,6 +581,7 @@ fn registration_identity_copied_suite_suppression_is_scoped_to_the_caller() {
     assert_eq!(same.findings[0].rule, Rule::DuplicateSuite);
 }
 
+/// Verify shared hook pairs preserve every caller.
 #[test]
 fn registration_identity_shared_hook_pairs_preserve_every_caller() {
     use crate::model::{Hook, HookKind};
@@ -583,6 +607,7 @@ fn registration_identity_shared_hook_pairs_preserve_every_caller() {
     );
 }
 
+/// Verify jsonl bounds and names provenance fields.
 #[test]
 fn registration_identity_jsonl_bounds_and_names_provenance_fields() {
     let owner = "x".repeat(2_100);
