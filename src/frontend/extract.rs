@@ -439,6 +439,8 @@ fn run(source: &str, file: &SourceFile, globals: Globals, allow_imported: bool) 
     }
 }
 
+/// Derive the parser source type from the path and apply any forced module flavor; return None
+/// for unsupported paths.
 fn build_source_type(file: &SourceFile) -> Option<SourceType> {
     let source_type = SourceType::from_path(&file.path).ok()?;
     Some(match file.module_flavor {
@@ -829,6 +831,8 @@ fn collect_mocked_modules(
         found: bool,
     }
     impl<'a> Visit<'a> for NestedMockScan<'_, 'a> {
+        /// Flag recognized mock calls outside the pre-read top-level set, then continue
+        /// scanning nested calls.
         fn visit_call_expression(&mut self, it: &CallExpression<'a>) {
             if !self
                 .read_at_top_level
@@ -1058,6 +1062,8 @@ impl<'a> Walker<'a> {
         }
     }
 
+    /// Pre-register bindings and scope effects from one statement and supported nested
+    /// statement containers.
     fn prepare_statement(&mut self, statement: &Statement<'a>, registry: &mut Registry) {
         match statement {
             Statement::VariableDeclaration(declaration) => {
@@ -1127,6 +1133,7 @@ impl<'a> Walker<'a> {
         }
     }
 
+    /// Prepare all statements of a block body, otherwise prepare the single body statement.
     fn prepare_body_like_statement(&mut self, statement: &Statement<'a>, registry: &mut Registry) {
         match statement {
             Statement::BlockStatement(block) => self.prepare_statements(&block.body, registry),
@@ -1164,6 +1171,9 @@ impl<'a> Walker<'a> {
         )
     }
 
+    /// Pre-register imported, scoped and free-identifier ambient hooks for this scope.
+    /// If registry resolution fails and no ambient hook is recorded, pre-scan a possible local or
+    /// first-party imported helper body. Fixture bindings are prepared separately.
     fn prepare_call(&mut self, call: &CallExpression<'a>, registry: &mut Registry) {
         let Some(resolved) = self.resolve_call_callee(&call.callee, registry) else {
             // S8/R10: an AMBIENT hook -- `beforeAll(...)` with no import and no declaration
@@ -1320,12 +1330,15 @@ impl<'a> Walker<'a> {
         }
     }
 
+    /// Walk every statement in source order without preparing the enclosing scope again;
+    /// its bindings and hook effects have already been collected.
     fn walk_statement_list(&mut self, statements: &[Statement<'a>], registry: &mut Registry) {
         for statement in statements {
             self.walk_statement(statement, registry);
         }
     }
 
+    /// Walk a block's statement list or a single non-block body with the same registry.
     fn walk_body_like_statement(&mut self, statement: &Statement<'a>, registry: &mut Registry) {
         match statement {
             Statement::BlockStatement(block) => self.walk_statement_list(&block.body, registry),
@@ -1439,6 +1452,8 @@ impl<'a> Walker<'a> {
         }
     }
 
+    /// Dispatch recognized test/suite calls for emission; attempt helper expansion for
+    /// unresolved callees.
     fn classify_call(&mut self, call: &CallExpression<'a>, registry: &mut Registry) {
         let Some(resolved) = self.resolve_call_callee(&call.callee, registry) else {
             // S11: not Vitest, but possibly a local helper that declares tests. See
@@ -1470,6 +1485,8 @@ impl<'a> Walker<'a> {
         }
     }
 
+    /// Fingerprint a readable hook callback and record its kind, location and idempotence in
+    /// the current scope.
     fn record_hook(&mut self, call: &CallExpression<'a>, kind: HookKind) {
         let Some(function_like) = call.arguments.first().and_then(as_function_like) else {
             return;
@@ -1510,6 +1527,8 @@ impl<'a> Walker<'a> {
         }
     }
 
+    /// Emit declaration records with row-specific titles, modifiers, context and body
+    /// fingerprints.
     fn emit_test(
         &mut self,
         call: &CallExpression<'a>,
@@ -1672,6 +1691,8 @@ impl<'a> Walker<'a> {
         }
     }
 
+    /// Emit suite records and walk readable suite bodies under their derived scope and row
+    /// context.
     fn emit_describe(
         &mut self,
         call: &CallExpression<'a>,
@@ -2198,6 +2219,7 @@ impl<'a> Walker<'a> {
             found: Vec<Arc<str>>,
         }
         impl<'a, 'r> Visit<'a> for Collector<'r> {
+            /// Collect anchored module identities for references resolved to imported symbols.
             fn visit_identifier_reference(&mut self, it: &oxc_ast::ast::IdentifierReference<'a>) {
                 if let Some(reference_id) = it.reference_id.get() {
                     if let Some(symbol_id) = self.scoping.get_reference(reference_id).symbol_id() {
@@ -2244,6 +2266,8 @@ impl<'a> Walker<'a> {
         hooks
     }
 
+    /// Convert a parser byte span into an owned source location with line and UTF-16 column
+    /// positions.
     fn location(&self, span: Span) -> Location {
         Location {
             path: self.file.path.clone(),
@@ -2257,6 +2281,8 @@ impl<'a> Walker<'a> {
     }
 }
 
+/// Map the four supported lifecycle-hook names to their owned hook kinds, returning None for
+/// other names.
 fn hook_kind(name: &str) -> Option<HookKind> {
     match name {
         "beforeAll" => Some(HookKind::BeforeAll),
@@ -2267,6 +2293,8 @@ fn hook_kind(name: &str) -> Option<HookKind> {
     }
 }
 
+/// Borrow an inline arrow or function expression argument as a callable, declining other
+/// argument forms.
 fn as_function_like<'a, 'b>(arg: &'b Argument<'a>) -> Option<FunctionLike<'a, 'b>> {
     match arg {
         Argument::ArrowFunctionExpression(arrow) => Some(FunctionLike::Arrow(arrow)),
@@ -2320,6 +2348,7 @@ enum DescribeBody<'r, 'a> {
     Concise(&'r Expression<'a>),
 }
 
+/// Borrow a readable suite callback as block statements or a concise arrow expression.
 fn describe_body<'r, 'a>(body_arg: Option<&'r Argument<'a>>) -> Option<DescribeBody<'r, 'a>> {
     match body_arg.and_then(as_function_like) {
         Some(FunctionLike::Arrow(arrow)) => match &arrow.body {
@@ -2334,6 +2363,8 @@ fn describe_body<'r, 'a>(body_arg: Option<&'r Argument<'a>>) -> Option<DescribeB
     }
 }
 
+/// Separate title, optional literal options object and body arguments by inspecting the second
+/// argument's shape.
 fn split_declaration_args<'r, 'a>(
     args: &'r [Argument<'a>],
 ) -> (
@@ -2349,6 +2380,8 @@ fn split_declaration_args<'r, 'a>(
     }
 }
 
+/// Add recognized modifiers whose options-object properties are literal true, without
+/// duplicating modifiers.
 fn union_option_modifiers(modifiers: &mut Vec<Modifier>, options: &ObjectExpression) {
     for property in &options.properties {
         let ObjectPropertyKind::ObjectProperty(property) = property else {
@@ -2481,6 +2514,7 @@ fn title_is_unresolved(title: &Title) -> bool {
     matches!(title, Title::Dynamic(_) | Title::Parameterized(_))
 }
 
+/// Map a declaration member name to its modifier, retaining unsupported names as Unknown.
 fn modifier_for_member(name: &str) -> Modifier {
     match name {
         "skip" => Modifier::Skip,
@@ -2515,6 +2549,8 @@ struct TitlePattern {
     resolved: bool,
 }
 
+/// Read a title pattern and whether it was resolved, retaining source text for unsupported
+/// dynamic forms.
 fn raw_title_pattern(title_arg: Option<&Argument>, source: &str) -> TitlePattern {
     match title_arg {
         Some(Argument::StringLiteral(literal)) => TitlePattern {
@@ -2734,6 +2770,8 @@ enum IdempotentStatement {
     Reset,
 }
 
+/// Borrow block-body statements from a callable, returning None for concise arrows or absent
+/// function bodies.
 fn function_like_statements<'a, 'b>(
     function_like: &'b FunctionLike<'a, 'b>,
 ) -> Option<&'b oxc_allocator::Vec<'a, Statement<'a>>> {
@@ -2761,6 +2799,8 @@ fn simple_target_path(expression: &Expression) -> Option<String> {
     }
 }
 
+/// Render an identifier or static member-chain assignment target, declining unsupported target
+/// forms.
 fn assignment_target_path(target: &AssignmentTarget) -> Option<String> {
     match target {
         AssignmentTarget::AssignmentTargetIdentifier(ident) => Some(ident.name.as_str().to_owned()),
@@ -2785,6 +2825,8 @@ fn is_primitive_literal(expression: &Expression) -> bool {
     )
 }
 
+/// Classify supported overwrite, guarded-write and framework-reset statements, declining other
+/// effects.
 fn idempotent_statement(
     statement: &Statement,
     semantic: &Semantic,
@@ -2850,11 +2892,6 @@ fn idempotent_statement(
     }
 }
 
-/// Whether `call` is one of the framework reset operations, resolved through the import graph.
-///
-/// Never by bare name. `not-redundant-hook-guarded-connect.test.ts` exists to forbid an
-/// implementation that keys idempotence on what a callee is *called*, and a project's own
-/// `cleanup()` is not Testing Library's.
 /// What a reference binds to, in the three states that matter when deciding whether a callee is
 /// the framework's own.
 ///
@@ -2872,6 +2909,8 @@ enum Binding {
     Local,
 }
 
+/// Classify an identifier as unbound, locally declared or imported with its anchored module
+/// identity.
 fn binding_of(
     ident: &IdentifierReference,
     semantic: &Semantic,
@@ -2926,6 +2965,11 @@ fn is_vitest_namespace(
     }
 }
 
+/// Whether `call` is one of the framework reset operations, resolved through the import graph.
+///
+/// Never by bare name. `not-redundant-hook-guarded-connect.test.ts` exists to forbid an
+/// implementation that keys idempotence on what a callee is *called*, and a project's own
+/// `cleanup()` is not Testing Library's.
 fn is_framework_reset_call(
     call: &CallExpression,
     semantic: &Semantic,
@@ -2994,6 +3038,8 @@ fn import_is_package(module: &str, package: &str) -> bool {
     false
 }
 
+/// Keep all row cells observable for named rows or unreadable, rest, defaulted or destructuring
+/// callback bindings.
 fn row_cells_fully_observable(body_arg: Option<&Argument>, row: &Row) -> bool {
     // An object row binds whole. Even a callback that destructures only some members holds a
     // binding through which the rest are reachable, so no member is provably unread.
@@ -3020,6 +3066,8 @@ fn row_cells_fully_observable(body_arg: Option<&Argument>, row: &Row) -> bool {
             })
 }
 
+/// Build positional or named substitutions from a resolved table row, returning None for
+/// unresolved rows.
 fn row_substitution(row: &Row) -> Option<RowSubstitution> {
     if row.unresolved {
         return None;
@@ -3053,6 +3101,8 @@ fn render_each_title(pattern: &TitlePattern, row: &Row, index: usize) -> Title {
     }
 }
 
+/// Render supported printf/named row-title placeholders, declining unresolved substitutions
+/// and unsupported rendering cases such as %% or a NaN numeric coercion.
 fn try_render_each_title(pattern: &str, row: &Row, index: usize) -> Option<String> {
     // The printf arguments come from the row itself, not from its cells: an object row is ONE
     // argument (`{ a: 1 }`), and an array row spreads even where its binding does not. See
@@ -3327,6 +3377,7 @@ fn parse_numeric_prefix(rendered: &str, float: bool) -> Option<f64> {
     trimmed[..index].parse::<f64>().ok()
 }
 
+/// Recognize the static import.meta.vitest member expression used by in-source tests.
 fn is_import_meta_vitest_expr(expr: &Expression) -> bool {
     matches!(
         expr,
@@ -3341,6 +3392,7 @@ struct LineIndex<'a> {
 }
 
 impl<'a> LineIndex<'a> {
+    /// Build a byte-offset line index with the start of every source line.
     fn new(source: &'a str) -> Self {
         let mut line_starts = vec![0u32];
         for (index, byte) in source.bytes().enumerate() {
@@ -3381,6 +3433,7 @@ mod tests {
     use crate::discovery::SourceLanguage;
     use std::path::PathBuf;
 
+    /// Build a source-file fixture with language and module flavor inferred from its extension.
     fn file(path: &str) -> SourceFile {
         let language = if path.ends_with(".ts") || path.ends_with(".mts") || path.ends_with(".cts")
         {
@@ -3742,6 +3795,8 @@ mod tests {
         assert_eq!(scope, None, "and contributes no scope to compare ON");
     }
 
+    /// Extract the supplied source using a path-derived fixture file and the requested globals
+    /// mode.
     fn extract_source(source: &str, path: &str, globals: Globals) -> FileExtraction {
         extract(source, &file(path), globals)
     }
@@ -3789,6 +3844,8 @@ mod tests {
         );
     }
 
+    /// Check declaration extraction: test case table row class round trips and defaults when
+    /// absent.
     #[test]
     fn test_case_table_row_class_round_trips_and_defaults_when_absent() {
         let extraction = extract_source(
@@ -3868,6 +3925,7 @@ mod tests {
 
     // HAZARD 1: `bench` changed from a top-level import (v2-v4) to a `TestContext` fixture (v5).
     // Both shapes appear in real corpora and must not crash or double-count.
+    /// Check declaration extraction: hazard1 legacy top level bench is a benchmark declaration.
     #[test]
     fn hazard1_legacy_top_level_bench_is_a_benchmark_declaration() {
         let source = include_str!("../../fixtures/declarations/bench-legacy-toplevel.bench.ts");
@@ -3878,6 +3936,8 @@ mod tests {
         assert!(extraction.tests[0].modifiers.contains(&Modifier::Skip));
     }
 
+    /// Check declaration extraction: hazard1 v5 fixture style bench is not a separate
+    /// declaration.
     #[test]
     fn hazard1_v5_fixture_style_bench_is_not_a_separate_declaration() {
         let source = include_str!("../../fixtures/declarations/bench-v5-fixture-style.test.ts");
@@ -3891,6 +3951,7 @@ mod tests {
 
     // HAZARD 2: `.sequential` was removed in v5 but must still surface as a real modifier for
     // pre-v5 corpora, not be dropped or folded into `Unknown`.
+    /// Check declaration extraction: hazard2 legacy sequential modifier is recognized.
     #[test]
     fn hazard2_legacy_sequential_modifier_is_recognized() {
         let source = include_str!("../../fixtures/modifiers/modifier-sequential-legacy.test.ts");
@@ -3907,6 +3968,7 @@ mod tests {
 
     // HAZARD 3: globals resolution is per file (standing in for "per project"), not a single
     // repo-wide boolean -- the same source extracts differently depending only on the flag.
+    /// Check declaration extraction: hazard3 globals flag gates ambient bindings.
     #[test]
     fn hazard3_globals_flag_gates_ambient_bindings() {
         let source = include_str!("../../fixtures/resolution/globals-ambient.test.ts");
@@ -3923,6 +3985,7 @@ mod tests {
 
     // HAZARD 4: look-alikes share call shape with Vitest but must never be extracted, because
     // import-specifier resolution (not name matching) is the only sound signal.
+    /// Check declaration extraction: hazard4 lookalikes are never extracted.
     #[test]
     fn hazard4_lookalikes_are_never_extracted() {
         let cases: &[(&str, &str)] = &[
@@ -3970,6 +4033,7 @@ mod tests {
 
     // Sharper version of hazard 4: an import from a *specific* competing framework must dominate
     // even when the caller (incorrectly, or for an unrelated project) passes `Globals::Enabled`.
+    /// Check declaration extraction: hazard4 competing import dominates over globals flag.
     #[test]
     fn hazard4_competing_import_dominates_over_globals_flag() {
         let source = include_str!("../../fixtures/lookalikes/lookalike-playwright.spec.ts");
@@ -3989,6 +4053,8 @@ mod tests {
     // require the caller to feed in path-based project routing (e.g. Cypress's own
     // `cypress.config.*` `specPattern`) the same way `Globals` itself is already threaded in from
     // outside this frontend.
+    /// Check declaration extraction: hazard4 cypress ambient shape resolves as vitest under
+    /// globals enabled.
     #[test]
     fn hazard4_cypress_ambient_shape_resolves_as_vitest_under_globals_enabled() {
         let source = include_str!("../../fixtures/lookalikes/lookalike-cypress.cy.ts");
@@ -4002,6 +4068,8 @@ mod tests {
         );
     }
 
+    /// Check declaration extraction: hazard4 mocha ambient shape resolves as vitest under
+    /// globals enabled.
     #[test]
     fn hazard4_mocha_ambient_shape_resolves_as_vitest_under_globals_enabled() {
         let source = include_str!("../../fixtures/lookalikes/lookalike-mocha-before-after.test.ts");
@@ -4019,6 +4087,7 @@ mod tests {
     }
 
     // HAZARD 5: a non-literal `.each` table must degrade to "unresolved", not zero tests.
+    /// Check declaration extraction: hazard5 nonliteral each table yields one unresolved case.
     #[test]
     fn hazard5_nonliteral_each_table_yields_one_unresolved_case() {
         let source = include_str!("../../fixtures/each/each-nonliteral-table.test.ts");
@@ -4045,6 +4114,7 @@ mod tests {
     // HAZARD 6: title rendering is version-dependent, so a literal table renders concrete titles
     // only when every referenced value is provably static; otherwise the extractor must not
     // fabricate a rendering and falls back to the raw, unrendered pattern.
+    /// Check declaration extraction: hazard6 literal each table renders static titles per row.
     #[test]
     fn hazard6_literal_each_table_renders_static_titles_per_row() {
         let source = include_str!("../../fixtures/each/each-array-of-arrays.test.ts");
@@ -4064,6 +4134,8 @@ mod tests {
         );
     }
 
+    /// Check declaration extraction: hazard6 directives exceeding row values fall back to
+    /// parameterized.
     #[test]
     fn hazard6_directives_exceeding_row_values_fall_back_to_parameterized() {
         let source = include_str!("../../fixtures/each/each-printf-directives.test.ts");
@@ -4091,6 +4163,7 @@ mod tests {
     // when the referenced cell itself is a perfectly literal, fully-known value -- the renderer's
     // own documented limitation, not row's `unresolved` flag, is what forces the fallback. Before
     // F5 this case's `context.unresolved` was `false`: only `Title::Dynamic` tainted it.
+    /// Check declaration extraction: f5 dotted path each placeholder marks context unresolved.
     #[test]
     fn f5_dotted_path_each_placeholder_marks_context_unresolved() {
         let source = include_str!("../../fixtures/each/each-dollar-indexed.test.ts");
@@ -4113,6 +4186,7 @@ mod tests {
 
     // HAZARD 7: an options-object modifier must union with (not replace) chain-based modifiers,
     // and a bare-function 2nd argument must not be mistaken for an options object.
+    /// Check declaration extraction: hazard7 options object modifier is recognized.
     #[test]
     fn hazard7_options_object_modifier_is_recognized() {
         let source = include_str!("../../fixtures/declarations/options-object-modifiers.test.ts");
@@ -4126,6 +4200,8 @@ mod tests {
         assert!(extraction.tests[0].has_body);
     }
 
+    /// Check declaration extraction: hazard7 options object 2nd arg does not break body
+    /// detection.
     #[test]
     fn hazard7_options_object_2nd_arg_does_not_break_body_detection() {
         let source = include_str!("../../fixtures/declarations/options-object-2nd-arg.test.ts");
@@ -4140,6 +4216,8 @@ mod tests {
     // carry a fingerprint of its own setup function, not just its name, cross-referenced against
     // the specific `.extend` chain that produced the local `test` binding (via `registry.rs`'s
     // binding resolution, not name matching).
+    /// Check declaration extraction: hazard8 extend fixture is tracked by name and setup
+    /// fingerprint.
     #[test]
     fn hazard8_extend_fixture_is_tracked_by_name_and_setup_fingerprint() {
         let source = include_str!("../../fixtures/fixtures/fixtures-basic-extend.test.ts");
@@ -4158,6 +4236,8 @@ mod tests {
         assert!(!extraction.tests[0].context.unresolved);
     }
 
+    /// Check declaration extraction: hazard8 extend dependency chain unions fixtures from every
+    /// link.
     #[test]
     fn hazard8_extend_dependency_chain_unions_fixtures_from_every_link() {
         let source = include_str!("../../fixtures/fixtures/fixtures-dependency-chain.test.ts");
@@ -4179,6 +4259,7 @@ mod tests {
 
     // A fixture with a computed key defeats static naming and must flag the context as
     // unresolved rather than silently drop the fixture or guess at its identity.
+    /// Check declaration extraction: hazard8 computed fixture key marks context unresolved.
     #[test]
     fn hazard8_computed_fixture_key_marks_context_unresolved() {
         let source = r#"
@@ -4193,6 +4274,8 @@ mod tests {
     }
 
     // HAZARD 9: in-source tests bind off `import.meta.vitest`, not an import specifier or globals.
+    /// Check declaration extraction: hazard9 in source test is extracted via import meta
+    /// vitest.
     #[test]
     fn hazard9_in_source_test_is_extracted_via_import_meta_vitest() {
         let source = include_str!("../../fixtures/insource/in-source-basic.ts");
@@ -4206,6 +4289,7 @@ mod tests {
 
     // HAZARD 10: a local variable can shadow `test`/`describe`/`it` without being Vitest's --
     // binding resolution, not name matching, must be what decides this.
+    /// Check declaration extraction: hazard10 shadowed local is not misidentified.
     #[test]
     fn hazard10_shadowed_local_is_not_misidentified() {
         let source = include_str!(
@@ -4228,6 +4312,7 @@ mod tests {
     }
 
     // Resolution forms beyond aliasing/shadowing: namespace import.
+    /// Check declaration extraction: namespace import is extracted.
     #[test]
     fn namespace_import_is_extracted() {
         let source = include_str!("../../fixtures/resolution/imports-namespace.test.ts");
@@ -4308,6 +4393,8 @@ mod tests {
         );
     }
 
+    /// Assert exactly one extracted test and borrow the anchored imports retained in its
+    /// context.
     fn only_test_imports(extraction: &FileExtraction) -> &[Arc<str>] {
         assert_eq!(extraction.tests.len(), 1, "expected exactly one test case");
         &extraction.tests[0].context.imports
@@ -4543,6 +4630,7 @@ mod tests {
         );
     }
 
+    /// Check declaration extraction: nested describe builds suite path outermost first.
     #[test]
     fn nested_describe_builds_suite_path_outermost_first() {
         let source = include_str!("../../fixtures/declarations/nested-describe.test.ts");
@@ -4562,6 +4650,8 @@ mod tests {
         );
     }
 
+    /// Check declaration extraction: nested hooks are ordered outer to inner then inner to
+    /// outer.
     #[test]
     fn nested_hooks_are_ordered_outer_to_inner_then_inner_to_outer() {
         let source = include_str!("../../fixtures/hooks/hooks-nested-order.test.ts");
@@ -4585,6 +4675,7 @@ mod tests {
         );
     }
 
+    /// Check declaration extraction: todo declarations have no body.
     #[test]
     fn todo_declarations_have_no_body() {
         let source = include_str!("../../fixtures/modifiers/modifier-todo.test.ts");
@@ -4602,6 +4693,7 @@ mod tests {
 
     // A3: `vi.mock` with a non-literal specifier must not be silently dropped -- dropping it
     // would make a mocked test compare equal to an unmocked one with the same body.
+    /// Check declaration extraction: a3 nonliteral vi mock specifier marks the file unresolved.
     #[test]
     fn a3_nonliteral_vi_mock_specifier_marks_the_file_unresolved() {
         let source = r#"
@@ -4624,6 +4716,7 @@ mod tests {
 
     // A4: a factory this extractor cannot read (an imported/computed function, not an inline
     // arrow/function) must never be mapped onto `Automock` -- the two mean different behavior.
+    /// Check declaration extraction: a4 non inline factory is unresolved not automock.
     #[test]
     fn a4_non_inline_factory_is_unresolved_not_automock() {
         let source = r#"
@@ -4643,6 +4736,7 @@ mod tests {
     }
 
     // A4, other half: no second argument at all is a real automock and must stay comparable.
+    /// Check declaration extraction: a4 missing factory argument is automock.
     #[test]
     fn a4_missing_factory_argument_is_automock() {
         let source = r#"
@@ -4663,6 +4757,7 @@ mod tests {
     // folded into the file-wide `mocked_modules` list (which would put one test's runtime-only
     // mock into every other test's `Context` and let tests with genuinely different module state
     // compare equal), and a file containing one must not look like a clean, fully-resolved file.
+    /// Check declaration extraction: f4 do mock is not treated as file wide mock.
     #[test]
     fn f4_do_mock_is_not_treated_as_file_wide_mock() {
         let source = r#"
@@ -4719,6 +4814,8 @@ mod tests {
     // The defect this modelling exists to fix: `vi.mock(p, f); vi.unmock(p)` nets to "unmocked",
     // so it must not produce the same context as a file that leaves `p` mocked -- and it must not
     // be excluded from comparison either, which is what the previous conservative taint did.
+    /// Check declaration extraction: mock then unmock is a different context from mock alone
+    /// and stays comparable.
     #[test]
     fn mock_then_unmock_is_a_different_context_from_mock_alone_and_stays_comparable() {
         let source = r#"
@@ -4748,6 +4845,7 @@ mod tests {
     // The ordering, verified against a real Vitest 5 run rather than assumed: hoisted calls keep
     // their relative source order, so the LAST one for a specifier wins. `unmock` does not simply
     // dominate `mock`, which is the natural (and wrong) assumption.
+    /// Check declaration extraction: unmock then mock is the same context as mock alone.
     #[test]
     fn unmock_then_mock_is_the_same_context_as_mock_alone() {
         let source = r#"
@@ -4769,6 +4867,8 @@ mod tests {
     // An `unmock` of a specifier this file never mocked removes nothing, which is exactly what
     // Vitest does. Such a file must therefore be context-equivalent to one that does no mocking
     // at all -- not tainted, and not carrying a phantom entry.
+    /// Check declaration extraction: unmock of a never mocked specifier matches a file with no
+    /// mocking.
     #[test]
     fn unmock_of_a_never_mocked_specifier_matches_a_file_with_no_mocking() {
         let source = r#"
@@ -4796,6 +4896,7 @@ mod tests {
     // one directory, deliberately: the surviving specifier is anchored to the file it was written
     // in, so this also proves the anchoring still resolves both to the same module, and that the
     // fold's output order does not leak the hash map's iteration order.
+    /// Check declaration extraction: two files mocking and unmocking alike share one context.
     #[test]
     fn two_files_mocking_and_unmocking_alike_share_one_context() {
         let preamble = r#"
@@ -4827,6 +4928,7 @@ mod tests {
     // `vi.doUnmock` is the non-hoisted counterpart of `vi.unmock`, exactly as `vi.doMock` is of
     // `vi.mock`: it takes effect where it runs, for later dynamic imports only, so no file-wide
     // answer exists. It must keep tainting rather than being folded into the hoisted events.
+    /// Check declaration extraction: do unmock still taints the file.
     #[test]
     fn do_unmock_still_taints_the_file() {
         let source = r#"
@@ -4855,6 +4957,7 @@ mod tests {
     // outside of the module's top level scope", verified by running this shape -- so there is no
     // runtime context here to model. The scan used to walk the whole program and treat anything
     // it found as file-wide regardless of nesting; this is the assertion that it no longer does.
+    /// Check declaration extraction: a non top level unmock taints the file.
     #[test]
     fn a_non_top_level_unmock_taints_the_file() {
         let source = r#"
@@ -4885,6 +4988,7 @@ mod tests {
     // `program.body`" check passes the `if` statement and would wrongly model the call inside it
     // -- as unconditionally mocked, which is what Vitest would do, but only on versions that
     // still run the file.
+    /// Check declaration extraction: a conditional top level mock taints the file.
     #[test]
     fn a_conditional_top_level_mock_taints_the_file() {
         let source = r#"
@@ -4909,6 +5013,7 @@ mod tests {
     // A5: a fixture value this extractor cannot read (a call, an identifier, ...) must never
     // collapse into the same "plain literal" bucket as an actual literal -- `base.extend({ db:
     // makeRealDb() })` must not compare equal to `base.extend({ db: 42 })`.
+    /// Check declaration extraction: a5 call expression fixture value is unresolved.
     #[test]
     fn a5_call_expression_fixture_value_is_unresolved() {
         let source = r#"
@@ -4925,6 +5030,7 @@ mod tests {
         assert!(extraction.tests[0].context.unresolved);
     }
 
+    /// Check declaration extraction: a5 literal and unresolved fixture values are distinct.
     #[test]
     fn a5_literal_and_unresolved_fixture_values_are_distinct() {
         let literal_source = r#"
@@ -4953,6 +5059,7 @@ mod tests {
 
     // C1: a title whose runtime value is not statically known must not let the surrounding
     // context be trusted for comparison either.
+    /// Check declaration extraction: c1 dynamic title marks context unresolved.
     #[test]
     fn c1_dynamic_title_marks_context_unresolved() {
         let source = r#"
@@ -4970,6 +5077,7 @@ mod tests {
     // C1: a body argument that is present but not an inline arrow/function this extractor can
     // recurse into (here, a reference to a named helper) is opaque, not absent -- unlike a
     // genuine `.todo` declaration, it must not silently compare as an empty, trivial body.
+    /// Check declaration extraction: c1 opaque test body reference marks context unresolved.
     #[test]
     fn c1_opaque_test_body_reference_marks_context_unresolved() {
         let source = r#"
@@ -4987,6 +5095,8 @@ mod tests {
     // (here, a reference to a named helper) is a body this walker declines to recurse into --
     // any tests hidden inside it are invisible, so the suite's own record must at least flag
     // that its context could not be fully resolved.
+    /// Check declaration extraction: c1 opaque describe body reference marks context
+    /// unresolved.
     #[test]
     fn c1_opaque_describe_body_reference_marks_context_unresolved() {
         let source = r#"
@@ -5003,6 +5113,8 @@ mod tests {
         assert!(suite.context.unresolved);
     }
 
+    /// Check declaration extraction: each call of a call places title and body on the outer
+    /// call.
     #[test]
     fn each_call_of_a_call_places_title_and_body_on_the_outer_call() {
         // Regression for the single easiest thing to get wrong about `.each` in the AST:
@@ -5015,6 +5127,8 @@ mod tests {
         assert!(extraction.tests.iter().all(|t| t.has_body));
     }
 
+    /// Check declaration extraction: vi mock specifiers apply file wide regardless of source
+    /// position.
     #[test]
     fn vi_mock_specifiers_apply_file_wide_regardless_of_source_position() {
         let source = include_str!("../../fixtures/edge/vi-mock-hoisting.test.ts");
@@ -5035,6 +5149,7 @@ mod tests {
         assert!(!extraction.tests[0].context.unresolved);
     }
 
+    /// Check declaration extraction: extraction never panics on malformed input.
     #[test]
     fn extraction_never_panics_on_malformed_input() {
         let extraction = extract_source(
@@ -5045,6 +5160,7 @@ mod tests {
         assert!(extraction.incomplete);
     }
 
+    /// Check declaration extraction: extraction never panics on empty input.
     #[test]
     fn extraction_never_panics_on_empty_input() {
         let extraction = extract_source("", "empty.test.ts", Globals::Disabled);
@@ -5056,6 +5172,8 @@ mod tests {
     // binary search: succeeds at 500 levels, overflows at 1000 on a default-size thread). The
     // guard in `run()` must reject a file this deep *before* calling `Parser::parse` at all --
     // if it didn't, this test process itself would abort rather than fail.
+    /// Check declaration extraction: deeply nested input is rejected without parsing and the
+    /// process survives.
     #[test]
     fn deeply_nested_input_is_rejected_without_parsing_and_the_process_survives() {
         let depth = MAX_NESTING_DEPTH * 4;
@@ -5072,6 +5190,7 @@ mod tests {
 
     // A real (if unusually nested) test file must still extract normally -- the guard's limit is
     // meant to be far beyond anything human-written, not a trap for legitimate deep nesting.
+    /// Check declaration extraction: nesting just under the limit still extracts normally.
     #[test]
     fn nesting_just_under_the_limit_still_extracts_normally() {
         let depth = MAX_NESTING_DEPTH - 30;
@@ -5085,6 +5204,7 @@ mod tests {
         assert!(!extraction.incomplete);
     }
 
+    /// Check declaration extraction: raw syntax budget has an exact independent boundary.
     #[test]
     fn raw_syntax_budget_has_an_exact_independent_boundary() {
         assert!(parse_refusal(&"!".repeat(MAX_RAW_SYNTAX_UNITS)).is_none());
@@ -5101,6 +5221,7 @@ mod tests {
         assert!(parse_refusal(&format!("[{}]", vec!["1"; 20_000].join(","))).is_none());
     }
 
+    /// Check declaration extraction: max nesting depth measures bracket nesting conservatively.
     #[test]
     fn max_nesting_depth_measures_bracket_nesting_conservatively() {
         assert_eq!(max_nesting_depth(""), 0);
@@ -5127,6 +5248,8 @@ mod tests {
     // fix, this returned 200 (the string's 200 fake closers reset the counter to 0 before the
     // second batch of opens, so neither batch's local peak ever reflected that both are really
     // nested together); the true depth a real parser recurses through here is 400.
+    /// Check declaration extraction: defect2 closing delimiters inside a string no longer lower
+    /// the counter.
     #[test]
     fn defect2_closing_delimiters_inside_a_string_no_longer_lower_the_counter() {
         let source = format!(
@@ -5141,6 +5264,7 @@ mod tests {
     // Concise-body arrow `describe` callbacks (`describe("x", () => test(...))`) are legal
     // Vitest. Missing them silently is the worst failure mode this tool has: a clean run that
     // quietly dropped a real test.
+    /// Check declaration extraction: concise body describe callback is recursed into.
     #[test]
     fn concise_body_describe_callback_is_recursed_into() {
         let source = r#"
@@ -5172,6 +5296,8 @@ mod tests {
     // The `for...of` loop is unrolled once per element of its literal array (2 elements), exactly
     // like `.each` row semantics, so it contributes 2 declarations, not 1 -- see
     // `literal_for_of_elements`. Total: 1 (`if`) + 2 (`for...of`) + 1 (top level) = 4.
+    /// Check declaration extraction: defect1 tests inside if for are no longer silently
+    /// dropped.
     #[test]
     fn defect1_tests_inside_if_for_are_no_longer_silently_dropped() {
         let source = r#"
@@ -5212,6 +5338,8 @@ mod tests {
     // identifier) must still walk the loop body exactly once, and a title that interpolates the
     // loop variable must degrade to `Title::Dynamic` -- unresolved, consistent with every other
     // dynamic title -- rather than being silently dropped or guessed at.
+    /// Check declaration extraction: defect1 nonliteral for of walks body once with dynamic
+    /// title.
     #[test]
     fn defect1_nonliteral_for_of_walks_body_once_with_dynamic_title() {
         let source = r#"
@@ -5232,6 +5360,8 @@ mod tests {
     // Defect 1: a statement form the walker deliberately does not recurse into (`with`, disallowed
     // in strict/ESM source and unsound to resolve identifiers inside) must still be visible as a
     // real limitation -- `incomplete` plus a diagnostic naming the construct -- never silent.
+    /// Check declaration extraction: defect1 with statement is reported incomplete not silently
+    /// skipped.
     #[test]
     fn defect1_with_statement_is_reported_incomplete_not_silently_skipped() {
         let source = r#"
@@ -5257,6 +5387,7 @@ mod tests {
     // Defect 1: a hook declared inside a plain `if` (not just the `import.meta.vitest` idiom) must
     // still be registered for the enclosing scope -- the same silent-drop failure mode as a
     // declaration, just for a hook instead of a test.
+    /// Check declaration extraction: defect1 hook inside plain if is registered.
     #[test]
     fn defect1_hook_inside_plain_if_is_registered() {
         let source = r#"
@@ -5281,6 +5412,7 @@ mod tests {
     // Defect 3: a dynamic `describe` title must taint every test nested inside it, not just the
     // suite's own record -- otherwise two differently-behaving runtime suite instances that
     // normalize to the same title text let their nested tests be falsely compared.
+    /// Check declaration extraction: defect3 dynamic describe title taints nested tests.
     #[test]
     fn defect3_dynamic_describe_title_taints_nested_tests() {
         let source = r#"
@@ -5314,6 +5446,8 @@ mod tests {
     // while an individual row still carries a cell this extractor cannot read. That row's own
     // identity is unknown even though the table's shape is not, and must not be treated as
     // resolved just because the surrounding array literal is.
+    /// Check declaration extraction: defect4 each row with unresolved cell is marked
+    /// unresolved.
     #[test]
     fn defect4_each_row_with_unresolved_cell_is_marked_unresolved() {
         let source = r#"
@@ -5346,6 +5480,7 @@ mod tests {
     // could not tell "table is an empty literal" apart from "table could not be enumerated at
     // all") produced a synthetic test with no runtime counterpart, which could collide with a
     // real test at Error severity, inflate `testsAnalyzed`, and bypass the zero-extraction guard.
+    /// Check declaration extraction: f2 test each with known empty table emits no test.
     #[test]
     fn f2_test_each_with_known_empty_table_emits_no_test() {
         let source = r#"
@@ -5369,6 +5504,7 @@ mod tests {
 
     // F2, suite form: `describe.each([])` instantiates zero suites at runtime, so neither the
     // suite's own record nor anything nested inside it is ever reached.
+    /// Check declaration extraction: f2 describe each with known empty table emits nothing.
     #[test]
     fn f2_describe_each_with_known_empty_table_emits_nothing() {
         let source = r#"
@@ -5398,6 +5534,7 @@ mod tests {
     // own chain, never anything inherited from an enclosing `describe`. `analysis.rs`'s
     // `ModifierKey` keys `duplicate-test` on exactly those chain steps, so a nested test must
     // carry its enclosing suite's copy too, not just its own (empty) one.
+    /// Check declaration extraction: f3 suite each is inherited into nested test modifiers.
     #[test]
     fn f3_suite_each_is_inherited_into_nested_test_modifiers() {
         let source = r#"
@@ -5427,6 +5564,8 @@ mod tests {
     // enclosing `.skipIf` condition, with the same suite title and identical nested test bodies.
     // Before F3, both nested `inner` tests carried empty `modifiers`, so `ModifierKey` saw no
     // difference between them at all and they compared equal at Error severity.
+    /// Check declaration extraction: f3 suite skip if is inherited and distinguishes nested
+    /// tests across suites.
     #[test]
     fn f3_suite_skip_if_is_inherited_and_distinguishes_nested_tests_across_suites() {
         let source = r#"
@@ -5464,6 +5603,8 @@ mod tests {
     // test.ts`, moved there from `fixtures/near/` once this passed): a fully-known positional
     // `.each` row must fingerprint identically to a hand-written test duplicating that row's own
     // concrete values, so `duplicate-test` can link them.
+    /// Check declaration extraction: p1 8 each row substitutes positional params and matches
+    /// hand written duplicate.
     #[test]
     fn p1_8_each_row_substitutes_positional_params_and_matches_hand_written_duplicate() {
         let source = r#"
@@ -5499,6 +5640,7 @@ mod tests {
     // exact same shadow: if substitution matched by name, it would incorrectly rewrite the
     // shadowed `w` too, and the two bodies would still match (vacuously) -- see the negative
     // control below for why that possibility is separately ruled out.
+    /// Check declaration extraction: p1 8 row substitution respects lexical shadowing.
     #[test]
     fn p1_8_row_substitution_respects_lexical_shadowing() {
         let source = r#"
@@ -5529,6 +5671,8 @@ mod tests {
     // the fingerprint. If shadowing were broken by matching on name instead of symbol (e.g. by
     // ignoring the shadowed `w` entirely, or worse, substituting it too), this would also collide
     // and the previous test would not actually be proving anything.
+    /// Check declaration extraction: p1 8 row substitution does not erase a differently
+    /// shadowed local.
     #[test]
     fn p1_8_row_substitution_does_not_erase_a_differently_shadowed_local() {
         let source = r#"
@@ -5556,6 +5700,8 @@ mod tests {
     // Hard part 2 (destructured parameters): a row of objects bound to a single destructured
     // object parameter (`({a, b}) => ...`) must substitute by field name, and must therefore also
     // link to a hand-written duplicate of that row's own values.
+    /// Check declaration extraction: p1 8 destructured object row substitutes named params and
+    /// matches hand written duplicate.
     #[test]
     fn p1_8_destructured_object_row_substitutes_named_params_and_matches_hand_written_duplicate() {
         let source = r#"
@@ -5587,6 +5733,8 @@ mod tests {
     // substitution to link -- deliberately not attempted (see `resolve_row_substitution`'s doc).
     // That row's body must fingerprint exactly as if no substitution had ever been offered to it,
     // not some incorrect guess.
+    /// Check declaration extraction: p1 8 non destructured single row param is left
+    /// unsubstituted.
     #[test]
     fn p1_8_non_destructured_single_row_param_is_left_unsubstituted() {
         // Both declarations live in one file/source (unlike this test's earlier draft, which
@@ -5635,6 +5783,8 @@ mod tests {
         }
     }
 
+    /// Check declaration extraction: p1 8 row substitution bails out entirely when any cell is
+    /// unresolved.
     #[test]
     fn p1_8_row_substitution_bails_out_entirely_when_any_cell_is_unresolved() {
         let row = Row {
@@ -5666,6 +5816,8 @@ mod tests {
     // therefore no substitution) at all -- proving the partial cells that *were* readable were
     // never substituted either. A half-substituted body here could collide with something it does
     // not actually match.
+    /// Check declaration extraction: p1 8 each row with one unreadable cell stays
+    /// unsubstituted.
     #[test]
     fn p1_8_each_row_with_one_unreadable_cell_stays_unsubstituted() {
         // Same-file comparison against a same-shape sibling, for the same reason the test above
@@ -5709,6 +5861,8 @@ mod tests {
     // own call-site `Location` (the second assertion). That precondition is unrelated to body
     // fingerprinting and this feature does not touch it, but it is exactly the kind of thing a
     // change to how bodies compare could silently invalidate, so it is asserted directly here.
+    /// Check declaration extraction: p1 8 distinct rows of one each declaration get distinct
+    /// alpha but share location.
     #[test]
     fn p1_8_distinct_rows_of_one_each_declaration_get_distinct_alpha_but_share_location() {
         let source = r#"
@@ -5758,6 +5912,8 @@ mod tests {
     // from *that row's* modifiers -- see `emit_test`'s comment at the each-row loop for why this
     // is still sound (the substituted body itself now carries the differentiation `Each` used to
     // provide).
+    /// Check declaration extraction: p1 8 fully substituted row does not carry an each
+    /// modifier.
     #[test]
     fn p1_8_fully_substituted_row_does_not_carry_an_each_modifier() {
         let source = r#"
@@ -5789,6 +5945,8 @@ mod tests {
     // case never actually reaches `ModifierKey` in practice (the same unresolved cell already
     // marks `Context::unresolved`, excluding it from comparison entirely), but the modifier itself
     // must still reflect reality rather than being dropped unconditionally.
+    /// Check declaration extraction: p1 8 partially unresolved row still carries its each
+    /// modifier.
     #[test]
     fn p1_8_partially_unresolved_row_still_carries_its_each_modifier() {
         let source = r#"
@@ -5817,6 +5975,8 @@ mod tests {
     // its instances exactly as before. This guards against the natural but wrong implementation
     // that filters `Modifier::Each` out of the whole (suite-prefixed) modifier list rather than
     // only the row's own contribution.
+    /// Check declaration extraction: p1 8 dropping the rows own each modifier does not remove
+    /// an enclosing suites.
     #[test]
     fn p1_8_dropping_the_rows_own_each_modifier_does_not_remove_an_enclosing_suites() {
         let source = r#"
@@ -5860,6 +6020,8 @@ mod tests {
     // naming two different files on disk -- produced an identical `MockedModule` and therefore an
     // equivalent `Context`. See `MockedModule::specifier`'s doc and
     // `fingerprint::specifier_identity`.
+    /// Check declaration extraction: cross file relative mock specifier is anchored to the
+    /// declaring directory.
     #[test]
     fn cross_file_relative_mock_specifier_is_anchored_to_the_declaring_directory() {
         let dir = tempfile::tempdir().unwrap();
@@ -5934,6 +6096,8 @@ mod tests {
 
     // Positive control for the test above: the same relative specifier from two files in the
     // *same* directory names the same module and must still compare equal.
+    /// Check declaration extraction: same directory relative mock specifier still matches
+    /// across files.
     #[test]
     fn same_directory_relative_mock_specifier_still_matches_across_files() {
         let dir = tempfile::tempdir().unwrap();
@@ -5950,6 +6114,7 @@ mod tests {
 
     // A bare/package specifier is already file-independent and must not be anchored per-file: two
     // files in different directories mocking the same package must still compare equal.
+    /// Check declaration extraction: bare mock specifier still matches across files.
     #[test]
     fn bare_mock_specifier_still_matches_across_files() {
         let dir = tempfile::tempdir().unwrap();
@@ -5977,6 +6142,8 @@ mod tests {
     // declaration *and* the hook registered beside it survive the recursion, and that the file is
     // not reported incomplete.
 
+    /// Check declaration extraction: a declaration and a hook are found inside every recursed
+    /// construct.
     #[test]
     fn a_declaration_and_a_hook_are_found_inside_every_recursed_construct() {
         #[rustfmt::skip]
@@ -6055,6 +6222,7 @@ mod tests {
     // Titles
     // -----------------------------------------------------------------------------------------
 
+    /// Extract the source with ambient globals enabled and collect its declaration titles.
     fn titles_of(source: &str) -> Vec<Title> {
         extract_source(source, "case.test.ts", Globals::Enabled)
             .tests
@@ -6063,6 +6231,8 @@ mod tests {
             .collect()
     }
 
+    /// Embed a hook body in an owned test fixture and return its extracted hook after checking
+    /// the test count.
     fn extracted_hook(body: &str) -> Hook {
         let source = format!(
             "import {{ beforeEach, test, vi }} from 'vitest';\nlet x; let flag; let config;\n\
@@ -6122,6 +6292,7 @@ mod tests {
         assert!(extraction.tests[0].context.unresolved);
     }
 
+    /// Check declaration extraction: helper parameter refusals do not invent static titles.
     #[test]
     fn helper_parameter_refusals_do_not_invent_static_titles() {
         for (parameters, arguments) in [
@@ -6139,6 +6310,7 @@ mod tests {
         }
     }
 
+    /// Check declaration extraction: non declaration for of targets are not unrolled.
     #[test]
     fn non_declaration_for_of_targets_are_not_unrolled() {
         let extraction = extract_source(
@@ -6803,12 +6975,16 @@ mod tests {
     // Modifiers
     // -----------------------------------------------------------------------------------------
 
+    /// Extract one declaration with ambient globals enabled and return its modifiers, asserting
+    /// a single result.
     fn modifiers_of(source: &str) -> Vec<Modifier> {
         let extraction = extract_source(source, "case.test.ts", Globals::Enabled);
         assert_eq!(extraction.tests.len(), 1, "expected one declaration");
         extraction.tests.into_iter().next().expect("one").modifiers
     }
 
+    /// Check declaration extraction: every member modifier and its options object twin are
+    /// recognized.
     #[test]
     fn every_member_modifier_and_its_options_object_twin_are_recognized() {
         #[rustfmt::skip]
@@ -6876,6 +7052,7 @@ mod tests {
     // The `function` callback form, and the module flavor
     // -----------------------------------------------------------------------------------------
 
+    /// Check declaration extraction: a function callback is extracted like an arrow one.
     #[test]
     fn a_function_callback_is_extracted_like_an_arrow_one() {
         let arrow = extract_source(
@@ -6905,6 +7082,7 @@ mod tests {
         );
     }
 
+    /// Check declaration extraction: a forced commonjs file is still extracted.
     #[test]
     fn a_forced_commonjs_file_is_still_extracted() {
         // `.cjs`/`.cts` pin the module flavor, which changes the `SourceType` handed to the
@@ -6929,6 +7107,8 @@ mod tests {
     // Each row asserts the diagnostic or the `incomplete`/`unresolved` flag, not merely that the
     // call did not panic.
 
+    /// Check declaration extraction: an unsupported extension is reported rather than extracted
+    /// as nothing.
     #[test]
     fn an_unsupported_extension_is_reported_rather_than_extracted_as_nothing() {
         let extraction = extract(
@@ -6958,6 +7138,8 @@ mod tests {
         assert!(!extraction.proven_empty);
     }
 
+    /// Check declaration extraction: recoverable parse and semantic diagnostics are counted and
+    /// reported.
     #[test]
     fn recoverable_parse_and_semantic_diagnostics_are_counted_and_reported() {
         // A top-level `return` is a recoverable parse error: the parser recovers and the
@@ -7077,6 +7259,7 @@ mod tests {
     // `vi.mock` / `vi.unmock` bookkeeping
     // -----------------------------------------------------------------------------------------
 
+    /// Extract one test and return its retained mock identities and unresolved-context flag.
     fn mock_context(source: &str) -> (Vec<MockedModule>, bool) {
         let extraction = extract_source(source, "case.test.ts", Globals::Enabled);
         assert_eq!(extraction.tests.len(), 1, "expected one declaration");
@@ -7084,6 +7267,8 @@ mod tests {
         (test.context.mocked_modules, test.context.unresolved)
     }
 
+    /// Check declaration extraction: a mocking call this extractor cannot read taints the whole
+    /// file.
     #[test]
     fn a_mocking_call_this_extractor_cannot_read_taints_the_whole_file() {
         // The control: a readable `vi.mock` is recorded, and nothing is tainted.
@@ -7132,6 +7317,8 @@ mod tests {
     // Bindings introduced outside a plain import
     // -----------------------------------------------------------------------------------------
 
+    /// Check declaration extraction: an import meta vitest destructure binds only the names it
+    /// can canonicalize.
     #[test]
     fn an_import_meta_vitest_destructure_binds_only_the_names_it_can_canonicalize() {
         let extraction = extract_source(
@@ -7158,6 +7345,7 @@ mod tests {
         assert_eq!(extraction.tests.len(), 0);
     }
 
+    /// Check declaration extraction: a local alias binds only when it resolves to test.
     #[test]
     fn a_local_alias_binds_only_when_it_resolves_to_test() {
         // `const myTest = test.extend({...})` resolves exactly like `test` did, fixtures included.
@@ -7214,6 +7402,7 @@ mod tests {
         assert_eq!(extraction.tests.len(), 0);
     }
 
+    /// Check declaration extraction: a hook with no callback registers nothing.
     #[test]
     fn a_hook_with_no_callback_registers_nothing() {
         let extraction = extract_source(
@@ -7232,6 +7421,7 @@ mod tests {
     // Suite and declaration shapes
     // -----------------------------------------------------------------------------------------
 
+    /// Check declaration extraction: a named function callback supplies its own title.
     #[test]
     fn a_named_function_callback_supplies_its_own_title() {
         // `test(function myTestName() { ... })`: the title is the function's name, and the
@@ -7261,6 +7451,7 @@ mod tests {
         );
     }
 
+    /// Check declaration extraction: an empty suite body and a concise one are both handled.
     #[test]
     fn an_empty_suite_body_and_a_concise_one_are_both_handled() {
         // An empty `describe` body has nothing to recurse into, so only the suite is recorded.
@@ -7285,6 +7476,8 @@ mod tests {
         );
     }
 
+    /// Check declaration extraction: a suite each table that cannot be read yields one
+    /// representative suite.
     #[test]
     fn a_suite_each_table_that_cannot_be_read_yields_one_representative_suite() {
         // A known-empty table registers zero suites at runtime, so extracting one would be a
@@ -7809,6 +8002,8 @@ mod tests {
     /// visible.
     #[test]
     fn helper_nesting_one_past_the_depth_limit_is_refused_rather_than_silently_dropped() {
+        /// Build a chain of local helper calls of the requested depth ending in one test
+        /// registration.
         fn chain(levels: usize) -> String {
             let mut source = String::from("import { it } from 'vitest';\nh0();\n");
             for level in 0..levels {

@@ -191,6 +191,8 @@ pub(super) struct SummaryCounters {
 }
 
 impl SummaryCounters {
+    /// Copy analysis counts, incompleteness causes and mode counters into the shared report
+    /// summary.
     pub(super) fn from_result(result: &AnalysisResult) -> Self {
         Self {
             tests_analyzed: result.tests_analyzed,
@@ -217,6 +219,8 @@ pub(super) struct JsonLocation {
 }
 
 impl From<&Location> for JsonLocation {
+    /// Convert a source location to report fields, sanitizing its path while preserving
+    /// line/column endpoints.
     fn from(location: &Location) -> Self {
         Self {
             // `report_safe_path` normalizes separators *then* strips control/ANSI/bidi/invisible
@@ -256,6 +260,8 @@ pub(super) fn findings_by_file<'a>(
 mod tests {
     use super::*;
 
+    /// Check shared report fields: terminal safe strips newlines carriage returns tabs and
+    /// escapes.
     #[test]
     fn terminal_safe_strips_newlines_carriage_returns_tabs_and_escapes() {
         let input = "line one\nline two\r\x1b[31mred\x1b[0m\ttabbed";
@@ -268,6 +274,8 @@ mod tests {
         assert_eq!(sanitized, "line oneline two[31mred[0mtabbed");
     }
 
+    /// Check shared report fields: report safe keeps intentional whitespace but strips escapes
+    /// and invisibles.
     #[test]
     fn report_safe_keeps_intentional_whitespace_but_strips_escapes_and_invisibles() {
         let input = "line one\nline two\tend\x1b[31mred\x1b[0m\u{200b}hidden";
@@ -278,6 +286,7 @@ mod tests {
         assert!(!sanitized.contains('\u{200b}'));
     }
 
+    /// Check shared report fields: forward slash path normalizes backslashes on every platform.
     #[test]
     fn forward_slash_path_normalizes_backslashes_on_every_platform() {
         // `Path` treats `\` as an ordinary byte on non-Windows hosts, so this exercises the
@@ -287,12 +296,16 @@ mod tests {
         assert_eq!(forward_slash_path(path), "src/module/file.test.ts");
     }
 
+    /// Check shared report fields: forward slash path is a no op for already forward slashed
+    /// paths.
     #[test]
     fn forward_slash_path_is_a_no_op_for_already_forward_slashed_paths() {
         let path = Path::new("src/module/file.test.ts");
         assert_eq!(forward_slash_path(path), "src/module/file.test.ts");
     }
 
+    /// Check shared report fields: report safe path normalizes separators and strips bidi zero
+    /// width and control characters.
     #[test]
     fn report_safe_path_normalizes_separators_and_strips_bidi_zero_width_and_control_characters() {
         let bidi = Path::new("src\\safe\u{202e}gnisaeler-tset\u{202c}evil.test.ts");
@@ -308,6 +321,8 @@ mod tests {
         assert!(!report_safe_path(control).contains('\u{7}'));
     }
 
+    /// Check shared report fields: report safe strips deprecated bidi and shaping controls
+    /// u206a through u206f.
     #[test]
     fn report_safe_strips_deprecated_bidi_and_shaping_controls_u206a_through_u206f() {
         // U+206A..=U+206F (inhibit/activate symmetric swapping, inhibit/activate Arabic form
@@ -327,6 +342,8 @@ mod tests {
         }
     }
 
+    /// Check shared report fields: report safe path strips deprecated bidi and shaping controls
+    /// u206a through u206f.
     #[test]
     fn report_safe_path_strips_deprecated_bidi_and_shaping_controls_u206a_through_u206f() {
         for codepoint in 0x206a_u32..=0x206f {
@@ -341,6 +358,7 @@ mod tests {
         }
     }
 
+    /// Check shared report fields: report safe path preserves legitimate unicode filenames.
     #[test]
     fn report_safe_path_preserves_legitimate_unicode_filenames() {
         // The whole point of stripping only control/ANSI/bidi/invisible characters rather than
@@ -353,6 +371,7 @@ mod tests {
         );
     }
 
+    /// Check shared report fields: severity label is lowercase and stable.
     #[test]
     fn severity_label_is_lowercase_and_stable() {
         assert_eq!(severity_label(Severity::Error), "error");

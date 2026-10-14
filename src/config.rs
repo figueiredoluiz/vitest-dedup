@@ -178,6 +178,8 @@ impl Config {
         Ok(config)
     }
 
+    /// Build configuration for the supplied root using test/benchmark discovery defaults and
+    /// each rule's default severity.
     fn defaults(root: PathBuf) -> Self {
         Self {
             root,
@@ -200,6 +202,8 @@ impl Config {
         }
     }
 
+    /// Apply present config-file fields and rule overrides, rejecting invalid thresholds, rule
+    /// names or severity names.
     fn apply_raw(&mut self, raw: RawConfig) -> Result<()> {
         if let Some(include) = raw.include {
             self.include = include;
@@ -221,6 +225,8 @@ impl Config {
         Ok(())
     }
 
+    /// Apply an optional CLI threshold and extend configured rule severities with CLI
+    /// overrides.
     fn apply_overrides(&mut self, overrides: ConfigOverrides) {
         if let Some(threshold) = overrides.threshold {
             self.threshold = threshold;
@@ -228,6 +234,7 @@ impl Config {
         self.rules.extend(overrides.rules);
     }
 
+    /// Reject thresholds above 100 and invalid include/exclude globs before discovery begins.
     fn validate(&self) -> Result<()> {
         if self.threshold > 100 {
             bail!(
@@ -283,6 +290,7 @@ pub(crate) fn compile_glob_set(patterns: &[String], kind: &str) -> Result<GlobSe
         .with_context(|| format!("failed to build {kind} glob set"))
 }
 
+/// Convert a signed threshold to u8 only when it lies in the inclusive range 0 through 100.
 fn validate_threshold_range(value: i64) -> Result<u8> {
     u8::try_from(value)
         .ok()
@@ -345,6 +353,7 @@ fn discover_config_file(root: &Path) -> Result<(Option<RawConfig>, Option<PathBu
     Ok((None, None))
 }
 
+/// Display a path relative to root when possible, with forward slashes even on Windows.
 fn display_relative(path: &Path, root: &Path) -> String {
     path.strip_prefix(root)
         .unwrap_or(path)
@@ -357,6 +366,7 @@ mod tests {
     use super::*;
     use std::fs;
 
+    /// Check configuration: defaults apply when no config file exists.
     #[test]
     fn defaults_apply_when_no_config_file_exists() {
         let directory = tempfile::tempdir().unwrap();
@@ -367,6 +377,7 @@ mod tests {
         assert_eq!(config.severity(Rule::DuplicateTestName), Severity::Warning);
     }
 
+    /// Check configuration: unknown top level key is a load error not a silent ignore.
     #[test]
     fn unknown_top_level_key_is_a_load_error_not_a_silent_ignore() {
         let directory = tempfile::tempdir().unwrap();
@@ -379,6 +390,7 @@ mod tests {
         assert!(error.to_string().contains("failed to parse"), "{error:#}");
     }
 
+    /// Check configuration: typo'd rule name is an error not a silently disabled rule.
     #[test]
     fn typo_d_rule_name_is_an_error_not_a_silently_disabled_rule() {
         let directory = tempfile::tempdir().unwrap();
@@ -391,6 +403,7 @@ mod tests {
         assert!(error.to_string().contains("unknown rule `duplicate-tets`"));
     }
 
+    /// Check configuration: invalid severity string is an actionable error.
     #[test]
     fn invalid_severity_string_is_an_actionable_error() {
         let directory = tempfile::tempdir().unwrap();
@@ -403,6 +416,7 @@ mod tests {
         assert!(error.to_string().contains("invalid severity `critical`"));
     }
 
+    /// Check configuration: threshold out of range is rejected at 101 and negative.
     #[test]
     fn threshold_out_of_range_is_rejected_at_101_and_negative() {
         let directory = tempfile::tempdir().unwrap();
@@ -427,6 +441,7 @@ mod tests {
         );
     }
 
+    /// Check configuration: malformed glob is an operational error.
     #[test]
     fn malformed_glob_is_an_operational_error() {
         let directory = tempfile::tempdir().unwrap();
@@ -439,6 +454,7 @@ mod tests {
         assert!(error.to_string().contains("invalid include glob pattern"));
     }
 
+    /// Check configuration: config file over the size limit is rejected.
     #[test]
     fn config_file_over_the_size_limit_is_rejected() {
         let directory = tempfile::tempdir().unwrap();
@@ -452,6 +468,7 @@ mod tests {
         assert!(error.to_string().contains("exceeding the"), "{error:#}");
     }
 
+    /// Check configuration: cli overrides win over file configuration.
     #[test]
     fn cli_overrides_win_over_file_configuration() {
         let directory = tempfile::tempdir().unwrap();
@@ -475,6 +492,7 @@ mod tests {
         assert_eq!(config.severity(Rule::DuplicateTest), Severity::Error);
     }
 
+    /// Check configuration: auto discovery walks upward from the analysis root.
     #[test]
     fn auto_discovery_walks_upward_from_the_analysis_root() {
         let directory = tempfile::tempdir().unwrap();
@@ -493,6 +511,7 @@ mod tests {
         assert!(config.source.ends_with(".vitest-dedup.json"));
     }
 
+    /// Check configuration: nearest config file wins over a more distant ancestor.
     #[test]
     fn nearest_config_file_wins_over_a_more_distant_ancestor() {
         let directory = tempfile::tempdir().unwrap();
@@ -509,6 +528,7 @@ mod tests {
         assert_eq!(config.threshold, 20);
     }
 
+    /// Check configuration: explicit config file bypasses auto discovery.
     #[test]
     fn explicit_config_file_bypasses_auto_discovery() {
         let directory = tempfile::tempdir().unwrap();
@@ -531,6 +551,7 @@ mod tests {
         assert_eq!(config.threshold, 55);
     }
 
+    /// Check configuration: missing explicit config file is a fatal error.
     #[test]
     fn missing_explicit_config_file_is_a_fatal_error() {
         let directory = tempfile::tempdir().unwrap();
@@ -545,6 +566,7 @@ mod tests {
         assert!(error.to_string().contains("failed to read"));
     }
 
+    /// Check configuration: analysis root must be a directory.
     #[test]
     fn analysis_root_must_be_a_directory() {
         let directory = tempfile::tempdir().unwrap();

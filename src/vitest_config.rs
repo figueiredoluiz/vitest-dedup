@@ -491,6 +491,8 @@ pub(crate) fn config_test_scope(path: &Path) -> Result<Option<String>, String> {
     }
 }
 
+/// Find the first supported root-level Vitest config, falling back to a Vite config in
+/// extension order.
 pub(crate) fn find_project_config(root: &Path) -> Option<PathBuf> {
     CONFIG_EXTENSIONS
         .iter()
@@ -1181,6 +1183,8 @@ fn find_direct_key_value_starts_with(
     matches
 }
 
+/// Collect direct-key value offsets in a masked object range, skipping masked whitespace
+/// after each colon. Use [`find_direct_key_value_starts_precise`] for string/template values.
 pub(crate) fn find_direct_key_value_starts(
     masked: &[char],
     range: Range<usize>,
@@ -1297,10 +1301,12 @@ mod tests {
     use super::*;
     use std::fs;
 
+    /// Write a config fixture file directly beneath root, panicking on filesystem failure.
     fn write(root: &Path, name: &str, contents: &str) {
         fs::write(root.join(name), contents).unwrap();
     }
 
+    /// Check static Vitest config: vitest config with globals true is enabled.
     #[test]
     fn vitest_config_with_globals_true_is_enabled() {
         let directory = tempfile::tempdir().unwrap();
@@ -1316,6 +1322,7 @@ mod tests {
         );
     }
 
+    /// Check static Vitest config: vitest config with globals false is disabled.
     #[test]
     fn vitest_config_with_globals_false_is_disabled() {
         let directory = tempfile::tempdir().unwrap();
@@ -1331,6 +1338,7 @@ mod tests {
         );
     }
 
+    /// Check static Vitest config: vitest config without globals key is disabled.
     #[test]
     fn vitest_config_without_globals_key_is_disabled() {
         let directory = tempfile::tempdir().unwrap();
@@ -1346,6 +1354,7 @@ mod tests {
         );
     }
 
+    /// Check static Vitest config: vite config is used when no vitest config exists.
     #[test]
     fn vite_config_is_used_when_no_vitest_config_exists() {
         let directory = tempfile::tempdir().unwrap();
@@ -1363,6 +1372,7 @@ mod tests {
         }
     }
 
+    /// Check static Vitest config: vitest config takes precedence over vite config.
     #[test]
     fn vitest_config_takes_precedence_over_vite_config() {
         let directory = tempfile::tempdir().unwrap();
@@ -1748,6 +1758,7 @@ mod tests {
         assert_eq!(classify_slash_run(&unbalanced, 0), SlashRun::Unbalanced);
     }
 
+    /// Check static Vitest config: projects declaration is unknown not a repo wide guess.
     #[test]
     fn projects_declaration_is_unknown_not_a_repo_wide_guess() {
         let directory = tempfile::tempdir().unwrap();
@@ -1765,6 +1776,8 @@ mod tests {
         }
     }
 
+    /// Check static Vitest config: workspace file forces unknown even with a root config
+    /// present.
     #[test]
     fn workspace_file_forces_unknown_even_with_a_root_config_present() {
         let directory = tempfile::tempdir().unwrap();
@@ -1787,6 +1800,7 @@ mod tests {
         }
     }
 
+    /// Check static Vitest config: globals word inside a comment does not trigger.
     #[test]
     fn globals_word_inside_a_comment_does_not_trigger() {
         let directory = tempfile::tempdir().unwrap();
@@ -1802,6 +1816,7 @@ mod tests {
         );
     }
 
+    /// Check static Vitest config: globals word inside a string literal does not trigger.
     #[test]
     fn globals_word_inside_a_string_literal_does_not_trigger() {
         let directory = tempfile::tempdir().unwrap();
@@ -1817,6 +1832,7 @@ mod tests {
         );
     }
 
+    /// Check static Vitest config: no config file at all is unknown.
     #[test]
     fn no_config_file_at_all_is_unknown() {
         let directory = tempfile::tempdir().unwrap();
@@ -1897,6 +1913,7 @@ mod tests {
         assert_eq!(display_path(root, root), "");
     }
 
+    /// Check static Vitest config: oversized config file is unknown.
     #[test]
     fn oversized_config_file_is_unknown() {
         let directory = tempfile::tempdir().unwrap();
@@ -1915,6 +1932,7 @@ mod tests {
         }
     }
 
+    /// Check static Vitest config: malformed source with an unterminated string is unknown.
     #[test]
     fn malformed_source_with_an_unterminated_string_is_unknown() {
         let directory = tempfile::tempdir().unwrap();
@@ -1930,6 +1948,7 @@ mod tests {
         );
     }
 
+    /// Check static Vitest config: non literal globals value is unknown.
     #[test]
     fn non_literal_globals_value_is_unknown() {
         let directory = tempfile::tempdir().unwrap();
@@ -1947,6 +1966,7 @@ mod tests {
         }
     }
 
+    /// Check static Vitest config: non object test value is unknown.
     #[test]
     fn non_object_test_value_is_unknown() {
         let directory = tempfile::tempdir().unwrap();
@@ -1964,6 +1984,7 @@ mod tests {
         }
     }
 
+    /// Check static Vitest config: template literal hole does not confuse brace matching.
     #[test]
     fn template_literal_hole_does_not_confuse_brace_matching() {
         let directory = tempfile::tempdir().unwrap();
@@ -1979,6 +2000,8 @@ mod tests {
         );
     }
 
+    /// Check static Vitest config: globals inside a plugin option is not mistaken for the real
+    /// config.
     #[test]
     fn globals_inside_a_plugin_option_is_not_mistaken_for_the_real_config() {
         // Copilot PR #1 finding C1, failure case 1: a `test: { globals: true }` shape appearing
@@ -1997,6 +2020,8 @@ mod tests {
         );
     }
 
+    /// Check static Vitest config: globals under a sibling key does not override the direct
+    /// test globals.
     #[test]
     fn globals_under_a_sibling_key_does_not_override_the_direct_test_globals() {
         // Copilot PR #1 finding C1, failure case 2: `environmentOptions.globals` is a different
@@ -2017,6 +2042,8 @@ mod tests {
         }
     }
 
+    /// Check static Vitest config: deeply nested globals under a plugin does not leak into the
+    /// direct test object.
     #[test]
     fn deeply_nested_globals_under_a_plugin_does_not_leak_into_the_direct_test_object() {
         // A decoy two levels deeper than the single-level plugin-option case above, to pin that
@@ -2037,6 +2064,8 @@ mod tests {
         }
     }
 
+    /// Check static Vitest config: direct test globals true still wins over a decoy elsewhere
+    /// in the file.
     #[test]
     fn direct_test_globals_true_still_wins_over_a_decoy_elsewhere_in_the_file() {
         // The legitimate case must still be detected once a plugin-option decoy is anchored away:
@@ -2055,6 +2084,8 @@ mod tests {
         );
     }
 
+    /// Check static Vitest config: define config wrapped call with a decoy plugin option is
+    /// still correctly enabled.
     #[test]
     fn define_config_wrapped_call_with_a_decoy_plugin_option_is_still_correctly_enabled() {
         // The `defineConfig({ ... })` function-call wrapper shape, combined with a decoy so the
@@ -2074,6 +2105,7 @@ mod tests {
         }
     }
 
+    /// Check static Vitest config: duplicate globals key uses the last occurrence.
     #[test]
     fn duplicate_globals_key_uses_the_last_occurrence() {
         let directory = tempfile::tempdir().unwrap();
@@ -2097,6 +2129,8 @@ mod tests {
     // such an arm counts against this file's measured coverage forever, which is a bad trade for a
     // panic message that `assert!`'s own `{detection:?}` already carries.
 
+    /// Check static Vitest config: a config assigned to a variable without export default is
+    /// unknown.
     #[test]
     fn a_config_assigned_to_a_variable_without_export_default_is_unknown() {
         // CommonJS shape. There is no `export default` to anchor to, so the scan must refuse
@@ -2115,6 +2149,8 @@ mod tests {
         );
     }
 
+    /// Check static Vitest config: a word merely starting with default is not the default
+    /// export.
     #[test]
     fn a_word_merely_starting_with_default_is_not_the_default_export() {
         // `defaultTheme` starts with `default` but is a different identifier. Without the
@@ -2134,6 +2170,8 @@ mod tests {
         );
     }
 
+    /// Check static Vitest config: a named export before the default one does not anchor the
+    /// scan.
     #[test]
     fn a_named_export_before_the_default_one_does_not_anchor_the_scan() {
         // The sibling of the boundary check above: here the word after `export` is not `default`
@@ -2153,6 +2191,8 @@ mod tests {
         );
     }
 
+    /// Check static Vitest config: an arrow function default export is unknown rather than a
+    /// guess.
     #[test]
     fn an_arrow_function_default_export_is_unknown_rather_than_a_guess() {
         // `export default () => ({ ... })` is a real Vite/Vitest config shape (the callback form
@@ -2171,6 +2211,7 @@ mod tests {
         );
     }
 
+    /// Check static Vitest config: export default with nothing after it is unknown.
     #[test]
     fn export_default_with_nothing_after_it_is_unknown() {
         // A truncated file: the keyword sequence is the last thing in it, so the expression start
@@ -2184,6 +2225,7 @@ mod tests {
         );
     }
 
+    /// Check static Vitest config: export default await with nothing after it is unknown.
     #[test]
     fn export_default_await_with_nothing_after_it_is_unknown() {
         // The `await` peel-off must not run off the end of the source when the awaited expression
@@ -2197,6 +2239,7 @@ mod tests {
         );
     }
 
+    /// Check static Vitest config: whitespace around a wrapping calls argument is still read.
     #[test]
     fn whitespace_around_a_wrapping_calls_argument_is_still_read() {
         // `defineConfig ( { ... } )` is unusual but legal, and a reformat can produce it. The
@@ -2216,6 +2259,8 @@ mod tests {
         );
     }
 
+    /// Check static Vitest config: an object literal default export that never closes is
+    /// unknown.
     #[test]
     fn an_object_literal_default_export_that_never_closes_is_unknown() {
         let directory = tempfile::tempdir().unwrap();
@@ -2231,6 +2276,7 @@ mod tests {
         );
     }
 
+    /// Check static Vitest config: a define config argument that never closes is unknown.
     #[test]
     fn a_define_config_argument_that_never_closes_is_unknown() {
         // The same defect as the bare-literal case above, reached through the wrapping-call arm --
@@ -2250,6 +2296,7 @@ mod tests {
 
     // --- Masking: what the scan must not read as code ------------------------------------------
 
+    /// Check static Vitest config: globals true inside a block comment does not trigger.
     #[test]
     fn globals_true_inside_a_block_comment_does_not_trigger() {
         // The commented-out setting sits at depth zero of the real `test` object, so nothing but
@@ -2268,6 +2315,7 @@ mod tests {
         );
     }
 
+    /// Check static Vitest config: an unterminated block comment is unknown.
     #[test]
     fn an_unterminated_block_comment_is_unknown() {
         // Past an unclosed `/*` the scan can no longer tell code from text, so it fails closed for
@@ -2285,6 +2333,8 @@ mod tests {
         );
     }
 
+    /// Check static Vitest config: a raw newline inside a quoted string is treated as
+    /// unterminated.
     #[test]
     fn a_raw_newline_inside_a_quoted_string_is_treated_as_unterminated() {
         // A raw newline never legally appears inside a `'`/`"` string, so the masking pass treats
@@ -2303,6 +2353,7 @@ mod tests {
         );
     }
 
+    /// Check static Vitest config: an escaped backtick does not end a template literal.
     #[test]
     fn an_escaped_backtick_does_not_end_a_template_literal() {
         // If the escape were not consumed as a pair, the `\` would be masked as ordinary template
@@ -2325,6 +2376,7 @@ mod tests {
         );
     }
 
+    /// Check static Vitest config: an unterminated template literal is unknown.
     #[test]
     fn an_unterminated_template_literal_is_unknown() {
         let directory = tempfile::tempdir().unwrap();
@@ -2340,6 +2392,7 @@ mod tests {
         );
     }
 
+    /// Check static Vitest config: a config file that is not valid utf8 is unknown.
     #[test]
     fn a_config_file_that_is_not_valid_utf8_is_unknown() {
         // `read_bounded` refuses the file rather than lossily decoding it: a replacement character
@@ -2357,6 +2410,8 @@ mod tests {
         );
     }
 
+    /// Check static Vitest config: locate test object reports malformed when the test brace
+    /// never closes.
     #[test]
     fn locate_test_object_reports_malformed_when_the_test_brace_never_closes() {
         // Called directly, because no config file can reach this arm: `detect_globals` only looks

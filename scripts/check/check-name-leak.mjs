@@ -300,6 +300,10 @@ export function scan(path, text, terms) {
   return problems;
 }
 
+/**
+ * Scan readable, non-NUL files for attribution/name leaks; return problems and the text-file
+ * count, skipping unreadable inputs.
+ */
 export function inspect(files, terms, { read = readFileSync, root = ROOT } = {}) {
   const problems = [];
   let scanned = 0;
@@ -319,6 +323,10 @@ export function inspect(files, terms, { read = readFileSync, root = ROOT } = {})
   return { problems, scanned };
 }
 
+/**
+ * Evaluate tracked-file and local-name-source gates, returning a status and report lines
+ * without exiting the process.
+ */
 export function runCli(argv = [], { root = ROOT, run = execFileSync } = {}) {
   const verbose = argv.includes("--verbose");
   const lines = [];

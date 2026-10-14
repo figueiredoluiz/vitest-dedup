@@ -57,6 +57,10 @@ export function clauseRule(entry) {
   return undefined
 }
 
+/**
+ * Replace backslashes with forward slashes and remove repeated leading ./ prefixes for
+ * location comparisons.
+ */
 function normalizedPath(path) {
   return path.replaceAll('\\', '/').replace(/^(?:\.\/)+/, '')
 }
@@ -89,6 +93,10 @@ const SUMMARY_COUNT_FIELDS = [
   'unresolvedTests',
 ]
 
+/**
+ * Throw a report-schema error naming the field unless its value is an integer greater than or
+ * equal to zero.
+ */
 function requireNonNegativeInteger(value, field) {
   if (!Number.isInteger(value) || value < 0) {
     throw new Error(

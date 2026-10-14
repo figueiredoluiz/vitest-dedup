@@ -20,6 +20,10 @@ import {
 } from './check-mutation-score.mjs'
 
 // 9 caught / 10 scored = 90%, 2 unviable, one baseline entry plus one per mutant.
+/**
+ * Build a mutation-report fixture with overridable counters and generated baseline/mutant
+ * outcomes when none are supplied.
+ */
 function report(overrides = {}) {
   const merged = {
     caught: 9,
@@ -228,6 +232,10 @@ const REAL_SCOPE_COUNTS = Object.fromEntries(
   SCOPE.map((entry) => [entry.file, entry.minimumMutants + 10]),
 )
 
+/**
+ * Return a fixture reader that normalizes path separators and throws an ENOENT-shaped error
+ * for absent files.
+ */
 function fakeRead(files) {
   return (path) => {
     const key = path.replaceAll('\\', '/')
@@ -262,6 +270,10 @@ function fullReport(overrides = {}) {
   }
 }
 
+/**
+ * Run the mutation gate against in-memory report and mutant-list fixtures, returning its
+ * status and report lines.
+ */
 function cli(reportOverrides, { path = 'mutants.out/outcomes.json', argv = [path] } = {}) {
   const files = {
     [path]: JSON.stringify(fullReport(reportOverrides)),

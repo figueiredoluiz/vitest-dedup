@@ -152,6 +152,8 @@ impl SarifReporter {
 }
 
 impl Reporter for SarifReporter {
+    /// Render the analysis as pretty SARIF JSON and attach context to serialization or writer
+    /// failures.
     fn write_report(&self, result: &AnalysisResult, writer: &mut dyn Write) -> Result<()> {
         let document = render(result);
         serde_json::to_writer_pretty(writer, &document).context("failed to serialize SARIF report")
@@ -320,10 +322,13 @@ mod tests {
     use crate::reporters::test_support::{append_third_participant, cross_file_result};
     use std::path::PathBuf;
 
+    /// Build a cross-file finding fixture for SARIF rule, result and location assertions.
     fn sample_result() -> AnalysisResult {
         cross_file_result("identical bodies under an equivalent context")
     }
 
+    /// Serialize through the SARIF reporter and parse the document, panicking if either step
+    /// fails.
     fn render_value(result: &AnalysisResult) -> Value {
         let mut buffer = Vec::new();
         SarifReporter::new()
@@ -332,6 +337,8 @@ mod tests {
         serde_json::from_slice(&buffer).expect("reporter must emit valid JSON")
     }
 
+    /// Check SARIF output: round trips through serde json and carries the required top level
+    /// sarif fields.
     #[test]
     fn round_trips_through_serde_json_and_carries_the_required_top_level_sarif_fields() {
         let value = render_value(&sample_result());
@@ -344,6 +351,7 @@ mod tests {
         assert!(run["results"].is_array());
     }
 
+    /// Check SARIF output: rule list matches rule all exactly.
     #[test]
     fn rule_list_matches_rule_all_exactly() {
         let value = render_value(&sample_result());
@@ -360,6 +368,7 @@ mod tests {
         assert_eq!(emitted_ids, expected_ids);
     }
 
+    /// Check SARIF output: every rule entry carries a level a description and no help uri.
     #[test]
     fn every_rule_entry_carries_a_level_a_description_and_no_help_uri() {
         let value = render_value(&sample_result());
@@ -379,6 +388,7 @@ mod tests {
         }
     }
 
+    /// Check SARIF output: off by default rule is listed disabled and never backs a result.
     #[test]
     fn off_by_default_rule_is_listed_disabled_and_never_backs_a_result() {
         let value = render_value(&sample_result());
@@ -405,6 +415,7 @@ mod tests {
         }
     }
 
+    /// Check SARIF output: severity maps to the documented sarif level.
     #[test]
     fn severity_maps_to_the_documented_sarif_level() {
         let mut result = sample_result();
@@ -420,6 +431,7 @@ mod tests {
         );
     }
 
+    /// Check SARIF output: verdict is emitted in properties for every rule.
     #[test]
     fn verdict_is_emitted_in_properties_for_every_rule() {
         for rule in Rule::ALL {
@@ -439,6 +451,8 @@ mod tests {
         }
     }
 
+    /// Check SARIF output: fingerprint is keyed by the versioned label and matches the model
+    /// method.
     #[test]
     fn fingerprint_is_keyed_by_the_versioned_label_and_matches_the_model_method() {
         let result = sample_result();
@@ -453,6 +467,7 @@ mod tests {
         assert_eq!(fingerprints.as_object().unwrap().len(), 1);
     }
 
+    /// Check SARIF output: primary location and related locations split first from rest.
     #[test]
     fn primary_location_and_related_locations_split_first_from_rest() {
         let mut result = sample_result();
@@ -476,6 +491,7 @@ mod tests {
         assert_eq!(related[1]["message"]["text"], "suite > c");
     }
 
+    /// Check SARIF output: region uses the finding's span.
     #[test]
     fn region_uses_the_finding_s_span() {
         let value = render_value(&sample_result());
@@ -486,6 +502,7 @@ mod tests {
         assert_eq!(region["endColumn"], 8);
     }
 
+    /// Check SARIF output: inert flag is attached to its own location.
     #[test]
     fn inert_flag_is_attached_to_its_own_location() {
         let mut result = sample_result();
@@ -503,6 +520,7 @@ mod tests {
         );
     }
 
+    /// Check SARIF output: incomplete run is visible at the invocation level.
     #[test]
     fn incomplete_run_is_visible_at_the_invocation_level() {
         let mut result = sample_result();
@@ -518,6 +536,7 @@ mod tests {
         );
     }
 
+    /// Check SARIF output: hostile title and path are sanitized in message and uri.
     #[test]
     fn hostile_title_and_path_are_sanitized_in_message_and_uri() {
         let mut result = sample_result();
@@ -548,6 +567,7 @@ mod tests {
         assert!(!message_text.contains('\u{1b}'));
     }
 
+    /// Check SARIF output: output is byte identical across two renders of the same result.
     #[test]
     fn output_is_byte_identical_across_two_renders_of_the_same_result() {
         let result = sample_result();
@@ -562,6 +582,7 @@ mod tests {
         assert_eq!(first, second);
     }
 
+    /// Check SARIF output: zero findings still produces a valid document with a full rule list.
     #[test]
     fn zero_findings_still_produces_a_valid_document_with_a_full_rule_list() {
         let value = render_value(&AnalysisResult::default());

@@ -493,6 +493,8 @@ impl ParsedArgs {
     }
 }
 
+/// Parse RULE=SEVERITY into the rule and severity enums, returning a diagnostic for malformed
+/// or unknown values.
 fn parse_rule_override(value: &str) -> Result<(Rule, Severity), String> {
     let (id, severity) = value
         .split_once('=')
@@ -507,6 +509,7 @@ fn parse_rule_override(value: &str) -> Result<(Rule, Severity), String> {
 mod tests {
     use super::*;
 
+    /// Check CLI parsing: supports implicit and explicit check forms.
     #[test]
     fn supports_implicit_and_explicit_check_forms() {
         let implicit = ParsedArgs::parse_from(["vitest-dedup", "src"]).unwrap();
@@ -516,12 +519,14 @@ mod tests {
         assert!(ParsedArgs::parse_from(["vitest-dedup", "check"]).is_err());
     }
 
+    /// Check CLI parsing: defaults root to current directory.
     #[test]
     fn defaults_root_to_current_directory() {
         let args = ParsedArgs::parse_from(["vitest-dedup"]).unwrap();
         assert_eq!(args.root, PathBuf::from("."));
     }
 
+    /// Check CLI parsing: rejects a path placed before check.
     #[test]
     fn rejects_a_path_placed_before_check() {
         let error = ParsedArgs::parse_from(["vitest-dedup", "src", "check", "src"]).unwrap_err();
@@ -530,12 +535,14 @@ mod tests {
             .contains("do not pass a path before `check`"));
     }
 
+    /// Check CLI parsing: reporters default to terminal when omitted.
     #[test]
     fn reporters_default_to_terminal_when_omitted() {
         let args = ParsedArgs::parse_from(["vitest-dedup"]).unwrap();
         assert_eq!(args.reporters, vec![ReporterKind::Terminal]);
     }
 
+    /// Check CLI parsing: reporters accept a comma separated list and reject unknown values.
     #[test]
     fn reporters_accept_a_comma_separated_list_and_reject_unknown_values() {
         let args =
@@ -547,6 +554,7 @@ mod tests {
         assert!(ParsedArgs::parse_from(["vitest-dedup", "--reporters", "xml"]).is_err());
     }
 
+    /// Check CLI parsing: sarif is an accepted file reporter.
     #[test]
     fn sarif_is_an_accepted_file_reporter() {
         let args = ParsedArgs::parse_from(["vitest-dedup", "--reporters", "sarif"]).unwrap();
@@ -555,6 +563,7 @@ mod tests {
         assert_eq!(ReporterKind::Sarif.extension(), Some("sarif"));
     }
 
+    /// Check CLI parsing: threshold is bounded to zero through one hundred.
     #[test]
     fn threshold_is_bounded_to_zero_through_one_hundred() {
         assert_eq!(
@@ -573,6 +582,7 @@ mod tests {
         assert!(ParsedArgs::parse_from(["vitest-dedup", "--threshold", "-1"]).is_err());
     }
 
+    /// Check CLI parsing: rule overrides parse repeated flags and reject bad input.
     #[test]
     fn rule_overrides_parse_repeated_flags_and_reject_bad_input() {
         let args = ParsedArgs::parse_from([
@@ -599,6 +609,7 @@ mod tests {
         assert!(ParsedArgs::parse_from(["vitest-dedup", "--rule", "duplicate-test"]).is_err());
     }
 
+    /// Check CLI parsing: no metrics is global and off by default.
     #[test]
     fn no_metrics_is_global_and_off_by_default() {
         assert!(!ParsedArgs::parse_from(["vitest-dedup"]).unwrap().no_metrics);
@@ -613,6 +624,7 @@ mod tests {
         }
     }
 
+    /// Check CLI parsing: repeated rule flag for the same rule keeps the last occurrence.
     #[test]
     fn repeated_rule_flag_for_the_same_rule_keeps_the_last_occurrence() {
         let args = ParsedArgs::parse_from([
@@ -629,6 +641,7 @@ mod tests {
         );
     }
 
+    /// Check CLI parsing: to overrides maps only config relevant fields.
     #[test]
     fn to_overrides_maps_only_config_relevant_fields() {
         let args = ParsedArgs::parse_from([
@@ -650,6 +663,7 @@ mod tests {
         );
     }
 
+    /// Check CLI parsing: globals defaults to false and is settable.
     #[test]
     fn globals_defaults_to_false_and_is_settable() {
         assert!(!ParsedArgs::parse_from(["vitest-dedup"]).unwrap().globals);
@@ -660,6 +674,7 @@ mod tests {
         );
     }
 
+    /// Check CLI parsing: fail on incomplete defaults to any and parses its classes.
     #[test]
     fn fail_on_incomplete_defaults_to_any_and_parses_its_classes() {
         use super::FailOnIncomplete;
@@ -709,6 +724,8 @@ mod tests {
         assert_eq!(space_form.root, std::path::PathBuf::from("reads"));
     }
 
+    /// Check CLI parsing: emit test fingerprints is off by default and requires the jsonl
+    /// reporter.
     #[test]
     fn emit_test_fingerprints_is_off_by_default_and_requires_the_jsonl_reporter() {
         assert!(
@@ -758,6 +775,7 @@ mod tests {
         }
     }
 
+    /// Check CLI parsing: debug memory is off by default and requires the jsonl reporter.
     #[test]
     fn debug_memory_is_off_by_default_and_requires_the_jsonl_reporter() {
         assert!(
@@ -800,6 +818,7 @@ mod tests {
         }
     }
 
+    /// Check CLI parsing: exit code values match the documented contract.
     #[test]
     fn exit_code_values_match_the_documented_contract() {
         assert_eq!(ExitCode::Success.code(), 0);

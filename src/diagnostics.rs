@@ -33,6 +33,7 @@ mod sanitized {
     }
 
     impl fmt::Display for Sanitized {
+        /// Write the stored sanitized text to the formatter, propagating formatter errors.
         fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
             formatter.write_str(&self.0)
         }
@@ -275,6 +276,8 @@ mod tests {
 
     struct FailingWriter(usize);
     impl Write for FailingWriter {
+        /// Consume the remaining test-writer byte budget, returning an error once no bytes can
+        /// be accepted.
         fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
             if self.0 == 0 {
                 return Err(io::Error::other("writer failed"));
@@ -283,11 +286,14 @@ mod tests {
             self.0 -= written;
             Ok(written)
         }
+        /// Treat flushing the budgeted test writer as a successful no-op.
         fn flush(&mut self) -> io::Result<()> {
             Ok(())
         }
     }
 
+    /// Assert a renderer emits nonempty output and propagates writer errors at every smaller
+    /// byte budget.
     fn assert_writer_failures(render: impl Fn(&mut dyn Write) -> io::Result<()>) {
         let mut full = Vec::new();
         render(&mut full).unwrap();
@@ -300,6 +306,7 @@ mod tests {
         }
     }
 
+    /// Check terminal diagnostics: qualifications preserve counts bounds conditions and safety.
     #[test]
     fn qualifications_preserve_counts_bounds_conditions_and_safety() {
         for count in [0, 9, 10, 11, 19, 20, 21] {
@@ -371,6 +378,8 @@ mod tests {
         }
     }
 
+    /// Check terminal diagnostics: empty qualifications are silent and traversal messages do
+    /// not invent file counts.
     #[test]
     fn empty_qualifications_are_silent_and_traversal_messages_do_not_invent_file_counts() {
         let result = AnalysisResult::default();
@@ -403,6 +412,7 @@ mod tests {
         );
     }
 
+    /// Check terminal diagnostics: early lists are bounded and omissions are exact.
     #[test]
     fn early_lists_are_bounded_and_omissions_are_exact() {
         for count in [0, 9, 10, 11, 19, 20, 21] {
@@ -443,6 +453,8 @@ mod tests {
         }
     }
 
+    /// Check terminal diagnostics: early errors lists and announcements propagate writer
+    /// failures.
     #[test]
     fn early_errors_lists_and_announcements_propagate_writer_failures() {
         let error = anyhow::anyhow!("repository\n\x1b[31m\u{202e}").context("loading config");

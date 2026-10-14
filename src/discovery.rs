@@ -285,6 +285,7 @@ impl SourceFile {
 }
 
 impl PartialOrd for SourceFile {
+    /// Delegate partial comparison to the total source-file ordering.
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         Some(self.cmp(other))
     }
@@ -678,6 +679,7 @@ pub fn classify_source_file(path: &Path) -> Option<(SourceLanguage, ModuleFlavor
     }
 }
 
+/// Return owned test and benchmark inclusion globs used by default discovery.
 fn owned_default_include() -> Vec<String> {
     DEFAULT_INCLUDE_GLOBS
         .iter()
@@ -686,6 +688,7 @@ fn owned_default_include() -> Vec<String> {
         .collect()
 }
 
+/// Return owned copies of the default discovery exclusion patterns.
 fn owned_default_exclude() -> Vec<String> {
     DEFAULT_EXCLUDE_GLOBS
         .iter()
@@ -812,6 +815,8 @@ fn prepare_in_source_candidates<'a>(
     candidates
 }
 
+/// Prepare a project's in-source candidate channel, recording degradation for unknown or
+/// invalid glob configuration.
 #[allow(clippy::too_many_arguments)]
 fn prepare_in_source_channel<'a>(
     project: &'a Project,
@@ -1000,6 +1005,8 @@ mod tests {
         );
     }
 
+    /// Load default configuration for a discovery fixture root, panicking on invalid fixture
+    /// configuration.
     fn load(root: &Path) -> Config {
         Config::load(root, ConfigOverrides::default()).unwrap()
     }
@@ -1021,15 +1028,20 @@ mod tests {
     }
 
     impl Scenario {
+        /// Return this discovery scenario's root-relative file paths in discovery order.
         fn paths(&self) -> Vec<String> {
             relative_paths(&self.files.files, &self.root)
         }
 
+        /// Return the requested discovered file from this scenario, panicking when the fixture
+        /// did not discover it.
         fn find(&self, relative: &str) -> &SourceFile {
             find_file(&self.files, &self.root, relative)
         }
     }
 
+    /// Write temporary fixture files, optionally override includes, and return a plain or
+    /// project-scoped discovery scenario.
     fn scenario(files: &[(&str, &str)], include: &[&str], project_scoped: bool) -> Scenario {
         let directory = tempfile::tempdir().unwrap();
         for (path, contents) in files {
@@ -1062,6 +1074,7 @@ mod tests {
         scenario(files, include, project_scoped).paths()
     }
 
+    /// Render discovered file paths relative to the fixture root with normalized separators.
     fn relative_paths(files: &[SourceFile], root: &Path) -> Vec<String> {
         files
             .iter()
@@ -1177,6 +1190,8 @@ mod tests {
         );
     }
 
+    /// Check file discovery: discovers default vitest test and spec files but ignores git
+    /// excludes.
     #[test]
     fn discovers_default_vitest_test_and_spec_files_but_ignores_git_excludes() {
         assert_eq!(
@@ -1195,6 +1210,7 @@ mod tests {
         );
     }
 
+    /// Check file discovery: discovers default vitest bench and benchmark files.
     #[test]
     fn discovers_default_vitest_bench_and_benchmark_files() {
         assert_eq!(
@@ -1211,6 +1227,8 @@ mod tests {
         );
     }
 
+    /// Check file discovery: benchmark include and exclude are independent from test file
+    /// globs.
     #[test]
     fn benchmark_include_and_exclude_are_independent_from_test_file_globs() {
         assert_eq!(
@@ -1240,6 +1258,7 @@ mod tests {
         );
     }
 
+    /// Check file discovery: custom test include does not erase the default benchmark include.
     #[test]
     fn custom_test_include_does_not_erase_the_default_benchmark_include() {
         assert_eq!(
@@ -1259,6 +1278,8 @@ mod tests {
         );
     }
 
+    /// Check file discovery: unreadable benchmark include falls back visibly for default
+    /// benchmark files.
     #[test]
     fn unreadable_benchmark_include_falls_back_visibly_for_default_benchmark_files() {
         let scenario = scenario(
@@ -1286,6 +1307,7 @@ mod tests {
         );
     }
 
+    /// Check file discovery: benchmark include source is additive and uses benchmark exclude.
     #[test]
     fn benchmark_include_source_is_additive_and_uses_benchmark_exclude() {
         assert_eq!(
@@ -1312,6 +1334,7 @@ mod tests {
         );
     }
 
+    /// Check file discovery: built in excludes prune node modules and friends.
     #[test]
     fn built_in_excludes_prune_node_modules_and_friends() {
         assert_eq!(
@@ -1330,6 +1353,7 @@ mod tests {
         );
     }
 
+    /// Check file discovery: vitest dedupignore supports negation like gitignore.
     #[test]
     fn vitest_dedupignore_supports_negation_like_gitignore() {
         // A negation for a path nested inside an *ignored directory* famously cannot re-include
@@ -1354,6 +1378,7 @@ mod tests {
         );
     }
 
+    /// Check file discovery: discovery order is independent of filesystem traversal order.
     #[test]
     fn discovery_order_is_independent_of_filesystem_traversal_order() {
         // Create in reverse alphabetical order, and across sibling directories, so an
@@ -1374,6 +1399,8 @@ mod tests {
         );
     }
 
+    /// Check file discovery: file at exactly the size limit is kept and one byte over is
+    /// skipped.
     #[test]
     fn file_at_exactly_the_size_limit_is_kept_and_one_byte_over_is_skipped() {
         let directory = tempfile::tempdir().unwrap();
@@ -1397,6 +1424,7 @@ mod tests {
         assert!(files.incomplete);
     }
 
+    /// Check file discovery: unsupported extensions are rejected explicitly not guessed at.
     #[test]
     fn unsupported_extensions_are_rejected_explicitly_not_guessed_at() {
         assert_eq!(classify_source_file(Path::new("legacy.test.coffee")), None);
@@ -1405,6 +1433,7 @@ mod tests {
         assert_eq!(classify_source_file(Path::new("types.d.cts")), None);
     }
 
+    /// Check file discovery: widened include reaches the unsupported language skip path.
     #[test]
     fn widened_include_reaches_the_unsupported_language_skip_path() {
         // The built-in defaults are already extension-scoped, so nothing unsupported can reach
@@ -1430,6 +1459,7 @@ mod tests {
         assert!(!scenario.files.incomplete);
     }
 
+    /// Check file discovery: symlink loops do not hang or error discovery.
     #[cfg(unix)]
     #[test]
     fn symlink_loops_do_not_hang_or_error_discovery() {
@@ -1450,6 +1480,7 @@ mod tests {
         );
     }
 
+    /// Check file discovery: traversal errors are collected and mark the run incomplete.
     #[cfg(unix)]
     #[test]
     fn traversal_errors_are_collected_and_mark_the_run_incomplete() {
@@ -1474,6 +1505,7 @@ mod tests {
         assert!(files.incomplete);
     }
 
+    /// Check file discovery: module flavor reflects forced esm and cjs extensions.
     #[test]
     fn module_flavor_reflects_forced_esm_and_cjs_extensions() {
         assert_eq!(
@@ -1502,6 +1534,8 @@ mod tests {
 
     use crate::vitest_projects::{resolve_projects, GlobPatterns};
 
+    /// Check file discovery: project scoping skips a cypress file outside include and keeps a
+    /// test file inside it.
     #[test]
     fn project_scoping_skips_a_cypress_file_outside_include_and_keeps_a_test_file_inside_it() {
         // Under `globals: true`, a `.cy.ts` file's ambient `describe`/`it` is statically
@@ -1541,6 +1575,8 @@ mod tests {
         assert!(!scenario.files.incomplete);
     }
 
+    /// Check file discovery: unreadable project globs fall back to defaults instead of
+    /// discovering nothing.
     #[test]
     fn unreadable_project_globs_fall_back_to_defaults_instead_of_discovering_nothing() {
         let directory = tempfile::tempdir().unwrap();
@@ -1572,6 +1608,7 @@ mod tests {
         assert!(files.skipped.is_empty());
     }
 
+    /// Check file discovery: passing no project set reproduces today's behavior exactly.
     #[test]
     fn passing_no_project_set_reproduces_todays_behavior_exactly() {
         // With no `ProjectSet` supplied, project scoping never runs at all: every file that
@@ -1824,6 +1861,8 @@ mod tests {
 
     // -- In-source testing (`includeSource`) -------------------------------------------------
 
+    /// Check file discovery: include source widens discovery to a matching non test source
+    /// file.
     #[test]
     fn include_source_widens_discovery_to_a_matching_non_test_source_file() {
         // docs/vitest-surface.md, "In-source testing": `src/thing.ts` is ordinary application
@@ -1847,6 +1886,7 @@ mod tests {
         assert!(!scenario.files.incomplete);
     }
 
+    /// Check file discovery: absent include source does not discover the same source file.
     #[test]
     fn absent_include_source_does_not_discover_the_same_source_file() {
         // The same project, minus `includeSource`: `includeSource` defaults to `[]`, so
@@ -1865,6 +1905,7 @@ mod tests {
         .is_empty());
     }
 
+    /// Check file discovery: project exclude still wins over a matching include source glob.
     #[test]
     fn project_exclude_still_wins_over_a_matching_include_source_glob() {
         assert_eq!(
@@ -1889,6 +1930,8 @@ mod tests {
         );
     }
 
+    /// Check file discovery: a file matching both include and include source is discovered
+    /// exactly once.
     #[test]
     fn a_file_matching_both_include_and_include_source_is_discovered_exactly_once() {
         // `src/thing.test.ts` uses the ordinary Vitest naming convention, so it also matches
@@ -1911,6 +1954,8 @@ mod tests {
         );
     }
 
+    /// Check file discovery: unreadable include source marks the run incomplete with a
+    /// diagnostic naming it.
     #[test]
     fn unreadable_include_source_marks_the_run_incomplete_with_a_diagnostic_naming_it() {
         // `includeSource` set to a call expression is not a literal array this scan can read --
@@ -1944,6 +1989,8 @@ mod tests {
 
     // -- Carrying the admitting project's `globals` forward (regression fix) ----------------
 
+    /// Find a root-relative fixture path in discovery results, panicking with the full result
+    /// when it is absent.
     fn find_file<'a>(files: &'a DiscoveredFiles, root: &Path, relative: &str) -> &'a SourceFile {
         files
             .files
@@ -1970,6 +2017,8 @@ mod tests {
         );
     }
 
+    /// Check file discovery: in source file in a globals true project carries enabled globals
+    /// onto the source file.
     #[test]
     fn in_source_file_in_a_globals_true_project_carries_enabled_globals_onto_the_source_file() {
         // The regression this task exists to fix: an in-source candidate never matches any
@@ -1984,6 +2033,8 @@ mod tests {
         );
     }
 
+    /// Check file discovery: in source file in a globals false project carries disabled globals
+    /// onto the source file.
     #[test]
     fn in_source_file_in_a_globals_false_project_carries_disabled_globals_onto_the_source_file() {
         assert_carried_globals(
@@ -1993,6 +2044,8 @@ mod tests {
         );
     }
 
+    /// Check file discovery: a file matching both include and include source carries the same
+    /// projects globals.
     #[test]
     fn a_file_matching_both_include_and_include_source_carries_the_same_projects_globals() {
         // Consistency requirement: whichever path admits the file, the `globals` answer carried
@@ -2007,6 +2060,8 @@ mod tests {
         );
     }
 
+    /// Check file discovery: in source file whose projects globals is unknown carries that
+    /// uncertainty forward.
     #[test]
     fn in_source_file_whose_projects_globals_is_unknown_carries_that_uncertainty_forward() {
         // The admitting project's own `globals` could not be read. A caller must not treat this
@@ -2122,6 +2177,7 @@ mod tests {
         );
     }
 
+    /// Check file discovery: ordinary test file is not given a project globals override.
     #[test]
     fn ordinary_test_file_is_not_given_a_project_globals_override() {
         // Ordinary files must resolve exactly as they did before this field existed: discovery
@@ -2136,6 +2192,8 @@ mod tests {
 
     // -- Copilot review #9: sharing the ambiguity decision with `governing_project` ---------
 
+    /// Check file discovery: in source admission is ambiguous when an unresolved entry is
+    /// declared after the match.
     #[test]
     fn in_source_admission_is_ambiguous_when_an_unresolved_entry_is_declared_after_the_match() {
         // `missing-project-dir/*` never resolves to anything, so it is an unresolved
@@ -2190,6 +2248,8 @@ mod tests {
         scenario
     }
 
+    /// Check file discovery: in source admission is not degraded when the unresolved entry is
+    /// declared before the match.
     #[test]
     fn in_source_admission_is_not_degraded_when_the_unresolved_entry_is_declared_before_the_match()
     {
@@ -2207,6 +2267,8 @@ mod tests {
         );
     }
 
+    /// Check file discovery: ordinary include admitted files are unaffected by the shared
+    /// ambiguity check.
     #[test]
     fn ordinary_include_admitted_files_are_unaffected_by_the_shared_ambiguity_check() {
         // No project here sets `includeSource`, so the in-source fast path never runs at all --

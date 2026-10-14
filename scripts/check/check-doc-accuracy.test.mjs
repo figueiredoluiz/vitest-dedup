@@ -36,10 +36,16 @@ import {
 // the paragraph window and the adjudicator together rather than a convenient inner function.
 // ---------------------------------------------------------------------------------------------
 
+/**
+ * Inspect one supplied documentation file and return all accuracy problems reported for it.
+ */
 function problemsFor(path, source) {
   return inspect([{ path, source }]).problems;
 }
 
+/**
+ * Inspect a supplied file, assert exactly one documentation problem, and return that problem.
+ */
 function onlyProblem(path, source) {
   const problems = problemsFor(path, source);
   assert.equal(
