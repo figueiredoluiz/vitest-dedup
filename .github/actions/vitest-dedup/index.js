@@ -70,6 +70,9 @@ export function releaseTarget(
 // Argument construction
 // ---------------------------------------------------------------------------
 
+/**
+ * Split comma/newline input into trimmed, nonempty entries.
+ */
 function splitList(value = "") {
   return value
     .split(/[\n,]+/)
@@ -212,6 +215,10 @@ export function isValidReportShape(report) {
   );
 }
 
+/**
+ * Build string-valued Action outputs from the exit code and available report, returning only
+ * the exit code when no report exists.
+ */
 export function extractOutputs(report, exitCode) {
   const outputs = { "exit-code": String(exitCode) };
   if (!report) {
@@ -368,12 +375,20 @@ export function verifyAttestation(archivePath, repository, runner = spawnSync) {
 // I/O shell
 // ---------------------------------------------------------------------------
 
+/**
+ * Read an Action input from its exact or portable environment key, falling back only when both
+ * are absent.
+ */
 function readInput(env, name, fallback) {
   const exact = `INPUT_${name.toUpperCase()}`;
   const portable = exact.replaceAll("-", "_");
   return env[exact] ?? env[portable] ?? fallback;
 }
 
+/**
+ * Append a delimiter-framed GitHub output when configured, otherwise print the name/value
+ * pair.
+ */
 function setOutput(env, name, value) {
   if (env.GITHUB_OUTPUT) {
     // The delimiter form (`name<<EOF\n...\nEOF`) is required because report paths and any future
@@ -401,14 +416,25 @@ export function encodeAnnotationData(value) {
   return String(value).replaceAll("%", "%25").replaceAll("\r", "%0D").replaceAll("\n", "%0A");
 }
 
+/**
+ * Emit a warning annotation through the supplied logger with workflow-control characters
+ * escaped.
+ */
 export function warningAnnotation(message, log = console.log) {
   log(`::warning::${encodeAnnotationData(message)}`);
 }
 
+/**
+ * Emit an escaped GitHub error annotation through the supplied logger.
+ */
 export function errorAnnotation(message, log = console.log) {
   log(`::error::${encodeAnnotationData(message)}`);
 }
 
+/**
+ * Fetch a release asset into destination, rejecting unsuccessful or bodyless responses and
+ * propagating stream failures.
+ */
 async function download(url, destination) {
   const response = await fetch(url, {
     redirect: "follow",
@@ -486,6 +512,10 @@ async function installRelease(rawVersion, target, env) {
   return binary;
 }
 
+/**
+ * Read Action inputs, obtain and run the analyzer, validate its report and publish outputs;
+ * return the effective exit code.
+ */
 export async function runAction({ env = process.env, cwd = process.cwd() } = {}) {
   const inputs = {
     path: readInput(env, "path", "."),

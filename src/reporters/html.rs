@@ -484,6 +484,7 @@ mod tests {
             .to_owned()
     }
 
+    /// Render an analysis result to UTF-8 HTML text, panicking on reporter or decoding errors.
     fn render_str(result: &AnalysisResult) -> String {
         let mut buffer = Vec::new();
         HtmlReporter::new()
@@ -569,6 +570,8 @@ mod tests {
 
     // --- Safety rule 1: HTML-escape every interpolated value ------------------------------
 
+    /// Regression fixture for HTML report: title with closing script tag cannot break out of
+    /// the script element.
     #[test]
     fn title_with_closing_script_tag_cannot_break_out_of_the_script_element() {
         let result = rendered_result(vec![finding_with_title(
@@ -585,6 +588,8 @@ mod tests {
         assert!(output.contains("&lt;/script&gt;&lt;script&gt;alert(1)&lt;/script&gt;"));
     }
 
+    /// Regression fixture for HTML report: title with html injection attempt is escaped not
+    /// executed.
     #[test]
     fn title_with_html_injection_attempt_is_escaped_not_executed() {
         let hostile = "<img src=x onerror=alert(1)>";
@@ -598,6 +603,8 @@ mod tests {
         assert!(output.contains("&lt;img src=x onerror=alert(1)&gt;"));
     }
 
+    /// Regression fixture for HTML report: ampersand quote and apostrophe are escaped in
+    /// titles.
     #[test]
     fn ampersand_quote_and_apostrophe_are_escaped_in_titles() {
         let result = rendered_result(vec![finding_with_title(
@@ -615,6 +622,8 @@ mod tests {
 
     // --- Safety rule 2: embedded JSON cannot escape the <script> element ------------------
 
+    /// Regression fixture for HTML report: json island encodes script closing and comment
+    /// sequences.
     #[test]
     fn json_island_encodes_script_closing_and_comment_sequences() {
         let hostile = "</script><!--x--><![CDATA[y]]>";
@@ -642,6 +651,8 @@ mod tests {
 
     // --- Safety rule 3: strip bidi and invisible Unicode formatting characters ------------
 
+    /// Regression fixture for HTML report: bidi override characters are stripped from titles
+    /// and json.
     #[test]
     fn bidi_override_characters_are_stripped_from_titles_and_json() {
         let hostile = "safe\u{202e}gnisaeler-tset\u{202c}evil";
@@ -664,6 +675,8 @@ mod tests {
         &output[start..end]
     }
 
+    /// Regression fixture for HTML report: path with bidi override is stripped from visible
+    /// text and json island.
     #[test]
     fn path_with_bidi_override_is_stripped_from_visible_text_and_json_island() {
         let hostile_path = "src/safe\u{202e}gnisaeler-tset\u{202c}evil.test.ts";
@@ -698,6 +711,8 @@ mod tests {
         &output[start..end]
     }
 
+    /// Regression fixture for HTML report: path with bidi override is stripped from the
+    /// rendered heading specifically.
     #[test]
     fn path_with_bidi_override_is_stripped_from_the_rendered_heading_specifically() {
         // Strengthens `path_with_bidi_override_is_stripped_from_visible_text_and_json_island`
@@ -717,6 +732,8 @@ mod tests {
         assert!(!heading.contains('\u{202c}'));
     }
 
+    /// Regression fixture for HTML report: path with deprecated bidi formatting character is
+    /// stripped from the rendered heading.
     #[test]
     fn path_with_deprecated_bidi_formatting_character_is_stripped_from_the_rendered_heading() {
         // Covers the actual live gap: U+206A..=U+206F are not `char::is_control()` and, before
@@ -752,6 +769,8 @@ mod tests {
         }
     }
 
+    /// Regression fixture for HTML report: path with zero width character is stripped from
+    /// visible text and json island.
     #[test]
     fn path_with_zero_width_character_is_stripped_from_visible_text_and_json_island() {
         let hostile_path = "src/a\u{200b}.test.ts";
@@ -767,6 +786,8 @@ mod tests {
         assert!(!path.contains('\u{200b}'));
     }
 
+    /// Regression fixture for HTML report: path with control character is stripped from visible
+    /// text and json island.
     #[test]
     fn path_with_control_character_is_stripped_from_visible_text_and_json_island() {
         let hostile_path = "src/a\u{7}.test.ts";

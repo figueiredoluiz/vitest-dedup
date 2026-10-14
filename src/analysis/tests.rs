@@ -36,6 +36,7 @@ use std::sync::Arc;
 // IR builders
 // ---------------------------------------------------------------------------------------------
 
+/// Build a one-column source-span fixture on the supplied line.
 fn line_span(line: u32) -> Span {
     Span {
         start: Position { line, column: 1 },
@@ -73,6 +74,8 @@ fn non_idempotent_hook(kind: HookKind, alpha: &str, line: u32) -> Hook {
     }
 }
 
+/// Build fingerprint fixtures with the requested alpha digest and trivial flag, leaving other
+/// evidence empty.
 fn fingerprints(alpha: &str, trivial: bool) -> crate::model::Fingerprints {
     crate::model::Fingerprints {
         alpha: crate::model::BodyDigest::of(alpha),
@@ -158,6 +161,8 @@ struct T {
 }
 
 impl T {
+    /// Initialize a test-case builder with source identity, title and alpha evidence, using
+    /// default context and modifiers.
     fn new(path: &'static str, line: u32, title: &'static str, alpha: &'static str) -> Self {
         Self {
             span_override: None,
@@ -233,31 +238,37 @@ impl T {
         self
     }
 
+    /// Set the fixture suite path and return the updated builder.
     fn suite(mut self, parts: &[&'static str]) -> Self {
         self.suite = parts.to_vec();
         self
     }
 
+    /// Replace fixture context hooks and return the updated builder.
     fn hooks(mut self, hooks: Vec<Hook>) -> Self {
         self.context.hooks = hooks;
         self
     }
 
+    /// Set the context mock identities on this test builder.
     fn mocked_modules(mut self, modules: Vec<MockedModule>) -> Self {
         self.context.mocked_modules = modules;
         self
     }
 
+    /// Set the context fixture bindings on this test builder.
     fn fixtures(mut self, fixtures: Vec<FixtureBinding>) -> Self {
         self.context.fixtures = fixtures;
         self
     }
 
+    /// Store the supplied module identities as shared context strings.
     fn imports(mut self, imports: &[&str]) -> Self {
         self.context.imports = imports.iter().map(|m| Arc::from(*m)).collect();
         self
     }
 
+    /// Append the skip modifier to this declaration fixture.
     fn skip(mut self) -> Self {
         self.modifiers.push(Modifier::Skip);
         self
@@ -270,12 +281,14 @@ impl T {
         self
     }
 
+    /// Mark the fixture todo and remove its executable-body flag.
     fn todo(mut self) -> Self {
         self.modifiers.push(Modifier::Todo);
         self.has_body = false;
         self
     }
 
+    /// Mark this fixture body as trivial for rule controls.
     fn trivial(mut self) -> Self {
         self.trivial = true;
         self
@@ -289,6 +302,7 @@ impl T {
         self
     }
 
+    /// Mark the fixture context unresolved for fail-closed rule tests.
     fn unresolved(mut self) -> Self {
         self.context.unresolved = true;
         self
@@ -310,6 +324,8 @@ impl T {
         self.build()
     }
 
+    /// Materialize the owned test case, honoring any source-span override and configured
+    /// fingerprint/context fields.
     fn build(self) -> TestCase {
         TestCase {
             registration_file: None,
@@ -358,6 +374,8 @@ impl T {
     }
 }
 
+/// Build an analysis fixture config with the supplied severities and quality-gate threshold
+/// percentage.
 fn config_with(rules: &[(Rule, Severity)], threshold: u8) -> Config {
     let mut map = BTreeMap::new();
     for (rule, severity) in rules {
@@ -385,10 +403,12 @@ fn analyze_with(tests: Vec<TestCase>, config: &Config, files_analyzed: usize) ->
     analyze(tests, config, files_analyzed, IncompleteCauses::default()).unwrap()
 }
 
+/// Build the baseline analysis fixture config with no severity overrides and a zero threshold.
 fn default_config() -> Config {
     config_with(&[], 0)
 }
 
+/// Count duplicate-test and duplicate-test-name findings in that order.
 fn rule_counts(findings: &[Finding]) -> (usize, usize) {
     let duplicate_test = findings
         .iter()
@@ -515,6 +535,7 @@ fn cross_file_pair() -> Vec<TestCase> {
     ]
 }
 
+/// Enable cross-file duplicate warnings in the analysis fixture configuration.
 fn cross_file_config() -> Config {
     config_with(&[(Rule::CrossFileDuplicate, Severity::Warning)], 0)
 }
@@ -528,6 +549,7 @@ fn analyze_hooked(hooks: Vec<Hook>, config: &Config) -> AnalysisResult {
     analyze_with(tests, config, 1)
 }
 
+/// Count findings produced by the requested rule.
 fn rule_count(findings: &[Finding], rule: Rule) -> usize {
     findings.iter().filter(|f| f.rule == rule).count()
 }
@@ -957,6 +979,7 @@ fn fixture_not_duplicates_different_helper_modules() {
 // Adversarial / structural cases
 // ---------------------------------------------------------------------------------------------
 
+/// Regression fixture for analysis rules: empty test list yields empty result.
 #[test]
 fn empty_test_list_yields_empty_result() {
     let result = analyze(
@@ -973,6 +996,7 @@ fn empty_test_list_yields_empty_result() {
     assert!(threshold_passed(&result, &config_with(&[], 0)));
 }
 
+/// Regression fixture for analysis rules: single test yields no findings.
 #[test]
 fn single_test_yields_no_findings() {
     let tests = vec![T::new("s.test.ts", 1, "only test", "expect(1).toBe(1)").build()];
@@ -981,6 +1005,7 @@ fn single_test_yields_no_findings() {
     assert_eq!(result.tests_analyzed, 1);
 }
 
+/// Regression fixture for analysis rules: group of exactly four produces a linear spanning set.
 #[test]
 fn group_of_exactly_four_produces_a_linear_spanning_set() {
     let tests = numbered_group("spanning.test.ts", 4, "expect(1).toBe(1)", "case");
@@ -998,6 +1023,8 @@ fn group_of_exactly_four_produces_a_linear_spanning_set() {
     assert!(!result.incomplete());
 }
 
+/// Regression fixture for analysis rules: group of exactly five collapses into one cluster
+/// finding.
 #[test]
 fn group_of_exactly_five_collapses_into_one_cluster_finding() {
     let tests = numbered_group("cluster.test.ts", 5, "expect(1).toBe(1)", "case");
@@ -1021,6 +1048,8 @@ fn group_of_exactly_five_collapses_into_one_cluster_finding() {
     );
 }
 
+/// Regression fixture for analysis rules: empty alpha bodies still compare equal when not
+/// trivial.
 #[test]
 fn empty_alpha_bodies_still_compare_equal_when_not_trivial() {
     // Same file (post-A7, `duplicate-test` no longer groups across files): the point of this test
@@ -1033,6 +1062,8 @@ fn empty_alpha_bodies_still_compare_equal_when_not_trivial() {
     assert_eq!(rule_counts(&result.findings).0, 1);
 }
 
+/// Regression fixture for analysis rules: trivial bodies never participate even with equal
+/// alpha.
 #[test]
 fn trivial_bodies_never_participate_even_with_equal_alpha() {
     let tests = vec![
@@ -1043,6 +1074,8 @@ fn trivial_bodies_never_participate_even_with_equal_alpha() {
     assert!(result.findings.is_empty());
 }
 
+/// Regression fixture for analysis rules: todo tests have no body and never participate in
+/// duplicate test.
 #[test]
 fn todo_tests_have_no_body_and_never_participate_in_duplicate_test() {
     let tests = vec![
@@ -3268,6 +3301,7 @@ fn baseline_from(findings: &[Finding]) -> (tempfile::TempDir, crate::modes::Base
     (directory, baseline)
 }
 
+/// Build two same-file declaration fixtures with identical bodies and different titles.
 fn duplicate_pair() -> Vec<TestCase> {
     let body = "expect(add(1, 1)).toBe(2)";
     vec![

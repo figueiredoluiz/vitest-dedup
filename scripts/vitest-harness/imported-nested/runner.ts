@@ -10,6 +10,9 @@ export function outer(label: string) {
 
 /** Reaches the imported runner through a helper local to this file. */
 function viaLocal() { leaf('local') }
+/**
+ * Register tests through both the local helper and the imported runner alias.
+ */
 export function mixed() {
   viaLocal()
   aliasedLeaf('alias')

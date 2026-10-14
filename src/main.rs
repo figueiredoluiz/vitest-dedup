@@ -72,6 +72,8 @@ mod rss {
     }
 }
 
+/// Run the CLI, preserving quality-gate exit codes and reporting operational errors with
+/// sanitized diagnostics.
 fn main() -> ProcessExitCode {
     match run() {
         Ok(code) => process_code(code),
@@ -190,6 +192,8 @@ fn relativize_extraction_paths(
 mod registration_path_tests {
     use super::*;
 
+    /// Regression fixture for CLI reporting: registration identity relativizes source caller
+    /// and hook paths for both passes.
     #[test]
     fn registration_identity_relativizes_source_caller_and_hook_paths_for_both_passes() {
         use vitest_dedup::discovery::{ModuleFlavor, SourceFile, SourceLanguage};
@@ -1174,6 +1178,7 @@ mod tests {
         });
     "#;
 
+    /// Write a Vitest config and companion ordinary/in-source test fixtures beneath root.
     fn write_project(root: &std::path::Path, config_test_body: &str) {
         std::fs::create_dir_all(root.join("src")).unwrap();
         std::fs::write(
@@ -1216,6 +1221,8 @@ mod tests {
         (stderr, read_json_report(&root.join("report")))
     }
 
+    /// Run the CLI successfully with a JSON output prefix, then read and parse the generated
+    /// report.
     fn run_json(root: &std::path::Path, extra_args: &[&str]) -> serde_json::Value {
         let output_prefix = root.join("report");
         // The process outcome is part of what this helper verifies, not just the file it leaves
@@ -1239,6 +1246,8 @@ mod tests {
         serde_json::from_str(&report).unwrap()
     }
 
+    /// Regression fixture for CLI reporting: cell census counts files once and stays off
+    /// machine stdout.
     #[test]
     fn cell_census_counts_files_once_and_stays_off_machine_stdout() {
         let directory = tempfile::tempdir().unwrap();
@@ -1277,6 +1286,8 @@ mod tests {
             .contains("cell census"));
     }
 
+    /// Regression fixture for CLI reporting: in source file in a globals true project yields
+    /// its ambient tests.
     #[test]
     fn in_source_file_in_a_globals_true_project_yields_its_ambient_tests() {
         let directory = tempfile::tempdir().unwrap();
@@ -1295,6 +1306,8 @@ mod tests {
         assert_eq!(report["incomplete"], false);
     }
 
+    /// Regression fixture for CLI reporting: in source file in a globals false project yields
+    /// no ambient test.
     #[test]
     fn in_source_file_in_a_globals_false_project_yields_no_ambient_test() {
         // Same file, same `includeSource`, only `globals` differs: the ambient `test(...)` call
@@ -1316,6 +1329,8 @@ mod tests {
         assert_eq!(report["incomplete"], false);
     }
 
+    /// Regression fixture for CLI reporting: in source file whose projects globals is unknown
+    /// marks the run incomplete.
     #[test]
     fn in_source_file_whose_projects_globals_is_unknown_marks_the_run_incomplete() {
         // The admitting project's own `globals` cannot be read. Falling back to the
@@ -1385,6 +1400,8 @@ mod tests {
         std::fs::write(root.join("sub/companion.test.ts"), ORDINARY_TEST).unwrap();
     }
 
+    /// Regression fixture for CLI reporting: ordinary file whose projects globals is unknown
+    /// marks the run incomplete.
     #[test]
     fn ordinary_file_whose_projects_globals_is_unknown_marks_the_run_incomplete() {
         // `sub/ambient.test.ts` is governed by the `sub` project (matched via its `include`
@@ -1410,6 +1427,8 @@ mod tests {
         assert_fail_on_incomplete_is_operational_error(directory.path());
     }
 
+    /// Regression fixture for CLI reporting: file governed by no project still uses the
+    /// repository wide fallback.
     #[test]
     fn file_governed_by_no_project_still_uses_the_repository_wide_fallback() {
         // No `vitest.config.*`/`vite.config.*` at all: `resolve_projects` reports
@@ -1436,6 +1455,8 @@ mod tests {
     // -- always blaming `test.globals` -- but the guard itself must keep firing (`incomplete`     -
     // -- stays `true`), since Vitest itself refuses such a file ("No test suite found in file").  -
 
+    /// Regression fixture for CLI reporting: statically empty each table explains zero tests
+    /// without blaming globals.
     #[test]
     fn statically_empty_each_table_explains_zero_tests_without_blaming_globals() {
         // The exact reproduction from the review: `test.each([])` statically proves zero rows,
@@ -1473,6 +1494,8 @@ mod tests {
         );
     }
 
+    /// Regression fixture for CLI reporting: a wholly excluded file is named on stderr and
+    /// counted in the report.
     #[test]
     fn a_wholly_excluded_file_is_named_on_stderr_and_counted_in_the_report() {
         // The deception this closes: `blind.test.ts` produces no findings, so it appears nowhere
@@ -1518,6 +1541,8 @@ mod tests {
         );
     }
 
+    /// Regression fixture for CLI reporting: ordinary zero extraction names observation and
+    /// both binding sources.
     #[test]
     fn ordinary_zero_extraction_names_observation_and_both_binding_sources() {
         // Contrast with the test above: zero extraction gives no static proof of WHY no test was
@@ -1556,6 +1581,8 @@ mod tests {
         assert_eq!(report["incomplete"], true, "{report:#?}");
     }
 
+    /// Regression fixture for CLI reporting: imported but empty file is an independent
+    /// operational failure.
     #[test]
     fn imported_but_empty_file_is_an_independent_operational_failure() {
         // Kept independent of the ambient-globals fixture so this ordinary supported-import case
@@ -1742,6 +1769,7 @@ mod tests {
         );
     }
 
+    /// Regression fixture for CLI reporting: a hostile filename reaches stderr sanitized.
     #[test]
     fn a_hostile_filename_reaches_stderr_sanitized() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -1819,6 +1847,8 @@ mod tests {
         );
     }
 
+    /// Regression fixture for CLI reporting: relativize test path strips the root for a path
+    /// beneath it.
     #[test]
     fn relativize_test_path_strips_the_root_for_a_path_beneath_it() {
         let root = std::path::Path::new("/repo/analysis-root");
@@ -1857,6 +1887,8 @@ mod tests {
         );
     }
 
+    /// Regression fixture for CLI reporting: relativize test path strips an existing verbatim
+    /// prefix mismatch.
     #[cfg(windows)]
     #[test]
     fn relativize_test_path_strips_an_existing_verbatim_prefix_mismatch() {
@@ -1877,6 +1909,8 @@ mod tests {
         );
     }
 
+    /// Regression fixture for CLI reporting: relativize test path keeps a missing verbatim path
+    /// unchanged.
     #[cfg(windows)]
     #[test]
     fn relativize_test_path_keeps_a_missing_verbatim_path_unchanged() {
@@ -1885,6 +1919,8 @@ mod tests {
         assert_eq!(relativize_test_path(missing, root), missing);
     }
 
+    /// Regression fixture for CLI reporting: relativize test path strips a matching unc share
+    /// root.
     #[cfg(windows)]
     #[test]
     fn relativize_test_path_strips_a_matching_unc_share_root() {
@@ -1903,6 +1939,8 @@ mod tests {
         );
     }
 
+    /// Regression fixture for CLI reporting: relativize test path forwards whatever the
+    /// platform cannot strip.
     #[test]
     fn relativize_test_path_forwards_whatever_the_platform_cannot_strip() {
         // Platform-neutral statement of the contract, exercised with the Windows-shaped strings
@@ -1955,6 +1993,7 @@ mod tests {
         );
     }
 
+    /// Load a temporary fixture config with the requested threshold override.
     fn config_with_threshold(threshold: u8) -> Config {
         let directory = tempfile::tempdir().unwrap();
         Config::load(
@@ -1976,6 +2015,7 @@ mod tests {
     /// reads gate on it would send someone chasing the wrong fix.
     use vitest_dedup::cli::FailOnIncomplete;
 
+    /// Regression fixture for CLI reporting: fail on incomplete reads ignores limit causes.
     #[test]
     fn fail_on_incomplete_reads_ignores_limit_causes() {
         let config = config_with_threshold(0);
@@ -2039,6 +2079,8 @@ mod tests {
         );
     }
 
+    /// Regression fixture for CLI reporting: fail on incomplete returns operational error not
+    /// quality gate failed.
     #[test]
     fn fail_on_incomplete_returns_operational_error_not_quality_gate_failed() {
         let config = config_with_threshold(0);
@@ -2056,6 +2098,7 @@ mod tests {
         );
     }
 
+    /// Regression fixture for CLI reporting: nothing analyzed is always an operational error.
     #[test]
     fn nothing_analyzed_is_always_an_operational_error() {
         let config = config_with_threshold(0);
@@ -2066,6 +2109,8 @@ mod tests {
         );
     }
 
+    /// Regression fixture for CLI reporting: zero executable tests preserve real quality
+    /// failures.
     #[test]
     fn zero_executable_tests_preserve_real_quality_failures() {
         let strict_config = config_with_threshold(0);
@@ -2226,6 +2271,8 @@ mod tests {
         )
     }
 
+    /// Read and parse the JSON file for an output prefix, panicking with path context on
+    /// failure.
     fn read_json_report(prefix: &std::path::Path) -> serde_json::Value {
         let path = prefix.with_extension("json");
         serde_json::from_str(
@@ -2574,6 +2621,7 @@ mod tests {
         assert_eq!(code, Some(1), "without a directive the pair still fires");
     }
 
+    /// Regression fixture for CLI reporting: fail on new fires only above its limit.
     #[test]
     fn fail_on_new_fires_only_above_its_limit() {
         let directory = single_file_project("math.test.ts", DUPLICATE_PAIR);
@@ -2638,6 +2686,8 @@ mod tests {
         assert_eq!(code, Some(1));
     }
 
+    /// Regression fixture for CLI reporting: update baseline refuses to record an incomplete
+    /// run.
     #[test]
     fn update_baseline_refuses_to_record_an_incomplete_run() {
         // An incomplete run does not know what it would be accepting, and a baseline written from
@@ -2668,6 +2718,8 @@ mod tests {
 
     // -- `--changed-since` ------------------------------------------------------------------
 
+    /// Run a fixture Git operation after removing inherited repository-path environment
+    /// variables.
     fn git(root: &std::path::Path, args: &[&str]) {
         let mut command = std::process::Command::new("git");
         // The same inherited-environment hazard `modes.rs` documents: when this suite runs from a
@@ -2693,6 +2745,7 @@ mod tests {
         assert!(status.success(), "git {args:?} failed");
     }
 
+    /// Initialize and commit the fixture tree with a local test identity on main.
     fn init_repository(root: &std::path::Path) {
         git(root, &["init", "-q", "-b", "main"]);
         git(root, &["config", "user.email", "test@example.com"]);
@@ -3195,6 +3248,7 @@ mod tests {
                 assertEqual<Record<string, string>, Expected>(true);
             });"#;
 
+    /// Build a temporary type-level declaration fixture and return its all-rules JSON report.
     fn type_level_report(helpers: &str, declarations: &str) -> serde_json::Value {
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path();
@@ -3234,12 +3288,14 @@ mod tests {
         (lines, summary)
     }
 
+    /// Create and return a temporary workspace containing the requested source file.
     fn single_file_project(file: &str, contents: &str) -> tempfile::TempDir {
         let directory = tempfile::tempdir().unwrap();
         std::fs::write(directory.path().join(file), contents).unwrap();
         directory
     }
 
+    /// Run the fixture CLI and parse each stdout line as an independent JSON record.
     fn run_jsonl(root: &std::path::Path, extra_args: &[&str]) -> Vec<serde_json::Value> {
         let (_, stdout, _) = run_cli(root, extra_args);
         stdout
@@ -3251,6 +3307,7 @@ mod tests {
             .collect()
     }
 
+    /// Borrow records matching the requested JSONL type.
     fn records_of<'a>(lines: &'a [serde_json::Value], kind: &str) -> Vec<&'a serde_json::Value> {
         lines
             .iter()
@@ -3800,6 +3857,7 @@ mod tests {
     // and two different hook kinds with byte-identical bodies must stay distinguishable.
     // =========================================================================================
 
+    /// Sort borrowed JSONL records by their numeric line field.
     fn sorted_by_line(records: Vec<&serde_json::Value>) -> Vec<&serde_json::Value> {
         let mut records = records;
         records.sort_by_key(|record| record["line"].as_u64().unwrap());

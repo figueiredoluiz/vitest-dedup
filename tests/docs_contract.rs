@@ -130,6 +130,7 @@ fn parse_table(markdown: &str, header: &[&str], doc_name: &str) -> Vec<Vec<Strin
 // depend on a tree whose contents change independently of this file.
 // ---------------------------------------------------------------------------------------------
 
+/// Write distinct test bodies for documentation examples that require a clean analysis result.
 fn write_clean_fixture(dir: &Path) {
     fs::write(
         dir.join("clean.test.ts"),
@@ -251,6 +252,7 @@ test('adds one and one in file b', () => {
     .unwrap();
 }
 
+/// Write a shorter/longer behavior pair for the documented subsumed-test rule.
 fn write_subsumed_fixture(dir: &Path) {
     fs::write(
         dir.join("subsumed.test.ts"),
@@ -275,6 +277,7 @@ test('submits and confirms the order', () => {
     .unwrap();
 }
 
+/// Write matching suite fixtures for the duplicate-suite documentation contract.
 fn write_duplicate_suite_fixture(dir: &Path) {
     fs::write(
         dir.join("suite.test.ts"),
@@ -301,6 +304,7 @@ describe('checkout', () => {
     .unwrap();
 }
 
+/// Write a parameterized test with repeated literal rows for the duplicate-each-row example.
 fn write_duplicate_each_row_fixture(dir: &Path) {
     fs::write(
         dir.join("each-row.test.ts"),
@@ -356,6 +360,7 @@ describe('outer', () => {
     .unwrap();
 }
 
+/// Write same-title tests with different bodies for the duplicate-name documentation example.
 fn write_name_collision_fixture(dir: &Path) {
     fs::write(
         dir.join("name-collision.test.ts"),
@@ -400,6 +405,7 @@ with (globalThis) {
 // must independently survive the table being reformatted or reordered.
 // =================================================================================================
 
+/// Parse numeric exit codes and meanings from the README contract table.
 fn exit_code_table() -> Vec<(i32, String)> {
     parse_table(README, &["Code", "Meaning"], "README.md")
         .into_iter()
@@ -424,6 +430,7 @@ fn documented_meaning(codes: &[(i32, String)], code: i32) -> String {
         .clone()
 }
 
+/// Regression fixture for public documentation: exit code 0 on a clean corpus.
 #[test]
 fn exit_code_0_on_a_clean_corpus() {
     let codes = exit_code_table();
@@ -436,6 +443,8 @@ fn exit_code_0_on_a_clean_corpus() {
     cmd.assert().code(0);
 }
 
+/// Regression fixture for public documentation: exit code 1 on an error severity finding at the
+/// default threshold.
 #[test]
 fn exit_code_1_on_an_error_severity_finding_at_the_default_threshold() {
     let codes = exit_code_table();
@@ -508,6 +517,7 @@ fn exit_code_2_on_fail_on_incomplete_with_a_degraded_run() {
 // nobody re-checks the whole table once one reporter changes.
 // =================================================================================================
 
+/// Parse reporter names/destinations from the public report documentation table.
 fn reporter_table() -> Vec<(String, String)> {
     parse_table(
         REPORTS_DOC,
@@ -930,6 +940,7 @@ fn extract_doc_json_example(source: &str, doc_name: &str) -> serde_json::Value {
     );
 }
 
+/// Return sorted JSON object keys, panicking with context when the value is not an object.
 fn sorted_object_keys(value: &serde_json::Value, what: &str) -> Vec<String> {
     let mut keys: Vec<String> = value
         .as_object()
@@ -941,6 +952,7 @@ fn sorted_object_keys(value: &serde_json::Value, what: &str) -> Vec<String> {
     keys
 }
 
+/// Build a representative analysis result for public report-schema assertions.
 fn sample_analysis_result() -> AnalysisResult {
     let location = |path: &str, line: u32, column: u32| Location {
         path: PathBuf::from(path),
@@ -1079,6 +1091,8 @@ struct DeficiencySite {
 /// directly under `fixtures/` (see this section's module doc for why that corpus is out of scope).
 fn fixture_ts_files_excluding_duplicates(root: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
+    /// Collect TypeScript fixture paths recursively while excluding directories named
+    /// duplicates.
     fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
         for entry in fs::read_dir(dir)
             .unwrap_or_else(|error| panic!("could not read directory {}: {error}", dir.display()))

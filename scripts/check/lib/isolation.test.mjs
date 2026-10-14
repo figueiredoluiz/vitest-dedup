@@ -69,6 +69,10 @@ test('test records are not indexed as hooks', () => {
 // and FAILS the moment it can (the day near-duplicate normalization equates the phrasings), so
 // the restatement each reason records is forced by the gate rather than remembered by a reader.
 
+/**
+ * Build a fixture whose isolation claim requires an explicit missing-view justification and
+ * restatement.
+ */
 function unstateableExpectation() {
   return {
     rule: 'none',

@@ -136,6 +136,10 @@ function fittedExponent(points) {
   return covariance / variance
 }
 
+/**
+ * Generate pinned scale corpora, measure memory growth and enforce scaling limits; clean
+ * generated files unless --keep was requested.
+ */
 function main() {
   const { binary, keep } = parseGateArguments('check-memory-scaling.mjs')
   const failures = []

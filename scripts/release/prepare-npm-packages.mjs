@@ -25,6 +25,10 @@ import { platformManifest, renderPlatformReadme } from './platform-package.mjs'
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
 
+/**
+ * Read a target workspace manifest and require an exact match with its expected
+ * metadata/version before returning it.
+ */
 async function validatedManifest({ root, target, version }) {
   const packageRoot = join(root, 'npm', 'platforms', target.packageDirectory)
   const manifest = JSON.parse(await readFile(join(packageRoot, 'package.json'), 'utf8'))
@@ -95,6 +99,9 @@ export async function prepareAll({ root = repoRoot, artifacts, version }) {
   return written
 }
 
+/**
+ * Read and return the launcher package version from the supplied repository root.
+ */
 async function rootVersion(root) {
   const manifest = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'))
   return manifest.version

@@ -77,6 +77,10 @@ export function publishOrder(targets = TARGETS) {
   ]
 }
 
+/**
+ * Publish or confirm native packages before the launcher, refusing missing optional
+ * dependencies and registry/publish failures.
+ */
 export async function publishNpmPackages({ root = defaultRoot, runNpm = runNpmCommand } = {}) {
   const confirmed = new Set()
 
@@ -123,6 +127,10 @@ export async function publishNpmPackages({ root = defaultRoot, runNpm = runNpmCo
   console.log(`published or confirmed ${confirmed.size} packages`)
 }
 
+/**
+ * Run npm in the requested root and return its process result, capturing output only when
+ * requested.
+ */
 export function runNpmCommand(arguments_, { capture, root }) {
   const { executable, prefixArguments } = npmInvocation()
   return spawnSync(executable, [...prefixArguments, ...arguments_], {

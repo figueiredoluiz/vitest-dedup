@@ -155,6 +155,10 @@ export const SCOPE = [
   { file: 'src/analysis.rs', minimumMutants: 250 }, // 265 measured
 ]
 
+/**
+ * Return cargo-mutants --file arguments for a nonempty scope; reject an empty list to prevent
+ * an unintended whole-tree run.
+ */
 export function scopeArguments(scope = SCOPE) {
   // An empty scope is the one input whose failure mode is inverted: `cargo mutants` with no
   // `--file` mutates the whole tree, so this would not under-measure, it would launch a run far
@@ -189,6 +193,10 @@ export function checkScope(mutants, scope = SCOPE) {
   return counts
 }
 
+/**
+ * Validate counts/baseline and reject built-but-untested or timed-out mutants, then enforce
+ * score and viable-sample floors; return the score percentage.
+ */
 export function checkMutationScore(report, minimumScore, minimumScored = MINIMUM_SCORED) {
   assert.ok(
     Number.isFinite(minimumScore) && minimumScore >= 0 && minimumScore <= 100,

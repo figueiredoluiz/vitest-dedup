@@ -48,6 +48,7 @@ impl DetectionTiming {
         }
     }
 
+    /// Sum discovery, parsing and analysis durations with saturating arithmetic.
     fn total(self) -> Duration {
         self.discovery
             .saturating_add(self.parsing)
@@ -110,6 +111,8 @@ impl TerminalReporter {
         self.write_report_inner(result, Some(context), writer)
     }
 
+    /// Write the terminal summary/findings with optional run context, propagating writer
+    /// failures.
     fn write_report_inner(
         &self,
         result: &AnalysisResult,
@@ -347,12 +350,14 @@ impl TerminalReporter {
 }
 
 impl Default for TerminalReporter {
+    /// Construct the default terminal reporter.
     fn default() -> Self {
         Self::new()
     }
 }
 
 impl Reporter for TerminalReporter {
+    /// Render the terminal report without supplementary run context.
     fn write_report(&self, result: &AnalysisResult, writer: &mut dyn Write) -> Result<()> {
         self.write_report_inner(result, None, writer)
     }
@@ -417,6 +422,7 @@ mod tests {
     }
 
     impl Write for FailingWriter {
+        /// Consume the test-writer budget and return BrokenPipe when it is exhausted.
         fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
             if self.budget == 0 {
                 return Err(std::io::Error::new(
@@ -429,6 +435,7 @@ mod tests {
             Ok(written)
         }
 
+        /// Treat flushing the terminal test writer as a successful no-op.
         fn flush(&mut self) -> std::io::Result<()> {
             Ok(())
         }
@@ -454,6 +461,7 @@ mod tests {
         );
     }
 
+    /// Regression fixture for terminal report: the failing writer flushes.
     #[test]
     fn the_failing_writer_flushes() {
         // `Write` requires `flush`, and an uncalled one is dead code in this module's own test
@@ -490,6 +498,8 @@ mod tests {
         }
     }
 
+    /// Regression fixture for terminal report: a write error is propagated from every stage of
+    /// the report.
     #[test]
     fn a_write_error_is_propagated_from_every_stage_of_the_report() {
         let result = result_exercising_every_banner();
@@ -511,6 +521,8 @@ mod tests {
         }
     }
 
+    /// Regression fixture for terminal report: a writer with room for the whole report
+    /// succeeds.
     #[test]
     fn a_writer_with_room_for_the_whole_report_succeeds() {
         // The control. Without it the test above would pass just as well if `write_report`
@@ -522,6 +534,7 @@ mod tests {
             .expect("a writer with room for the whole report must succeed");
     }
 
+    /// Regression fixture for terminal report: default matches new.
     #[test]
     fn default_matches_new() {
         let result = result_exercising_every_banner();
@@ -535,6 +548,7 @@ mod tests {
         );
     }
 
+    /// Render an analysis result to UTF-8 terminal text for output assertions.
     fn render(result: &AnalysisResult) -> String {
         let mut buffer = Vec::new();
         TerminalReporter::new()
@@ -971,6 +985,8 @@ mod tests {
         );
     }
 
+    /// Regression fixture for terminal report: empty result produces a clear success line not
+    /// empty output.
     #[test]
     fn empty_result_produces_a_clear_success_line_not_empty_output() {
         let output = render(&AnalysisResult::default());
@@ -980,6 +996,8 @@ mod tests {
         assert!(output.contains("Found 0 findings."));
     }
 
+    /// Regression fixture for terminal report: shows severity rule message and every location
+    /// with full title.
     #[test]
     fn shows_severity_rule_message_and_every_location_with_full_title() {
         let result = rendered_result(vec![finding_with_title(
@@ -998,6 +1016,8 @@ mod tests {
         assert!(output.contains("1 error, 0 warnings, 0 off; 0 suppressed"));
     }
 
+    /// Regression fixture for terminal report: groups findings by rule then by file in stable
+    /// order.
     #[test]
     fn groups_findings_by_rule_then_by_file_in_stable_order() {
         let result = rendered_result(vec![

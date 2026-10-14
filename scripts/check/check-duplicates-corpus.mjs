@@ -162,6 +162,10 @@ function mapsEqual(a, b) {
 //
 // The rule overrides come from the target being analyzed; see `TARGETS` above for which rules each
 // directory enables and why they differ.
+/**
+ * Run the analyzer with the target-specific rule overrides and return its parsed JSONL
+ * records.
+ */
 function runJsonl(target, args) {
   const rules = target.rules.flatMap((rule) => ['--rule', rule])
   return runAnalyzerJsonl(binary, [...args, ...rules]).records
@@ -502,6 +506,10 @@ const DELIBERATE_BLIND_FILES = new Set([
   'recall/mixed-loop-each-under-projects-entry/pkg/loops.spec.ts',
 ])
 
+/**
+ * Compare whole-corpus non-comparable test records with the pinned blind-file inventory,
+ * appending any failures.
+ */
 function checkBlindFiles(binary, failures) {
   const { records } = runAnalyzerJsonl(binary, [
     'fixtures',
@@ -568,6 +576,10 @@ function checkBlindFiles(binary, failures) {
   }
 }
 
+/**
+ * Check each owned fixture target and blind-file expectations, report held cases, and exit
+ * nonzero when assertions fail.
+ */
 function main() {
   const failures = []
   const pendingHeld = []

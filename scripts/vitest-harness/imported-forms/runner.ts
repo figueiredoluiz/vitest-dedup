@@ -18,6 +18,9 @@ export default function defaultDeclaration() {
   test('default declaration', () => { expect(4).toBe(4) })
 }
 
+/**
+ * Register the aliased helper test used by the imported-runner runtime oracle.
+ */
 function aliased() {
   test('aliased', () => { expect(5).toBe(5) })
 }

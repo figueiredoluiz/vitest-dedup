@@ -294,6 +294,7 @@ const HAZARDS: &[Hazard] = &[
     },
 ];
 
+/// Look up a named hostile-input fixture, panicking when the hazard inventory lacks it.
 fn hazard(id: &str) -> &'static Hazard {
     HAZARDS
         .iter()
@@ -308,6 +309,7 @@ fn needle_text(hazard: &Hazard) -> String {
     format!("adv{}begin{}adv{}end", hazard.id, hazard.decoded, hazard.id)
 }
 
+/// Wrap a hazard's JavaScript source spelling in recognizable title markers.
 fn title_source_text(hazard: &Hazard) -> String {
     format!(
         "adv{}begin{}adv{}end",
@@ -434,6 +436,7 @@ fn run_non_stderr(dir: &Path) -> NonStderrOutputs {
     }
 }
 
+/// Run the CLI with the terminal reporter and return decoded stderr for sanitization checks.
 fn run_stderr_only(dir: &Path) -> String {
     let output = Command::cargo_bin("vitest-dedup")
         .unwrap()
@@ -630,6 +633,7 @@ fn check_non_stderr_cells(hazard: &Hazard, site: Site, dir: &Path, needle: &str)
     );
 }
 
+/// Build the selected hostile-input site and check its non-stderr reporting surfaces.
 fn run_cell(hazard: &Hazard, site: Site) {
     let (dir, needle) = match site {
         Site::TestTitle => build_test_title_project(hazard),

@@ -130,6 +130,8 @@ impl PairBudget {
 mod tests {
     use super::*;
 
+    /// Regression fixture for pair emission: group outcome spans up to the max and clusters
+    /// above it.
     #[test]
     fn group_outcome_spans_up_to_the_max_and_clusters_above_it() {
         assert!(
@@ -144,6 +146,8 @@ mod tests {
         ));
     }
 
+    /// Regression fixture for pair emission: group and order drops singletons and excluded
+    /// items.
     #[test]
     fn group_and_order_drops_singletons_and_excluded_items() {
         let items = vec![1, 2, 1, 3];

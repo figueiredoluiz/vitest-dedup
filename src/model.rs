@@ -20,6 +20,7 @@ mod arc_str {
     use serde::{Deserialize, Deserializer, Serializer};
     use std::sync::Arc;
 
+    /// Serialize one shared string as a Serde string value.
     pub(super) fn serialize<S: Serializer>(
         value: &Arc<str>,
         serializer: S,
@@ -27,6 +28,7 @@ mod arc_str {
         serializer.serialize_str(value)
     }
 
+    /// Deserialize a string value into a shared string, propagating deserializer errors.
     pub(super) fn deserialize<'de, D: Deserializer<'de>>(
         deserializer: D,
     ) -> Result<Arc<str>, D::Error> {
@@ -41,6 +43,7 @@ mod arc_str_vec {
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
     use std::sync::Arc;
 
+    /// Serialize shared strings as a sequence of string values.
     pub(super) fn serialize<S: Serializer>(
         value: &[Arc<str>],
         serializer: S,
@@ -52,6 +55,7 @@ mod arc_str_vec {
             .serialize(serializer)
     }
 
+    /// Deserialize a string sequence into shared-string elements.
     pub(super) fn deserialize<'de, D: Deserializer<'de>>(
         deserializer: D,
     ) -> Result<Vec<Arc<str>>, D::Error> {
@@ -1255,6 +1259,7 @@ struct Sha256 {
 }
 
 impl Sha256 {
+    /// Initialize SHA-256 state with its standard constants and an empty partial block.
     fn new() -> Self {
         Self {
             state: SHA256_INIT,
@@ -1264,6 +1269,8 @@ impl Sha256 {
         }
     }
 
+    /// Buffer input bytes into the SHA-256 state, compressing each complete block and tracking
+    /// total length.
     fn update(&mut self, mut bytes: &[u8]) {
         self.length_bytes = self.length_bytes.wrapping_add(bytes.len() as u64);
         while !bytes.is_empty() {
@@ -1279,6 +1286,8 @@ impl Sha256 {
         }
     }
 
+    /// Apply one SHA-256 message-schedule/compression round sequence to the supplied 64-byte
+    /// block.
     fn compress(&mut self, block: &[u8; 64]) {
         let mut w = [0u32; 64];
         for (index, chunk) in block.as_chunks::<4>().0.iter().enumerate() {
@@ -1376,6 +1385,7 @@ struct DigestWriter {
 }
 
 impl DigestWriter {
+    /// Initialize the paired narrow/strong digest sink.
     fn new() -> Self {
         Self {
             narrow: FNV64_OFFSET,
@@ -1385,6 +1395,7 @@ impl DigestWriter {
 }
 
 impl std::io::Write for DigestWriter {
+    /// Feed all bytes into both digest states and report the complete buffer as consumed.
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         for byte in buf {
             self.narrow ^= u64::from(*byte);
@@ -1394,6 +1405,7 @@ impl std::io::Write for DigestWriter {
         Ok(buf.len())
     }
 
+    /// Return success because the digest sink has no external output to flush.
     fn flush(&mut self) -> std::io::Result<()> {
         Ok(())
     }
@@ -1530,6 +1542,8 @@ impl HeapBytes for BehaviorTrace {
 }
 
 impl HeapBytes for Fingerprints {
+    /// Sum retained fingerprint heap payloads; scalar flags and the copy-only callback form add
+    /// no heap storage.
     fn heap_bytes(&self) -> usize {
         let Self {
             alpha,
@@ -2087,6 +2101,7 @@ impl AnalysisResult {
 mod tests {
     use super::*;
 
+    /// Build a model location fixture with the requested start and a five-column/byte endpoint.
     fn location(path: &str, line: u32, column: u32, start_byte: u32) -> Location {
         Location {
             path: PathBuf::from(path),
@@ -2102,6 +2117,8 @@ mod tests {
         }
     }
 
+    /// Build a model finding from participant locations/titles with default severity and no
+    /// baseline flag.
     fn finding(rule: Rule, participants: &[(&str, u32, &str)]) -> Finding {
         Finding {
             registration_files: Vec::new(),
@@ -2819,6 +2836,8 @@ mod tests {
 
     // --- context equivalence -----------------------------------------------------------------
 
+    /// Build a non-idempotent hook fixture with the requested kind, alpha digest and retained
+    /// source text.
     fn hook(kind: HookKind, line: u32, alpha: &str, source: &str) -> Hook {
         Hook {
             kind,

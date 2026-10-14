@@ -138,6 +138,10 @@ function findingMatches(finding, expected) {
   return true
 }
 
+/**
+ * Render a rule matcher with any severity, title and location constraints for failure
+ * diagnostics.
+ */
 function describeMatcher(matcher) {
   const parts = [matcher.rule]
   if (matcher.severity) parts.push(`[${matcher.severity}]`)
@@ -355,6 +359,10 @@ function validateManifest(manifest, failures) {
 // suppression-shaped interaction is pinned INSIDE a covering case by its own `expectedAbsent`
 // entries (see `mixed-suite-copy-with-internal-duplicates`), not by pointing the inventory at a
 // case where one of the two never fires.
+/**
+ * Check the manifest inventory for each unordered rule pair and append missing or invalid
+ * mixed-rule coverage diagnostics.
+ */
 function validateMixedCoverage(manifest, failures) {
   if (!Array.isArray(manifest.mixedRuleCoverage)) {
     failures.push(

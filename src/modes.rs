@@ -1011,6 +1011,7 @@ mod tests {
     use super::*;
     use crate::model::{Location, Position, Rule, Severity, Span};
 
+    /// Build a mode-test location with a deterministic line-based byte span.
     fn location(path: &str, line: u32) -> Location {
         Location {
             path: PathBuf::from(path),
@@ -1023,6 +1024,8 @@ mod tests {
         }
     }
 
+    /// Build a mode-filter finding with participant provenance, default severity and no initial
+    /// baseline flag.
     fn finding(rule: Rule, participants: &[(&str, u32, &str)]) -> Finding {
         Finding {
             registration_files: Vec::new(),
@@ -1042,6 +1045,7 @@ mod tests {
         }
     }
 
+    /// Build a duplicate-test finding with two participants ten lines apart.
     fn pair(path: &str, title: &str, line: u32) -> Finding {
         finding(
             Rule::DuplicateTest,
@@ -1051,6 +1055,8 @@ mod tests {
 
     // -- round trip ------------------------------------------------------------------------
 
+    /// Regression fixture for baseline/change filtering: a written baseline reads back and
+    /// matches the findings it recorded.
     #[test]
     fn a_written_baseline_reads_back_and_matches_the_findings_it_recorded() {
         let directory = tempfile::tempdir().unwrap();
@@ -1072,6 +1078,8 @@ mod tests {
         assert!(findings.iter().all(|finding| finding.baselined));
     }
 
+    /// Regression fixture for baseline/change filtering: the written file is sorted
+    /// deterministic and newline terminated.
     #[test]
     fn the_written_file_is_sorted_deterministic_and_newline_terminated() {
         let directory = tempfile::tempdir().unwrap();
@@ -1103,6 +1111,8 @@ mod tests {
         assert_eq!(parsed.schema_version, BASELINE_SCHEMA_VERSION);
     }
 
+    /// Regression fixture for baseline/change filtering: a baseline survives a finding moving
+    /// within its file.
     #[test]
     fn a_baseline_survives_a_finding_moving_within_its_file() {
         let directory = tempfile::tempdir().unwrap();
@@ -1392,6 +1402,8 @@ mod tests {
 
     // -- git -----------------------------------------------------------------------------------
 
+    /// Create a Git command with inherited repository environment removed for isolated fixture
+    /// operations.
     fn fixture_git() -> Command {
         let mut command = Command::new("git");
         for variable in INHERITED_GIT_VARIABLES {
@@ -1400,6 +1412,8 @@ mod tests {
         command
     }
 
+    /// Initialize the fixture main branch, configure a test identity and commit its current
+    /// files.
     fn init_repository(root: &Path) {
         for arguments in [
             ["init", "-q", "-b", "main"].as_slice(),

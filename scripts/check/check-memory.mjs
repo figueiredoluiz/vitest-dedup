@@ -145,6 +145,10 @@ function printBreakdown(record) {
   for (const field of CONTEXT_FIELDS) row(field, record.contextFields[field])
 }
 
+/**
+ * Generate the pinned memory corpus, enforce retained-byte limits and clean it unless --keep
+ * was requested.
+ */
 function main() {
   const { binary, keep } = parseGateArguments('check-memory.mjs')
   const failures = []

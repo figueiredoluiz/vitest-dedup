@@ -407,6 +407,7 @@ impl<'a> FunctionLike<'a, '_> {
         }
     }
 
+    /// Borrow formal parameters from either supported callable form.
     pub(super) fn params(&self) -> &FormalParameters<'a> {
         match self {
             Self::Arrow(arrow) => &arrow.params,
@@ -414,6 +415,7 @@ impl<'a> FunctionLike<'a, '_> {
         }
     }
 
+    /// Return the callable's async flag for arrow and ordinary function forms.
     fn is_async(&self) -> bool {
         match self {
             Self::Arrow(arrow) => arrow.r#async,
@@ -421,6 +423,7 @@ impl<'a> FunctionLike<'a, '_> {
         }
     }
 
+    /// Report whether this callable is an ordinary generator function.
     fn is_generator(&self) -> bool {
         matches!(self, Self::Function(function) if function.generator)
     }
@@ -551,8 +554,8 @@ pub(super) fn fingerprint(
 ///
 /// Never panics; a helper whose parameters do not bind exactly (a guard `helpers.rs` enforces
 /// before calling) degrades to unsubstituted canonical locals rather than failing.
-// Every parameter is a distinct piece of construction context with no natural grouping --
-// the same rationale `FingerprintContext::new`'s own `#[allow]` records.
+/// Every parameter is a distinct piece of construction context with no natural grouping --
+/// the same rationale `FingerprintContext::new`'s own `#[allow]` records.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn render_inlined_helper_body(
     semantic: &Semantic<'_>,
@@ -779,6 +782,8 @@ fn resolve_row_substitution(
     }
     // The one place a parameter enters the map: its symbol must exist, and a symbol the body
     // writes is refused for the whole row (see the doc above), so both arms share the guard.
+    /// Bind an unmutated parameter symbol to its row-cell kind and raw value; decline missing
+    /// or written symbols.
     fn bind(
         resolved: &mut HashMap<SymbolId, (&'static str, String)>,
         semantic: &Semantic<'_>,
@@ -1142,6 +1147,7 @@ struct DestructuredNameScan {
 }
 
 impl<'a> Visit<'a> for DestructuredNameScan {
+    /// Collect destructured local names and continue into the variable declarator.
     fn visit_variable_declarator(&mut self, it: &VariableDeclarator<'a>) {
         self.collect_pattern(&it.id, "", 0);
         walk::walk_variable_declarator(self, it);
@@ -1415,6 +1421,8 @@ struct SymbolReadScan<'s, 'a> {
 }
 
 impl<'a> Visit<'a> for SymbolReadScan<'_, 'a> {
+    /// Count reads of the target symbol, distinguishing direct reads from reads under unsafe
+    /// nesting.
     fn visit_identifier_reference(&mut self, it: &IdentifierReference<'a>) {
         let is_target = it.reference_id.get().is_some_and(|reference_id| {
             let reference = self.semantic.scoping().get_reference(reference_id);
@@ -1429,66 +1437,78 @@ impl<'a> Visit<'a> for SymbolReadScan<'_, 'a> {
         }
     }
 
+    /// Treat symbol reads inside if statement nesting as unsafe for single-use inlining.
     fn visit_if_statement(&mut self, it: &IfStatement<'a>) {
         self.unsafe_depth += 1;
         walk::walk_if_statement(self, it);
         self.unsafe_depth -= 1;
     }
 
+    /// Treat symbol reads inside for statement nesting as unsafe for single-use inlining.
     fn visit_for_statement(&mut self, it: &ForStatement<'a>) {
         self.unsafe_depth += 1;
         walk::walk_for_statement(self, it);
         self.unsafe_depth -= 1;
     }
 
+    /// Treat symbol reads inside for in statement nesting as unsafe for single-use inlining.
     fn visit_for_in_statement(&mut self, it: &ForInStatement<'a>) {
         self.unsafe_depth += 1;
         walk::walk_for_in_statement(self, it);
         self.unsafe_depth -= 1;
     }
 
+    /// Treat symbol reads inside for of statement nesting as unsafe for single-use inlining.
     fn visit_for_of_statement(&mut self, it: &ForOfStatement<'a>) {
         self.unsafe_depth += 1;
         walk::walk_for_of_statement(self, it);
         self.unsafe_depth -= 1;
     }
 
+    /// Treat symbol reads inside while statement nesting as unsafe for single-use inlining.
     fn visit_while_statement(&mut self, it: &WhileStatement<'a>) {
         self.unsafe_depth += 1;
         walk::walk_while_statement(self, it);
         self.unsafe_depth -= 1;
     }
 
+    /// Treat symbol reads inside do while statement nesting as unsafe for single-use inlining.
     fn visit_do_while_statement(&mut self, it: &DoWhileStatement<'a>) {
         self.unsafe_depth += 1;
         walk::walk_do_while_statement(self, it);
         self.unsafe_depth -= 1;
     }
 
+    /// Treat symbol reads inside switch statement nesting as unsafe for single-use inlining.
     fn visit_switch_statement(&mut self, it: &SwitchStatement<'a>) {
         self.unsafe_depth += 1;
         walk::walk_switch_statement(self, it);
         self.unsafe_depth -= 1;
     }
 
+    /// Treat symbol reads inside try statement nesting as unsafe for single-use inlining.
     fn visit_try_statement(&mut self, it: &TryStatement<'a>) {
         self.unsafe_depth += 1;
         walk::walk_try_statement(self, it);
         self.unsafe_depth -= 1;
     }
 
+    /// Treat symbol reads inside class nesting as unsafe for single-use inlining.
     fn visit_class(&mut self, it: &Class<'a>) {
         self.unsafe_depth += 1;
         walk::walk_class(self, it);
         self.unsafe_depth -= 1;
     }
 
+    /// Treat symbol reads inside function nesting as unsafe for single-use inlining.
     fn visit_function(&mut self, it: &Function<'a>, flags: ScopeFlags) {
         self.unsafe_depth += 1;
         walk::walk_function(self, it, flags);
         self.unsafe_depth -= 1;
     }
 
+    /// Treat symbol reads inside arrow function expression nesting as unsafe for single-use
+    /// inlining.
     fn visit_arrow_function_expression(&mut self, it: &ArrowFunctionExpression<'a>) {
         self.unsafe_depth += 1;
         walk::walk_arrow_function_expression(self, it);
@@ -1505,6 +1525,7 @@ fn statement_has_effect(statement: &Statement<'_>) -> bool {
     statement_has_effect_at(statement, 0)
 }
 
+/// Conservatively detect statement effects, treating depth exhaustion as effectful.
 fn statement_has_effect_at(statement: &Statement<'_>, depth: u32) -> bool {
     if depth > MAX_DEPTH {
         return true; // degrade toward "has an effect" (blocks canonicalization) rather than loop.
@@ -1778,6 +1799,7 @@ fn path_segments(path: &Path) -> Vec<String> {
         .collect()
 }
 
+/// Join normalized path segments into the file identity used by fingerprint resolution.
 pub(super) fn path_key(path: &Path) -> String {
     path_segments(path).join("/")
 }
@@ -1816,10 +1838,12 @@ fn normalize_relative_specifier(importer_dir: &Path, specifier: &str) -> String 
 // Shared symbol-identity helpers, used by both the serializer and the behavior collector.
 // ---------------------------------------------------------------------------------------------
 
+/// Test whether the inner byte span lies entirely within the outer span.
 fn within(inner: Span, outer: Span) -> bool {
     inner.start >= outer.start && inner.end <= outer.end
 }
 
+/// Check whether a symbol's declaration span lies inside the fingerprinted callable body.
 fn is_local_symbol(semantic: &Semantic<'_>, body_span: Span, symbol_id: SymbolId) -> bool {
     within(semantic.scoping().symbol_span(symbol_id), body_span)
 }
@@ -1915,8 +1939,8 @@ fn binding_identity(
 }
 
 /// Renames an `IdentifierReference` (a use site): local, free, or global. See the module doc.
-// Every parameter is a distinct piece of resolution context with no natural grouping; bundling
-// them into a struct purely to satisfy the lint would add a type that means nothing.
+/// Every parameter is a distinct piece of resolution context with no natural grouping; bundling
+/// them into a struct purely to satisfy the lint would add a type that means nothing.
 #[allow(clippy::too_many_arguments)]
 fn reference_identity(
     semantic: &Semantic<'_>,
@@ -2458,6 +2482,8 @@ impl<'a, 'b, 's, 'm> Serializer<'a, 'b, 's, 'm> {
         format!("<opaque:{}>", self.ctx.slice(span))
     }
 
+    /// Retain a depth-limit marker and the original source slice rather than claiming a
+    /// complete rendering.
     fn degraded(&self, span: Span) -> String {
         format!("<max-depth:{}>", self.ctx.slice(span))
     }
@@ -2543,6 +2569,7 @@ impl<'a, 'b, 's, 'm> Serializer<'a, 'b, 's, 'm> {
         format!("id:{}", self.ctx.reference(ident))
     }
 
+    /// Allocate or reuse a canonical binding identity in this serialization context.
     fn binding(&mut self, name: &str, symbol_id: Option<SymbolId>) -> String {
         binding_identity(
             &mut self.ctx.canonical,
@@ -2592,6 +2619,8 @@ impl<'a, 'b, 's, 'm> Serializer<'a, 'b, 's, 'm> {
         }
     }
 
+    /// Serialize a callable's flags, parameters and body while scoping this/arguments
+    /// observations to its binding behavior.
     fn ser_callable(&mut self, body: &FunctionLike<'a, '_>, depth: u32) -> String {
         if depth > MAX_DEPTH {
             return self.degraded(body.span());
@@ -2683,6 +2712,8 @@ impl<'a, 'b, 's, 'm> Serializer<'a, 'b, 's, 'm> {
         }
     }
 
+    /// Render formal parameters and defaults, omitting patterns fully replaced by row
+    /// substitutions.
     fn ser_params(&mut self, params: &FormalParameters<'a>, depth: u32) -> String {
         if depth > MAX_DEPTH {
             return self.degraded(params.span);
@@ -2715,6 +2746,7 @@ impl<'a, 'b, 's, 'm> Serializer<'a, 'b, 's, 'm> {
         parts.join(" ")
     }
 
+    /// Serialize binding identifiers and destructuring/default patterns within the depth limit.
     fn ser_binding_pattern(&mut self, pattern: &BindingPattern<'a>, depth: u32) -> String {
         if depth > MAX_DEPTH {
             return self.degraded(pattern.span());
@@ -2771,6 +2803,8 @@ impl<'a, 'b, 's, 'm> Serializer<'a, 'b, 's, 'm> {
         }
     }
 
+    /// Render static/private property names or expression-valued keys, retaining opaque
+    /// unsupported syntax.
     fn ser_property_key(&mut self, key: &PropertyKey<'a>, depth: u32) -> String {
         if depth > MAX_DEPTH {
             return self.degraded(key.span());
@@ -2785,6 +2819,8 @@ impl<'a, 'b, 's, 'm> Serializer<'a, 'b, 's, 'm> {
         }
     }
 
+    /// Serialize statements in order into a block fragment, retaining a degradation marker at
+    /// the depth limit.
     fn ser_stmts(&mut self, statements: &[Statement<'a>], depth: u32) -> String {
         if depth > MAX_DEPTH {
             let span = statements
@@ -2968,6 +3004,8 @@ impl<'a, 'b, 's, 'm> Serializer<'a, 'b, 's, 'm> {
         format!("({kind} {})", declarators.join(" "))
     }
 
+    /// Serialize supported loop-left declarations and assignment targets; keep unsupported
+    /// target forms opaque and emit a degradation marker beyond the depth limit.
     fn ser_for_left(&mut self, left: &ForStatementLeft<'a>, depth: u32) -> String {
         if depth > MAX_DEPTH {
             return self.degraded(left.span());
@@ -3000,6 +3038,7 @@ impl<'a, 'b, 's, 'm> Serializer<'a, 'b, 's, 'm> {
         }
     }
 
+    /// Render a declared binding pattern and any initializer expression.
     fn ser_declarator(&mut self, declarator: &VariableDeclarator<'a>, depth: u32) -> String {
         if depth > MAX_DEPTH {
             return self.degraded(declarator.span);
@@ -3011,6 +3050,7 @@ impl<'a, 'b, 's, 'm> Serializer<'a, 'b, 's, 'm> {
         }
     }
 
+    /// Render the optional catch binding and ordered handler statements.
     fn ser_catch(&mut self, clause: &CatchClause<'a>, depth: u32) -> String {
         if depth > MAX_DEPTH {
             return self.degraded(clause.span);
@@ -3025,6 +3065,7 @@ impl<'a, 'b, 's, 'm> Serializer<'a, 'b, 's, 'm> {
         )
     }
 
+    /// Render a switch label or default marker followed by its consequent statements.
     fn ser_switch_case(&mut self, case: &SwitchCase<'a>, depth: u32) -> String {
         if depth > MAX_DEPTH {
             return self.degraded(case.span);
@@ -3041,6 +3082,8 @@ impl<'a, 'b, 's, 'm> Serializer<'a, 'b, 's, 'm> {
         format!("(case {test} {})", consequent.join(" "))
     }
 
+    /// Render template quasis and embedded expressions, preserving quasi text even in
+    /// structural mode.
     fn ser_template(&mut self, template: &TemplateLiteral<'a>, depth: u32) -> String {
         if depth > MAX_DEPTH {
             return self.degraded(template.span);
@@ -3058,6 +3101,8 @@ impl<'a, 'b, 's, 'm> Serializer<'a, 'b, 's, 'm> {
         format!("(template {})", parts.join(" "))
     }
 
+    /// Serialize supported expression structure using the current mode, with conservative
+    /// fallback for depth or unsupported syntax.
     fn ser_expr(&mut self, expr: &Expression<'a>, depth: u32) -> String {
         #[cfg(test)]
         record_stack_low_water_mark();
@@ -3251,6 +3296,7 @@ impl<'a, 'b, 's, 'm> Serializer<'a, 'b, 's, 'm> {
         }
     }
 
+    /// Render a named member access with the receiver and optional-chain distinction.
     fn ser_static_member(&mut self, member: &StaticMemberExpression<'a>, depth: u32) -> String {
         if depth > MAX_DEPTH {
             return self.degraded(member.span);
@@ -3263,6 +3309,7 @@ impl<'a, 'b, 's, 'm> Serializer<'a, 'b, 's, 'm> {
         )
     }
 
+    /// Render an indexed access, preserving both its key expression and optional-chain flag.
     fn ser_computed_member(&mut self, member: &ComputedMemberExpression<'a>, depth: u32) -> String {
         if depth > MAX_DEPTH {
             return self.degraded(member.span);
@@ -3281,6 +3328,7 @@ impl<'a, 'b, 's, 'm> Serializer<'a, 'b, 's, 'm> {
         format!("(index{optional} {object} {property})")
     }
 
+    /// Render a private-field access with its receiver and private member name.
     fn ser_private_field(&mut self, member: &PrivateFieldExpression<'a>, depth: u32) -> String {
         if depth > MAX_DEPTH {
             return self.degraded(member.span);
@@ -3369,6 +3417,7 @@ impl<'a, 'b, 's, 'm> Serializer<'a, 'b, 's, 'm> {
         }
     }
 
+    /// Render nested JSX member objects using component reference identities.
     fn ser_jsx_member_object(
         &mut self,
         object: &JSXMemberExpressionObject<'a>,
@@ -3425,6 +3474,8 @@ impl<'a, 'b, 's, 'm> Serializer<'a, 'b, 's, 'm> {
         }
     }
 
+    /// Serialize JSX string, expression, element and fragment attribute values in the current
+    /// fingerprint mode.
     fn ser_jsx_attribute_value(&mut self, value: &JSXAttributeValue<'a>, depth: u32) -> String {
         match value {
             // A plain string attribute is where the `parameterization-candidate` family was
@@ -3456,6 +3507,7 @@ impl<'a, 'b, 's, 'm> Serializer<'a, 'b, 's, 'm> {
         parts.join(" ")
     }
 
+    /// Render a meaningful JSX child, declining empty text and empty expression containers.
     fn ser_jsx_child(&mut self, child: &JSXChild<'a>, depth: u32) -> Option<String> {
         match child {
             JSXChild::Text(text) => {
@@ -3656,6 +3708,7 @@ impl<'a, 'b, 's, 'm> Serializer<'a, 'b, 's, 'm> {
         format!("(instantiate {expression}{type_arguments})")
     }
 
+    /// Render an expression or spread call argument, retaining opaque unsupported forms.
     fn ser_argument(&mut self, argument: &Argument<'a>, depth: u32) -> String {
         if depth > MAX_DEPTH {
             return self.degraded(argument.span());
@@ -3671,6 +3724,7 @@ impl<'a, 'b, 's, 'm> Serializer<'a, 'b, 's, 'm> {
         }
     }
 
+    /// Render array values, spreads and holes without conflating their shapes.
     fn ser_array_element(&mut self, element: &ArrayExpressionElement<'a>, depth: u32) -> String {
         if depth > MAX_DEPTH {
             return self.degraded(element.span());
@@ -3687,6 +3741,7 @@ impl<'a, 'b, 's, 'm> Serializer<'a, 'b, 's, 'm> {
         }
     }
 
+    /// Render object key/value pairs and spread properties in source order.
     fn ser_object_property(&mut self, property: &ObjectPropertyKind<'a>, depth: u32) -> String {
         if depth > MAX_DEPTH {
             return self.degraded(property.span());
@@ -3790,6 +3845,7 @@ struct BehaviorCollector<'a, 'b, 's, 'm> {
 }
 
 impl<'a, 'b, 's, 'm> BehaviorCollector<'a, 'b, 's, 'm> {
+    /// Initialize a behavior collector with the supplied fingerprint context and no events.
     fn new(ctx: FingerprintContext<'a, 'b, 's, 'm>) -> Self {
         Self {
             ctx,
@@ -3797,6 +3853,7 @@ impl<'a, 'b, 's, 'm> BehaviorCollector<'a, 'b, 's, 'm> {
         }
     }
 
+    /// Collect ordered behavior events from a callable body or concise arrow expression.
     fn run(mut self, body: &FunctionLike<'a, '_>) -> Vec<String> {
         match body {
             FunctionLike::Arrow(arrow) => match &arrow.body {
@@ -3913,6 +3970,7 @@ impl<'a, 'b, 's, 'm> BehaviorCollector<'a, 'b, 's, 'm> {
         Some((&member.object, statements))
     }
 
+    /// Append a behavior event, prefixing it when its execution is deferred.
     fn push(&mut self, deferred: bool, event: String) {
         self.events.push(if deferred {
             format!("deferred-{event}")
@@ -3921,6 +3979,8 @@ impl<'a, 'b, 's, 'm> BehaviorCollector<'a, 'b, 's, 'm> {
         });
     }
 
+    /// Collect statement behavior within the depth bound, carrying deferred-execution state
+    /// into nested expressions.
     fn walk_stmt(&mut self, statement: &Statement<'a>, deferred: bool, depth: u32) {
         if depth > MAX_DEPTH {
             return;
@@ -4057,6 +4117,8 @@ impl<'a, 'b, 's, 'm> BehaviorCollector<'a, 'b, 's, 'm> {
         }
     }
 
+    /// Collect expression behavior while distinguishing enclosing execution from deferred
+    /// nested callables.
     fn walk_expr(&mut self, expr: &Expression<'a>, deferred: bool, depth: u32) {
         if depth > MAX_DEPTH {
             return;
@@ -4321,6 +4383,7 @@ impl<'a, 'b, 's, 'm> BehaviorCollector<'a, 'b, 's, 'm> {
         }
     }
 
+    /// Render an alpha assignment target and retain the serializer's canonical-binding updates.
     fn assignment_target_shape(&mut self, target: &AssignmentTarget<'a>, depth: u32) -> String {
         let mut serializer = self.shape_serializer(Mode::Alpha);
         let result = serializer.ser_assignment_target(target, depth);
@@ -4329,6 +4392,8 @@ impl<'a, 'b, 's, 'm> BehaviorCollector<'a, 'b, 's, 'm> {
         result
     }
 
+    /// Render a simple alpha assignment target and preserve the updated canonical-binding
+    /// state.
     fn simple_assignment_target_shape(
         &mut self,
         target: &SimpleAssignmentTarget<'a>,
@@ -4341,6 +4406,8 @@ impl<'a, 'b, 's, 'm> BehaviorCollector<'a, 'b, 's, 'm> {
         result
     }
 
+    /// Collect one atomic assertion event or ordinary call behavior, respecting nesting and
+    /// deferred execution.
     fn walk_call(&mut self, call: &CallExpression<'a>, deferred: bool, depth: u32) {
         if depth > MAX_DEPTH {
             return;
@@ -4482,6 +4549,8 @@ impl<'a, 'b, 's, 'm> BehaviorCollector<'a, 'b, 's, 'm> {
         }
     }
 
+    /// Render an anchored callee path, retaining raw source for unsupported callee forms or
+    /// when the depth limit is exceeded.
     fn call_path(&mut self, callee: &Expression<'a>, depth: u32) -> String {
         if depth > MAX_DEPTH {
             return self.ctx.slice(callee.span()).to_owned();
@@ -4732,6 +4801,8 @@ impl<'a, 'b, 's, 'm> BehaviorCollector<'a, 'b, 's, 'm> {
         }
     }
 
+    /// Render an expression in the requested mode and merge canonical-binding state back into
+    /// the collector.
     fn shape(&mut self, expr: &Expression<'a>, mode: Mode, depth: u32) -> String {
         let mut serializer = self.shape_serializer(mode);
         let result = serializer.ser_expr(expr, depth);
@@ -4776,6 +4847,8 @@ fn unwind_member_chain<'a, 'x>(
     }
 }
 
+/// Recognize a literal true, the subject and expected value of the expect(true).toBe(true)
+/// stub assertion.
 fn is_stub_boolean_true(expr: &Expression<'_>) -> bool {
     matches!(expr, Expression::BooleanLiteral(literal) if literal.value)
 }
@@ -4924,6 +4997,8 @@ mod tests {
     }
 
     impl<'a, 'b> Visit<'a> for BodyCollector<'a, 'b> {
+        /// Collect arrow-function test callback fingerprints, then continue walking nested call
+        /// expressions.
         fn visit_call_expression(&mut self, it: &CallExpression<'a>) {
             let is_test_call = matches!(&it.callee, Expression::Identifier(ident) if matches!(ident.name.as_str(), "test" | "it"));
             if is_test_call {
@@ -4956,6 +5031,8 @@ mod tests {
         (a, b)
     }
 
+    /// Parse and analyze a source fixture, then fingerprint its arrow test bodies using the
+    /// supplied file identity.
     fn fingerprint_all_at(source: &str, file: &Path) -> Vec<BodyFingerprint> {
         let allocator = Allocator::default();
         let source_type = SourceType::from_path(file).unwrap();
@@ -4984,6 +5061,7 @@ mod tests {
         collector.results
     }
 
+    /// Fingerprint arrow test callbacks in the standard case.test.ts fixture file.
     fn fingerprint_all(source: &str) -> Vec<BodyFingerprint> {
         fingerprint_all_at(source, Path::new("case.test.ts"))
     }
@@ -8743,6 +8821,7 @@ test('x', () => { const w = 1; f(w); });"#;
     }
 
     impl<'a> Visit<'a> for FunctionBodyCollector<'a, '_> {
+        /// Collect ordinary-function test callback fingerprints while traversing fixture calls.
         fn visit_call_expression(&mut self, it: &CallExpression<'a>) {
             let is_test_call = matches!(&it.callee, Expression::Identifier(ident) if matches!(ident.name.as_str(), "test" | "it"));
             if is_test_call {
@@ -8760,6 +8839,7 @@ test('x', () => { const w = 1; f(w); });"#;
         }
     }
 
+    /// Parse a source fixture and collect fingerprints for ordinary-function test callbacks.
     fn fingerprint_function_bodies(source: &str) -> Vec<BodyFingerprint> {
         let allocator = Allocator::default();
         let source_type = SourceType::from_path(std::path::Path::new("case.test.ts")).unwrap();
@@ -9555,6 +9635,7 @@ test('x', () => { const w = 1; f(w); });"#;
     }
 
     impl<'a> Visit<'a> for RowBodyCollector<'a, '_> {
+        /// Fingerprint the first readable arrow callback with the fixture's row substitutions.
         fn visit_call_expression(&mut self, it: &CallExpression<'a>) {
             if self.result.is_none() {
                 if let Some(Argument::ArrowFunctionExpression(arrow)) = it.arguments.get(1) {
@@ -9571,6 +9652,8 @@ test('x', () => { const w = 1; f(w); });"#;
         }
     }
 
+    /// Fingerprint the fixture's first readable arrow callback with the supplied row
+    /// substitutions.
     fn fingerprint_row(source: &str, substitution: &RowSubstitution) -> BodyFingerprint {
         let allocator = Allocator::default();
         let source_type = SourceType::from_path(std::path::Path::new("case.test.ts")).unwrap();
@@ -9588,6 +9671,7 @@ test('x', () => { const w = 1; f(w); });"#;
         collector.result.expect("an arrow callback")
     }
 
+    /// Wrap a row-cell kind/raw-text pair in an owned optional substitution value.
     fn cell(kind: &'static str, raw: &str) -> Option<(&'static str, String)> {
         Some((kind, raw.to_owned()))
     }

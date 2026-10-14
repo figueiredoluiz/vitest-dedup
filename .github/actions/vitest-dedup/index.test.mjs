@@ -521,6 +521,10 @@ describe("isValidReleaseVersion", () => {
 
 describe("runAction", () => {
   // Each case owns its workspace and cleanup; only subprocess/output plumbing is shared.
+  /**
+   * Create a temporary Action workspace and fake-binary runner with report/output paths;
+   * register cleanup with the test.
+   */
   function actionFixture(t) {
     const dir = mkdtempSync(join(tmpdir(), "vitest-dedup-action-run-"));
     t.after(() => rmSync(dir, { recursive: true, force: true }));

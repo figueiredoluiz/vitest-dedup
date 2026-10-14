@@ -286,9 +286,12 @@ impl Row {
         if self.unresolved {
             return None;
         }
+        /// Append a length-prefixed component to the row identity buffer.
         fn push_part(output: &mut String, part: &str) {
             output.push_str(&format!("{}:{part}", part.len()));
         }
+        /// Encode a resolved cell's kind/raw text or a known elision distinctly in the row
+        /// identity.
         fn push_value(output: &mut String, value: &Option<CellValue>) {
             match value {
                 Some(value) => {
@@ -508,6 +511,8 @@ pub(super) fn resolve_callee(
     Some(resolved)
 }
 
+/// Resolve a reference through registered Vitest bindings or permitted ambient globals,
+/// declining unrelated bindings.
 fn resolve_identifier(
     ident: &IdentifierReference,
     registry: &Registry,
@@ -552,6 +557,7 @@ fn resolve_identifier(
     }
 }
 
+/// Recognize an identifier whose resolved symbol is a registered framework namespace.
 fn is_namespace(expr: &Expression, registry: &Registry, scoping: &Scoping) -> bool {
     let Expression::Identifier(ident) = expr else {
         return false;
@@ -684,6 +690,8 @@ fn extend_fixture_bindings(
     }
 }
 
+/// Convert supported fixture values into setup/literal evidence, retaining an unresolved marker
+/// for unsupported forms.
 fn fixture_body_fingerprint(
     value: &Expression,
     semantic: &Semantic<'_>,
@@ -816,6 +824,8 @@ fn expression_identity(
     }
 
     impl<'a> Visit<'a> for References<'_, '_> {
+        /// Collect each referenced identifier's anchored identity while walking the fixture
+        /// expression.
         fn visit_identifier_reference(&mut self, ident: &IdentifierReference<'a>) {
             self.identities
                 .push(identifier_identity(ident, self.semantic, self.file));
@@ -909,6 +919,7 @@ fn table_rows(
     }
 }
 
+/// Read static identifier/string property names, declining computed or unsupported keys.
 pub(super) fn property_key_name(key: &PropertyKey) -> Option<String> {
     match key {
         PropertyKey::StaticIdentifier(id) => Some(id.name.as_str().to_owned()),
@@ -919,6 +930,8 @@ pub(super) fn property_key_name(key: &PropertyKey) -> Option<String> {
     }
 }
 
+/// Read a literal array table using homogeneous-array spreading rules, retaining unresolved
+/// cells and refusing unreadable tables.
 fn literal_table_rows(
     expr: &Expression,
     semantic: &Semantic<'_>,
@@ -1071,6 +1084,8 @@ pub(super) struct CellCensus {
     enabled: bool,
 }
 
+/// Run an operation against the shared census under its mutex, or the thread-local census in
+/// tests.
 #[cfg(not(test))]
 fn with_cell_census<T>(operation: impl FnOnce(&mut CellCensus) -> T) -> T {
     static CENSUS: OnceLock<Mutex<CellCensus>> = OnceLock::new();
@@ -1089,25 +1104,32 @@ std::thread_local! {
     static TEST_CELL_CENSUS: std::cell::RefCell<CellCensus> = Default::default();
 }
 
+/// Run an operation against the shared census under its mutex, or the thread-local census in
+/// tests.
 #[cfg(test)]
 fn with_cell_census<T>(operation: impl FnOnce(&mut CellCensus) -> T) -> T {
     TEST_CELL_CENSUS.with(|census| operation(&mut census.borrow_mut()))
 }
 
+/// Clone the current test-thread census so a fixture can restore it afterward.
 #[cfg(test)]
 pub(super) fn test_cell_census_snapshot() -> CellCensus {
     with_cell_census(|census| census.clone())
 }
 
+/// Replace the test-thread census with a previously captured snapshot.
 #[cfg(test)]
 pub(super) fn restore_test_cell_census(snapshot: CellCensus) {
     with_cell_census(|census| *census = snapshot);
 }
 
+/// Run a test body with a fresh enabled census and restore the previous state when the guard
+/// drops.
 #[cfg(test)]
 fn with_test_census<T>(body: impl FnOnce() -> T) -> T {
     struct Restore(CellCensus);
     impl Drop for Restore {
+        /// Restore the saved thread-local census when the test guard leaves scope.
         fn drop(&mut self) {
             TEST_CELL_CENSUS.with(|census| census.replace(std::mem::take(&mut self.0)));
         }
@@ -1140,6 +1162,7 @@ fn census_enabled() -> bool {
     }
 }
 
+/// Record a refused cell once per span when census collection is enabled.
 fn census_refusal(expr: &Expression, resolve: Resolve<'_, '_>) {
     if !census_enabled() {
         return;
@@ -1156,6 +1179,7 @@ fn mark_census_cell(span: oxc_span::Span) -> bool {
     with_cell_census(|census| census.counted.insert((span.start, span.end)))
 }
 
+/// Increment the census count for the supplied refusal cause.
 fn record_census_refusal(cause: String) {
     with_cell_census(|census| *census.counts.entry(cause).or_insert(0) += 1);
 }
@@ -1314,6 +1338,8 @@ fn declaration_precedes(declarator: &VariableDeclarator, use_span: oxc_span::Spa
     declarator.span().start <= use_span.start
 }
 
+/// Follow supported earlier const bindings within the value-hop limit, declining unavailable or
+/// unsafe references.
 fn resolved_binding<'e, 'a: 'e>(
     expr: &'e Expression<'a>,
     semantic: &Semantic<'a>,
@@ -1532,6 +1558,8 @@ fn peeled<'e, 'a: 'e>(expr: &'e Expression<'a>, resolve: Resolve<'_, 'a>) -> &'e
         .unwrap_or(expr)
 }
 
+/// Extract positional/named row cells and title arguments, retaining unresolved evidence for
+/// unsupported values.
 fn analyze_row(cell_expr: &Expression, source: &str, resolve: Resolve<'_, '_>) -> Row {
     let display = source_text(source, cell_expr.span());
     let (cells, unresolved) = match unwrap_parens(cell_expr) {
@@ -1899,6 +1927,8 @@ fn number_of_string(raw: &str) -> Option<f64> {
     Some(value)
 }
 
+/// Read a tagged table's header and substitutions into rows, refusing unsupported or
+/// inconsistent forms.
 fn tagged_template_rows(
     quasi: &TemplateLiteral,
     source: &str,
@@ -1985,6 +2015,7 @@ fn assembled_object_within_budget(
     };
     // A fn item rather than a closure: it is used from two closures, and passing a closure by
     // reference to `map` is a lint under current stable clippy.
+    /// Join rendered object-property parts into one object display fragment.
     fn assemble(parts: Vec<String>) -> String {
         format!("{{ {} }}", parts.join(", "))
     }
@@ -2099,6 +2130,8 @@ pub(super) fn const_fold_kind(
     }
 }
 
+/// Read a supported scalar's runtime kind and raw fingerprint value after bounded binding
+/// resolution.
 fn const_fold_kind_scalar(
     expr: &Expression,
     resolve: Resolve<'_, '_>,
@@ -2132,6 +2165,8 @@ fn const_fold_kind_scalar(
     }
 }
 
+/// Render supported constant expressions as display text, returning None for forms the
+/// evaluator cannot establish.
 pub(super) fn const_fold(expr: &Expression, resolve: Resolve<'_, '_>) -> Option<String> {
     let expr = peeled(expr, resolve);
     match unwrap_transparent(expr) {
@@ -2311,6 +2346,8 @@ fn peeled_unwrapped<'e, 'a: 'e>(
     (depth <= MAX_CELL_DEPTH).then(|| unwrap_transparent(peeled(expr, resolve)))
 }
 
+/// Render supported top-level values for string-format coercion, preserving inspected objects
+/// and BigInt suffixes.
 fn render_coerce(expr: &Expression, depth: u32, resolve: Resolve<'_, '_>) -> Option<String> {
     let inner = peeled_unwrapped(expr, resolve, depth)?;
     match inner {
@@ -2953,6 +2990,7 @@ fn is_string_valued(expr: &Expression, resolve: Resolve<'_, '_>) -> bool {
     }
 }
 
+/// Read a numeric literal or supported folded numeric expression as f64.
 fn const_fold_number(expr: &Expression, resolve: Resolve<'_, '_>) -> Option<f64> {
     match unwrap_transparent(peeled(expr, resolve)) {
         Expression::NumericLiteral(literal) => Some(literal.value),
@@ -2962,6 +3000,7 @@ fn const_fold_number(expr: &Expression, resolve: Resolve<'_, '_>) -> Option<f64>
     }
 }
 
+/// Format numbers for static display, spelling NaN and positive/negative Infinity explicitly.
 fn format_number(value: f64) -> String {
     if value.is_nan() {
         return "NaN".to_owned();
@@ -2991,6 +3030,7 @@ fn format_number(value: f64) -> String {
     }
 }
 
+/// Borrow the innermost expression after removing parenthesized wrappers.
 fn unwrap_parens<'e, 'a>(expr: &'e Expression<'a>) -> &'e Expression<'a> {
     let mut current = expr;
     while let Expression::ParenthesizedExpression(inner) = current {
@@ -3085,6 +3125,7 @@ fn fold_signed_number(expr: &Expression, resolve: Resolve<'_, '_>) -> Option<f64
     }
 }
 
+/// Return a trimmed source-span slice, falling back to empty text for an invalid range.
 pub(super) fn source_text(source: &str, span: oxc_span::Span) -> String {
     source
         .get(span.start as usize..span.end as usize)
@@ -3166,6 +3207,8 @@ mod tests {
     // T1 census: the histogram machinery, exercised with the gate on (C5's coverage round).
     // -----------------------------------------------------------------------------------------
 
+    /// Regression fixture for framework registration: cell refusal cause names every shape it
+    /// digs into.
     #[test]
     fn cell_refusal_cause_names_every_shape_it_digs_into() {
         let cause_of =
@@ -3200,6 +3243,8 @@ mod tests {
         assert_eq!(cause_of("a === b"), "other");
     }
 
+    /// Regression fixture for framework registration: the census records refusals end to end
+    /// when enabled.
     #[test]
     fn the_census_records_refusals_end_to_end_when_enabled() {
         with_test_census(|| {
@@ -3213,6 +3258,8 @@ mod tests {
         assert!(!census_enabled(), "the test override is restored");
     }
 
+    /// Regression fixture for framework registration: census file scope is isolated from other
+    /// threads.
     #[test]
     fn census_file_scope_is_isolated_from_other_threads() {
         with_test_census(|| {
@@ -3234,6 +3281,8 @@ mod tests {
         });
     }
 
+    /// Regression fixture for framework registration: census override restores state after
+    /// unwinding.
     #[test]
     fn census_override_restores_state_after_unwinding() {
         record_census_refusal("previous".to_owned());
@@ -3268,17 +3317,22 @@ mod tests {
         .collect()
     }
 
+    /// Require one extracted title and report whether it remains parameterized.
     fn all_parameterized(titles: &[crate::model::Title]) -> bool {
         assert_eq!(titles.len(), 1, "each refusal probe must extract one test");
         matches!(titles[0], crate::model::Title::Parameterized(_))
     }
 
+    /// Regression fixture for framework registration: refusal checks reject missing
+    /// declarations.
     #[test]
     #[should_panic(expected = "each refusal probe must extract one test")]
     fn refusal_checks_reject_missing_declarations() {
         all_parameterized(&[]);
     }
 
+    /// Regression fixture for framework registration: cell renderers preserve numbers and
+    /// refuse unknown coercions.
     #[test]
     fn cell_renderers_preserve_numbers_and_refuse_unknown_coercions() {
         for (source, expected) in [
@@ -3308,6 +3362,8 @@ mod tests {
         );
     }
 
+    /// Regression fixture for framework registration: parsed parentheses preserve the
+    /// underlying cell value.
     #[test]
     fn parsed_parentheses_preserve_the_underlying_cell_value() {
         let allocator = Allocator::default();
@@ -3322,6 +3378,8 @@ mod tests {
         assert_eq!(const_fold(unwrap_parens(&expr), None), Some("1".to_owned()));
     }
 
+    /// Regression fixture for framework registration: census labels distinguish resolved
+    /// bindings.
     #[test]
     fn census_labels_distinguish_resolved_bindings() {
         for (source, expected) in [
@@ -3435,6 +3493,8 @@ mod tests {
         );
     }
 
+    /// Regression fixture for framework registration: row identity is exact for positional
+    /// named elided and unresolved rows.
     #[test]
     fn row_identity_is_exact_for_positional_named_elided_and_unresolved_rows() {
         let value = |kind, raw: &str| {
@@ -3521,6 +3581,7 @@ mod tests {
         );
     }
 
+    /// Parse a TypeScript fixture and return its program for registry tests.
     fn parse<'a>(allocator: &'a Allocator, source: &'a str) -> Program<'a> {
         let source_type = SourceType::from_path("file.test.ts").unwrap();
         Parser::new(allocator, source, source_type).parse().program
@@ -3540,6 +3601,8 @@ mod tests {
     }
 
     impl<'a, 'r, 's> Visit<'a> for FirstCallResolver<'r, 's> {
+        /// Resolve calls until one callee succeeds, then retain that first successful
+        /// resolution.
         fn visit_call_expression(&mut self, it: &oxc_ast::ast::CallExpression<'a>) {
             if self.resolved.is_none() {
                 self.resolved = resolve_callee(
@@ -3554,6 +3617,8 @@ mod tests {
         }
     }
 
+    /// Resolve the first readable call in the standard fixture file under the requested globals
+    /// mode.
     fn resolve_first_call(source: &str, globals: Globals) -> Option<ResolvedCallee> {
         resolve_first_call_in_file(source, globals, Path::new("file.test.ts"))
     }
@@ -3581,6 +3646,7 @@ mod tests {
     }
 
     // HAZARD 4 / basic case: a named import from "vitest" resolves a bare `test(...)` call.
+    /// Regression fixture for framework registration: named import resolves bare test call.
     #[test]
     fn named_import_resolves_bare_test_call() {
         let resolved = resolve_first_call(
@@ -3593,6 +3659,8 @@ mod tests {
     }
 
     // Aliased imports: `it`/`suite` canonicalize, and a renamed local (`t`) still resolves.
+    /// Regression fixture for framework registration: renamed import resolves through its local
+    /// binding.
     #[test]
     fn renamed_import_resolves_through_its_local_binding() {
         let resolved = resolve_first_call(
@@ -3634,6 +3702,7 @@ mod tests {
 
     // HAZARD 10: a local variable named `test` that shadows the real import must not resolve --
     // this must hold via binding identity, not by the identifier's spelling.
+    /// Regression fixture for framework registration: shadowed local test does not resolve.
     #[test]
     fn shadowed_local_test_does_not_resolve() {
         let source = r#"
@@ -3653,6 +3722,8 @@ mod tests {
             resolutions: Vec<(String, bool)>,
         }
         impl<'a, 'r> Visit<'a> for IdentifierResolutions<'r> {
+            /// Record whether each test-named identifier reference resolves through the fixture
+            /// registry.
             fn visit_identifier_reference(&mut self, it: &oxc_ast::ast::IdentifierReference<'a>) {
                 if it.name.as_str() == "test" {
                     let resolved = resolve_identifier(it, self.registry, self.scoping);
@@ -3830,6 +3901,8 @@ mod tests {
     // Defect 5: two sibling `const enabled` bindings with opposite values must never fingerprint
     // identically just because they share a name -- that is exactly what let a false
     // `duplicate-test` fire at error severity on genuinely different `skipIf` conditions.
+    /// Regression fixture for framework registration: defect5 sibling bindings with the same
+    /// name fingerprint differently.
     #[test]
     fn defect5_sibling_bindings_with_the_same_name_fingerprint_differently() {
         let source = r#"
@@ -3857,6 +3930,7 @@ mod tests {
             resolved: Vec<ResolvedCallee>,
         }
         impl<'a, 'r, 's> Visit<'a> for AllCallResolver<'r, 's> {
+            /// Collect every successfully resolved call while traversing the fixture program.
             fn visit_call_expression(&mut self, it: &oxc_ast::ast::CallExpression<'a>) {
                 if let Some(resolved) = resolve_callee(
                     &it.callee,
@@ -4142,6 +4216,8 @@ mod tests {
         panic!("`{source}` produced no `.each`/`.for` step");
     }
 
+    /// Return readable fixture table rows, panicking with the table identity when reading is
+    /// refused.
     fn each_rows(source: &str) -> Vec<Row> {
         each_step(source)
             .1
@@ -5236,6 +5312,8 @@ mod tests {
     // `test.extend` fixtures
     // -----------------------------------------------------------------------------------------
 
+    /// Resolve the first fixture call and return its retained fixture identities and
+    /// uncertainty flag.
     fn fixtures_of(source: &str) -> (Vec<FixtureBinding>, bool) {
         let resolved = resolve_first_call(source, Globals::Enabled)
             .unwrap_or_else(|| panic!("`{source}` should resolve"));
@@ -5334,6 +5412,8 @@ mod tests {
     // `.skipIf` / `.runIf` conditions
     // -----------------------------------------------------------------------------------------
 
+    /// Resolve a conditional modifier and return its condition identity and unresolved flag,
+    /// panicking if absent.
     fn condition_of(source: &str) -> (String, bool) {
         let resolved = resolve_first_call(source, Globals::Enabled)
             .unwrap_or_else(|| panic!("`{source}` should resolve"));
@@ -5604,6 +5684,7 @@ mod tests {
     }
 
     impl<'a> Visit<'a> for OutermostCallResolver<'_, '_> {
+        /// Attempt resolution only for the first visited call, without descending into it.
         fn visit_call_expression(&mut self, it: &oxc_ast::ast::CallExpression<'a>) {
             if self.seen {
                 return;
@@ -5619,6 +5700,8 @@ mod tests {
         }
     }
 
+    /// Parse the fixture and resolve its first call without descending through that call before
+    /// selection.
     fn resolve_outermost_call(source: &str, globals: Globals) -> Option<ResolvedCallee> {
         let allocator = Allocator::default();
         let program = parse(&allocator, source);
