@@ -2818,7 +2818,17 @@ impl<'a, 'b, 's, 'm> Serializer<'a, 'b, 's, 'm> {
                 self.ser_variable_declaration(declaration, depth)
             }
             Statement::FunctionDeclaration(function) => {
-                self.ser_callable(&FunctionLike::Function(function), depth + 1)
+                // Keep the declaration-to-reference link, including when a hoisted call was
+                // encountered first. Registering without emitting the identity would still
+                // merge calls to different declarations before those declarations appear.
+                let name = function.id.as_ref().map_or_else(
+                    || "<anonymous>".to_owned(),
+                    |id| self.binding(id.name.as_str(), id.symbol_id.get()),
+                );
+                format!(
+                    "(function-decl {name} {})",
+                    self.ser_callable(&FunctionLike::Function(function), depth + 1)
+                )
             }
             Statement::IfStatement(if_statement) => {
                 let test = self.ser_expr(&if_statement.test, depth + 1);
@@ -7811,7 +7821,7 @@ test('x', () => { const w = 1; f(w); });"#;
         ("let", "let a = 1;", "(let (decl "),
         ("const", "const a = 1;", "(const (decl "),
         ("declarator-without-init", "let a;", "(let (decl L0))"),
-        ("function-declaration", "function g(){}", "(block (fn () (block )))"),
+        ("function-declaration", "function g(){}", "(block (function-decl L0 (fn () (block ))))"),
         ("if", "if(1)2;", "(if <number:1> (stmt <number:2>))"),
         ("if-else", "if(1)2;else 3;", "(if <number:1> (stmt <number:2>) (stmt <number:3>))"),
         ("for", "for(;;)1;", "(for () () () (stmt <number:1>))"),
@@ -8818,8 +8828,8 @@ test('x', () => { const w = 1; f(w); });"#;
             "the signature declares no statements to compare: {alpha}"
         );
         assert!(
-            alpha.contains("(fn (L0) (no-body))"),
-            "...and its parameters are still compared: {alpha}"
+            alpha.contains("(function-decl L0 (fn (L1) (no-body)))"),
+            "...and its declaration and parameter bindings are still compared: {alpha}"
         );
         assert!(
             alpha.contains("(block (stmt (call id:global:f )))"),
