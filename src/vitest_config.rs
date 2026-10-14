@@ -1758,7 +1758,7 @@ mod tests {
         assert_eq!(classify_slash_run(&unbalanced, 0), SlashRun::Unbalanced);
     }
 
-    /// Check static Vitest config: projects declaration is unknown not a repo wide guess.
+    /// Check static Vitest config: projects with no resolved entries are unknown, not a repo-wide guess.
     #[test]
     fn projects_declaration_is_unknown_not_a_repo_wide_guess() {
         let directory = tempfile::tempdir().unwrap();
