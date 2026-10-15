@@ -417,7 +417,7 @@ fn run(source: &str, file: &SourceFile, globals: Globals, allow_imported: bool) 
     let semantic = &semantic_return.semantic;
 
     // Every body fingerprinted below shares this file's import origins, computed once here.
-    let walker = super::fingerprint::with_file_import_origins(source, &file.path, || {
+    let walker = super::fingerprint::with_file_import_origins(source, &file.path, program, || {
         let mut registry = Registry::new(program, globals);
         let mut walker = Walker::new(source, file, program, semantic, globals);
         walker.allow_imported = allow_imported;
@@ -3455,14 +3455,15 @@ mod tests {
         }
     }
 
-    /// A file's import origins are parsed once per extraction, whatever its test count (P1).
+    /// Extraction reads a file's import origins off its own parse: no extra parse, whatever the
+    /// test count.
     ///
     /// Every fingerprinted body used to re-parse the whole file for its imports, so a file's cost
     /// was quadratic in its test count. The source reaches every fingerprinting caller (tests, a
     /// hook, `.each` rows, a `vi.mock` factory, a `test.extend` fixture) and imports packages only,
-    /// so no helper file is parsed: any count above one is a per-body re-parse.
+    /// so no helper file is parsed: any count above zero is a re-parse.
     #[test]
-    fn import_origins_are_parsed_once_per_file_whatever_its_test_count() {
+    fn import_origins_add_no_parse_to_extraction_whatever_its_test_count() {
         let source_with = |tests: usize| {
             let mut source = String::from(concat!(
                 "import { test, expect, beforeEach, vi } from 'vitest';\n",
@@ -3496,8 +3497,8 @@ mod tests {
                 extraction.diagnostics
             );
             assert_eq!(
-                parses, 1,
-                "{tests} test(s): import origins parsed {parses} times"
+                parses, 0,
+                "{tests} test(s): import origins re-parsed {parses} times"
             );
         }
     }

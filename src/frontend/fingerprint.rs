@@ -1641,9 +1641,9 @@ fn expression_has_effect(expr: &Expression<'_>, depth: u32) -> bool {
 /// only `body`/`semantic`/`source`/`file`. So this re-parses `source` with its own throwaway
 /// `Allocator` to read straight off the top-level `ImportDeclaration`s, which needs no semantic
 /// analysis of its own (imports are always top-level, never nested, so a shallow scan of
-/// `program.body` is sufficient). Extraction runs it once per file through
-/// [`with_file_import_origins`], and every body fingerprinted from that file shares the result;
-/// only helper files and callers outside an extraction scope compute it afresh.
+/// `program.body` is sufficient). Extraction does not use this re-parse: it reads the map off its
+/// own real-type parse ([`with_file_import_origins`]), shared by every body fingerprinted from that
+/// file. Helper files and callers outside an extraction scope still compute it here.
 ///
 /// `SourceType::tsx()` is used unconditionally as the most permissive superset available (this
 /// module is never told the real file extension). A file using the legacy `<T>expr` TypeScript
@@ -1766,12 +1766,13 @@ pub(super) fn import_origin_parses() -> usize {
     IMPORT_ORIGIN_PARSES.with(std::cell::Cell::get)
 }
 
-/// Runs `walk` with `file`'s import origins computed once and shared by every body fingerprinted
-/// from that same `source` during the walk; the previous state is restored afterwards, including
-/// on unwind.
+/// Runs `walk` with `file`'s import origins, read once from `program` (the caller's parse of
+/// `source`), shared by every body fingerprinted from that same `source` during the walk; the
+/// previous state is restored afterwards, including on unwind.
 pub(super) fn with_file_import_origins<R>(
     source: &str,
     file: &Path,
+    program: &oxc_ast::ast::Program<'_>,
     walk: impl FnOnce() -> R,
 ) -> R {
     /// Puts back the entry that was visible before this scope.
@@ -1783,9 +1784,12 @@ pub(super) fn with_file_import_origins<R>(
             FILE_IMPORTS.with(|slot| *slot.borrow_mut() = previous);
         }
     }
+    // Read off the caller's own parse, made with the file's real source type: a second TSX parse
+    // would reject valid `.ts` syntax (a legacy `<T>value` cast, a generic arrow) and silently
+    // empty the map.
     let entry = (
         FileKey::of(source, file),
-        std::rc::Rc::new(import_origins(source, file)),
+        std::rc::Rc::new(import_origins_from_program(program, file)),
     );
     let _restore = Restore(FILE_IMPORTS.with(|slot| slot.replace(Some(entry))));
     walk()
