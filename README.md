@@ -120,10 +120,10 @@ states how many findings were suppressed this way.
 ## GitHub Action
 
 ```yaml
-- uses: figueiredoluiz/vitest-dedup@v0.2.1
+- uses: figueiredoluiz/vitest-dedup@v0.3.0
   with:
     path: .
-    version: 0.2.1
+    version: 0.3.0
     threshold: "5"
 ```
 
