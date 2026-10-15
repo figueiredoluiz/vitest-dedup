@@ -605,13 +605,7 @@ fn collect_import_specifiers(
     // this same text. Keyed by the specifier as written; `file` is fixed, so the same text always
     // resolves to the same identity and a repeat declaration skips the resolution too.
     let mut identities: HashMap<&str, Arc<str>> = HashMap::new();
-    for statement in &program.body {
-        let Statement::ImportDeclaration(import) = statement else {
-            continue;
-        };
-        if matches!(import.import_kind, oxc_ast::ast::ImportOrExportKind::Type) {
-            continue;
-        }
+    for import in super::fingerprint::value_import_declarations(program) {
         let source = import.source.value.as_str();
         let identity = Arc::clone(identities.entry(source).or_insert_with(|| {
             Arc::from(super::fingerprint::specifier_identity(file, source).as_str())

@@ -1661,14 +1661,33 @@ pub(super) fn import_origins(source: &str, file: &Path) -> ImportOrigins {
     if parsed.fatal_error {
         return HashMap::new();
     }
-    let mut origins = HashMap::new();
-    for statement in &parsed.program.body {
-        let Statement::ImportDeclaration(import) = statement else {
-            continue;
-        };
-        if matches!(import.import_kind, oxc_ast::ast::ImportOrExportKind::Type) {
-            continue;
+    import_origins_from_program(&parsed.program, file)
+}
+
+/// `program`'s top-level import declarations that bind values: `import type` declarations are
+/// erased by TypeScript and never reach runtime, so every import table skips them.
+pub(super) fn value_import_declarations<'p, 'a>(
+    program: &'p oxc_ast::ast::Program<'a>,
+) -> impl Iterator<Item = &'p oxc_ast::ast::ImportDeclaration<'a>> + 'p {
+    program.body.iter().filter_map(|statement| match statement {
+        Statement::ImportDeclaration(import)
+            if !matches!(import.import_kind, oxc_ast::ast::ImportOrExportKind::Type) =>
+        {
+            Some(&**import)
         }
+        _ => None,
+    })
+}
+
+/// The import map of an already-parsed `program` written at `file`: each top-level, non-type
+/// import's local binding name mapped to its origin (see [`import_origins`] for the identity
+/// scheme). Needs no semantic analysis, because imports are always top-level.
+pub(super) fn import_origins_from_program(
+    program: &oxc_ast::ast::Program<'_>,
+    file: &Path,
+) -> ImportOrigins {
+    let mut origins = HashMap::new();
+    for import in value_import_declarations(program) {
         let Some(specifiers) = &import.specifiers else {
             continue;
         };
@@ -5171,6 +5190,57 @@ mod tests {
         prints.into_iter().next().expect("one body").structural
     }
 
+    /// The import map can be read from a parse the caller already holds (M12 groundwork): a `.ts`
+    /// file with a legacy `<T>value` cast yields nothing through [`import_origins`]'s TSX parse,
+    /// and every non-type import through [`import_origins_from_program`] on its real-type parse.
+    #[test]
+    fn import_origins_from_program_reads_what_the_tsx_parse_drops() {
+        let directory = tempfile::tempdir().unwrap();
+        let file = directory.path().join("cast.test.ts");
+        let source = concat!(
+            "import { a as alias, type T } from './m'\n",
+            "import def from './d'\n",
+            "import * as ns from 'pkg'\n",
+            "import type { U } from './t'\n",
+            "const cast = <number>(1 as unknown)\n",
+        );
+        assert!(
+            import_origins(source, &file).is_empty(),
+            "the TSX parse rejects the cast"
+        );
+
+        let allocator = Allocator::default();
+        let parsed = Parser::new(&allocator, source, SourceType::from_path(&file).unwrap()).parse();
+        assert!(
+            !parsed.fatal_error && parsed.diagnostics.is_empty(),
+            "the real-type parse accepts the file: {:?}",
+            parsed.diagnostics
+        );
+        let origins = import_origins_from_program(&parsed.program, &file);
+        let mut entries: Vec<_> = origins
+            .iter()
+            .map(|(local, origin)| {
+                (
+                    local.as_str(),
+                    origin.exported.as_str(),
+                    origin.specifier.as_str(),
+                )
+            })
+            .collect();
+        entries.sort_unstable();
+        assert_eq!(
+            entries,
+            vec![
+                ("alias", "a", "./m"),
+                ("def", "default", "./d"),
+                ("ns", "*", "pkg")
+            ],
+            "type-only imports are skipped"
+        );
+    }
+
+    /// A local binding and an import with the same name are different identities, so their
+    /// bodies are not alpha-equal.
     #[test]
     fn local_vs_imported_name_are_not_alpha_equal() {
         let source = std::fs::read_to_string(concat!(
