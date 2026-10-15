@@ -729,6 +729,18 @@ describe("verifyAttestation", () => {
   // by the release pipeline itself, says anything about where the bytes came from. These tests
   // pin that an unavailable verifier degrades loudly while a FAILED one is always fatal.
 
+  /** Runs a passing verification with `token` and returns the environment given to the verify call. */
+  function verifyEnvironment(token) {
+    const envs = [];
+    const capture = (_cmd, args, options) => {
+      if (args[0] !== "--version") envs.push(options.env);
+      return { status: 0 };
+    };
+    verifyAttestation("/tmp/a.tar.gz", "o/r", "0.2.1", capture, token);
+    assert.equal(envs.length, 1, "exactly one verify call");
+    return envs[0];
+  }
+
   test("reports unavailable, without throwing, when the gh CLI is absent", () => {
     const missing = () => ({ error: new Error("ENOENT"), status: null });
     assert.equal(verifyAttestation("/tmp/a.tar.gz", "o/r", "0.2.1", missing), "unavailable");
@@ -764,44 +776,13 @@ describe("verifyAttestation", () => {
       ...attestationIdentity("figueiredoluiz/vitest-dedup", "0.2.1"),
     ]);
   });
-});
-
-describe("attestationIdentity", () => {
-  // `--repo` alone accepts an attestation from any workflow or ref in the repository; the release
-  // identity is the release workflow building the version's tag. Measured on the published
-  // releases: all are signed by release.yml; 0.2.0 and later record refs/tags/v<version>, while
-  // 0.1.0 records refs/heads/main.
-  test("requires the release workflow and the version's tag", () => {
-    assert.deepEqual(attestationIdentity("o/r", "0.2.1"), [
-      "--repo", "o/r",
-      "--signer-workflow", "o/r/.github/workflows/release.yml",
-      "--source-ref", "refs/tags/v0.2.1",
-    ]);
-  });
-
-  test("binds a prerelease to its own tag", () => {
-    assert.ok(attestationIdentity("o/r", "1.0.0-rc.1").join(" ").endsWith("--source-ref refs/tags/v1.0.0-rc.1"));
-  });
-
-  test("checks 0.1.0, built from main, by signer workflow only", () => {
-    assert.deepEqual(attestationIdentity("o/r", "0.1.0"), [
-      "--repo", "o/r",
-      "--signer-workflow", "o/r/.github/workflows/release.yml",
-    ]);
-  });
 
   test("gives the token to the verify call as GH_TOKEN", () => {
     // gh refuses API calls without credentials, and a JavaScript action's environment carries no
     // token, so the token input is the only way verification can run on a hosted runner.
-    const envs = [];
-    const capture = (_cmd, args, options) => {
-      if (args[0] !== "--version") envs.push(options.env);
-      return { status: 0 };
-    };
-    verifyAttestation("/tmp/a.tar.gz", "o/r", "0.2.1", capture, "token-value");
-    assert.equal(envs.length, 1);
-    assert.equal(envs[0].GH_TOKEN, "token-value");
-    assert.equal(envs[0].PATH, process.env.PATH, "the rest of the environment is kept");
+    const env = verifyEnvironment("token-value");
+    assert.equal(env.GH_TOKEN, "token-value");
+    assert.equal(env.PATH, process.env.PATH, "the rest of the environment is kept");
   });
 
   test("replaces a differently-cased GH_TOKEN instead of adding a second one", (t) => {
@@ -809,24 +790,13 @@ describe("attestationIdentity", () => {
     // to chance.
     process.env.Gh_Token = "stale";
     t.after(() => delete process.env.Gh_Token);
-    let env = null;
-    const capture = (_cmd, args, options) => {
-      if (args[0] !== "--version") env = options.env;
-      return { status: 0 };
-    };
-    verifyAttestation("/tmp/a.tar.gz", "o/r", "0.2.1", capture, "token-value");
+    const env = verifyEnvironment("token-value");
     assert.deepEqual(Object.keys(env).filter((name) => name.toUpperCase() === "GH_TOKEN"), ["GH_TOKEN"]);
     assert.equal(env.GH_TOKEN, "token-value");
   });
 
   test("injects no GH_TOKEN when the token is empty", () => {
-    let env = null;
-    const capture = (_cmd, args, options) => {
-      if (args[0] !== "--version") env = options.env;
-      return { status: 0 };
-    };
-    verifyAttestation("/tmp/a.tar.gz", "o/r", "0.2.1", capture, "");
-    assert.equal(env, process.env);
+    assert.equal(verifyEnvironment(""), process.env);
   });
 
   test("reports unavailable, without throwing, when gh is not authenticated", () => {
@@ -854,6 +824,31 @@ describe("attestationIdentity", () => {
       () => verifyAttestation("/tmp/a.tar.gz", "o/r", "0.2.1", unauthenticated, "token-value"),
       /attestation failed/,
     );
+  });
+});
+
+describe("attestationIdentity", () => {
+  // `--repo` alone accepts an attestation from any workflow or ref in the repository; the release
+  // identity is the release workflow building the version's tag. Measured on the published
+  // releases: all are signed by release.yml; 0.2.0 and later record refs/tags/v<version>, while
+  // 0.1.0 records refs/heads/main.
+  test("requires the release workflow and the version's tag", () => {
+    assert.deepEqual(attestationIdentity("o/r", "0.2.1"), [
+      "--repo", "o/r",
+      "--signer-workflow", "o/r/.github/workflows/release.yml",
+      "--source-ref", "refs/tags/v0.2.1",
+    ]);
+  });
+
+  test("binds a prerelease to its own tag", () => {
+    assert.ok(attestationIdentity("o/r", "1.0.0-rc.1").join(" ").endsWith("--source-ref refs/tags/v1.0.0-rc.1"));
+  });
+
+  test("checks 0.1.0, built from main, by signer workflow only", () => {
+    assert.deepEqual(attestationIdentity("o/r", "0.1.0"), [
+      "--repo", "o/r",
+      "--signer-workflow", "o/r/.github/workflows/release.yml",
+    ]);
   });
 });
 
