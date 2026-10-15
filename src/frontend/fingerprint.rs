@@ -1643,7 +1643,8 @@ fn expression_has_effect(expr: &Expression<'_>, depth: u32) -> bool {
 /// analysis of its own (imports are always top-level, never nested, so a shallow scan of
 /// `program.body` is sufficient). Extraction does not use this re-parse: it reads the map off its
 /// own real-type parse ([`with_file_import_origins`]), shared by every body fingerprinted from that
-/// file. Helper files and callers outside an extraction scope still compute it here.
+/// file, and helper files use their own parse too. Only callers outside an extraction scope still
+/// compute it here.
 ///
 /// `SourceType::tsx()` is used unconditionally as the most permissive superset available (this
 /// module is never told the real file extension). A file using the legacy `<T>expr` TypeScript

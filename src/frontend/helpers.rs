@@ -86,8 +86,8 @@
 //! fingerprint inlining and never follows installed-package bodies.
 
 use super::fingerprint::{
-    import_origins, module_export_name, render_inlined_helper_body, FunctionLike, ImportOrigin,
-    Mode,
+    import_origins_from_program, module_export_name, render_inlined_helper_body, FunctionLike,
+    ImportOrigin, Mode,
 };
 use super::resolver::{self, Resolved};
 use oxc_allocator::Allocator;
@@ -350,7 +350,9 @@ fn render_from(
                 if parameters != argument_fragments.len() {
                     return None;
                 }
-                let imports = import_origins(source, path);
+                // The helper's own parse, made with its real source type: a TSX re-parse would
+                // reject valid `.ts` syntax and silently empty the map.
+                let imports = import_origins_from_program(program, path);
                 let semantic_return = SemanticBuilder::new().build(program);
                 if !semantic_return.diagnostics.is_empty() {
                     return None;
