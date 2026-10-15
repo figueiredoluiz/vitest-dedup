@@ -560,29 +560,42 @@ pub fn revision_sources(
                 terminal_safe(path_text)
             );
         };
-        // An admitted entry that is not a blob (a submodule gitlink named like a test file) is an
-        // operational error, as an unreadable file always was: skipping it would leave a silent
-        // gap that makes the gate more lenient than it claims.
-        if *kind != b"blob" {
-            bail!(
-                "git failed while reading base file `{}`: not a blob ({})",
-                terminal_safe(path_text),
-                String::from_utf8_lossy(kind)
-            );
-        }
         let too_large = std::str::from_utf8(size)
             .ok()
             .and_then(|size| size.parse::<u64>().ok())
             .is_none_or(|size| size > MAX_REVISION_SOURCE_BYTES);
-        let object = String::from_utf8_lossy(object).into_owned();
-        admitted.push((path_text.to_owned(), relative, object, too_large));
+        admitted.push(AdmittedEntry {
+            path_text: path_text.to_owned(),
+            relative,
+            kind: String::from_utf8_lossy(kind).into_owned(),
+            object: String::from_utf8_lossy(object).into_owned(),
+            too_large,
+        });
     }
 
     let mut reader = None;
     let mut sources = Vec::new();
-    for (path_text, relative, object, too_large) in admitted {
-        // Skips are reported in listing order, exactly where the per-file read used to report
-        // them, so stderr is unchanged.
+    for AdmittedEntry {
+        path_text,
+        relative,
+        kind,
+        object,
+        too_large,
+    } in admitted
+    {
+        // Skips and refusals are reported in listing order, exactly where the per-file read used
+        // to report them, so stderr is unchanged.
+        //
+        // An admitted entry that is not a blob (a submodule gitlink named like a test file) is an
+        // operational error, as an unreadable file always was: skipping it would leave a silent
+        // gap that makes the gate more lenient than it claims.
+        if kind != "blob" {
+            bail!(
+                "git failed while reading base file `{}`: not a blob ({})",
+                terminal_safe(&path_text),
+                terminal_safe(&kind)
+            );
+        }
         if too_large {
             eprintln!(
                 "vitest-dedup: skipping {} in the base revision: exceeds the byte limit",
@@ -593,16 +606,25 @@ pub fn revision_sources(
         if reader.is_none() {
             reader = Some(BlobReader::spawn(root)?);
         }
-        let blob = reader
-            .as_mut()
-            .expect("spawned above")
-            .read(&object)
-            .with_context(|| {
-                format!(
-                    "git failed while reading base file `{}`",
-                    terminal_safe(&path_text)
-                )
-            })?;
+        let blob = match reader.as_mut().expect("spawned above").read(&object) {
+            Ok(blob) => blob,
+            Err(error) => {
+                // Reap the process and keep what git said before reporting the failure.
+                let said = reader.take().map(BlobReader::abort).unwrap_or_default();
+                let said = said.trim();
+                return Err(error).with_context(|| {
+                    let git = if said.is_empty() {
+                        String::new()
+                    } else {
+                        format!(": {}", terminal_safe(said))
+                    };
+                    format!(
+                        "git failed while reading base file `{}`{git}",
+                        terminal_safe(&path_text)
+                    )
+                });
+            }
+        };
         let content = match String::from_utf8(blob) {
             Ok(content) => content,
             Err(_) => {
@@ -629,9 +651,22 @@ pub fn revision_sources(
 /// database, so it runs nothing from the analyzed tree.
 struct BlobReader {
     child: std::process::Child,
-    input: std::process::ChildStdin,
+    /// `None` once closed; closing it is how cat-file is told to exit.
+    input: Option<std::process::ChildStdin>,
     output: std::io::BufReader<std::process::ChildStdout>,
-    stderr: std::thread::JoinHandle<String>,
+    /// `None` once joined.
+    stderr: Option<std::thread::JoinHandle<String>>,
+}
+
+/// One listing entry that passed admission, kept until the read loop reaches it so every skip
+/// and refusal is reported in listing order.
+struct AdmittedEntry {
+    path_text: String,
+    relative: PathBuf,
+    /// The object type `ls-tree` reported; anything but `blob` is refused in the read loop.
+    kind: String,
+    object: String,
+    too_large: bool,
 }
 
 /// How much of a child's stderr [`drain_stderr`] keeps for an error message.
@@ -669,9 +704,9 @@ impl BlobReader {
         let stderr = drain_stderr(child.stderr.take().context("git cat-file has no stderr")?);
         Ok(Self {
             child,
-            input,
+            input: Some(input),
             output: std::io::BufReader::new(output),
-            stderr,
+            stderr: Some(stderr),
         })
     }
 
@@ -679,8 +714,12 @@ impl BlobReader {
     /// mid-answer is an error, never an empty file.
     fn read(&mut self, object: &str) -> Result<Vec<u8>> {
         use std::io::{BufRead, Read, Write};
-        writeln!(self.input, "{object}")?;
-        self.input.flush()?;
+        let input = self
+            .input
+            .as_mut()
+            .context("git cat-file input is closed")?;
+        writeln!(input, "{object}")?;
+        input.flush()?;
         let mut header = String::new();
         if self.output.read_line(&mut header)? == 0 {
             bail!("git cat-file ended before answering");
@@ -700,17 +739,10 @@ impl BlobReader {
     }
 
     /// Closes the request stream and requires a clean exit.
-    fn finish(self) -> Result<()> {
-        let Self {
-            mut child,
-            input,
-            output,
-            stderr,
-        } = self;
-        drop(input);
-        drop(output);
-        let status = child.wait()?;
-        let stderr = stderr.join().unwrap_or_default();
+    fn finish(mut self) -> Result<()> {
+        self.input = None;
+        let status = self.child.wait()?;
+        let stderr = self.join_stderr();
         if !status.success() {
             bail!(
                 "git failed while reading the base revision's files: {}",
@@ -718,6 +750,38 @@ impl BlobReader {
             );
         }
         Ok(())
+    }
+
+    /// Stops the process after a failed read: closes its input, kills and reaps it, and returns
+    /// what it wrote to stderr so the caller can report it with the failure.
+    fn abort(mut self) -> String {
+        self.stop();
+        self.join_stderr()
+    }
+
+    /// Closes the input, then kills and reaps the process; a no-op once it has been waited on.
+    fn stop(&mut self) {
+        self.input = None;
+        if matches!(self.child.try_wait(), Ok(None)) {
+            let _ = self.child.kill();
+        }
+        let _ = self.child.wait();
+    }
+
+    /// Joins the stderr drainer once; later calls return an empty string.
+    fn join_stderr(&mut self) -> String {
+        self.stderr
+            .take()
+            .map(|stderr| stderr.join().unwrap_or_default())
+            .unwrap_or_default()
+    }
+}
+
+impl Drop for BlobReader {
+    /// Reaps a reader abandoned on an early return, so no `git` process outlives the read.
+    fn drop(&mut self) {
+        self.stop();
+        self.join_stderr();
     }
 }
 
@@ -1718,6 +1782,32 @@ mod tests {
             .expect("the child exited instead of blocking on a full stderr pipe");
         assert!(success);
         assert_eq!(kept, usize::try_from(MAX_KEPT_STDERR_BYTES).unwrap());
+    }
+
+    /// A failed batch read names the object, and aborting reaps the git process instead of
+    /// leaving it running. The watchdog turns a cleanup regression (which would otherwise block
+    /// on the live child) into a failure rather than a hung test run.
+    #[test]
+    fn a_failed_blob_read_is_an_error_and_abort_reaps_git() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(directory.path().join("a.test.ts"), "x").unwrap();
+        init_repository(directory.path());
+        let root = directory.path().to_path_buf();
+        let (done, finished) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut reader = BlobReader::spawn(&root).unwrap();
+            let missing = "0123456789012345678901234567890123456789";
+            let error = format!("{:#}", reader.read(missing).unwrap_err());
+            reader.stop();
+            let reaped = matches!(reader.child.try_wait(), Ok(Some(_)));
+            let _ = done.send((error.contains(missing), reaped));
+            let _ = reader.abort();
+        });
+        let (named, reaped) = finished
+            .recv_timeout(std::time::Duration::from_secs(20))
+            .expect("the read failed and the process was stopped without blocking");
+        assert!(named, "the error names the missing object");
+        assert!(reaped, "the git process has exited and been reaped");
     }
 
     /// The base read costs a fixed number of git processes, not one per file (P5): spawning one

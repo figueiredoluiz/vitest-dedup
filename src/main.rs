@@ -2562,6 +2562,39 @@ mod tests {
         );
     }
 
+    /// Refusals keep listing order: an oversized base file listed before an unreadable entry (a
+    /// gitlink named like a test file) still gets its skip line before the run fails, as it did
+    /// when each file was read in turn.
+    #[test]
+    fn baseline_from_ref_reports_earlier_skips_before_a_later_refusal() {
+        let directory = single_file_project("c-ok.test.ts", DUPLICATE_PAIR);
+        let root = directory.path();
+        std::fs::write(root.join("a-huge.test.ts"), "x".repeat(8 * 1024 * 1024 + 1)).unwrap();
+        init_repository(root);
+        // A gitlink's commit need not exist in this repository.
+        git(
+            root,
+            &[
+                "update-index",
+                "--add",
+                "--cacheinfo",
+                "160000",
+                "1234567890123456789012345678901234567890",
+                "b-vendor.test.ts",
+            ],
+        );
+        git(root, &["commit", "-qm", "gitlink"]);
+        let (code, _, stderr) = run_cli(root, &["--baseline-from-ref", "HEAD"]);
+        assert_eq!(code, Some(2), "{stderr}");
+        let skip = stderr
+            .find("skipping a-huge.test.ts in the base revision: exceeds the byte limit")
+            .unwrap_or_else(|| panic!("the earlier skip is reported: {stderr}"));
+        let refusal = stderr
+            .find("git failed while reading base file `b-vendor.test.ts`")
+            .unwrap_or_else(|| panic!("the gitlink is refused: {stderr}"));
+        assert!(skip < refusal, "skip before refusal: {stderr}");
+    }
+
     #[test]
     /// P3: the directive beside one participant removes the finding, the summary says so, and
     /// `--update-baseline` on the suppressed tree records nothing -- a baseline records accepted
