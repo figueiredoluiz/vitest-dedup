@@ -962,8 +962,12 @@ fn run() -> Result<ExitCode> {
                         format!("creating report directory {}", parent.display())
                     })?;
                 }
-                let mut file = std::fs::File::create(&path)
-                    .with_context(|| format!("writing report {}", path.display()))?;
+                // Buffered: the serializers emit one small write per token, and an unbuffered
+                // `File` turns each into a syscall. `flush` below still surfaces write errors.
+                let mut file = std::io::BufWriter::new(
+                    std::fs::File::create(&path)
+                        .with_context(|| format!("writing report {}", path.display()))?,
+                );
                 match reporter {
                     ReporterKind::Json => JsonReporter::new().write_report(&result, &mut file)?,
                     ReporterKind::Html => {
