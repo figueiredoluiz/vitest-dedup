@@ -2499,9 +2499,9 @@ mod tests {
     }
 
     /// The review-found geometry: the analysis root is a SUBDIRECTORY of the git repository.
-    /// `ls-tree` run from there lists paths relative to it, while `cat-file commit:path`
-    /// resolves from the repository root -- without the `./` form the base read silently reads
-    /// the wrong paths (or fails), and the baseline would be computed from nothing. Pinned from
+    /// `ls-tree` run from there lists paths relative to it; a read that resolved those paths from
+    /// the repository root would silently read the wrong files (or fail), and the baseline would
+    /// be computed from nothing. Blobs are now read by the object id `ls-tree` lists. Pinned from
     /// `src/`: a committed duplicate pair under a subdirectory must still be accepted from the
     /// base revision.
     #[test]

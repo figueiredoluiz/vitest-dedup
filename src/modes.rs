@@ -475,8 +475,8 @@ pub struct RevisionSource {
 /// - **No checkout, no worktree, ever.** Hostile checkout-time code is the whole threat model:
 ///   `.gitattributes` smudge/clean filters, `core.fsmonitor`, and process-level hooks all
 ///   execute *working-tree* plumbing, and an analyzed repository controls all of them. File
-///   content here arrives through `git cat-file blob <commit>:<path>` -- plumbing that reads an
-///   object from the database and runs nothing from the tree. The analyzed repository never
+///   content here arrives through `git cat-file --batch`, fed the object ids `git ls-tree`
+///   listed -- plumbing that reads objects from the database and runs nothing from the tree. The analyzed repository never
 ///   gets code execution from being analyzed.
 /// - **The revision never reaches git as an option.** It is resolved through
 ///   [`resolve_commit`], which passes `--end-of-options` and verifies the `<commit>` suffix --
@@ -514,8 +514,10 @@ pub fn revision_sources(
 
     // `-z` because an analyzed repository controls its own filenames: a newline in a filename
     // would otherwise split into two entries, and `--` so a path can never read as an option.
+    // `-l` adds each entry's object id and size, so an oversized blob is skipped unread and the
+    // admitted ones are read by id through one `cat-file --batch` (see [`BlobReader`]).
     let listing = git_at(root)
-        .args(["ls-tree", "-r", "--name-only", "-z", "--"])
+        .args(["ls-tree", "-r", "-l", "-z", "--"])
         .arg(&commit)
         .output()
         .with_context(|| "git failed while listing the base revision's files")?;
@@ -526,12 +528,16 @@ pub fn revision_sources(
         );
     }
 
-    let mut sources = Vec::new();
+    let mut admitted = Vec::new();
     for entry in listing.stdout.split(|byte| *byte == b'\0') {
         if entry.is_empty() {
             continue;
         }
-        let path_text = std::str::from_utf8(entry)
+        // `<mode> <type> <object> <size>\t<path>`; the path follows the first tab.
+        let Some(tab) = entry.iter().position(|byte| *byte == b'\t') else {
+            bail!("git returned an unreadable listing entry for the base revision");
+        };
+        let path_text = std::str::from_utf8(&entry[tab + 1..])
             .with_context(|| "git returned a non-UTF-8 file name for the base revision")?;
         let relative = PathBuf::from(path_text);
         // A tree path cannot escape its tree, but admission is asserted here rather than
@@ -543,50 +549,176 @@ pub fn revision_sources(
         if exclude.is_match(Path::new(&forward)) || !include.is_match(Path::new(&forward)) {
             continue;
         }
-
-        // `commit:path` resolves `path` from the REPOSITORY root, but `ls-tree` from a
-        // subdirectory lists paths relative to that subdirectory (the analysis root, which need
-        // not be the git root). The `./` form pins resolution to the process's working directory
-        // -- the analysis root -- so the blob read is the file this loop actually listed,
-        // wherever the analysis root sits inside the repository. Review-found: without it, an
-        // analysis root below the git root read the wrong paths or failed outright.
-        let blob = git_at(root)
-            .args(["cat-file", "blob", "--"])
-            .arg(format!("{commit}:./{path_text}"))
-            .output()
-            .with_context(|| {
-                format!(
-                    "git failed while reading base file `{}`",
-                    terminal_safe(path_text)
-                )
-            })?;
-        if !blob.status.success() {
+        let fields: Vec<&[u8]> = entry[..tab]
+            .split(u8::is_ascii_whitespace)
+            .filter(|field| !field.is_empty())
+            .collect();
+        let (Some(kind), Some(object), Some(size)) = (fields.get(1), fields.get(2), fields.get(3))
+        else {
             bail!(
-                "git failed while reading base file `{}`: {}",
+                "git returned an unreadable listing entry for base file `{}`",
+                terminal_safe(path_text)
+            );
+        };
+        // An admitted entry that is not a blob (a submodule gitlink named like a test file) is an
+        // operational error, as an unreadable file always was: skipping it would leave a silent
+        // gap that makes the gate more lenient than it claims.
+        if *kind != b"blob" {
+            bail!(
+                "git failed while reading base file `{}`: not a blob ({})",
                 terminal_safe(path_text),
-                String::from_utf8_lossy(&blob.stderr).trim()
+                String::from_utf8_lossy(kind)
             );
         }
-        if blob.stdout.len() as u64 > MAX_REVISION_SOURCE_BYTES {
+        let too_large = std::str::from_utf8(size)
+            .ok()
+            .and_then(|size| size.parse::<u64>().ok())
+            .is_none_or(|size| size > MAX_REVISION_SOURCE_BYTES);
+        let object = String::from_utf8_lossy(object).into_owned();
+        admitted.push((path_text.to_owned(), relative, object, too_large));
+    }
+
+    let mut reader = None;
+    let mut sources = Vec::new();
+    for (path_text, relative, object, too_large) in admitted {
+        // Skips are reported in listing order, exactly where the per-file read used to report
+        // them, so stderr is unchanged.
+        if too_large {
             eprintln!(
                 "vitest-dedup: skipping {} in the base revision: exceeds the byte limit",
-                terminal_safe(path_text)
+                terminal_safe(&path_text)
             );
             continue;
         }
-        let content = match String::from_utf8(blob.stdout) {
+        if reader.is_none() {
+            reader = Some(BlobReader::spawn(root)?);
+        }
+        let blob = reader
+            .as_mut()
+            .expect("spawned above")
+            .read(&object)
+            .with_context(|| {
+                format!(
+                    "git failed while reading base file `{}`",
+                    terminal_safe(&path_text)
+                )
+            })?;
+        let content = match String::from_utf8(blob) {
             Ok(content) => content,
             Err(_) => {
                 eprintln!(
                     "vitest-dedup: skipping {} in the base revision: not valid UTF-8",
-                    terminal_safe(path_text)
+                    terminal_safe(&path_text)
                 );
                 continue;
             }
         };
         sources.push(RevisionSource { relative, content });
     }
+    if let Some(reader) = reader {
+        reader.finish()?;
+    }
     Ok(sources)
+}
+
+/// One `git cat-file --batch` process answering blob reads by object id, one at a time.
+///
+/// Request/response, never pipelined: cat-file flushes after each object, so writing one id and
+/// reading its whole answer before the next cannot fill both pipes and deadlock. Only hex object
+/// ids from `git ls-tree` reach its stdin -- never a path -- and it reads objects from the
+/// database, so it runs nothing from the analyzed tree.
+struct BlobReader {
+    child: std::process::Child,
+    input: std::process::ChildStdin,
+    output: std::io::BufReader<std::process::ChildStdout>,
+    stderr: std::thread::JoinHandle<String>,
+}
+
+/// How much of a child's stderr [`drain_stderr`] keeps for an error message.
+const MAX_KEPT_STDERR_BYTES: u64 = 64 * 1024;
+
+/// Reads `pipe` to its end on a separate thread and returns the first [`MAX_KEPT_STDERR_BYTES`]
+/// as text. Draining is what keeps the child from blocking on a full stderr pipe -- mid-batch or
+/// at exit -- while this side waits on stdout or `wait()`; the excess is discarded.
+fn drain_stderr(pipe: impl std::io::Read + Send + 'static) -> std::thread::JoinHandle<String> {
+    std::thread::spawn(move || {
+        use std::io::Read;
+        let mut pipe = pipe;
+        let mut kept = Vec::new();
+        let _ = pipe
+            .by_ref()
+            .take(MAX_KEPT_STDERR_BYTES)
+            .read_to_end(&mut kept);
+        let _ = std::io::copy(&mut pipe, &mut std::io::sink());
+        String::from_utf8_lossy(&kept).into_owned()
+    })
+}
+
+impl BlobReader {
+    /// Starts the batch process at `root`.
+    fn spawn(root: &Path) -> Result<Self> {
+        let mut child = git_at(root)
+            .args(["cat-file", "--batch"])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .with_context(|| "git failed to start reading the base revision's files")?;
+        let input = child.stdin.take().context("git cat-file has no stdin")?;
+        let output = child.stdout.take().context("git cat-file has no stdout")?;
+        let stderr = drain_stderr(child.stderr.take().context("git cat-file has no stderr")?);
+        Ok(Self {
+            child,
+            input,
+            output: std::io::BufReader::new(output),
+            stderr,
+        })
+    }
+
+    /// Returns the bytes of blob `object`. A missing object, a non-blob, or the process ending
+    /// mid-answer is an error, never an empty file.
+    fn read(&mut self, object: &str) -> Result<Vec<u8>> {
+        use std::io::{BufRead, Read, Write};
+        writeln!(self.input, "{object}")?;
+        self.input.flush()?;
+        let mut header = String::new();
+        if self.output.read_line(&mut header)? == 0 {
+            bail!("git cat-file ended before answering");
+        }
+        let fields: Vec<&str> = header.split_whitespace().collect();
+        let size = match fields.as_slice() {
+            [_, "blob", size] => size.parse::<usize>()?,
+            _ => bail!("unexpected git cat-file answer `{}`", header.trim()),
+        };
+        // The contents are followed by one newline.
+        let mut blob = vec![0; size + 1];
+        self.output.read_exact(&mut blob)?;
+        if blob.pop() != Some(b'\n') {
+            bail!("git cat-file answer was not newline-terminated");
+        }
+        Ok(blob)
+    }
+
+    /// Closes the request stream and requires a clean exit.
+    fn finish(self) -> Result<()> {
+        let Self {
+            mut child,
+            input,
+            output,
+            stderr,
+        } = self;
+        drop(input);
+        drop(output);
+        let status = child.wait()?;
+        let stderr = stderr.join().unwrap_or_default();
+        if !status.success() {
+            bail!(
+                "git failed while reading the base revision's files: {}",
+                terminal_safe(stderr.trim())
+            );
+        }
+        Ok(())
+    }
 }
 
 /// Compiles the admission globs for a base-revision read; `globset`'s errors are wrapped with
@@ -707,8 +839,16 @@ const INHERITED_GIT_VARIABLES: [&str; 8] = [
     "GIT_CEILING_DIRECTORIES",
 ];
 
+#[cfg(test)]
+thread_local! {
+    /// Test-only count of `git` commands built on this thread by [`git_at`].
+    static GIT_SPAWNS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// A `git` invocation bound to `root` and nothing else.
 fn git_at(root: &Path) -> Command {
+    #[cfg(test)]
+    GIT_SPAWNS.with(|spawns| spawns.set(spawns.get() + 1));
     let mut command = Command::new("git");
     for variable in INHERITED_GIT_VARIABLES {
         command.env_remove(variable);
@@ -1431,6 +1571,7 @@ mod tests {
         }
     }
 
+    /// Changed files are reported relative to the analysis root, untracked files included.
     #[test]
     fn changed_files_are_relative_to_the_root_and_include_untracked_files() {
         let directory = tempfile::tempdir().unwrap();
@@ -1454,6 +1595,7 @@ mod tests {
         );
     }
 
+    /// A revision that does not resolve is an error naming `--changed-since`, never an empty set.
     #[test]
     fn a_missing_revision_is_an_error_not_an_empty_changed_set() {
         let directory = tempfile::tempdir().unwrap();
@@ -1470,6 +1612,140 @@ mod tests {
         }
     }
 
+    /// Reads `root`'s committed test files the way `--baseline-from-ref` does, as sorted
+    /// `(path, content)` pairs.
+    fn read_revision(root: &Path) -> Vec<(String, String)> {
+        let mut sources: Vec<_> = revision_sources(root, "HEAD", &["**/*.test.ts".to_owned()], &[])
+            .unwrap()
+            .into_iter()
+            .map(|source| {
+                (
+                    source.relative.to_string_lossy().into_owned(),
+                    source.content,
+                )
+            })
+            .collect();
+        sources.sort();
+        sources
+    }
+
+    /// The base read returns exactly the committed text of every admitted file, whatever its
+    /// name, and skips files the classifier or globs decline.
+    #[test]
+    fn revision_reads_return_the_committed_text_of_admitted_files() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let mut files = vec![
+            ("a.test.ts", "test('a', () => {});\n"),
+            ("-dash.test.ts", "test('dash', () => {});\n"),
+            ("with space.test.ts", "test('space', () => {});\n"),
+            ("nested/b.test.ts", "test('b', () => {});\n"),
+        ];
+        if cfg!(unix) {
+            files.push(("line\nbreak.test.ts", "test('newline', () => {});\n"));
+        }
+        for (path, content) in &files {
+            let full = root.join(path);
+            std::fs::create_dir_all(full.parent().unwrap()).unwrap();
+            std::fs::write(full, content).unwrap();
+        }
+        std::fs::write(root.join("notes.md"), "not source").unwrap();
+        std::fs::write(root.join("helper.ts"), "export const x = 1;").unwrap();
+        init_repository(root);
+        std::fs::write(root.join("a.test.ts"), "changed in the working tree").unwrap();
+
+        let mut expected: Vec<_> = files
+            .iter()
+            .map(|(path, content)| ((*path).to_owned(), (*content).to_owned()))
+            .collect();
+        expected.sort();
+        assert_eq!(read_revision(root), expected);
+    }
+
+    /// An analysis root below the git root reads its own subtree with root-relative paths.
+    #[test]
+    fn revision_reads_resolve_paths_from_an_analysis_root_below_the_git_root() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        std::fs::create_dir_all(root.join("pkg")).unwrap();
+        std::fs::write(root.join("pkg/x.test.ts"), "test('x', () => {});\n").unwrap();
+        std::fs::write(root.join("x.test.ts"), "test('outer', () => {});\n").unwrap();
+        init_repository(root);
+        assert_eq!(
+            read_revision(&root.join("pkg")),
+            vec![("x.test.ts".to_owned(), "test('x', () => {});\n".to_owned())]
+        );
+    }
+
+    /// Oversized and non-UTF-8 blobs are skipped; the other files are still read.
+    #[test]
+    fn revision_reads_skip_oversized_and_non_utf8_blobs() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        std::fs::write(root.join("ok.test.ts"), "test('ok', () => {});\n").unwrap();
+        std::fs::write(root.join("bytes.test.ts"), [0xff, 0xfe, 0x00]).unwrap();
+        let limit = usize::try_from(MAX_REVISION_SOURCE_BYTES).unwrap();
+        std::fs::write(root.join("huge.test.ts"), "x".repeat(limit + 1)).unwrap();
+        init_repository(root);
+        assert_eq!(
+            read_revision(root),
+            vec![(
+                "ok.test.ts".to_owned(),
+                "test('ok', () => {});\n".to_owned()
+            )]
+        );
+    }
+
+    /// A child that floods stderr cannot block: the drain keeps a bounded prefix and reads the
+    /// rest, so the child exits and `wait()` returns. The watchdog turns a regression into a
+    /// failure instead of a hung test run.
+    #[cfg(unix)]
+    #[test]
+    fn a_flooding_stderr_is_drained_so_the_child_can_exit() {
+        let (done, finished) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut child = Command::new("sh")
+                .args(["-c", "head -c 300000 /dev/zero | tr '\\0' x >&2"])
+                .stderr(std::process::Stdio::piped())
+                .spawn()
+                .unwrap();
+            let stderr = drain_stderr(child.stderr.take().unwrap());
+            let status = child.wait().unwrap();
+            let _ = done.send((status.success(), stderr.join().unwrap().len()));
+        });
+        let (success, kept) = finished
+            .recv_timeout(std::time::Duration::from_secs(20))
+            .expect("the child exited instead of blocking on a full stderr pipe");
+        assert!(success);
+        assert_eq!(kept, usize::try_from(MAX_KEPT_STDERR_BYTES).unwrap());
+    }
+
+    /// The base read costs a fixed number of git processes, not one per file (P5): spawning one
+    /// `cat-file` per file made `--baseline-from-ref` take seconds on ordinary repositories.
+    #[test]
+    fn revision_reads_spawn_a_fixed_number_of_git_processes() {
+        let spawns_for = |count: usize| {
+            let directory = tempfile::tempdir().unwrap();
+            for index in 0..count {
+                std::fs::write(
+                    directory.path().join(format!("t{index}.test.ts")),
+                    format!("test('{index}', () => {{}});\n"),
+                )
+                .unwrap();
+            }
+            init_repository(directory.path());
+            let before = GIT_SPAWNS.with(std::cell::Cell::get);
+            assert_eq!(read_revision(directory.path()).len(), count);
+            GIT_SPAWNS.with(std::cell::Cell::get) - before
+        };
+        assert_eq!(
+            spawns_for(2),
+            spawns_for(30),
+            "git processes must not grow with files"
+        );
+    }
+
+    /// Changed-file mode outside a Git repository is an error, not an empty set.
     #[test]
     fn a_directory_outside_any_repository_is_an_error() {
         let directory = tempfile::tempdir().unwrap();
