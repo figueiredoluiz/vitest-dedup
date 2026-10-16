@@ -162,6 +162,13 @@ export function buildArguments(inputs) {
   if (inputs.changedSince) {
     args.push("--changed-since", inputs.changedSince);
   }
+  // Passed through unvalidated, like `fail-on-new`: the CLI's own message names a bad value.
+  if (inputs.maxMemory) {
+    args.push("--max-memory", inputs.maxMemory);
+  }
+  if (inputs.noMemoryCap === "true") {
+    args.push("--no-memory-cap");
+  }
 
   return args;
 }
@@ -598,6 +605,8 @@ export async function runAction({ env = process.env, cwd = process.cwd() } = {})
     baseline: readInput(env, "baseline", ""),
     failOnNew: readInput(env, "fail-on-new", ""),
     changedSince: readInput(env, "changed-since", ""),
+    maxMemory: readInput(env, "max-memory", ""),
+    noMemoryCap: readInput(env, "no-memory-cap", "false"),
     version: readInput(env, "version", ""),
   };
 

@@ -649,6 +649,55 @@ impl MemoryReport {
     }
 }
 
+/// The default retained-memory budget, in MiB (`--max-memory`).
+pub const DEFAULT_MEMORY_BUDGET_MIB: u64 = 2_048;
+
+/// A ceiling on what the run holds, checked at file boundaries.
+///
+/// The figure is the one [`MemoryReport::post_extraction`] reports as `retained_bytes` -- the
+/// corpus vector's spine plus each test's [`HeapBytes::heap_bytes`] -- plus any source text the run
+/// retains for its reports. Each file is charged once, when its tests are ingested, so checking
+/// costs nothing proportional to the corpus.
+#[derive(Debug, Clone, Copy)]
+pub struct MemoryRoof {
+    /// The budget in bytes, or `None` when the roof is disabled.
+    budget_bytes: Option<u64>,
+    /// Heap and retained text charged so far, excluding the corpus spine.
+    charged: u64,
+}
+
+impl MemoryRoof {
+    /// A roof of `budget_bytes`, or none.
+    #[must_use]
+    pub fn new(budget_bytes: Option<u64>) -> Self {
+        Self {
+            budget_bytes,
+            charged: 0,
+        }
+    }
+
+    /// Charges one file's tests, before they join the corpus, and the text retained for it.
+    pub fn charge(&mut self, tests: &[TestCase], retained_text: usize) {
+        let heap: usize = tests.iter().map(HeapBytes::heap_bytes).sum();
+        self.charged = self
+            .charged
+            .saturating_add(u64::try_from(heap.saturating_add(retained_text)).unwrap_or(u64::MAX));
+    }
+
+    /// Whether `corpus`, with everything charged so far, holds more than the budget.
+    ///
+    /// Takes `&Vec` for its capacity, as [`MemoryReport::post_extraction`] does.
+    #[allow(clippy::ptr_arg)]
+    #[must_use]
+    pub fn exceeded(&self, corpus: &Vec<TestCase>) -> bool {
+        let spine = corpus.capacity().saturating_mul(size_of::<TestCase>());
+        let held = self
+            .charged
+            .saturating_add(u64::try_from(spine).unwrap_or(u64::MAX));
+        self.budget_bytes.is_some_and(|budget| held > budget)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1133,5 +1182,33 @@ mod tests {
             Title::Static(padded("computed name", 700)).heap_bytes(),
             cost
         );
+    }
+
+    /// The roof holds exactly its budget and stops one byte past it; without a budget it never
+    /// stops.
+    #[test]
+    fn the_roof_stops_one_byte_past_its_budget() {
+        let corpus: Vec<TestCase> = Vec::new();
+        let mut roof = MemoryRoof::new(Some(100));
+        roof.charge(&[], 100);
+        assert!(!roof.exceeded(&corpus), "equal to the budget is within it");
+        roof.charge(&[], 1);
+        assert!(roof.exceeded(&corpus));
+
+        let mut uncapped = MemoryRoof::new(None);
+        uncapped.charge(&[], usize::MAX);
+        assert!(!uncapped.exceeded(&corpus));
+    }
+
+    /// The charge is the figure `--debug-memory` reports: the corpus spine plus each test's heap.
+    #[test]
+    fn the_roof_charges_what_debug_memory_reports() {
+        let mut corpus = vec![test_case(&padded("a title", 4_000))];
+        let retained = MemoryReport::post_extraction(&corpus, 1, 1, None).retained_bytes as u64;
+        let mut roof = MemoryRoof::new(Some(retained));
+        roof.charge(&corpus, 0);
+        assert!(!roof.exceeded(&corpus));
+        corpus.reserve_exact(1);
+        assert!(roof.exceeded(&corpus), "the spine's capacity counts too");
     }
 }

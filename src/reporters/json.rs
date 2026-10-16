@@ -17,6 +17,7 @@
 //!     "unresolvedContexts": 0,
 //!     "pairBudgetExhausted": false,
 //!     "hookScanExhausted": false,
+//!     "filesOverMemoryBudget": 0,
 //!     "findingsTruncated": 0,
 //!     "withheldUnchanged": 0
 //!   },

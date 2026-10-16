@@ -253,6 +253,14 @@ describe("buildArguments", () => {
     assert.ok(!args.includes("--changed-since"));
   });
 
+  test("forwards the memory budget inputs, and omits them when unset", () => {
+    const args = buildArguments({ path: ".", maxMemory: "512", noMemoryCap: "true" });
+    assert.deepEqual(args.slice(args.indexOf("--max-memory")), ["--max-memory", "512", "--no-memory-cap"]);
+    const unset = buildArguments({ path: ".", maxMemory: "", noMemoryCap: "false" });
+    assert.ok(!unset.includes("--max-memory"));
+    assert.ok(!unset.includes("--no-memory-cap"));
+  });
+
   test("passes --fail-on-new 0, which is the strictest limit and not an absent one", () => {
     const args = buildArguments({ path: ".", baseline: "b.json", failOnNew: "0" });
     assert.deepEqual(args.slice(args.indexOf("--fail-on-new")), ["--fail-on-new", "0"]);

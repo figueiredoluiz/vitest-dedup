@@ -41,6 +41,7 @@ vitest-dedup . --reporters json,html --output reports/dedup  # write report file
 vitest-dedup . --reporters jsonl | jq -c 'select(.type == "finding")'
 vitest-dedup . --baseline dedup-baseline.json               # gate only on findings the baseline lacks
 vitest-dedup . --changed-since origin/main                  # only findings touching changed files
+vitest-dedup . --max-memory 4096                            # raise the 2048 MiB memory budget
 ```
 
 `vitest-dedup check <path>` is the explicit form of `vitest-dedup <path>`. `--help` lists every
@@ -137,8 +138,8 @@ attestation check is skipped with a warning; a failed verification, including a 
 always fails the step.
 
 The inputs are `path`, `config`, `threshold`, `reporters`, `output`, `rule`, `globals`,
-`no-metrics`, `fail-on-incomplete`, `baseline`, `fail-on-new`, `changed-since`, `version`, and
-`token`. `path` is the positional argument, `version` selects the release binary, `token`
+`no-metrics`, `fail-on-incomplete`, `baseline`, `fail-on-new`, `changed-since`, `max-memory`,
+`no-memory-cap`, `version`, and `token`. `path` is the positional argument, `version` selects the release binary, `token`
 authenticates the attestation check, and each of the others maps to the flag of the same name.
 `rule` accepts several overrides separated by newlines or commas. The JSON reporter is always
 enabled so the outputs below can be read. `--update-baseline` is deliberately
@@ -176,8 +177,8 @@ The gate counts a class of causes, because the classes call for different respon
 `--fail-on-incomplete` or `--fail-on-incomplete=any` counts every cause. `=reads` counts only
 causes meaning the project could not be fully read: unreadable, oversized, or partially read
 files, undetermined config, and tests whose context could not be resolved. `=limits` counts only
-the analyzer's own bounded work being capped: the pair budget, the hook-scan budget, and truncated
-findings. The value needs the `=`; with a space, `reads` would be read as the path.
+the analyzer's own bounded work being capped: the pair budget, the hook-scan budget, the memory
+budget, and truncated findings. The value needs the `=`; with a space, `reads` would be read as the path.
 
 A file in which every test was excluded is a blind spot: it produced no findings, so it appears
 nowhere in the report. Blind spots are named on stderr, worst first, counted in the `blindFiles`

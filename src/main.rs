@@ -248,6 +248,32 @@ fn report_path(prefix: &std::path::Path, extension: &str) -> std::path::PathBuf 
 /// One analysis run end to end: parse args, load config, discover, extract, analyze, apply
 /// modes, write reports, decide the exit code. Every failure is a `bail!` with a sanitized
 /// message; the caller maps results to the process exit code.
+/// The memory roof `--max-memory`/`--no-memory-cap` selected.
+fn memory_roof(args: &ParsedArgs) -> vitest_dedup::memory::MemoryRoof {
+    vitest_dedup::memory::MemoryRoof::new(
+        args.memory_budget_mib
+            .map(|mib| mib.saturating_mul(1024 * 1024)),
+    )
+}
+
+/// Names where the memory roof stopped a pass and what to do about it.
+fn write_roof_diagnostic(
+    stderr: &mut impl Write,
+    pass: &str,
+    args: &ParsedArgs,
+    files_read: usize,
+    remaining: usize,
+) -> Result<()> {
+    writeln!(
+        stderr,
+        "\nvitest-dedup: the {pass} reached the memory budget ({} MiB) after {files_read} file(s); \
+         {remaining} remaining file(s) were not analyzed. Raise --max-memory, pass \
+         --no-memory-cap, or narrow the analyzed directory or `include`.",
+        args.memory_budget_mib.unwrap_or_default()
+    )?;
+    Ok(())
+}
+
 fn run() -> Result<ExitCode> {
     let args = ParsedArgs::parse()?;
     let mut stderr = std::io::stderr().lock();
@@ -392,7 +418,8 @@ fn run() -> Result<ExitCode> {
                 modes::revision_sources(&config.root, revision, &config.include, &config.exclude)?;
             let mut base_tests = Vec::new();
             let mut base_causes = IncompleteCauses::default();
-            for source in &sources {
+            let mut base_roof = memory_roof(&args);
+            for (index, source) in sources.iter().enumerate() {
                 let (language, module_flavor) =
                     match discovery::classify_source_file(&source.relative) {
                         Some(classified) => classified,
@@ -409,7 +436,20 @@ fn run() -> Result<ExitCode> {
                     base_causes.files_partially_read += 1;
                 }
                 relativize_extraction_paths(&mut extraction.tests, &config.root);
+                base_roof.charge(&extraction.tests, 0);
                 base_tests.extend(extraction.tests);
+                let remaining = sources.len() - index - 1;
+                if remaining > 0 && base_roof.exceeded(&base_tests) {
+                    base_causes.files_over_memory_budget = remaining;
+                    write_roof_diagnostic(
+                        &mut stderr,
+                        "base revision",
+                        &args,
+                        index + 1,
+                        remaining,
+                    )?;
+                    break;
+                }
             }
             let base_result = analysis::analyze(base_tests, &config, sources.len(), base_causes)?;
             // A base run that could not see the whole tree (oversized, non-UTF-8, or skipped
@@ -521,7 +561,10 @@ fn run() -> Result<ExitCode> {
     let mut inline_suppressions: Vec<modes::InlineSuppression> = Vec::new();
 
     let mut seen_helper_sources = std::collections::BTreeSet::new();
-    for file in &discovered.files {
+    let mut roof = memory_roof(&args);
+    for (index, file) in discovered.files.iter().enumerate() {
+        // Source text this file adds to `retained_sources`, charged to the memory roof.
+        let mut retained_text = 0;
         // A single unreadable file must degrade this file, not the run. `read_to_string` fails on
         // any non-UTF-8 byte, and propagating that aborted the whole analysis with exit 2 and no
         // report at all -- losing every finding from every other file, and not even naming the
@@ -561,6 +604,7 @@ fn run() -> Result<ExitCode> {
         };
         files_read += 1;
         if retain_sources {
+            retained_text += source.len();
             // Clone, not move: `extract` parses this same `source` below, and the byte spans in
             // every `Location` it produces index into exactly these bytes.
             retained_sources.insert(
@@ -666,6 +710,7 @@ fn run() -> Result<ExitCode> {
                 relative.clone(),
             ));
             if retain_sources {
+                retained_text += helper_source.len();
                 retained_sources.insert(relative, helper_source);
             }
         }
@@ -705,7 +750,16 @@ fn run() -> Result<ExitCode> {
         // Relativizing both here, at the single point where the analysis root is known, keeps the
         // two location families from ever disagreeing about what a reported path means.
         relativize_extraction_paths(&mut extraction.tests, &config.root);
+        roof.charge(&extraction.tests, retained_text);
         tests.extend(extraction.tests);
+        // Whole files only: stopping here keeps every per-file side effect above consistent, so
+        // the run is exactly a run over the files read so far.
+        let remaining = discovered.files.len() - index - 1;
+        if remaining > 0 && roof.exceeded(&tests) {
+            causes.files_over_memory_budget = remaining;
+            write_roof_diagnostic(&mut stderr, "analysis", &args, files_read, remaining)?;
+            break;
+        }
     }
 
     drop(seen_helper_sources);

@@ -197,8 +197,8 @@ struct RawOptions {
     /// corpus. With no value (or `=any`) every cause counts; `=reads` counts only causes that
     /// mean the analyzed project could not be fully read (unreadable/oversized/partial files,
     /// undetermined config, tests whose context could not be resolved); `=limits` counts only
-    /// this tool's own bounded work being capped (pair budget, hook-scan budget, truncated
-    /// findings). The split exists because the two classes ask for different CI responses: fix
+    /// this tool's own bounded work being capped (pair budget, hook-scan budget, memory budget,
+    /// truncated findings). The split exists because the two classes ask for different CI responses: fix
     /// the repository, or raise the limits.
     ///
     /// The value requires `=`: an optional value with a space would greedily consume the next
@@ -288,6 +288,23 @@ struct RawOptions {
     /// the run as an operational error instead of producing useful analysis.
     #[arg(long, global = true)]
     globals: bool,
+
+    /// Stop reading files once the analyzer holds more than MIB mebibytes (default 2048).
+    ///
+    /// Checked between files, so the run analyzes whole files only; the rest are reported and the
+    /// run is marked incomplete.
+    #[arg(
+        long,
+        global = true,
+        value_name = "MIB",
+        value_parser = clap::value_parser!(u64).range(1..),
+        conflicts_with = "no_memory_cap"
+    )]
+    max_memory: Option<u64>,
+
+    /// Remove the memory budget.
+    #[arg(long, global = true)]
+    no_memory_cap: bool,
 }
 
 /// Parsed and validated command-line arguments.
@@ -333,6 +350,8 @@ pub struct ParsedArgs {
     pub fail_on_new: Option<usize>,
     /// Git revision to scope the report to (`--changed-since`).
     pub changed_since: Option<String>,
+    /// Retained-memory budget in MiB, or `None` under `--no-memory-cap`.
+    pub memory_budget_mib: Option<u64>,
 }
 
 impl ParsedArgs {
@@ -475,6 +494,11 @@ impl ParsedArgs {
             update_baseline: cli.options.update_baseline,
             fail_on_new: cli.options.fail_on_new,
             changed_since: cli.options.changed_since,
+            memory_budget_mib: (!cli.options.no_memory_cap).then(|| {
+                cli.options
+                    .max_memory
+                    .unwrap_or(crate::memory::DEFAULT_MEMORY_BUDGET_MIB)
+            }),
         })
     }
 
@@ -622,6 +646,22 @@ mod tests {
         ] {
             assert!(ParsedArgs::parse_from(argv).unwrap().no_metrics);
         }
+    }
+
+    /// Check CLI parsing: the memory budget defaults to 2048 MiB, takes a positive value, and is
+    /// removed only by `--no-memory-cap`, which conflicts with an explicit budget.
+    #[test]
+    fn memory_budget_defaults_and_accepts_overrides() {
+        let budget =
+            |argv: &[&str]| ParsedArgs::parse_from(argv).map(|args| args.memory_budget_mib);
+        assert_eq!(budget(&["vitest-dedup"]).unwrap(), Some(2_048));
+        assert_eq!(
+            budget(&["vitest-dedup", "--max-memory", "512"]).unwrap(),
+            Some(512)
+        );
+        assert_eq!(budget(&["vitest-dedup", "--no-memory-cap"]).unwrap(), None);
+        assert!(budget(&["vitest-dedup", "--max-memory", "0"]).is_err());
+        assert!(budget(&["vitest-dedup", "--max-memory", "512", "--no-memory-cap"]).is_err());
     }
 
     /// Check CLI parsing: repeated rule flag for the same rule keeps the last occurrence.

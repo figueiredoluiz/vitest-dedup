@@ -287,6 +287,13 @@ loop array longer than what remains of its limit is skipped without being read. 
 the file stops emitting and counts as not read in full; the declarations already emitted are
 compared as usual.
 
+The run reads whole files until the analyzer holds more than its memory budget: 2,048 MiB by
+default, set with `--max-memory <MiB>` and removed with `--no-memory-cap`. The figure is the
+retained heap `--debug-memory` reports plus source text kept for the HTML report. Files after that
+point are not analyzed and are counted in `filesOverMemoryBudget`; every rule runs over the files
+read, with the same findings as a run over exactly those files. `--baseline-from-ref` applies the
+same budget to the base revision.
+
 ## Determinism
 
 The same input produces byte-identical output. Findings are ordered by their participants'

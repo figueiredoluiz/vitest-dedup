@@ -69,6 +69,14 @@ inputs:
       Requires full history: set `fetch-depth: 0` on `actions/checkout`, or the run fails with an
       operational error rather than diffing against a truncated history.
     default: ""
+  max-memory:
+    description: >-
+      Retained-memory budget in MiB (default 2048). Files are read whole until the analyzer holds
+      more than this; the rest are reported and the run is marked incomplete.
+    default: ""
+  no-memory-cap:
+    description: Remove the memory budget
+    default: "false"
   version:
     description: Exact VitestDedup release version to download and verify
     required: true
