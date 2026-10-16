@@ -18,8 +18,25 @@ pub(super) struct RunnerImport {
 pub(super) struct ExpansionState {
     pub(super) active: Vec<(PathBuf, u32)>,
     left: usize,
+    /// Declarations this file may still emit (see [`MAX_DECLARATIONS_PER_FILE`]).
+    declarations_left: usize,
+    /// Literal loop iterations this file may still unroll (see [`MAX_UNROLLED_ITERATIONS`]).
+    iterations_left: usize,
+    /// Whether a declaration or an iteration was refused, for [`Self::budget_diagnostics`].
+    declarations_refused: bool,
+    iterations_refused: bool,
     /// Whether importing a module (and everything it imports) runs no unmodeled setup, by path.
     closure: HashMap<PathBuf, bool>,
+}
+
+/// Takes one unit from `left`, or marks `refused` when none is left.
+fn admit(left: &mut usize, refused: &mut bool) -> bool {
+    if *left == 0 {
+        *refused = true;
+        return false;
+    }
+    *left -= 1;
+    true
 }
 
 /// Most modules one import-closure check may visit before it refuses.
@@ -31,12 +48,64 @@ impl Default for ExpansionState {
         Self {
             active: Vec::new(),
             left: MAX_HELPER_EXPANSIONS,
+            declarations_left: emission_limit(MAX_DECLARATIONS_PER_FILE),
+            iterations_left: emission_limit(MAX_UNROLLED_ITERATIONS),
+            declarations_refused: false,
+            iterations_refused: false,
             closure: HashMap::new(),
         }
     }
 }
 
+/// The per-file emission limit, or a smaller test-only override set on the extracting thread.
+fn emission_limit(limit: usize) -> usize {
+    #[cfg(test)]
+    if let Some(limit) = EMISSION_LIMIT_OVERRIDE.with(std::cell::Cell::get) {
+        return limit;
+    }
+    limit
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Test-only replacement for both emission limits, so a truncation can be compared against
+    /// a full run without generating ten thousand declarations.
+    pub(super) static EMISSION_LIMIT_OVERRIDE: std::cell::Cell<Option<usize>> =
+        const { std::cell::Cell::new(None) };
+}
+
 impl ExpansionState {
+    /// Spends one declaration, or records the refusal once the file's budget is spent. Nothing is
+    /// admitted after a refused iteration either, so a truncated file is always a prefix of its
+    /// full extraction.
+    pub(super) fn admit_declaration(&mut self) -> bool {
+        !self.iterations_refused
+            && admit(&mut self.declarations_left, &mut self.declarations_refused)
+    }
+
+    /// Spends one unrolled loop iteration, or records the refusal once the budget is spent.
+    pub(super) fn admit_iteration(&mut self) -> bool {
+        admit(&mut self.iterations_left, &mut self.iterations_refused)
+    }
+
+    /// One diagnostic per emission budget this file ran out of.
+    pub(super) fn budget_diagnostics(&self) -> Vec<String> {
+        let mut diagnostics = Vec::new();
+        if self.declarations_refused {
+            diagnostics.push(format!(
+                "the file declares more than {MAX_DECLARATIONS_PER_FILE} tests and suites; \
+                 declarations past the limit were not counted"
+            ));
+        }
+        if self.iterations_refused {
+            diagnostics.push(format!(
+                "the file unrolls more than {MAX_UNROLLED_ITERATIONS} loop iterations; \
+                 declarations past the limit were not counted"
+            ));
+        }
+        diagnostics
+    }
+
     /// Spends an admission and guards a local helper against recursion and excessive depth.
     pub(super) fn begin(&mut self, identity: (PathBuf, u32)) -> Result<(), &'static str> {
         self.spend()?;
