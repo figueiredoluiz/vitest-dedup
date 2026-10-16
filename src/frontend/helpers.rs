@@ -152,7 +152,68 @@ pub(super) fn render_inline(
 /// The shape-only locate: the parameter count behind a would-be inline, or `None` when the
 /// export cannot be located or does not qualify. Split out so [`would_inline`] decides without
 /// paying for a `Semantic` build, while walking the *same* export logic [`render_from`] does.
+///
+/// Memoized process-wide per (path, export): every inline decision asks this, and the walk parses
+/// the helper and each re-export hop. An answer is served only while every file the walk read
+/// still has the stamp it had then (see [`settled_stamp`]); a walk that read an unsettled or
+/// unstampable file is not cached.
 fn locate(path: &Path, export: &str) -> Option<usize> {
+    let key = (path.to_path_buf(), export.to_owned());
+    let lock = || {
+        LOCATE_ANSWERS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    };
+    let cached = lock()
+        .as_ref()
+        .and_then(|answers| answers.get(&key).cloned());
+    if let Some((files, answer)) = cached {
+        if files
+            .iter()
+            .all(|(file, stamp)| current_stamp(file).as_ref() == Some(stamp))
+        {
+            return answer;
+        }
+    }
+    let mut files = Vec::new();
+    let answer = walk_locate(path, export, &mut files);
+    if let Some(files) = files.into_iter().collect::<Option<Vec<_>>>() {
+        let mut guard = lock();
+        let answers = guard.get_or_insert_with(std::collections::HashMap::new);
+        if answers.len() < MAX_LOCATE_ANSWERS || answers.contains_key(&key) {
+            answers.insert(key, (files, answer));
+        }
+    }
+    answer
+}
+
+/// Upper bound on memoized [`locate`] answers; past it, new lookups are walked uncached.
+const MAX_LOCATE_ANSWERS: usize = 16_384;
+
+/// One memoized [`locate`] answer: the files its walk read, with their stamps, and the answer.
+type LocateAnswer = (Vec<(PathBuf, FileStamp)>, Option<usize>);
+
+/// Memoized [`locate`] answers keyed by (helper path, export name).
+static LOCATE_ANSWERS: std::sync::Mutex<
+    Option<std::collections::HashMap<(PathBuf, String), LocateAnswer>>,
+> = std::sync::Mutex::new(None);
+
+/// Returns `path`'s current stamp, or `None` when it cannot be read or was modified too recently
+/// to trust (see [`settled_stamp`]).
+fn current_stamp(path: &Path) -> Option<FileStamp> {
+    std::fs::metadata(path)
+        .ok()
+        .and_then(|metadata| settled_stamp(&metadata))
+}
+
+/// The uncached [`locate`] walk. Records each file it reads, with its stamp (`None` when the file
+/// is unsettled, unstampable or not admitted), so the caller can decide whether the answer may be
+/// memoized.
+fn walk_locate(
+    path: &Path,
+    export: &str,
+    files: &mut Vec<Option<(PathBuf, FileStamp)>>,
+) -> Option<usize> {
     let mut visited = HashSet::new();
     let mut path = path.to_path_buf();
     let mut export = export.to_owned();
@@ -160,12 +221,26 @@ fn locate(path: &Path, export: &str) -> Option<usize> {
         if !visited.insert((path.clone(), export.clone())) {
             return None;
         }
+        // Memoizable only while the answer is a property of the files' content: a file that was
+        // not admitted (a read error, a refusal) leaves the walk uncached, so a helper made
+        // readable again is walked afresh. An installed package is refused by path alone. The
+        // admission check runs only on a settled file, whose source the cache then serves.
+        files.push(
+            current_stamp(&path)
+                .filter(|_| is_dependency(&path) || admitted_source(&path).is_some())
+                .map(|stamp| (path.clone(), stamp)),
+        );
         // The program borrows this frame's arena; everything found in it is consumed before the
         // loop moves to the next hop's file.
         let found = with_parsed_file(&path, |program, _| match find_export(program, &export)? {
             Export::Local(callable) => bindable_parameters(&callable).map(CallableOrHop::Callable),
             Export::Reexport { specifier, local } => {
-                resolve_hop(&path, &specifier).map(|next| CallableOrHop::Hop((next, local)))
+                let next = resolve_hop(&path, &specifier);
+                // An unresolved target is no file to stamp; creating it must change the answer.
+                if next.is_none() {
+                    files.push(None);
+                }
+                next.map(|next| CallableOrHop::Hop((next, local)))
             }
         })?;
         match found {
@@ -451,6 +526,8 @@ pub(super) fn with_parsed_file<T>(
         return None;
     }
     let source = admitted_source(path)?;
+    #[cfg(test)]
+    HELPER_PARSES.with(|parses| parses.set(parses.get() + 1));
     let allocator = Allocator::default();
     // Use the resolved helper extension, so .ts casts and .tsx JSX keep their own syntax.
     let parsed = Parser::new(&allocator, &source, SourceType::from_path(path).ok()?).parse();
@@ -469,6 +546,17 @@ const MAX_CACHED_HELPER_BYTES: usize = 64 * 1024 * 1024;
 /// rewrite inside one tick keeps the old stamp, so a file modified this recently is read afresh
 /// every time, the same way Git re-checks racily clean index entries.
 const RACY_MODIFICATION_WINDOW: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// The stamp a cache entry for this file may be keyed on: its length and modification time, or
+/// `None` when the modification time is unreadable or within [`RACY_MODIFICATION_WINDOW`] of now.
+fn settled_stamp(metadata: &std::fs::Metadata) -> Option<FileStamp> {
+    let modified = metadata.modified().ok()?;
+    let age = modified.elapsed().ok()?;
+    (age > RACY_MODIFICATION_WINDOW).then_some(FileStamp {
+        len: metadata.len(),
+        modified,
+    })
+}
 
 /// The metadata a cached helper entry is valid for. A file whose length or modification time
 /// differs is read again, so a rewritten helper is not served from an old copy. A same-length
@@ -495,6 +583,8 @@ static HELPER_SOURCES: std::sync::Mutex<Option<HelperSources>> = std::sync::Mute
 thread_local! {
     /// Test-only count of helper files this thread actually read.
     static HELPER_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// Test-only count of helper files this thread parsed.
+    static HELPER_PARSES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// Returns `path`'s source when it is admitted for parsing (readable, within the size bound and
@@ -504,19 +594,7 @@ thread_local! {
 /// [`RACY_MODIFICATION_WINDOW`], is never cached.
 fn admitted_source(path: &Path) -> Option<std::sync::Arc<str>> {
     let metadata = std::fs::metadata(path).ok()?;
-    let settled = |modified: &std::time::SystemTime| {
-        modified
-            .elapsed()
-            .is_ok_and(|age| age > RACY_MODIFICATION_WINDOW)
-    };
-    let stamp = metadata
-        .modified()
-        .ok()
-        .filter(settled)
-        .map(|modified| FileStamp {
-            len: metadata.len(),
-            modified,
-        });
+    let stamp = settled_stamp(&metadata);
     let lock = || {
         HELPER_SOURCES
             .lock()

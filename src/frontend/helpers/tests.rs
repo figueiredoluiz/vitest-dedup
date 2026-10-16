@@ -24,6 +24,98 @@ fn settled_time() -> std::time::SystemTime {
     std::time::SystemTime::now() - std::time::Duration::from_secs(3600)
 }
 
+/// Returns how many helper files this thread has parsed so far.
+fn helper_parses() -> usize {
+    HELPER_PARSES.with(std::cell::Cell::get)
+}
+
+/// The export lookup behind every inline decision is memoized: twenty lookups of one export parse
+/// the helper once.
+#[test]
+fn an_export_lookup_parses_once_across_repeated_calls() {
+    let dir = tempfile::tempdir().unwrap();
+    let helper = dir.path().join("helpers.ts");
+    write_at(
+        &helper,
+        "export function add(a, b) { return a + b; }",
+        settled_time(),
+    );
+    let before = helper_parses();
+    for _ in 0..20 {
+        assert_eq!(locate(&helper, "add"), Some(2));
+    }
+    assert_eq!(
+        helper_parses() - before,
+        1,
+        "20 lookups of one unchanged export"
+    );
+}
+
+/// A memoized lookup depends on every file its walk read: rewriting the re-export target, not the
+/// file that was asked about, still forces a fresh walk.
+#[test]
+fn a_rewritten_reexport_target_is_walked_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let barrel = dir.path().join("index.ts");
+    let target = dir.path().join("impl.ts");
+    let modified = settled_time();
+    write_at(&barrel, "export { add } from './impl'", modified);
+    write_at(&target, "export function add(a) { return a; }", modified);
+    assert_eq!(locate(&barrel, "add"), Some(1));
+    write_at(
+        &target,
+        "export function add(a, b) { return a + b; }",
+        modified,
+    );
+    assert_eq!(
+        locate(&barrel, "add"),
+        Some(2),
+        "the rewritten target's arity"
+    );
+}
+
+/// A lookup that read a recently modified file is not memoized, and reads it once per walk.
+#[test]
+fn a_lookup_over_an_unsettled_file_is_not_memoized() {
+    let dir = tempfile::tempdir().unwrap();
+    let helper = dir.path().join("helpers.ts");
+    write_at(
+        &helper,
+        "export function add(a, b) { return a + b; }",
+        std::time::SystemTime::now(),
+    );
+    let (parses, reads) = (helper_parses(), helper_reads());
+    assert_eq!(locate(&helper, "add"), Some(2));
+    assert_eq!(locate(&helper, "add"), Some(2));
+    assert_eq!(
+        helper_parses() - parses,
+        2,
+        "each lookup walks the unsettled file"
+    );
+    assert_eq!(helper_reads() - reads, 2, "one read per walk");
+}
+
+/// A re-export whose target is missing is walked again once the target exists. The second lookup
+/// runs on a new thread, as a later file's extraction does, since resolution is memoized per
+/// worker.
+#[test]
+fn a_reexport_to_a_created_target_is_walked_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let barrel = dir.path().join("index.ts");
+    let modified = settled_time();
+    write_at(&barrel, "export { add } from './impl'", modified);
+    assert_eq!(locate(&barrel, "add"), None);
+    write_at(
+        &dir.path().join("impl.ts"),
+        "export function add(a) { return a; }",
+        modified,
+    );
+    let created = std::thread::spawn(move || locate(&barrel, "add"))
+        .join()
+        .unwrap();
+    assert_eq!(created, Some(1), "the created target");
+}
+
 /// One helper file is read once however many call sites ask about it (P4): every inline
 /// decision used to re-read and re-scan the file, which dominated helper-heavy runs.
 #[test]
