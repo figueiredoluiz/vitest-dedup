@@ -2,7 +2,7 @@
 // Guard for `.github/workflows/release.yml`, whose publication path is otherwise exercised only
 // by a manual dispatch from a release tag -- the worst moment to discover it is broken.
 //
-// This checks two independent things that nothing in CI previously touched:
+// This checks release payloads, platform invariants, Node pins, and publication channels:
 //
 //   1. The two `node -e` payloads embedded in release.yml actually run: extracted from the YAML
 //      (never hardcoded -- a hardcoded copy would drift from the workflow and this check would
@@ -332,6 +332,31 @@ if (jobsStart === -1) {
     }
   }
 }
+
+// 4. Publication channels must be explicit, including older stable versions and prereleases.
+const releaseAction = releaseYml.match(
+  /^      - uses: softprops\/action-gh-release@[^\r\n]+\r?\n((?:^        [^\r\n]*\r?\n)+)/m,
+)
+const prereleaseInput = /^          prerelease: \$\{\{ contains\(needs\.resolve\.outputs\.version, '-'\) \}\}\r?$/m
+if (!releaseAction || !prereleaseInput.test(releaseAction[1])) {
+  fail('GitHub release must derive prerelease from the validated resolve version')
+}
+
+const { npmPublishArguments } = await import('../release/publish-npm-packages.mjs')
+let channelsChecked = 0
+for (const [version, tag] of [
+  ['1.0.0', 'latest'], ['0.2.0', 'latest'],
+  ['1.0.0-rc.1', 'next'], ['1.0.0-beta.2', 'next'], ['1.0.0-0', 'next'],
+]) {
+  for (const directory of ['npm/platforms/darwin-arm64', '.']) {
+    const args = npmPublishArguments(directory, version)
+    channelsChecked++
+    if (args.filter((arg) => arg === '--tag').length !== 1 || args[args.indexOf('--tag') + 1] !== tag) {
+      fail(`npm publication of ${directory}@${version} must pass --tag ${tag}`)
+    }
+  }
+}
+console.log(`publication channels: ${channelsChecked} npm argument cases checked`)
 
 // ---------------------------------------------------------------------------------------------
 if (failures.length > 0) {
