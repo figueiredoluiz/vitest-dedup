@@ -414,44 +414,47 @@ fn run() -> Result<ExitCode> {
     // whose `globals` genuinely differed shows up as extra new findings (visible, fail-closed).
     let ref_baseline: Option<modes::Baseline> = match &args.baseline_from_ref {
         Some(revision) => {
-            let sources =
-                modes::revision_sources(&config.root, revision, &config.include, &config.exclude)?;
             let mut base_tests = Vec::new();
             let mut base_causes = IncompleteCauses::default();
             let mut base_roof = memory_roof(&args);
-            for (index, source) in sources.iter().enumerate() {
-                let (language, module_flavor) =
-                    match discovery::classify_source_file(&source.relative) {
-                        Some(classified) => classified,
-                        None => continue,
+            let mut base_files = 0;
+            // One base file is held at a time; the roof stops the read, not only the extraction.
+            let unread = modes::revision_sources(
+                &config.root,
+                revision,
+                &config.include,
+                &config.exclude,
+                |source| {
+                    base_files += 1;
+                    let Some((language, module_flavor)) =
+                        discovery::classify_source_file(&source.relative)
+                    else {
+                        return Ok(true);
                     };
-                let base_file = discovery::SourceFile::without_project_context(
-                    config.root.join(&source.relative),
-                    language,
-                    module_flavor,
-                );
-                let mut extraction =
-                    frontend::extract_from_revision(&source.content, &base_file, resolved_globals);
-                if extraction.incomplete {
-                    base_causes.files_partially_read += 1;
-                }
-                relativize_extraction_paths(&mut extraction.tests, &config.root);
-                base_roof.charge(&extraction.tests, 0);
-                base_tests.extend(extraction.tests);
-                let remaining = sources.len() - index - 1;
-                if remaining > 0 && base_roof.exceeded(&base_tests) {
-                    base_causes.files_over_memory_budget = remaining;
-                    write_roof_diagnostic(
-                        &mut stderr,
-                        "base revision",
-                        &args,
-                        index + 1,
-                        remaining,
-                    )?;
-                    break;
-                }
+                    let base_file = discovery::SourceFile::without_project_context(
+                        config.root.join(&source.relative),
+                        language,
+                        module_flavor,
+                    );
+                    let mut extraction = frontend::extract_from_revision(
+                        &source.content,
+                        &base_file,
+                        resolved_globals,
+                    );
+                    if extraction.incomplete {
+                        base_causes.files_partially_read += 1;
+                    }
+                    relativize_extraction_paths(&mut extraction.tests, &config.root);
+                    base_roof.charge(&extraction.tests, 0);
+                    base_tests.extend(extraction.tests);
+                    Ok(!base_roof.exceeded(&base_tests))
+                },
+            )?;
+            if unread > 0 {
+                base_causes.files_over_memory_budget = unread;
+                write_roof_diagnostic(&mut stderr, "base revision", &args, base_files, unread)?;
             }
-            let base_result = analysis::analyze(base_tests, &config, sources.len(), base_causes)?;
+            let base_result = analysis::analyze(base_tests, &config, base_files, base_causes)?;
             // A base run that could not see the whole tree (oversized, non-UTF-8, or skipped
             // files) produces a PARTIAL baseline: it accepts less than the base really had, so
             // the gate reports findings as new that the base would have accepted. The safe
@@ -604,13 +607,16 @@ fn run() -> Result<ExitCode> {
         };
         files_read += 1;
         if retain_sources {
-            retained_text += source.len();
             // Clone, not move: `extract` parses this same `source` below, and the byte spans in
-            // every `Location` it produces index into exactly these bytes.
-            retained_sources.insert(
+            // every `Location` it produces index into exactly these bytes. Charged only when new:
+            // a test file already retained as a helper's source holds one copy.
+            let previous = retained_sources.insert(
                 relativize_test_path(&file.path, &config.root),
                 source.clone(),
             );
+            if previous.is_none() {
+                retained_text += source.len();
+            }
         }
         inline_suppressions.extend(modes::scan_inline_suppressions(
             &source,
@@ -710,8 +716,10 @@ fn run() -> Result<ExitCode> {
                 relative.clone(),
             ));
             if retain_sources {
-                retained_text += helper_source.len();
-                retained_sources.insert(relative, helper_source);
+                let length = helper_source.len();
+                if retained_sources.insert(relative, helper_source).is_none() {
+                    retained_text += length;
+                }
             }
         }
         if extraction.proven_empty {

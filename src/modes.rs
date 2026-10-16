@@ -466,8 +466,10 @@ pub struct RevisionSource {
     pub content: String,
 }
 
-/// Reads every admitted file's content out of `revision`'s tree, without ever checking anything
-/// out.
+/// Hands every admitted file's content out of `revision`'s tree to `visit`, one at a time and in
+/// listing order, without ever checking anything out. `visit` returns whether to continue; after
+/// it stops, no further blob is read, but a later non-blob entry is still refused. Returns how many
+/// readable files were left unread.
 ///
 /// This is the containment design the `--baseline-from-ref` row required before the flag could
 /// exist, and every piece is load-bearing:
@@ -498,7 +500,8 @@ pub fn revision_sources(
     revision: &str,
     include_globs: &[String],
     exclude_globs: &[String],
-) -> Result<Vec<RevisionSource>> {
+    mut visit: impl FnMut(RevisionSource) -> Result<bool>,
+) -> Result<usize> {
     if revision.trim().is_empty() || revision.starts_with('-') {
         bail!(
             "invalid --baseline-from-ref revision `{}`",
@@ -574,7 +577,8 @@ pub fn revision_sources(
     }
 
     let mut reader = None;
-    let mut sources = Vec::new();
+    let mut stopped = false;
+    let mut unread = 0;
     for AdmittedEntry {
         path_text,
         relative,
@@ -595,6 +599,10 @@ pub fn revision_sources(
                 terminal_safe(&path_text),
                 terminal_safe(&kind)
             );
+        }
+        if stopped {
+            unread += usize::from(!too_large);
+            continue;
         }
         if too_large {
             eprintln!(
@@ -635,12 +643,12 @@ pub fn revision_sources(
                 continue;
             }
         };
-        sources.push(RevisionSource { relative, content });
+        stopped = !visit(RevisionSource { relative, content })?;
     }
     if let Some(reader) = reader {
         reader.finish()?;
     }
-    Ok(sources)
+    Ok(unread)
 }
 
 /// One `git cat-file --batch` process answering blob reads by object id, one at a time.
@@ -714,6 +722,8 @@ impl BlobReader {
     /// mid-answer is an error, never an empty file.
     fn read(&mut self, object: &str) -> Result<Vec<u8>> {
         use std::io::{BufRead, Read, Write};
+        #[cfg(test)]
+        BLOB_READS.with(|reads| reads.set(reads.get() + 1));
         let input = self
             .input
             .as_mut()
@@ -907,6 +917,8 @@ const INHERITED_GIT_VARIABLES: [&str; 8] = [
 thread_local! {
     /// Test-only count of `git` commands built on this thread by [`git_at`].
     static GIT_SPAWNS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// Test-only count of blobs this thread read through [`BlobReader::read`].
+    static BLOB_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// A `git` invocation bound to `root` and nothing else.
@@ -1679,7 +1691,7 @@ mod tests {
     /// Reads `root`'s committed test files the way `--baseline-from-ref` does, as sorted
     /// `(path, content)` pairs.
     fn read_revision(root: &Path) -> Vec<(String, String)> {
-        let mut sources: Vec<_> = revision_sources(root, "HEAD", &["**/*.test.ts".to_owned()], &[])
+        let mut sources: Vec<_> = collect_sources(root, "HEAD", &["**/*.test.ts".to_owned()], &[])
             .unwrap()
             .into_iter()
             .map(|source| {
@@ -1924,7 +1936,22 @@ mod tests {
                 .map(|glob| (*glob).to_owned())
                 .collect::<Vec<_>>()
         };
-        revision_sources(root, "HEAD", &owned(include), &owned(exclude))
+        collect_sources(root, "HEAD", &owned(include), &owned(exclude))
+    }
+
+    /// Every source a base read yields, collected in listing order.
+    fn collect_sources(
+        root: &Path,
+        revision: &str,
+        include: &[String],
+        exclude: &[String],
+    ) -> Result<Vec<RevisionSource>> {
+        let mut sources = Vec::new();
+        revision_sources(root, revision, include, exclude, |source| {
+            sources.push(source);
+            Ok(true)
+        })?;
+        Ok(sources)
     }
 
     /// The refusal text of a base read that must fail, as the user would see it.
@@ -2011,6 +2038,59 @@ mod tests {
         );
     }
 
+    /// A visitor that stops reads no further blob, and a non-blob entry past the stop still fails
+    /// the read: stopping early must not make the gate more lenient.
+    #[test]
+    fn a_stopped_base_read_reads_no_further_blob_but_still_refuses_a_gitlink() {
+        let repository = repository_with(&[
+            ("a.test.ts", b"a"),
+            ("b.test.ts", b"b"),
+            ("c.test.ts", b"c"),
+        ]);
+        let root = repository.path();
+        let include = ["**/*.test.ts".to_owned()];
+        let before = BLOB_READS.with(std::cell::Cell::get);
+        let mut visited = Vec::new();
+        let unread = revision_sources(root, "HEAD", &include, &[], |source| {
+            visited.push(source.relative);
+            Ok(false)
+        })
+        .unwrap();
+        assert_eq!(visited, [PathBuf::from("a.test.ts")]);
+        assert_eq!(unread, 2);
+        assert_eq!(BLOB_READS.with(std::cell::Cell::get) - before, 1);
+
+        let head = fixture_git()
+            .args(["rev-parse", "HEAD"])
+            .current_dir(root)
+            .output()
+            .unwrap();
+        let commit = String::from_utf8(head.stdout).unwrap().trim().to_owned();
+        for arguments in [
+            vec![
+                "update-index",
+                "--add",
+                "--cacheinfo",
+                "160000",
+                &commit,
+                "z.test.ts",
+            ],
+            vec!["commit", "-qm", "gitlink"],
+        ] {
+            assert!(fixture_git()
+                .args(arguments)
+                .current_dir(root)
+                .status()
+                .unwrap()
+                .success());
+        }
+        let stopped = revision_sources(root, "HEAD", &include, &[], |_| Ok(false));
+        assert!(
+            format!("{:#}", stopped.expect_err("the gitlink is still refused"))
+                .contains("`z.test.ts`")
+        );
+    }
+
     /// Each refusal before any file is read, under the flag's own name: an invalid glob in either
     /// list, a revision that is not a commit, and a directory outside any repository.
     #[test]
@@ -2022,7 +2102,7 @@ mod tests {
         let text = base_read_error(root, &["**/*.test.ts"], &["{"]);
         assert!(text.contains("invalid exclude pattern `{`"), "{text}");
 
-        let missing = revision_sources(root, "no-such-ref", &[], &[]).err();
+        let missing = collect_sources(root, "no-such-ref", &[], &[]).err();
         let text = format!(
             "{:#}",
             missing.expect("an unresolvable revision is refused")

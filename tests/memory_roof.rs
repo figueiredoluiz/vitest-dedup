@@ -176,6 +176,36 @@ fn source_retained_for_html_counts_against_the_budget() {
     );
 }
 
+/// A test file that is also an imported runner's helper is retained once for HTML, so it is
+/// charged once, whichever is read first: with a double charge the file after both would be left
+/// unread.
+#[test]
+fn a_test_file_retained_as_a_helper_is_charged_once() {
+    // (runner module, caller): the caller sorts first in the first case, the runner in the second.
+    for (runner, caller) in [("b", "a"), ("a", "b")] {
+        let root = tempfile::tempdir().unwrap();
+        let padding = format!("// {}\n", "x".repeat(600_000));
+        std::fs::write(
+            root.path().join(format!("{caller}.test.ts")),
+            format!("import {{ run }} from './{runner}.test';\nrun();\n"),
+        )
+        .unwrap();
+        std::fs::write(
+            root.path().join(format!("{runner}.test.ts")),
+            format!("import {{ test, expect }} from 'vitest';\n{padding}export function run() {{ test('runner', () => {{ expect(1).toBe(1); }}); }}\n"),
+        )
+        .unwrap();
+        std::fs::write(
+            root.path().join("c.test.ts"),
+            "import { test, expect } from 'vitest';\ntest('last', () => { expect(2).toBe(2); });\n",
+        )
+        .unwrap();
+        let html = analyze_with(root.path(), "json,html", &["--max-memory", "1"]);
+        assert_eq!(html.report["filesAnalyzed"], 3, "{runner}: {}", html.stderr);
+        assert_eq!(html.report["testsAnalyzed"], 2, "{runner}: {}", html.stderr);
+    }
+}
+
 /// `--baseline-from-ref` applies the budget to the base revision too, and says the baseline may be
 /// partial.
 #[test]
