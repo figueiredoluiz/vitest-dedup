@@ -15,7 +15,9 @@ A `.vitest-dedup.json` file is found by walking upward from the analyzed directo
 Every key is optional, and an unknown key is an error. `include` and `exclude` are globs relative
 to the analyzed directory; `threshold` is a percentage from 0 to 100; `rules` maps a rule id to
 `off`, `warning`, or `error`. Files matched by `.gitignore` or by a `.vitest-dedupignore` file in
-the same syntax are skipped as well.
+the same syntax are skipped as well. Single `*` and `?` wildcards stay within a path
+component; use `**` to match across directories. This also applies to resolved Vitest project
+globs and project paths.
 
 VitestDedup reads `test.include`, `test.exclude`, `test.globals`, project lists, and the typecheck
 channel from `vitest.config.*` and `vite.config.*` without executing them.

@@ -13,7 +13,7 @@
 
 use crate::model::{Rule, Severity};
 use anyhow::{bail, Context, Result};
-use globset::{Glob, GlobSet, GlobSetBuilder};
+use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::fs::File;
@@ -281,7 +281,9 @@ pub(crate) fn compile_glob_set(patterns: &[String], kind: &str) -> Result<GlobSe
     for pattern in patterns {
         let stripped = pattern.strip_prefix("./").unwrap_or(pattern);
         builder.add(
-            Glob::new(stripped)
+            GlobBuilder::new(stripped)
+                .literal_separator(true)
+                .build()
                 .with_context(|| format!("invalid {kind} glob pattern `{pattern}`"))?,
         );
     }

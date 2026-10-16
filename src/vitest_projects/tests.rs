@@ -3596,3 +3596,66 @@ fn a_projects_entry_built_by_a_call_expression_marks_the_set_degraded() {
         "an entry built by an unreadable call expression must degrade the project set"
     );
 }
+
+/// Recursive project patterns keep their single-star segment within one directory.
+#[test]
+fn project_path_stars_do_not_consume_directory_separators() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    for path in [
+        "packages/pkg-a/vitest.config.ts",
+        "packages/pkg-a/deep/vitest.config.ts",
+    ] {
+        write(root, path, "export default { test: { globals: true } };");
+    }
+    let direct = expand_project_path(
+        root,
+        "packages/**/pkg-*/vitest.config.ts",
+        &mut Budget::default(),
+    );
+    assert_eq!(direct, vec![root.join("packages/pkg-a/vitest.config.ts")]);
+    let recursive =
+        expand_project_path(root, "packages/**/vitest.config.ts", &mut Budget::default());
+    assert_eq!(recursive.len(), 2);
+}
+
+/// Typecheck includes and excludes share the test and benchmark component contract.
+#[test]
+fn typecheck_globs_keep_single_wildcards_inside_one_component() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    write(
+        root,
+        "vitest.config.ts",
+        "export default { test: { include: [], benchmark: { include: [] }, typecheck: { enabled: true, include: ['src/*.test-d.ts'], exclude: [] } } };",
+    );
+    let set = resolve_projects(root);
+    let project = single_project(&set);
+    assert_file_match(
+        project,
+        &root.join("src/a.test-d.ts"),
+        FileMatch::Yes,
+        "direct type test retained",
+    );
+    assert_file_match(
+        project,
+        &root.join("src/deep/n.test-d.ts"),
+        FileMatch::No,
+        "single star does not recurse",
+    );
+    let mut project = project.clone();
+    project.typecheck_include = owned(&["src/**/*.test-d.ts"]);
+    project.typecheck_exclude = owned(&["src/*.test-d.ts"]);
+    assert_file_match(
+        &project,
+        &root.join("src/a.test-d.ts"),
+        FileMatch::No,
+        "direct exclusion retained",
+    );
+    assert_file_match(
+        &project,
+        &root.join("src/deep/n.test-d.ts"),
+        FileMatch::Yes,
+        "direct exclusion does not erase nested positive",
+    );
+}

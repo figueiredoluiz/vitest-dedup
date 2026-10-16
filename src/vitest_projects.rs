@@ -111,7 +111,7 @@ use crate::vitest_config::{
     locate_test_object, mask_non_code, property_present, read_bounded, skip_trivia, ConfigObject,
     DelimitedLiteral, GlobalsDetection, TestObject,
 };
-use globset::Glob;
+use globset::GlobBuilder;
 use ignore::WalkBuilder;
 use std::collections::BTreeSet;
 use std::ops::Range;
@@ -1951,7 +1951,11 @@ fn expand_project_path(root: &Path, pattern: &str, budget: &mut Budget) -> Vec<P
         return Vec::new();
     }
 
-    let Ok(matcher) = Glob::new(pattern).map(|glob| glob.compile_matcher()) else {
+    let Ok(matcher) = GlobBuilder::new(pattern)
+        .literal_separator(true)
+        .build()
+        .map(|glob| glob.compile_matcher())
+    else {
         return Vec::new();
     };
 
