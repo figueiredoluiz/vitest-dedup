@@ -1,5 +1,6 @@
 //! Atomic publication contracts for CLI file reports and baselines.
 
+#[cfg(unix)]
 use vitest_dedup::modes;
 
 const DUPLICATE_PAIR: &str = r#"
@@ -125,6 +126,7 @@ fn file_outputs_replace_symlinks_without_following_them() {
 }
 
 /// Runs the CLI against an owned analysis root and returns its operational outcome.
+#[cfg(unix)]
 fn run_cli(root: &std::path::Path, args: &[&str]) -> (Option<i32>, String, String) {
     let output = assert_cmd::Command::cargo_bin("vitest-dedup")
         .expect("binary")
