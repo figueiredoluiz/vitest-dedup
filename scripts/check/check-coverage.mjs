@@ -251,6 +251,8 @@ const JS_MIN_TESTS = 100 // 235 today across the 15 enumerated suite files.
 
 const JS_MODULES = {
   'scripts/dev/verify.mjs': 100,
+  // Action pin gate measured 67/67 lines with owned YAML cases.
+  'scripts/check/check-action-pins.mjs': 100,
   'scripts/check/check-docstrings.mjs': 100,
   // Both were in JS_NOT_MEASURED as "reached only through a gate that needs a release binary".
   // `lib/fixture-directives.test.mjs` (2026-09-27) made that false for the parser, and pulled

@@ -86,6 +86,7 @@ export function commands(profile, rust = true, docDiff) {
   if (!['fast', 'full'].includes(profile)) throw new Error(`Unknown verification profile: ${profile}`)
   const steps = [
     ['node', 'scripts/check/check-docstrings.mjs', ...(docDiff ? ['--diff-file', docDiff] : [])],
+    ['npm', 'run', 'check:action-pins'],
     ['npm', 'run', 'check:release-workflow'],
     ['npm', 'run', 'check:versions'],
     ['npm', 'run', 'check:docs'],
