@@ -125,6 +125,8 @@ const RUST_MIN_INSTRUMENTED_LINES = 12_000 // 15,261 today.
 
 const RUST_MODULES = {
   'src/analysis.rs': 84,
+  // Atomic publication: measured at 95.45% (21/22 instrumented lines).
+  'src/atomic_write.rs': 95,
   'src/analysis/pairs.rs': 100,
   'src/cli.rs': 98,
   'src/config.rs': 98,

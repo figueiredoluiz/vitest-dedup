@@ -1024,22 +1024,16 @@ fn run() -> Result<ExitCode> {
                         format!("creating report directory {}", parent.display())
                     })?;
                 }
-                // Buffered: the serializers emit one small write per token, and an unbuffered
-                // `File` turns each into a syscall. `flush` below still surfaces write errors.
-                let mut file = std::io::BufWriter::new(
-                    std::fs::File::create(&path)
-                        .with_context(|| format!("writing report {}", path.display()))?,
-                );
-                match reporter {
-                    ReporterKind::Json => JsonReporter::new().write_report(&result, &mut file)?,
+                vitest_dedup::atomic_write::write(&path, |file| match reporter {
+                    ReporterKind::Json => JsonReporter::new().write_report(&result, file),
                     ReporterKind::Html => {
                         HtmlReporter::with_sources(std::mem::take(&mut retained_sources))
-                            .write_report(&result, &mut file)?
+                            .write_report(&result, file)
                     }
-                    ReporterKind::Sarif => SarifReporter::new().write_report(&result, &mut file)?,
+                    ReporterKind::Sarif => SarifReporter::new().write_report(&result, file),
                     _ => unreachable!("only file reporters reach this arm"),
-                }
-                file.flush()?;
+                })
+                .with_context(|| format!("writing report {}", path.display()))?;
                 written.push(path);
             }
         }

@@ -8,6 +8,7 @@
 #![forbid(unsafe_code)]
 
 pub mod analysis;
+pub mod atomic_write;
 pub mod cli;
 pub mod config;
 pub mod discovery;

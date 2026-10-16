@@ -18,7 +18,12 @@ vitest-dedup . --reporters jsonl | jq -c 'select(.type == "finding")'
 ```
 
 `--output` is a filename stem, not a directory: `--output reports/vd` writes `reports/vd.json`.
-Parent directories are created as needed. After every selected file report has been written
+Parent directories are created as needed. Each report is buffered into a temporary file in its
+output directory, then atomically replaces the destination after successful serialization and
+flush. A final-component symlink is replaced without writing to its target. If writing fails,
+the previous report remains intact; the run fails. Output directories may contain symlinks.
+Replacement uses temporary-file permissions and does not preserve the previous inode or its
+metadata. Several selected reports are replaced independently. After every selected file report has been written
 successfully, file-only runs print `Reports written to:` followed by indented, sanitized paths.
 The path spelling and filename-stem behavior are preserved. Runs with `terminal` or `jsonl`
 omit this announcement, leaving stdout to the selected stream reporter.
@@ -242,8 +247,9 @@ the parser's transient arenas, neither of which is retained.
 
 `--baseline <path>` suppresses findings the file already records, matching on `fingerprint`. Each
 suppressed finding is marked `baselined` rather than removed, so a report still shows the full
-picture while the gate counts only what is new. `--update-baseline` rewrites that file from the
-current run and is refused when the run is incomplete.
+picture while the gate counts only what is new. `--update-baseline` atomically replaces that file from the
+current run, with the same destination-symlink and failure handling as file reports, and is
+refused when the run is incomplete.
 
 `--changed-since <rev>` reports only findings with a participant's declaration source or represented
 caller in a file changed since that revision. Findings withheld this way force `incomplete`: they are real, were found, and are not in

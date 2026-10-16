@@ -293,7 +293,12 @@ pub fn write_baseline(path: &Path, findings: &[Finding]) -> Result<BaselineUpdat
     let mut text =
         serde_json::to_string_pretty(&file).context("failed to serialize the baseline")?;
     text.push('\n');
-    std::fs::write(path, text).with_context(|| format!("writing baseline {}", path.display()))?;
+    crate::atomic_write::write(path, |writer| {
+        writer
+            .write_all(text.as_bytes())
+            .context("writing baseline content")
+    })
+    .with_context(|| format!("writing baseline {}", path.display()))?;
     Ok(update)
 }
 

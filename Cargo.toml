@@ -32,6 +32,7 @@ oxc_semantic = "=0.153.0"
 oxc_span = "=0.153.0"
 oxc_syntax = "=0.153.0"
 ryu-js = "1.0.3"
+tempfile = "=3.27.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0", features = ["preserve_order"] }
 
@@ -50,7 +51,6 @@ winapi-util = "0.1"
 [dev-dependencies]
 assert_cmd = "2.0"
 predicates = "3.1"
-tempfile = "3.15"
 
 # Catch accidental debug output, unfinished code, and undocumented unsafe operations.
 # CI and developer checks deny warnings; deliberately invalid JS corpus files are unaffected.
