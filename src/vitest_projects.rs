@@ -93,10 +93,10 @@
 //!   one of the projects"), and one composable library's inline entry says
 //!   `extends: './vitest.config.ts'`. Refusing such a file in full cost that CSS engine 102 of its
 //!   104 files an undetermined globals mode.
-//! - **Discovery glob semantics mirror `crate::config::compile_glob_set`** (`globset`
-//!   defaults), not Vitest's own `tinyglobby`/micromatch matching -- close enough for `*`/`**`/
-//!   `{a,b}` (everything the real corpora above actually use) but not a certified match for every
-//!   extglob form Vitest accepts.
+//! - **Discovery glob semantics mirror `crate::config::compile_glob_set`** (`globset` with
+//!   literal separators), not Vitest's own `tinyglobby`/micromatch matching -- close enough for
+//!   `*`/`**`/`{a,b}` (everything the real corpora above actually use) but not a certified match
+//!   for every extglob form Vitest accepts.
 
 use crate::config::compile_glob_set;
 use crate::discovery::{

@@ -795,18 +795,11 @@ impl Drop for BlobReader {
     }
 }
 
-/// Compiles the admission globs for a base-revision read; `globset`'s errors are wrapped with
-/// the pattern list they came from, matching [`crate::discovery::compile_glob_set`]'s shape.
+/// Compiles the admission globs for a base-revision read with discovery's own compiler, so the
+/// base pass admits exactly the paths the working-tree run would (single wildcards stay within a
+/// path component, a leading `./` is stripped).
 fn compile_revision_globs(patterns: &[String], kind: &str) -> Result<globset::GlobSet> {
-    let mut builder = globset::GlobSetBuilder::new();
-    for pattern in patterns {
-        let glob = globset::Glob::new(pattern).with_context(|| {
-            format!("invalid {kind} pattern `{pattern}` in the base revision read")
-        })?;
-        builder.add(glob);
-    }
-    builder
-        .build()
+    crate::config::compile_glob_set(patterns, kind)
         .with_context(|| format!("compiling {kind} globs for the base revision read"))
 }
 

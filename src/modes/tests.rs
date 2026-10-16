@@ -755,6 +755,28 @@ fn a_base_read_admits_only_source_files_the_globs_allow() {
     assert_eq!(sources.len(), 2, "no source is listed twice");
 }
 
+/// The base pass admits what discovery admits: a single `*` stays within one directory in
+/// include and exclude alike, `**` recurses, and a leading `./` is stripped.
+#[test]
+fn a_base_read_admits_what_discovery_admits() {
+    let repository = repository_with(&[("src/a.test.ts", b"a"), ("src/deep/b.test.ts", b"b")]);
+    let root = repository.path();
+    let admitted = |include: &[&str], exclude: &[&str]| -> BTreeSet<PathBuf> {
+        base_read(root, include, exclude)
+            .unwrap()
+            .into_iter()
+            .map(|source| source.relative)
+            .collect()
+    };
+    let direct = BTreeSet::from([PathBuf::from("src/a.test.ts")]);
+    let nested = BTreeSet::from([PathBuf::from("src/deep/b.test.ts")]);
+    let both: BTreeSet<_> = direct.union(&nested).cloned().collect();
+    assert_eq!(admitted(&["src/*.test.ts"], &[]), direct);
+    assert_eq!(admitted(&["src/**/*.test.ts"], &[]), both);
+    assert_eq!(admitted(&["./src/**/*.test.ts"], &[]), both);
+    assert_eq!(admitted(&["src/**/*.test.ts"], &["src/*.test.ts"]), nested);
+}
+
 /// A blob over the byte cap and a blob that is not UTF-8 each cost a skip, never an error
 /// and never the rest of the read: the neighbouring file is still returned.
 #[test]
@@ -870,9 +892,10 @@ fn a_base_read_refuses_bad_input_before_reading_anything() {
     let repository = repository_with(&[("a.test.ts", b"x")]);
     let root = repository.path();
     let text = base_read_error(root, &["["], &[]);
-    assert!(text.contains("invalid include pattern `[`"), "{text}");
+    assert!(text.contains("invalid include glob pattern `[`"), "{text}");
+    assert!(text.contains("base revision read"), "{text}");
     let text = base_read_error(root, &["**/*.test.ts"], &["{"]);
-    assert!(text.contains("invalid exclude pattern `{`"), "{text}");
+    assert!(text.contains("invalid exclude glob pattern `{`"), "{text}");
 
     let missing = collect_sources(root, "no-such-ref", &[], &[]).err();
     let text = format!(

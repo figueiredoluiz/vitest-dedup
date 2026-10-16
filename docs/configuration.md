@@ -17,7 +17,7 @@ to the analyzed directory; `threshold` is a percentage from 0 to 100; `rules` ma
 `off`, `warning`, or `error`. Files matched by `.gitignore` or by a `.vitest-dedupignore` file in
 the same syntax are skipped as well. Single `*` and `?` wildcards stay within a path
 component; use `**` to match across directories. This also applies to resolved Vitest project
-globs and project paths.
+globs and project paths, and to the base revision `--baseline-from-ref` reads.
 
 VitestDedup reads `test.include`, `test.exclude`, `test.globals`, project lists, and the typecheck
 channel from `vitest.config.*` and `vite.config.*` without executing them.
