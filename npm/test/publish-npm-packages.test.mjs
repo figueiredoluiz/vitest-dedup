@@ -28,14 +28,16 @@ test('the launcher package is published last, after all eight platform packages'
 })
 
 test('publish arguments request public access and provenance', () => {
-  assert.deepEqual(npmPublishArguments('npm/platforms/darwin-arm64'), [
+  assert.deepEqual(npmPublishArguments('npm/platforms/darwin-arm64', '1.0.0'), [
     'publish',
     'npm/platforms/darwin-arm64',
     '--access',
     'public',
     '--provenance',
+    '--tag',
+    'latest',
   ])
-  assert.deepEqual(npmPublishArguments('.'), ['publish', '.', '--access', 'public', '--provenance'])
+  assert.deepEqual(npmPublishArguments('.', '1.0.0-rc.1'), ['publish', '.', '--access', 'public', '--provenance', '--tag', 'next'])
 })
 
 test('only a clean 404 counts as "not published yet"', () => {
@@ -82,16 +84,16 @@ test('the default npm runner actually works on this machine', () => {
 })
 
 /** Return a temporary release root, controllable registry runner and recorded publishes; register tree cleanup. */
-async function publishFixture(t, { registry }) {
+async function publishFixture(t, { registry, version = '1.0.0', tag = 'latest' }) {
   const root = await mkdtemp(join(tmpdir(), 'vitest-dedup-publish-'))
   t.after(() => rm(root, { recursive: true, force: true }))
   await writeFile(
     join(root, 'package.json'),
     JSON.stringify({
       name: 'vitest-dedup',
-      version: '1.0.0',
+      version,
       optionalDependencies: Object.fromEntries(
-        Object.values(TARGETS).map((target) => [target.packageName, '1.0.0']),
+        Object.values(TARGETS).map((target) => [target.packageName, version]),
       ),
     }),
   )
@@ -100,7 +102,7 @@ async function publishFixture(t, { registry }) {
     await mkdir(directory, { recursive: true })
     await writeFile(
       join(directory, 'package.json'),
-      JSON.stringify({ name: target.packageName, version: '1.0.0' }),
+      JSON.stringify({ name: target.packageName, version }),
     )
   }
 
@@ -110,26 +112,45 @@ async function publishFixture(t, { registry }) {
       const [name] = args[1].split('@')
       return registry(name, published)
     }
+    assert.equal(args.filter((arg) => arg === '--tag').length, 1)
+    assert.equal(args[args.indexOf('--tag') + 1], tag)
     published.push(args[1])
     return { status: 0 }
   }
   return { root, published, runNpm }
 }
 
-test('a rerun skips what is already live and finishes the rest', async (t) => {
-  const alreadyLive = new Set(['vitest-dedup-darwin-arm64', 'vitest-dedup-darwin-x64'])
-  const { root, published, runNpm } = await publishFixture(t, {
-    registry: (name) =>
-      alreadyLive.has(name)
-        ? { status: 0, stdout: '"1.0.0"', stderr: '' }
-        : { status: 1, stdout: '', stderr: 'npm error code E404' },
+for (const [version, tag] of [
+  ['1.0.0', 'latest'], ['0.2.0', 'latest'],
+  ['1.0.0-rc.1', 'next'], ['1.0.0-beta.2', 'next'], ['1.0.0-0', 'next'],
+]) {
+  test(`all nine packages at ${version} publish with explicit ${tag}`, async (t) => {
+    const { root, published, runNpm } = await publishFixture(t, {
+      version, tag,
+      registry: () => ({ status: 1, stdout: '', stderr: 'npm error code E404' }),
+    })
+    await publishNpmPackages({ root, runNpm })
+    assert.deepEqual(published, publishOrder())
   })
+}
 
-  await publishNpmPackages({ root, runNpm })
+for (const [version, tag] of [['1.0.0', 'latest'], ['1.0.0-rc.1', 'next']]) {
+  test(`a rerun of ${version} skips what is already live and finishes the rest`, async (t) => {
+    const alreadyLive = new Set(['vitest-dedup-darwin-arm64', 'vitest-dedup-darwin-x64'])
+    const { root, published, runNpm } = await publishFixture(t, {
+      version, tag,
+      registry: (name) =>
+        alreadyLive.has(name)
+          ? { status: 0, stdout: JSON.stringify(version), stderr: '' }
+          : { status: 1, stdout: '', stderr: 'npm error code E404' },
+    })
 
-  assert.equal(published.length, 7, 'two platform packages were already live')
-  assert.equal(published.at(-1), '.', 'the launcher is still published last')
-})
+    await publishNpmPackages({ root, runNpm })
+
+    assert.equal(published.length, 7, 'two platform packages were already live')
+    assert.equal(published.at(-1), '.', 'the launcher is still published last')
+  })
+}
 
 test('the launcher is refused while any platform package is unconfirmed', async (t) => {
   // The registry reports every platform package missing and every publish "succeeds", but one
