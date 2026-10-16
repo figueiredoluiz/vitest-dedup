@@ -40,6 +40,7 @@ use super::registry::{
     canonicalize_export_name, const_fold, is_ecmascript_trim_whitespace, js_number_to_string,
     js_radix_digits_value, property_key_name, resolve_callee, source_text, split_radix_prefix,
     CellValue, ChainStep, Globals, Registry, ResolvedCallee, Row, RowCells, TitleArg, TitleNumber,
+    OVER_LIMIT_TABLE,
 };
 use super::FileExtraction;
 
@@ -244,7 +245,8 @@ const MAX_HELPER_EXPANSIONS: usize = 2_000;
 const MAX_DECLARATIONS_PER_FILE: usize = 10_000;
 
 /// How many literal `for...of` iterations one file may unroll. Bounds walks over loop bodies that
-/// declare nothing, which [`MAX_DECLARATIONS_PER_FILE`] cannot see.
+/// declare nothing, which [`MAX_DECLARATIONS_PER_FILE`] cannot see. A loop spends its array's
+/// length before any element is folded, so an over-long array costs nothing to refuse.
 const MAX_UNROLLED_ITERATIONS: usize = 10_000;
 
 /// Estimates bracket nesting with a lexical masking heuristic, without parsing `source`.
@@ -736,6 +738,8 @@ fn collect_mocked_modules(
         source: &str,
         file: &std::path::Path,
     ) -> Option<String> {
+        // Only the root and the last member matter here; never read a `.each` table's rows.
+        registry.limit_table_rows(0);
         let resolved = resolve_callee(&call.callee, registry, semantic, source, file)?;
         if resolved.root != "vi" {
             return None;
@@ -1176,6 +1180,7 @@ impl<'a> Walker<'a> {
         callee: &Expression<'a>,
         registry: &Registry,
     ) -> Option<ResolvedCallee> {
+        registry.limit_table_rows(self.expansion.borrow().declarations_remaining());
         resolve_callee(
             callee,
             registry,
@@ -1372,12 +1377,18 @@ impl<'a> Walker<'a> {
     /// [`Walker::push_test_case`] already marks that unresolved -- so this stays consistent with
     /// how every other dynamic title is already handled, per the item this fixes.
     fn walk_for_of_statement(&mut self, for_of: &ForOfStatement<'a>, registry: &mut Registry) {
+        if let Expression::ArrayExpression(array) = &for_of.right {
+            if !self
+                .expansion
+                .borrow_mut()
+                .admit_iterations(array.elements.len())
+            {
+                return;
+            }
+        }
         match literal_for_of_elements(for_of) {
             Some((symbol_id, values)) => {
                 for value in values {
-                    if !self.expansion.borrow_mut().admit_iteration() {
-                        break;
-                    }
                     self.loop_bindings.push((symbol_id, value));
                     self.walk_body_like_statement(&for_of.body, registry);
                     self.loop_bindings.pop();
@@ -1544,6 +1555,20 @@ impl<'a> Walker<'a> {
         }
     }
 
+    /// Splits a declaration's resolved chain (see [`split_modifiers_and_each`]), or refuses the
+    /// declaration budget and returns `None` when its `.each` table was too long to read.
+    fn admitted_chain(
+        &self,
+        steps: Vec<ChainStep>,
+    ) -> Option<(Vec<Modifier>, Option<EachInfo>, bool)> {
+        let split = split_modifiers_and_each(steps);
+        if split.1.as_ref().is_some_and(|info| info.over_limit) {
+            self.expansion.borrow_mut().refuse_declarations();
+            return None;
+        }
+        Some(split)
+    }
+
     /// Emit declaration records with row-specific titles, modifiers, context and body
     /// fingerprints.
     fn emit_test(
@@ -1552,7 +1577,10 @@ impl<'a> Walker<'a> {
         kind: DeclarationKind,
         resolved: ResolvedCallee,
     ) {
-        let (own_modifiers, each, condition_unresolved) = split_modifiers_and_each(resolved.steps);
+        let Some((own_modifiers, each, condition_unresolved)) = self.admitted_chain(resolved.steps)
+        else {
+            return;
+        };
         // C1: an `.each`/`.for` table this extractor could not enumerate (hazard 5) is a fact the
         // context cannot vouch for -- distinct from a literal-but-empty table, which is fully
         // known and does not make the context unresolved.
@@ -1719,7 +1747,10 @@ impl<'a> Walker<'a> {
         resolved: ResolvedCallee,
         registry: &mut Registry,
     ) {
-        let (own_modifiers, each, condition_unresolved) = split_modifiers_and_each(resolved.steps);
+        let Some((own_modifiers, each, condition_unresolved)) = self.admitted_chain(resolved.steps)
+        else {
+            return;
+        };
         // C1: see the identical comment in `emit_test`.
         let each_unresolved = each.as_ref().is_some_and(|info| info.rows.is_err());
         // Defect 5: see the identical comment in `emit_test`.
@@ -2443,6 +2474,8 @@ fn union_option_modifiers(modifiers: &mut Vec<Modifier>, options: &ObjectExpress
 /// [`Modifier::Each`] because title rendering needs the row cells, not just their display text.
 struct EachInfo {
     rows: Result<Vec<Row>, String>,
+    /// The table was longer than the remaining declaration budget and was not read.
+    over_limit: bool,
 }
 
 /// Assigns exact-equality classes within one table without retaining each row's canonical text.
@@ -2487,7 +2520,8 @@ fn split_modifiers_and_each(steps: Vec<ChainStep>) -> (Vec<Modifier>, Option<Eac
                     is_for,
                     rows: table_rows,
                 }));
-                each = Some(EachInfo { rows });
+                let over_limit = matches!(&rows, Err(identity) if identity == OVER_LIMIT_TABLE);
+                each = Some(EachInfo { rows, over_limit });
             }
             ChainStep::SkipIf {
                 condition,

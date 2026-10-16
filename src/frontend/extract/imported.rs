@@ -29,13 +29,14 @@ pub(super) struct ExpansionState {
     closure: HashMap<PathBuf, bool>,
 }
 
-/// Takes one unit from `left`, or marks `refused` when none is left.
-fn admit(left: &mut usize, refused: &mut bool) -> bool {
-    if *left == 0 {
+/// Takes `units` from `left`, or marks `refused` when fewer are left. A refusal is final: a later,
+/// smaller request is refused too, so a truncated file stays a prefix of its full extraction.
+fn admit(left: &mut usize, refused: &mut bool, units: usize) -> bool {
+    if *refused || *left < units {
         *refused = true;
         return false;
     }
-    *left -= 1;
+    *left -= units;
     true
 }
 
@@ -80,12 +81,34 @@ impl ExpansionState {
     /// full extraction.
     pub(super) fn admit_declaration(&mut self) -> bool {
         !self.iterations_refused
-            && admit(&mut self.declarations_left, &mut self.declarations_refused)
+            && admit(
+                &mut self.declarations_left,
+                &mut self.declarations_refused,
+                1,
+            )
     }
 
-    /// Spends one unrolled loop iteration, or records the refusal once the budget is spent.
-    pub(super) fn admit_iteration(&mut self) -> bool {
-        admit(&mut self.iterations_left, &mut self.iterations_refused)
+    /// Spends `elements` loop iterations at once, or records the refusal when fewer remain.
+    pub(super) fn admit_iterations(&mut self, elements: usize) -> bool {
+        admit(
+            &mut self.iterations_left,
+            &mut self.iterations_refused,
+            elements,
+        )
+    }
+
+    /// How many declarations may still be emitted; none once either budget refused.
+    pub(super) fn declarations_remaining(&self) -> usize {
+        if self.iterations_refused || self.declarations_refused {
+            0
+        } else {
+            self.declarations_left
+        }
+    }
+
+    /// Records a declaration refusal for a table too long for the remaining budget.
+    pub(super) fn refuse_declarations(&mut self) {
+        self.declarations_refused = true;
     }
 
     /// One diagnostic per emission budget this file ran out of.

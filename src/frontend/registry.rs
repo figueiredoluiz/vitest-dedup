@@ -82,6 +82,18 @@ enum Binding {
 pub(super) struct Registry {
     bindings: HashMap<SymbolId, Binding>,
     globals_enabled: bool,
+    /// Most rows a `.each`/`.for` table may have before it is refused unread: the file's
+    /// remaining declaration budget, set by the walker before each resolution.
+    table_row_limit: std::cell::Cell<usize>,
+}
+
+/// The [`ChainStep::Each`] table identity of a table longer than [`Registry::limit_table_rows`].
+pub(super) const OVER_LIMIT_TABLE: &str = "<over-limit-table>";
+
+#[cfg(test)]
+thread_local! {
+    /// Test-only count of literal table rows this thread read.
+    pub(super) static TABLE_ROWS_READ: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 impl Registry {
@@ -92,6 +104,7 @@ impl Registry {
         let mut registry = Registry {
             bindings: HashMap::new(),
             globals_enabled: matches!(globals, Globals::Enabled),
+            table_row_limit: std::cell::Cell::new(usize::MAX),
         };
         for statement in &program.body {
             if let Statement::ImportDeclaration(import) = statement {
@@ -99,6 +112,11 @@ impl Registry {
             }
         }
         registry
+    }
+
+    /// Sets how many rows a table may have before resolution refuses it without reading a row.
+    pub(super) fn limit_table_rows(&self, limit: usize) {
+        self.table_row_limit.set(limit);
     }
 
     /// Registers runtime Vitest import symbols and skips type-only declarations/specifiers.
@@ -488,15 +506,34 @@ pub(super) fn resolve_callee(
                     .push(ChainStep::Member(member.property.name.to_string()));
             }
             Expression::CallExpression(call) => {
-                resolved = finish_interior_call(resolved, &call.arguments, semantic, source, file)?;
+                resolved = finish_interior_call(
+                    resolved,
+                    &call.arguments,
+                    registry.table_row_limit.get(),
+                    semantic,
+                    source,
+                    file,
+                )?;
             }
             Expression::TaggedTemplateExpression(tagged) => {
-                resolved = finish_tagged_call(resolved, &tagged.quasi, semantic, source)?;
+                resolved = finish_tagged_call(
+                    resolved,
+                    &tagged.quasi,
+                    registry.table_row_limit.get(),
+                    semantic,
+                    source,
+                )?;
             }
             Expression::ChainExpression(chain) => match &chain.expression {
                 ChainElement::CallExpression(call) => {
-                    resolved =
-                        finish_interior_call(resolved, &call.arguments, semantic, source, file)?;
+                    resolved = finish_interior_call(
+                        resolved,
+                        &call.arguments,
+                        registry.table_row_limit.get(),
+                        semantic,
+                        source,
+                        file,
+                    )?;
                 }
                 ChainElement::StaticMemberExpression(member) => {
                     resolved
@@ -581,6 +618,7 @@ fn is_namespace(expr: &Expression, registry: &Registry, scoping: &Scoping) -> bo
 fn finish_interior_call(
     mut resolved: ResolvedCallee,
     arguments: &[Argument],
+    row_limit: usize,
     semantic: &Semantic<'_>,
     source: &str,
     file: &Path,
@@ -592,14 +630,14 @@ fn finish_interior_call(
     };
     match name.as_str() {
         "each" => {
-            let rows = table_rows(arguments.first(), semantic, source, file);
+            let rows = table_rows(arguments.first(), row_limit, semantic, source, file);
             resolved.steps.push(ChainStep::Each {
                 is_for: false,
                 rows,
             });
         }
         "for" => {
-            let rows = table_rows(arguments.first(), semantic, source, file);
+            let rows = table_rows(arguments.first(), row_limit, semantic, source, file);
             resolved.steps.push(ChainStep::Each { is_for: true, rows });
         }
         "skipIf" => {
@@ -731,6 +769,7 @@ fn fixture_body_fingerprint(
 fn finish_tagged_call(
     mut resolved: ResolvedCallee,
     quasi: &TemplateLiteral,
+    row_limit: usize,
     semantic: &Semantic<'_>,
     source: &str,
 ) -> Option<ResolvedCallee> {
@@ -742,7 +781,7 @@ fn finish_tagged_call(
         "for" => true,
         _ => return None,
     };
-    let rows = tagged_template_rows(quasi, source, Some(semantic));
+    let rows = tagged_template_rows(quasi, row_limit, source, Some(semantic));
     resolved.steps.push(ChainStep::Each { is_for, rows });
     Some(resolved)
 }
@@ -909,12 +948,13 @@ fn table_identity(expr: &Expression, semantic: &Semantic<'_>, source: &str, file
 /// carries no argument at all (`.each()`), which is as unreadable as any other shape.
 fn table_rows(
     argument: Option<&Argument>,
+    row_limit: usize,
     semantic: &Semantic<'_>,
     source: &str,
     file: &Path,
 ) -> Result<Vec<Row>, String> {
     match argument.and_then(Argument::as_expression) {
-        Some(table) => literal_table_rows(table, semantic, source, file),
+        Some(table) => literal_table_rows(table, row_limit, semantic, source, file),
         None => Err("<unresolved:no-table-argument>".to_owned()),
     }
 }
@@ -931,9 +971,11 @@ pub(super) fn property_key_name(key: &PropertyKey) -> Option<String> {
 }
 
 /// Read a literal array table using homogeneous-array spreading rules, retaining unresolved
-/// cells and refusing unreadable tables.
+/// cells and refusing unreadable tables. A table longer than `row_limit` is refused as
+/// [`OVER_LIMIT_TABLE`] before any row is read.
 fn literal_table_rows(
     expr: &Expression,
+    row_limit: usize,
     semantic: &Semantic<'_>,
     source: &str,
     file: &Path,
@@ -945,6 +987,11 @@ fn literal_table_rows(
         // it to a bare marker, so two tables nobody could read do not collapse to one value.
         return Err(table_identity(expr, semantic, source, file));
     };
+    if array.elements.len() > row_limit {
+        return Err(OVER_LIMIT_TABLE.to_owned());
+    }
+    #[cfg(test)]
+    TABLE_ROWS_READ.with(|read| read.set(read.get() + array.elements.len()));
     // Vitest spreads a row into multiple arguments only when EVERY row is an array; a mixed
     // table (`it.each([1, 'a', [1, 2]])`) binds each row whole, so an array row inside one is a
     // single VALUE, not a positional spread. Verified against real Vitest 5 behavior, and it is
@@ -1931,6 +1978,7 @@ fn number_of_string(raw: &str) -> Option<f64> {
 /// inconsistent forms.
 fn tagged_template_rows(
     quasi: &TemplateLiteral,
+    row_limit: usize,
     source: &str,
     resolve: Resolve<'_, '_>,
 ) -> Result<Vec<Row>, String> {
@@ -1953,6 +2001,9 @@ fn tagged_template_rows(
     let column_count = columns.len();
     if quasi.expressions.is_empty() || !quasi.expressions.len().is_multiple_of(column_count) {
         return Err(tagged_template_identity(quasi, source));
+    }
+    if quasi.expressions.len() / column_count > row_limit {
+        return Err(OVER_LIMIT_TABLE.to_owned());
     }
     let mut rows = Vec::new();
     for chunk in quasi.expressions.chunks(column_count) {
@@ -4088,8 +4139,14 @@ mod tests {
         let Statement::ExpressionStatement(statement) = &program.body[0] else {
             panic!("expected an expression statement");
         };
-        let rows = literal_table_rows(&statement.expression, &semantic, source, Path::new("x.ts"))
-            .expect("a literal array of literal-shaped rows is enumerable");
+        let rows = literal_table_rows(
+            &statement.expression,
+            usize::MAX,
+            &semantic,
+            source,
+            Path::new("x.ts"),
+        )
+        .expect("a literal array of literal-shaped rows is enumerable");
         assert_eq!(rows.len(), 2);
         assert!(
             rows[0].unresolved,

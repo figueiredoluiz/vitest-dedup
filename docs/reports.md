@@ -282,7 +282,8 @@ because absence of a finding is then not evidence of its absence.
 non-zero exit.
 
 Each file emits at most 10,000 declarations (tests, `.each` rows and suite records, including those
-from imported runners) and unrolls at most 10,000 literal `for...of` iterations. Past either limit
+from imported runners) and unrolls at most 10,000 literal `for...of` iterations. A `.each` table or
+loop array longer than what remains of its limit is skipped without being read. Past either limit
 the file stops emitting and counts as not read in full; the declarations already emitted are
 compared as usual.
 

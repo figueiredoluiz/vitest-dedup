@@ -33,11 +33,11 @@ fn reports(extraction: &FileExtraction, needle: &str) -> bool {
         .any(|diagnostic| diagnostic.contains(needle))
 }
 
-/// An `.each` table of exactly the declaration limit is complete; one row more emits the limit
-/// and says so. Under a small limit: a table of ten thousand rows exceeds the raw syntax budget
-/// and is refused before parsing.
+/// An `.each` table that fits the remaining declarations is complete; one row longer is refused
+/// whole, before any row is read, and says so. Under a small limit: a table of ten thousand rows
+/// exceeds the raw syntax budget and is refused before parsing.
 #[test]
-fn an_each_table_past_the_declaration_limit_is_truncated_visibly() {
+fn an_each_table_past_the_declaration_limit_is_refused_unread() {
     let table = |rows: usize| {
         let rows: Vec<String> = (0..rows).map(|row| format!("[{row}]")).collect();
         format!(
@@ -50,18 +50,51 @@ fn an_each_table_past_the_declaration_limit_is_truncated_visibly() {
     assert!(!at.incomplete, "{:?}", at.diagnostics);
 
     let past = with_limit(5, || extract_ts(&table(6)));
-    assert_eq!(past.tests.len(), 5);
+    assert!(past.tests.is_empty(), "{:?}", past.tests);
     assert!(past.incomplete);
     assert!(
         reports(&past, "declares more than"),
         "{:?}",
         past.diagnostics
     );
+
+    // Unread: a trailing spread would make a read table unresolvable (one representative case).
+    let spread = with_limit(3, || {
+        extract_ts(
+            "import { test, expect } from 'vitest';
+test.each([[1], [2], [3], [4], ...more])('row %i', (n) => { expect(n).toBe(n); });
+",
+        )
+    });
+    assert!(spread.tests.is_empty(), "{:?}", spread.tests);
+    assert!(
+        reports(&spread, "declares more than"),
+        "{:?}",
+        spread.diagnostics
+    );
+
+    // The tagged-template form is bounded the same way, by its row count.
+    let tagged = |rows: &str| {
+        format!(
+            "import {{ test, expect }} from 'vitest';
+test.each`n\n{rows}`('row $n', ({{ n }}) => {{ expect(n).toBe(n); }});
+"
+        )
+    };
+    let fits = with_limit(3, || extract_ts(&tagged("${1}\n${2}\n${3}")));
+    assert_eq!(fits.tests.len(), 3, "{:?}", fits.diagnostics);
+    let over = with_limit(3, || extract_ts(&tagged("${1}\n${2}\n${3}\n${4}")));
+    assert!(over.tests.is_empty(), "{:?}", over.tests);
+    assert!(
+        reports(&over, "declares more than"),
+        "{:?}",
+        over.diagnostics
+    );
 }
 
-/// A truncated extraction is exactly the start of the full one, whatever the limit: emission
-/// order is walk order and a suite record precedes its children, so a cut never alters an
-/// admitted declaration.
+/// A truncated extraction is the start of the full one, whatever the limit: emission order is walk
+/// order, a suite record precedes its children, and a table or loop longer than what remains is
+/// refused whole. The expected lengths follow from that last rule.
 #[test]
 fn a_truncated_extraction_is_a_prefix_of_the_full_one() {
     let source = "import { describe, test, expect } from 'vitest';\n\
@@ -75,9 +108,12 @@ fn a_truncated_extraction_is_a_prefix_of_the_full_one() {
     let full = extract_ts(source);
     assert_eq!(full.tests.len(), 12, "{:?}", full.diagnostics);
     assert!(!full.incomplete, "{:?}", full.diagnostics);
-    for limit in 0..=full.tests.len() {
+    // plain, suite, three rows, two loop tests, group, inner, group, inner, tail.
+    let expected = [0, 1, 2, 2, 2, 5, 6, 7, 7, 9, 10, 11, 12];
+    assert_eq!(expected.len(), full.tests.len() + 1);
+    for (limit, &kept) in expected.iter().enumerate() {
         let cut = with_limit(limit, || extract_ts(source));
-        assert_eq!(cut.tests, full.tests[..limit], "limit {limit}");
+        assert_eq!(cut.tests, full.tests[..kept], "limit {limit}");
         assert_eq!(cut.incomplete, limit < full.tests.len(), "limit {limit}");
         if limit < full.tests.len() {
             assert!(reports(&cut, "declares more than"), "{:?}", cut.diagnostics);
@@ -106,6 +142,16 @@ fn a_loop_past_the_iteration_limit_is_refused_visibly() {
         reports(&past, "unrolls more than"),
         "{:?}",
         past.diagnostics
+    );
+
+    // The length is charged before any element is folded: an array that would not fold (and so
+    // would be walked once, uncharged) is still refused when it is longer than what remains.
+    let unfolded = with_limit(3, || extract_ts(&source("1, 2, 3, unknown")));
+    assert!(unfolded.tests.is_empty(), "{:?}", unfolded.tests);
+    assert!(
+        reports(&unfolded, "unrolls more than"),
+        "{:?}",
+        unfolded.diagnostics
     );
 }
 
@@ -167,5 +213,30 @@ fn an_imported_runner_crossing_the_limit_keeps_its_prefix() {
         !reports(&cut, "imported runner"),
         "the budget, not the runner, is the cause: {:?}",
         cut.diagnostics
+    );
+}
+
+/// Once either budget has refused, no later table is read, however small: the remaining budget
+/// handed to resolution drops to zero. The scope's hook pre-scan runs before the walk, while
+/// nothing is refused yet, and reads the small table once; the walk after the refusal reads
+/// nothing. Runs on this thread so the row counter is visible.
+#[test]
+fn no_table_is_read_after_a_refusal() {
+    let rows_read = || super::super::registry::TABLE_ROWS_READ.with(std::cell::Cell::get);
+    let file = SourceFile::without_project_context(
+        PathBuf::from("budget.test.ts"),
+        crate::discovery::SourceLanguage::TypeScript,
+        ModuleFlavor::Ambiguous,
+    );
+    let source = "import { test, expect } from 'vitest';\n\
+        test.each([[1], [2], [3], [4]])('big %i', (n) => { expect(n).toBe(n); });\n\
+        test.each([[5], [6]])('small %i', (n) => { expect(n).toBe(n); });\n";
+    let before = rows_read();
+    let extraction = with_limit(3, || run(source, &file, Globals::Disabled, true));
+    assert!(extraction.tests.is_empty(), "{:?}", extraction.tests);
+    assert_eq!(
+        rows_read() - before,
+        2,
+        "only the pre-scan reads the small table"
     );
 }
