@@ -3936,7 +3936,7 @@ impl<'a, 'b, 's, 'm> Serializer<'a, 'b, 's, 'm> {
 // behavior events
 // ---------------------------------------------------------------------------------------------
 
-/// Accept only constructor paths rooted in imports or globals, without following local aliases.
+/// Accept import/global constructor paths through erased wrappers, without local aliases.
 fn external_constructor(callee: &Expression<'_>, semantic: &Semantic<'_>, depth: u32) -> bool {
     if depth > MAX_DEPTH {
         return false;
@@ -3951,6 +3951,21 @@ fn external_constructor(callee: &Expression<'_>, semantic: &Semantic<'_>, depth:
         }),
         Expression::StaticMemberExpression(member) => {
             external_constructor(&member.object, semantic, depth + 1)
+        }
+        Expression::ParenthesizedExpression(wrapper) => {
+            external_constructor(&wrapper.expression, semantic, depth + 1)
+        }
+        Expression::TSAsExpression(wrapper) => {
+            external_constructor(&wrapper.expression, semantic, depth + 1)
+        }
+        Expression::TSSatisfiesExpression(wrapper) => {
+            external_constructor(&wrapper.expression, semantic, depth + 1)
+        }
+        Expression::TSNonNullExpression(wrapper) => {
+            external_constructor(&wrapper.expression, semantic, depth + 1)
+        }
+        Expression::TSTypeAssertion(wrapper) => {
+            external_constructor(&wrapper.expression, semantic, depth + 1)
         }
         _ => false,
     }
@@ -10347,6 +10362,139 @@ test('t', () => { g(r); });",
                 "{first}: expected {rule:?}"
             );
         }
+    }
+
+    /// Erased callee wrappers preserve constructor identity, effects and valid findings.
+    #[test]
+    fn constructor_wrapper_outcomes() {
+        use crate::model::Rule::*;
+        for wrapper in [
+            "({})",
+            "({} as any)",
+            "({} satisfies any)",
+            "{}!",
+            "(<any>{})",
+            "(({} as any)!)",
+        ] {
+            let store = wrapper.replace("{}", "Store");
+            let cart = wrapper.replace("{}", "Cart");
+            let first = format!("{{new {store}();tick();expect(trace).toEqual([1])}}");
+            let second = format!("{{new {cart}();tick();expect(trace).toEqual([1])}}");
+            assert!(constructor_rules(&first, &second).is_empty(), "{wrapper}");
+            for (first, second, rule) in [
+                (
+                    format!("new {store}(1);"),
+                    format!("new {store}(1);"),
+                    DuplicateTest,
+                ),
+                (
+                    "new Store(1);".into(),
+                    format!("void 0;new {store}(1);"),
+                    NearDuplicateTest,
+                ),
+                (
+                    format!("new {store}(1);"),
+                    format!("new {store}(2);"),
+                    ParameterizationCandidate,
+                ),
+                (
+                    format!("new {store}(1);"),
+                    format!("new {store}(1);extra();"),
+                    SubsumedTest,
+                ),
+            ] {
+                assert!(
+                    constructor_rules(
+                        &format!("{{{first}tick();expect(trace).toEqual([1])}}"),
+                        &format!("{{{second}tick();expect(trace).toEqual([1])}}"),
+                    )
+                    .contains(&rule),
+                    "{wrapper}: expected {rule:?}"
+                );
+            }
+        }
+        for (first, second) in [
+            ("new (Store as any)(loadA())", "new (Store as any)(loadB())"),
+            (
+                "new (Store as any)<string>()",
+                "new (Store as any)<number>()",
+            ),
+            (
+                "new (Store as any)(first(),second())",
+                "new (Store as any)(second(),first())",
+            ),
+            (
+                "new ((Store as any).Builder)()",
+                "new ((Store as any).Other)()",
+            ),
+            ("new (Store as any)()", "(Store as any)()"),
+        ] {
+            assert!(
+                constructor_rules(
+                    &format!("{{{first};tick();expect(trace).toEqual([1])}}"),
+                    &format!("{{{second};tick();expect(trace).toEqual([1])}}"),
+                )
+                .is_empty(),
+                "{first}"
+            );
+        }
+        assert!(constructor_rules(
+            "{new Store.Builder();tick();expect(trace).toEqual([1])}",
+            "{void 0;new ((Store satisfies any).Builder)();tick();expect(trace).toEqual([1])}",
+        )
+        .contains(&NearDuplicateTest));
+    }
+
+    /// Wrappers cannot turn local or dynamic roots into supported constructor evidence.
+    #[test]
+    fn constructor_wrapper_scope() {
+        for body in [
+            "class C{};new (C as any)();",
+            "const C=Store;new (C satisfies any)();",
+            "const Store=class{};new Store!();",
+            "new ((factory()) as any)();",
+            "new (ns[pick()] as any)();",
+            "new Store();expect(new (Local as any)()).toBeDefined();class Local{}",
+            "function f(){class C{};new (C as any)();}new Store();",
+            "new (Store<string>)();",
+        ] {
+            let events = behavior_of(&format!("{body}tick();"));
+            assert!(!events.is_empty(), "{body}");
+            assert!(
+                events
+                    .iter()
+                    .all(|e| e.ends_with("|unmodeled-constructor-scope")),
+                "{body}: {events:?}"
+            );
+        }
+        assert!(constructor_rules(
+            "{new (<any>Local)();tick();expect(trace).toEqual([1])}",
+            "{new Store();tick();expect(trace).toEqual([1])}",
+        )
+        .is_empty());
+        let events = behavior_of("new ((Store as any) satisfies any)!(first(),...second());");
+        assert_eq!(events.len(), 3, "{events:?}");
+        assert!(events[0].starts_with("new:"), "{events:?}");
+        assert!(
+            events[1].contains("first") && events[2].contains("second"),
+            "{events:?}"
+        );
+        assert_eq!(
+            behavior_of("function f(){new (Store as any)()}"),
+            behavior_of("function f(){new Store()}"),
+        );
+        let callee = format!(
+            "{}Store{}",
+            "(".repeat(MAX_DEPTH as usize + 1),
+            ")".repeat(MAX_DEPTH as usize + 1)
+        );
+        let events = behavior_of(&format!("new {callee}();tick();"));
+        assert!(
+            events
+                .iter()
+                .all(|e| e.ends_with("|unmodeled-constructor-scope")),
+            "{events:?}"
+        );
     }
 
     /// Initializers/interpolations retain source order, deferred scope and single-use inlining.

@@ -26,6 +26,7 @@ Each finding carries a verdict naming its remedy, because the remedies differ.
 integration layers is sometimes deliberate.
 
 Constructor behavior events retain callee identity, ordered arguments and nested effects for identifier/static-member callees rooted in imports or globals.
+Parentheses and erased TypeScript `as`, `satisfies`, non-null and angle-bracket assertions on these paths preserve the same constructor behavior.
 Other constructor shapes and depth-limited callbacks use legacy traversal in a separate behavior comparison scope.
 Their existing events remain comparable to each other; mixed-scope near-duplicate and subsumption comparisons are declined.
 
