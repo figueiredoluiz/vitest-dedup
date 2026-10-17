@@ -26,51 +26,10 @@ use vitest_dedup::{analysis, discovery};
 mod diagnostics;
 use diagnostics::Sanitized;
 
-/// Reads the process's own peak resident set size.
-///
-/// Lives in the binary rather than in `vitest_dedup::memory` for one reason: the library is
-/// `#![forbid(unsafe_code)]`, and there is no safe portable way to ask for this. `getrusage` is
-/// the POSIX answer and needs one FFI call; a binary is the right place to keep it, and the
-/// library stays a pure function of its inputs by taking the number as an argument.
-///
-/// What the number means is documented once, on [`vitest_dedup::memory::MemoryReport::
-/// peak_rss_bytes`], and repeated in the emitted record itself: it is the **process high-water
-/// mark**, transients the allocator has not returned included, reported beside retained bytes and
-/// comparable to neither them nor any budget.
-mod rss {
-    /// Peak RSS in bytes, or `None` where the platform has no reader wired up.
-    #[cfg(unix)]
-    pub fn peak_bytes() -> Option<u64> {
-        let mut usage = std::mem::MaybeUninit::<libc::rusage>::uninit();
-        // SAFETY: `getrusage` is handed `RUSAGE_SELF` and a correctly sized, correctly aligned
-        // `rusage` allocation to write into; it fully initializes that struct on success and is
-        // the documented POSIX interface for this. The return value is checked before the value
-        // is assumed initialized, so a failing call never reads uninitialized memory.
-        let queried = unsafe { libc::getrusage(libc::RUSAGE_SELF, usage.as_mut_ptr()) };
-        if queried != 0 {
-            return None;
-        }
-        // SAFETY: `getrusage` returned 0, which per POSIX means it wrote a complete `rusage`.
-        let usage = unsafe { usage.assume_init() };
-        let max_rss = u64::try_from(usage.ru_maxrss).ok()?;
-        // The one portability trap in this function, and it is a factor of 1024: Darwin reports
-        // `ru_maxrss` in **bytes**, while Linux and the BSDs report **kilobytes**. Reading the
-        // Linux convention on macOS would over-report by 1024x, which on the corpus this was
-        // built for is the difference between "well under budget" and "impossible".
-        if cfg!(any(target_os = "macos", target_os = "ios")) {
-            Some(max_rss)
-        } else {
-            Some(max_rss.saturating_mul(1024))
-        }
-    }
+mod rss;
 
-    /// No reader on this platform. Windows would need `GetProcessMemoryInfo`; until something
-    /// needs it there, the record reports `null` rather than a number that means something else.
-    #[cfg(not(unix))]
-    pub fn peak_bytes() -> Option<u64> {
-        None
-    }
-}
+#[cfg(test)]
+mod memory_roof_tests;
 
 /// Run the CLI, preserving quality-gate exit codes and reporting operational errors with
 /// sanitized diagnostics.
@@ -245,9 +204,6 @@ fn report_path(prefix: &std::path::Path, extension: &str) -> std::path::PathBuf 
     path
 }
 
-/// One analysis run end to end: parse args, load config, discover, extract, analyze, apply
-/// modes, write reports, decide the exit code. Every failure is a `bail!` with a sanitized
-/// message; the caller maps results to the process exit code.
 /// The memory roof `--max-memory`/`--no-memory-cap` selected.
 fn memory_roof(args: &ParsedArgs) -> vitest_dedup::memory::MemoryRoof {
     vitest_dedup::memory::MemoryRoof::new(
@@ -274,8 +230,13 @@ fn write_roof_diagnostic(
     Ok(())
 }
 
+/// Parse arguments and run discovery, extraction, analysis and reporting with native RSS samples.
 fn run() -> Result<ExitCode> {
-    let args = ParsedArgs::parse()?;
+    run_with_rss(ParsedArgs::parse()?, rss::current_bytes)
+}
+
+/// Run the pipeline with an injectable current-RSS reader for deterministic boundary tests.
+fn run_with_rss(args: ParsedArgs, mut resident: impl FnMut() -> Option<u64>) -> Result<ExitCode> {
     let mut stderr = std::io::stderr().lock();
     let config = Config::load(&args.root, args.to_overrides())?;
 
@@ -447,7 +408,7 @@ fn run() -> Result<ExitCode> {
                     relativize_extraction_paths(&mut extraction.tests, &config.root);
                     base_roof.charge(&extraction.tests, 0);
                     base_tests.extend(extraction.tests);
-                    Ok(!base_roof.exceeded(&base_tests))
+                    Ok(!base_roof.exceeded_with_rss(&base_tests, &mut resident))
                 },
             )?;
             if unread > 0 {
@@ -763,7 +724,7 @@ fn run() -> Result<ExitCode> {
         // Whole files only: stopping here keeps every per-file side effect above consistent, so
         // the run is exactly a run over the files read so far.
         let remaining = discovered.files.len() - index - 1;
-        if remaining > 0 && roof.exceeded(&tests) {
+        if remaining > 0 && roof.exceeded_with_rss(&tests, &mut resident) {
             causes.files_over_memory_budget = remaining;
             write_roof_diagnostic(&mut stderr, "analysis", &args, files_read, remaining)?;
             break;

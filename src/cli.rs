@@ -291,8 +291,8 @@ struct RawOptions {
 
     /// Stop reading files once the analyzer holds more than MIB mebibytes (default 2048).
     ///
-    /// Checked between files, so the run analyzes whole files only; the rest are reported and the
-    /// run is marked incomplete.
+    /// Checked between files, with a current process RSS backstop at 1.5 times MIB. The run
+    /// analyzes whole files only; the rest are reported and the run is marked incomplete.
     #[arg(
         long,
         global = true,

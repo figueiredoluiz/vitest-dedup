@@ -652,7 +652,7 @@ impl MemoryReport {
 /// The default retained-memory budget, in MiB (`--max-memory`).
 pub const DEFAULT_MEMORY_BUDGET_MIB: u64 = 2_048;
 
-/// A ceiling on what the run holds, checked at file boundaries.
+/// Retained-memory accounting and a current-RSS backstop, checked at file boundaries.
 ///
 /// The figure is the one [`MemoryReport::post_extraction`] reports as `retained_bytes` -- the
 /// corpus vector's spine plus each test's [`HeapBytes::heap_bytes`] -- plus any source text the run
@@ -682,6 +682,23 @@ impl MemoryRoof {
         self.charged = self
             .charged
             .saturating_add(u64::try_from(heap.saturating_add(retained_text)).unwrap_or(u64::MAX));
+    }
+
+    /// Check retained bytes and, if still within budget, sample current process RSS once.
+    /// RSS has a separate ceiling of 1.5 times the budget. A missing sample preserves the
+    /// accounting roof; a disabled roof never calls the reader. Both comparisons are strict.
+    #[allow(clippy::ptr_arg)]
+    #[must_use]
+    pub fn exceeded_with_rss(
+        &self,
+        corpus: &Vec<TestCase>,
+        resident: impl FnOnce() -> Option<u64>,
+    ) -> bool {
+        let Some(budget) = self.budget_bytes else {
+            return false;
+        };
+        self.exceeded(corpus)
+            || resident().is_some_and(|rss| rss > budget.saturating_add(budget / 2))
     }
 
     /// Whether `corpus`, with everything charged so far, holds more than the budget.
@@ -1198,6 +1215,32 @@ mod tests {
         let mut uncapped = MemoryRoof::new(None);
         uncapped.charge(&[], usize::MAX);
         assert!(!uncapped.exceeded(&corpus));
+    }
+
+    /// Current RSS is a separate 1.5x backstop, including exact and overflowing thresholds.
+    #[test]
+    fn rss_backstop_preserves_thresholds_and_accounting() {
+        let corpus = Vec::new();
+        let roof = MemoryRoof::new(Some(100));
+        for resident in [None, Some(149), Some(150)] {
+            assert!(!roof.exceeded_with_rss(&corpus, || resident));
+        }
+        assert!(roof.exceeded_with_rss(&corpus, || Some(151)));
+        assert!(!MemoryRoof::new(Some(3)).exceeded_with_rss(&corpus, || Some(4)));
+        assert!(MemoryRoof::new(Some(3)).exceeded_with_rss(&corpus, || Some(5)));
+        assert!(!MemoryRoof::new(Some(u64::MAX)).exceeded_with_rss(&corpus, || Some(u64::MAX)));
+        let mut charged = roof;
+        charged.charge(&[], 101);
+        assert!(charged.exceeded_with_rss(&corpus, || None));
+        assert!(!MemoryRoof::new(None).exceeded_with_rss(&corpus, || {
+            panic!("an uncapped run must not sample RSS")
+        }));
+        let mut samples = 0;
+        assert!(!roof.exceeded_with_rss(&corpus, || {
+            samples += 1;
+            Some(1)
+        }));
+        assert_eq!(samples, 1);
     }
 
     /// The charge is the figure `--debug-memory` reports: the corpus spine plus each test's heap.

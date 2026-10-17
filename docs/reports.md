@@ -295,15 +295,24 @@ compared as usual.
 
 The run reads whole files until the analyzer holds more than its memory budget: 2,048 MiB by
 default, set with `--max-memory <MiB>` and removed with `--no-memory-cap`. The figure is the
-retained heap `--debug-memory` reports plus source text kept for the HTML report. Files after that
-point are not analyzed and are counted in `filesOverMemoryBudget` (JSON and JSONL; the terminal
-and HTML banners name the cause); every rule runs over the files
+retained heap `--debug-memory` reports plus source text kept for the HTML report. A second
+backstop checks current process RSS after each file and stops above 1.5 times the budget on
+Linux, macOS and Windows. RSS includes allocator overhead and other resident allocations; it is
+separate from the lifetime peak reported by `--debug-memory`. This is an absolute process
+measurement: it includes the startup footprint and memory still resident after the baseline pass,
+even after baseline data is dropped. A budget whose RSS ceiling is below that footprint can stop
+the current pass after its first file, even when little test data is retained. If the OS sample is
+unavailable, the retained-byte check still applies. `--no-memory-cap` disables both checks. The
+checks run at file boundaries, so a single file or the later analysis phase can exceed either
+threshold. Files after that point are not analyzed and are counted in `filesOverMemoryBudget`
+(JSON and JSONL; the terminal and HTML banners name the cause); every rule runs over the files
 read, with the same findings as a run over exactly those files. `--baseline-from-ref` applies the
 same budget to the base revision.
 
 ## Determinism
 
-The same input produces byte-identical output. Findings are ordered by their participants'
+The same admitted input produces byte-identical output. A memory-limited run may admit a
+different file prefix as process residency changes. Findings are ordered by their participants'
 locations (root-relative path, then position), then by rule, then by message. Paths are compared
 component by component rather than as strings, so the order does not depend on the platform's
 separator.

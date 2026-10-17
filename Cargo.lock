@@ -1423,6 +1423,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "winapi-util",
+ "windows-sys",
 ]
 
 [[package]]

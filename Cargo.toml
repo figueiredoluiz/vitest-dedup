@@ -36,17 +36,16 @@ tempfile = "=3.27.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0", features = ["preserve_order"] }
 
-# Peak RSS has no safe portable API in `std`, and the library crate is `#![forbid(unsafe_code)]`.
-# The one `getrusage` call `--debug-memory` needs therefore lives in the binary (`src/main.rs`),
-# and this dependency is scoped to the platforms that have it: on Windows the crate is not
-# compiled at all and the binary reports no peak RSS rather than a wrong one. `libc` is already in
-# `Cargo.lock` transitively, so this adds a direct edge, not a new dependency.
+# OS memory readers live in the binary to keep the library free of unsafe code.
+# libc is already locked transitively; Unix builds use it for peak RSS and current residency.
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
 # Safe stdout-only VT enabling; this package is already locked through file discovery.
 [target.'cfg(windows)'.dependencies]
 winapi-util = "0.1"
+# Typed working-set bindings; this package is already locked transitively.
+windows-sys = { version = "0.61.2", features = ["Win32_System_ProcessStatus", "Win32_System_Threading"] }
 
 [dev-dependencies]
 assert_cmd = "2.0"

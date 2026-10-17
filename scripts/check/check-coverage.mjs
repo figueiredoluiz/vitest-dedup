@@ -179,6 +179,8 @@ const RUST_MODULES = {
   'src/frontend/registry.rs': 97,
   'src/frontend/resolver.rs': 100,
   'src/main.rs': 97,
+  // Native memory readers: measured 41/44 instrumented lines (93.18%) on macOS.
+  'src/rss.rs': 93,
   // New in this PR (commit a84a42d) and initially landed with no floor at all, which is what
   // caught it: the module added functions the tests did not reach, and `rust total functions`
   // dropped to 95.10%, below the 95.4% floor. Raised by testing what each `HeapBytes` impl
