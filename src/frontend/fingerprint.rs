@@ -3094,10 +3094,17 @@ impl<'a, 'b, 's, 'm> Serializer<'a, 'b, 's, 'm> {
                 format!("(for-in {left} {right} {body})")
             }
             Statement::ForOfStatement(for_of) => {
+                // Async iteration selects a distinct protocol, including awaiting values when
+                // wrapping a synchronous iterator. Preserve that choice in the loop identity.
+                let head = if for_of.r#await {
+                    "for-await-of"
+                } else {
+                    "for-of"
+                };
                 let left = self.ser_for_left(&for_of.left, depth + 1);
                 let right = self.ser_expr(&for_of.right, depth + 1);
                 let body = self.ser_stmt(&for_of.body, depth + 1);
-                format!("(for-of {left} {right} {body})")
+                format!("({head} {left} {right} {body})")
             }
             Statement::WhileStatement(while_statement) => {
                 format!(
@@ -4285,7 +4292,10 @@ impl<'a, 'b, 's, 'm> BehaviorCollector<'a, 'b, 's, 'm> {
                 self.walk_stmt(&for_in.body, deferred, depth + 1);
             }
             Statement::ForOfStatement(for_of) => {
-                self.push(deferred, "loop".to_owned());
+                // Sync loop kinds deliberately share one token. Async iteration changes
+                // protocol selection and suspension behavior, so it gets its own token.
+                let protocol = if for_of.r#await { "loop-await" } else { "loop" };
+                self.push(deferred, protocol.to_owned());
                 self.walk_expr(&for_of.right, deferred, depth + 1);
                 self.walk_stmt(&for_of.body, deferred, depth + 1);
             }
@@ -7879,6 +7889,17 @@ test('x', () => { const w = 1; f(w); });"#;
             asynchronous: false,
         },
         DepthCase {
+            name: "for-await-of",
+            template: "@",
+            pre: "for await(const k of o)",
+            post: "",
+            leaf: "f();",
+            token: "(for-await-of ",
+            entry: 2,
+            step: 1,
+            asynchronous: true,
+        },
+        DepthCase {
             // `ser_stmt` -> `ser_stmts`(try block) -> `ser_stmt`.
             name: "try",
             template: "@",
@@ -8204,6 +8225,13 @@ test('x', () => { const w = 1; f(w); });"#;
         prints.into_iter().next().expect("one body").behavior
     }
 
+    /// Every fingerprint view for one `async` test callback body, from a single parse.
+    fn async_prints_of(body: &str) -> BodyFingerprint {
+        let prints = fingerprint_all(&format!("test('t', async () => {{ {body} }});"));
+        assert_eq!(prints.len(), 1, "expected one test body for {body:?}");
+        prints.into_iter().next().expect("one body")
+    }
+
     /// Every modeled node kind, with the exact fragment its `Serializer` arm emits.
     ///
     /// Each row fails if its arm is deleted (the node falls through to `opaque`, whose text is
@@ -8355,6 +8383,70 @@ test('x', () => { const w = 1; f(w); });"#;
             alpha_of("const v = o[0];"),
             alpha_of("const v = o[0];"),
             "the same body must still serialize identically"
+        );
+    }
+
+    /// `for await` selects a different iteration protocol, so it is part of the loop's identity.
+    ///
+    /// `for await (const v of xs)` prefers `Symbol.asyncIterator`, falling back to a wrapped
+    /// synchronous iterator that awaits Promise-valued elements. Ordinary `for` selects
+    /// `Symbol.iterator` and yields those Promises unchanged. Both
+    /// callbacks must be `async` for the pair to parse, so the callable's own asyncness cannot
+    /// carry the difference: until 2026-10-18 the serializer and the behavior walk both dropped
+    /// `ForOfStatement.r#await`, and `duplicate-test` reported the pair at error severity on
+    /// bodies where one test passes and the other fails.
+    #[test]
+    fn for_await_selects_a_different_iteration_protocol() {
+        let sync = async_prints_of("for(const k of o)f();");
+        let r#await = async_prints_of("for await(const k of o)f();");
+
+        for (view, left, right) in [
+            ("alpha", sync.alpha.clone(), r#await.alpha.clone()),
+            (
+                "structural",
+                sync.structural.clone(),
+                r#await.structural.clone(),
+            ),
+            (
+                "behavior",
+                format!("{:?}", sync.behavior),
+                format!("{:?}", r#await.behavior),
+            ),
+        ] {
+            assert_ne!(
+                left, right,
+                "{view}: a body that awaits its elements is a different program"
+            );
+        }
+
+        // The exact fragments, so a deleted or respelled arm cannot hide behind a bare
+        // inequality: `opaque` embeds verbatim source, which also differs.
+        assert!(
+            r#await.alpha.contains("(for-await-of "),
+            "the serializer must name the protocol: {}",
+            r#await.alpha
+        );
+        assert_eq!(
+            sync.behavior,
+            vec!["loop".to_owned(), "call:global:f".to_owned()],
+            "a sync for-of keeps the shared loop token"
+        );
+        assert_eq!(
+            r#await.behavior,
+            vec!["loop-await".to_owned(), "call:global:f".to_owned()],
+            "an awaited for-of records the protocol in its loop event"
+        );
+
+        // The control. The protocol is the ONLY difference being claimed.
+        assert_eq!(
+            async_prints_of("for(const k of o)f();").alpha,
+            sync.alpha,
+            "the same body must still serialize identically"
+        );
+        assert_eq!(
+            async_prints_of("for await(const k of o)f();").alpha,
+            r#await.alpha,
+            "the same awaited body must still serialize identically"
         );
     }
 

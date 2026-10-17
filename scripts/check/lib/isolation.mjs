@@ -92,6 +92,20 @@ export const DIMENSIONS = new Map([
     },
   ],
   [
+    'for-await',
+    {
+      summary: 'a for-of loop differs in whether it awaits each element (for await vs for)',
+      equal: ['contextKey', 'modifierKey'],
+      differ: ['alpha', 'structural', 'behavior'],
+      why:
+        '`for await` selects the async iterator protocol, falling back to a wrapped sync ' +
+        'iterator that awaits Promise-valued elements. Ordinary `for` selects the sync ' +
+        'protocol. This difference must survive exact, structural, and behavior comparison ' +
+        'to prevent false duplicate and near-duplicate findings; both callbacks are async ' +
+        'so callback asyncness cannot carry the distinction.',
+    },
+  ],
+  [
     'literal',
     {
       summary: 'literal VALUES differ, of the same kind; nothing else does',

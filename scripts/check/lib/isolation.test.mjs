@@ -179,3 +179,18 @@ test('object property isolation rejects erased descriptors and unrelated context
     assert.equal(checkExpectation(expectation, indexOver([first, changed]), readSource).status, 'fail')
   }
 })
+
+test('for await isolation rejects a collapsed protocol and unrelated context drift', () => {
+  const expectation = unstateableExpectation()
+  expectation.isolates.unstateable = false
+  expectation.isolates.dimensions = ['for-await']
+  const first = { alpha: 'a1', structural: 's1', behavior: 'b1', contextKey: 'c', modifierKey: 'm' }
+  const second = { ...first, alpha: 'a2', structural: 's2', behavior: 'b2' }
+  assert.equal(checkExpectation(expectation, indexOver([first, second]), readSource).status, 'ok')
+  // Every differ field collapsing is the half-revert this dimension exists for: dropping the
+  // serializer flag collapses alpha/structural, dropping the behavior token collapses behavior.
+  for (const field of ['alpha', 'structural', 'behavior', 'contextKey', 'modifierKey']) {
+    const changed = { ...second, [field]: field.endsWith('Key') ? 'different' : first[field] }
+    assert.equal(checkExpectation(expectation, indexOver([first, changed]), readSource).status, 'fail')
+  }
+})
