@@ -10275,6 +10275,42 @@ test('t', () => { g(r); });",
         class_outcome_findings(source, 2, 0)
     }
 
+    /// A selected literal participates in owned class capture without erasing its property key.
+    #[test]
+    fn destructured_class_capture_final_outcomes() {
+        use crate::model::Rule;
+        let source = include_str!("../../fixtures/duplicates/destructured-class-capture.test.ts");
+        let findings = class_outcome_findings(source, 4, 0);
+        assert_eq!(findings.len(), 1, "{findings:?}");
+        assert_eq!(findings[0].rule, Rule::DuplicateTest);
+        assert_eq!(findings[0].titles, ["capture first", "capture renamed"]);
+        let values =
+            include_str!("../../fixtures/duplicates/destructured-class-capture-value.test.ts");
+        let findings = complete_pair_findings(values);
+        assert_eq!(findings.len(), 1, "{findings:?}");
+        assert_eq!(findings[0].rule, Rule::ParameterizationCandidate);
+        assert_eq!(findings[0].titles, ["value one", "value two"]);
+    }
+
+    /// Unmodeled selection still excludes its consumer, while a direct capture remains comparable.
+    #[test]
+    fn destructured_class_capture_uncertain_sources() {
+        for declaration in [
+            "const { value } = source();",
+            "const { value = 1 } = { value: undefined };",
+            "const { value, ...rest } = { value: 1 };",
+            "const { value } = { ...source(), value: 1 };",
+            "const { __proto__: value } = { __proto__: null };",
+        ] {
+            let source = format!(
+                "import {{test,expect}} from 'vitest'; test('uncertain',()=>{{{declaration} class C{{read(){{return value}}}} expect(new C().read()).toBe(1)}}); test('safe first',()=>{{const x=1;class C{{read(){{return x}}}}expect(new C().read()).toBe(1)}}); test('safe renamed',()=>{{const renamed=1;class Renamed{{read(){{return renamed}}}}expect(new Renamed().read()).toBe(1)}});"
+            );
+            let findings = class_outcome_findings(&source, 3, 1);
+            assert_eq!(findings.len(), 1, "{declaration}: {findings:?}");
+            assert_eq!(findings[0].titles, ["safe first", "safe renamed"]);
+        }
+    }
+
     /// Assert extraction, unresolved scope and final rule results for an owned class matrix.
     fn class_outcome_findings(
         source: &str,

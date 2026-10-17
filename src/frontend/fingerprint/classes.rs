@@ -5,7 +5,7 @@
 //! class bodies. All state here dies with its callback, before the owned IR is retained.
 use super::*;
 use oxc_ast::ast::{
-    AssignmentExpression, Class, ClassElement, MethodDefinitionKind, ReturnStatement,
+    AssignmentExpression, Class, ClassElement, MethodDefinitionKind, PropertyKind, ReturnStatement,
 };
 use oxc_ast::AstKind;
 
@@ -217,6 +217,86 @@ fn initializer<'a>(semantic: &Semantic<'a>, symbol: SymbolId) -> Option<&'a Expr
             .and_then(|item| item.init.as_ref()),
         _ => None,
     }
+}
+
+/// Resolve only a const object destructure of a fresh, primitive-valued literal.
+/// This carries the selected key and value without treating the whole object as the child.
+fn selected_literal<'a>(
+    semantic: &Semantic<'a>,
+    symbol: SymbolId,
+) -> Option<(String, &'a Expression<'a>)> {
+    let nodes = semantic.nodes();
+    let declaration = nodes.get_node(semantic.scoping().symbol_declaration(symbol));
+    let declarator = match declaration.kind() {
+        AstKind::VariableDeclarator(declarator) => {
+            let AstKind::VariableDeclaration(parent) = nodes.parent_kind(declaration.id()) else {
+                return None;
+            };
+            (parent.kind == VariableDeclarationKind::Const).then_some(declarator)?
+        }
+        AstKind::VariableDeclaration(parent) if parent.kind == VariableDeclarationKind::Const => {
+            parent.declarations.iter().find(|item| match &item.id {
+                BindingPattern::ObjectPattern(object) => object.properties.iter().any(|property| {
+                    matches!(&property.value, BindingPattern::BindingIdentifier(binding)
+                        if binding.symbol_id.get() == Some(symbol))
+                }),
+                _ => false,
+            })?
+        }
+        _ => return None,
+    };
+    let BindingPattern::ObjectPattern(pattern) = &declarator.id else {
+        return None;
+    };
+    if pattern.rest.is_some()
+        || pattern.properties.iter().any(|property| {
+            property.computed || !matches!(property.value, BindingPattern::BindingIdentifier(_))
+        })
+    {
+        return None;
+    }
+    let selected = pattern
+        .properties
+        .iter()
+        .find_map(|property| match &property.value {
+            BindingPattern::BindingIdentifier(binding)
+                if binding.symbol_id.get() == Some(symbol) =>
+            {
+                property_key_name(&property.key)
+            }
+            _ => None,
+        })?;
+    let Expression::ObjectExpression(object) = declarator.init.as_ref()? else {
+        return None;
+    };
+    let mut keys = HashSet::new();
+    let mut value = None;
+    for property in &object.properties {
+        let ObjectPropertyKind::ObjectProperty(property) = property else {
+            return None;
+        };
+        if property.kind != PropertyKind::Init || property.computed || property.method {
+            return None;
+        }
+        let key = property_key_name(&property.key)?;
+        if key == "__proto__"
+            || !keys.insert(key.clone())
+            || !matches!(
+                property.value,
+                Expression::BooleanLiteral(_)
+                    | Expression::NullLiteral(_)
+                    | Expression::NumericLiteral(_)
+                    | Expression::BigIntLiteral(_)
+                    | Expression::StringLiteral(_)
+            )
+        {
+            return None;
+        }
+        if key == selected {
+            value = Some(&property.value);
+        }
+    }
+    Some((selected, value?))
 }
 
 impl<'a, 'b, 's, 'm> Serializer<'a, 'b, 's, 'm> {
@@ -849,6 +929,13 @@ impl<'a, 'b, 's, 'm> Serializer<'a, 'b, 's, 'm> {
             return self.literal(kind, &value);
         }
         let Some(init) = self.value_at(symbol, position) else {
+            if let Some((property, value)) = selected_literal(self.ctx.semantic, symbol) {
+                return format!(
+                    "(selected {} {})",
+                    serde_json::to_string(&property).expect("property key serializes"),
+                    self.ser_expr(value, depth + 1)
+                );
+            }
             if let Some((callable, _, _)) =
                 self.resolve_callable_symbol(symbol, position, &mut HashSet::new(), depth + 1)
             {
