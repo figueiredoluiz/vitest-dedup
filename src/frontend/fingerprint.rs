@@ -2680,6 +2680,10 @@ impl<'a, 'b, 's, 'm> Serializer<'a, 'b, 's, 'm> {
             if let Some(instance) = self.class_instance_reference(ident, depth + 1) {
                 return instance;
             }
+        } else if self.instance_name_observed(ident) {
+            if let Some(instance) = self.class_instance_reference(ident, depth + 1) {
+                return instance;
+            }
         }
         if let Some(value) = self.class_capture(ident, depth + 1) {
             return value;
@@ -10529,6 +10533,83 @@ test('t', () => { g(r); });",
             let findings = complete_pair_findings(&source);
             assert_class_distinct(&findings, &source);
         }
+    }
+
+    /// Pin equivalent, parameterizable, distinct and unresolved owned-class outcomes.
+    #[test]
+    fn owned_class_fragility_outcomes() {
+        use crate::model::Rule;
+        let equivalent = include_str!("../../fixtures/duplicates/capture-binding-renamed.test.ts");
+        let retained = complete_pair_findings(equivalent);
+        assert_eq!(retained.len(), 1, "{retained:?}");
+        assert_eq!(retained[0].rule, Rule::DuplicateTest);
+
+        let escaped = include_str!("../../fixtures/duplicates/rv2-escaped-instance-name.test.ts");
+        let escaped_findings = complete_pair_findings(escaped);
+        assert_eq!(escaped_findings.len(), 1, "{escaped_findings:?}");
+        assert_eq!(escaped_findings[0].rule, Rule::ParameterizationCandidate);
+
+        let escaped_mismatch =
+            include_str!("../../fixtures/duplicates/rv2-escaped-instance-mismatch.test.ts");
+        let mismatch_findings = complete_pair_findings(escaped_mismatch);
+        assert_eq!(mismatch_findings.len(), 1, "{mismatch_findings:?}");
+        assert_eq!(mismatch_findings[0].rule, Rule::ParameterizationCandidate);
+
+        let whole_instance =
+            include_str!("../../fixtures/duplicates/rv2-instance-name-assertion.test.ts");
+        let whole_findings = complete_pair_findings(whole_instance);
+        assert_eq!(whole_findings.len(), 1, "{whole_findings:?}");
+        assert_eq!(whole_findings[0].rule, Rule::ParameterizationCandidate);
+
+        let nonreflective =
+            include_str!("../../fixtures/duplicates/rv2-instance-nonreflective-assertion.test.ts");
+        let nonreflective_findings = complete_pair_findings(nonreflective);
+        assert_eq!(
+            nonreflective_findings.len(),
+            1,
+            "{nonreflective_findings:?}"
+        );
+        assert_eq!(nonreflective_findings[0].rule, Rule::DuplicateTest);
+
+        let erased_type = include_str!("../../fixtures/duplicates/rv2-erased-field-type.test.ts");
+        let typed_findings = complete_pair_findings(erased_type);
+        assert_eq!(typed_findings.len(), 1, "{typed_findings:?}");
+        assert_eq!(typed_findings[0].rule, Rule::DuplicateTest);
+
+        let changed_effect =
+            include_str!("../../fixtures/duplicates/rv2-local-class-constructor.test.ts");
+        let changed_findings = complete_pair_findings(changed_effect);
+        assert_eq!(changed_findings.len(), 1, "{changed_findings:?}");
+        assert_eq!(changed_findings[0].rule, Rule::ParameterizationCandidate);
+
+        let uncertain =
+            include_str!("../../fixtures/duplicates/external-instance-owned-control.test.ts");
+        let scoped = class_outcome_findings(uncertain, 4, 2);
+        assert_eq!(scoped.len(), 1, "{scoped:?}");
+        assert_eq!(scoped[0].rule, Rule::DuplicateTest);
+    }
+
+    /// Uncertain instance and class-object writes exclude only their dependent tests.
+    #[test]
+    fn owned_class_review_dynamic_write_scope() {
+        use crate::model::Rule;
+        for source in [
+            include_str!("../../fixtures/duplicates/rv2-loop-instance-write.test.ts"),
+            include_str!("../../fixtures/duplicates/rv2-class-mutation-after-instance.test.ts"),
+            include_str!("../../fixtures/duplicates/rv2-assigned-class-alias-mutation.test.ts"),
+        ] {
+            let findings = class_outcome_findings(source, 4, 2);
+            assert_eq!(findings.len(), 1, "{source}: {findings:?}");
+            assert_eq!(findings[0].rule, Rule::DuplicateTest);
+        }
+        let hoisted = include_str!("../../fixtures/duplicates/rv2-hoisted-instance-write.test.ts");
+        let findings = class_outcome_findings(hoisted, 4, 2);
+        assert_eq!(findings.len(), 1, "{findings:?}");
+        assert_eq!(findings[0].rule, Rule::DuplicateTest);
+        assert_eq!(
+            findings[0].titles,
+            ["safe hoisted first", "safe hoisted second"]
+        );
     }
 
     /// Equal initializers cannot erase which enclosing binding a class or closure captures.

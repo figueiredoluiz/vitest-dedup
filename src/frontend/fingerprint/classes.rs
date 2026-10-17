@@ -4,7 +4,9 @@
 //! a nominal class slot and an environment digest; repeated `new` expressions do not clone
 //! class bodies. All state here dies with its callback, before the owned IR is retained.
 use super::*;
-use oxc_ast::ast::{Class, ClassElement, MethodDefinitionKind};
+use oxc_ast::ast::{
+    AssignmentExpression, Class, ClassElement, MethodDefinitionKind, ReturnStatement,
+};
 use oxc_ast::AstKind;
 
 /// One cached body, separated from the capture values read at a particular construction.
@@ -13,6 +15,80 @@ struct ClassSummary {
     digest: String,
     captures: Vec<SymbolId>,
     definition: String,
+    escapes_this: bool,
+}
+
+/// A class whose receiver leaves a method can expose its runtime name indirectly.
+#[derive(Default)]
+struct EscapedThis {
+    found: bool,
+    depth: u32,
+}
+
+impl<'a> Visit<'a> for EscapedThis {
+    fn visit_expression(&mut self, expression: &Expression<'a>) {
+        if self.found {
+            return;
+        }
+        if self.depth >= MAX_DEPTH {
+            self.found = true;
+            return;
+        }
+        self.depth += 1;
+        walk::walk_expression(self, expression);
+        self.depth -= 1;
+    }
+
+    fn visit_statement(&mut self, statement: &Statement<'a>) {
+        if self.found {
+            return;
+        }
+        if self.depth >= MAX_DEPTH {
+            self.found = true;
+            return;
+        }
+        self.depth += 1;
+        walk::walk_statement(self, statement);
+        self.depth -= 1;
+    }
+
+    fn visit_assignment_expression(&mut self, assignment: &AssignmentExpression<'a>) {
+        self.found |= matches!(assignment.right, Expression::ThisExpression(_));
+        if !self.found {
+            walk::walk_assignment_expression(self, assignment);
+        }
+    }
+
+    fn visit_call_expression(&mut self, call: &CallExpression<'a>) {
+        self.found |= call.arguments.iter().any(|argument| {
+            matches!(
+                argument.as_expression(),
+                Some(Expression::ThisExpression(_))
+            )
+        });
+        if !self.found {
+            walk::walk_call_expression(self, call);
+        }
+    }
+
+    fn visit_new_expression(&mut self, new: &NewExpression<'a>) {
+        self.found |= new.arguments.iter().any(|argument| {
+            matches!(
+                argument.as_expression(),
+                Some(Expression::ThisExpression(_))
+            )
+        });
+        if !self.found {
+            walk::walk_new_expression(self, new);
+        }
+    }
+
+    fn visit_return_statement(&mut self, statement: &ReturnStatement<'a>) {
+        self.found |= matches!(statement.argument, Some(Expression::ThisExpression(_)));
+        if !self.found {
+            walk::walk_return_statement(self, statement);
+        }
+    }
 }
 
 /// One indexed operation; parser handles remain confined to this temporary frontend cache.
@@ -458,8 +534,30 @@ impl<'a, 'b, 's, 'm> Serializer<'a, 'b, 's, 'm> {
                                 }
                             }
                             AstKind::AssignmentExpression(assignment) => {
-                                assignment.operator.as_str() != "="
+                                if assignment.operator.as_str() != "="
                                     || !self.straight_line(assignment.node_id.get())
+                                {
+                                    true
+                                } else if let AssignmentTarget::AssignmentTargetIdentifier(alias) =
+                                    &assignment.left
+                                {
+                                    if let Some(symbol) = self.class_symbol(alias) {
+                                        if is_local_symbol(
+                                            self.ctx.semantic,
+                                            self.ctx.body_span,
+                                            symbol,
+                                        ) {
+                                            owners.push(symbol);
+                                            false
+                                        } else {
+                                            true
+                                        }
+                                    } else {
+                                        true
+                                    }
+                                } else {
+                                    true
+                                }
                             }
                             _ => true,
                         };
@@ -585,10 +683,66 @@ impl<'a, 'b, 's, 'm> Serializer<'a, 'b, 's, 'm> {
         if !self.owned_constructor_candidate(&initial.callee, 0) {
             return None;
         }
-        match self.value_at(symbol, position)? {
+        let value = self.value_at(symbol, position)?;
+        let writes = self
+            .ctx
+            .class_cache
+            .borrow()
+            .writes
+            .get(&symbol)
+            .cloned()
+            .unwrap_or_default();
+        if writes.iter().any(|id| {
+            let AstKind::AssignmentExpression(assignment) =
+                self.ctx.semantic.nodes().parent_kind(*id)
+            else {
+                return true;
+            };
+            !self.straight_line(assignment.node_id.get())
+        }) {
+            self.unknown_class();
+            return None;
+        }
+        match value {
             Expression::NewExpression(new) => Some(new),
             _ => None,
         }
+    }
+
+    /// A whole instance passed to application code can expose its nominal class name.
+    pub(super) fn instance_name_observed(&self, ident: &IdentifierReference<'a>) -> bool {
+        if self.ctx.semantic.nodes().iter().len() == 0 {
+            return false;
+        }
+        let Some(reference_id) = ident.reference_id.get() else {
+            return true;
+        };
+        let reference = self.ctx.semantic.scoping().get_reference(reference_id);
+        let parent = self.ctx.semantic.nodes().parent_node(reference.node_id());
+        let AstKind::CallExpression(call) = parent.kind() else {
+            return matches!(
+                parent.kind(),
+                AstKind::NewExpression(_) | AstKind::ReturnStatement(_)
+            );
+        };
+        if let Expression::StaticMemberExpression(member) = &call.callee {
+            if matches!(
+                member.property.name.as_str(),
+                "toBe" | "toBeDefined" | "toBeTruthy" | "toBeFalsy"
+            ) {
+                if let Expression::CallExpression(base) = &member.object {
+                    if self.known_read_only_assertion(base) {
+                        return false;
+                    }
+                }
+            }
+        }
+        if !self.known_read_only_assertion(call) {
+            return true;
+        }
+        let matcher = self.ctx.semantic.nodes().parent_node(parent.id());
+        !matches!(matcher.kind(), AstKind::StaticMemberExpression(member)
+            if matches!(member.property.name.as_str(), "toBe" | "toBeDefined" | "toBeTruthy" | "toBeFalsy"))
     }
 
     /// An instance receiver retains the class and argument environment of its construction.
@@ -608,6 +762,20 @@ impl<'a, 'b, 's, 'm> Serializer<'a, 'b, 's, 'm> {
             &mut HashSet::new(),
             depth + 1,
         )?;
+        if let Expression::Identifier(class_ident) = &new.callee {
+            if let Some(class_symbol) = self.class_symbol(class_ident) {
+                self.class_external_mutations(class_symbol, class.span, ident.span.start);
+            }
+        }
+        let observed_name = if self.instance_name_observed(ident) {
+            let name = class.id.as_ref().map_or_else(
+                || self.unknown_class(),
+                |binding| self.literal("string", binding.name.as_str()),
+            );
+            format!(" name={name}")
+        } else {
+            String::new()
+        };
         self.ctx.capture_stack.push(symbol);
         self.ctx.class_uses.push(ident.span.start);
         let live = self.ser_class(class, depth + 1);
@@ -615,7 +783,9 @@ impl<'a, 'b, 's, 'm> Serializer<'a, 'b, 's, 'm> {
         let construction = self.ser_new(new, depth + 1);
         self.ctx.capture_stack.pop();
         let binding = self.instance_binding(symbol);
-        Some(format!("(instance {binding} {construction} live={live})"))
+        Some(format!(
+            "(instance {binding}{observed_name} {construction} live={live})"
+        ))
     }
 
     /// Captures are placeholders in the cached body, with values supplied separately at use.
@@ -2010,6 +2180,14 @@ impl<'a, 'b, 's, 'm> Serializer<'a, 'b, 's, 'm> {
         let Some(summary) = self.class_summary(class, depth + 1) else {
             return self.unknown_class();
         };
+        let observed_name = if summary.escapes_this {
+            let Some(binding) = &class.id else {
+                return self.unknown_class();
+            };
+            format!(" name={}", self.literal("string", binding.name.as_str()))
+        } else {
+            String::new()
+        };
         let position = self
             .ctx
             .class_uses
@@ -2025,7 +2203,7 @@ impl<'a, 'b, 's, 'm> Serializer<'a, 'b, 's, 'm> {
             &serde_json::to_string(&environment).expect("class environment serializes"),
         );
         format!(
-            "(class C{nominal} body={} definition={} environment={})",
+            "(class C{nominal}{observed_name} body={} definition={} environment={})",
             summary.digest,
             serde_json::to_string(&BodyDigest::of(&summary.definition))
                 .expect("definition digest serializes"),
@@ -2056,6 +2234,8 @@ impl<'a, 'b, 's, 'm> Serializer<'a, 'b, 's, 'm> {
                 let definition = child
                     .class_definition_effects(class, depth + 1)
                     .unwrap_or_default();
+                let mut escape = EscapedThis::default();
+                escape.visit_class(class);
                 let mut cache = self.ctx.class_cache.borrow_mut();
                 if body.len() > 1024 * 1024
                     || cache.bytes.saturating_add(body.len()) > 4 * 1024 * 1024
@@ -2070,6 +2250,7 @@ impl<'a, 'b, 's, 'm> Serializer<'a, 'b, 's, 'm> {
                         .expect("class digest serializes"),
                     captures,
                     definition,
+                    escapes_this: escape.found,
                 };
                 cache.bodies.insert(key, summary.clone());
                 summary
@@ -2090,19 +2271,9 @@ impl<'a, 'b, 's, 'm> Serializer<'a, 'b, 's, 'm> {
 
     /// Preserve ordinary-field versus auto-accessor kind with shared ordered value rendering.
     fn class_field(&mut self, element: &ClassElement<'a>, depth: u32) -> String {
-        let (kind, value, annotation, declared) = match element {
-            ClassElement::PropertyDefinition(item) => (
-                "field",
-                item.value.as_ref(),
-                item.type_annotation.as_ref(),
-                item.declare,
-            ),
-            ClassElement::AccessorProperty(item) => (
-                "accessor",
-                item.value.as_ref(),
-                item.type_annotation.as_ref(),
-                false,
-            ),
+        let (kind, value, declared) = match element {
+            ClassElement::PropertyDefinition(item) => ("field", item.value.as_ref(), item.declare),
+            ClassElement::AccessorProperty(item) => ("accessor", item.value.as_ref(), false),
             _ => return self.unknown_class(),
         };
         if element.has_decorator() || declared {
@@ -2116,10 +2287,9 @@ impl<'a, 'b, 's, 'm> Serializer<'a, 'b, 's, 'm> {
             )
         });
         format!(
-            "({kind} static={} computed={} key={key} type={} value={value})",
+            "({kind} static={} computed={} key={key} value={value})",
             element.r#static(),
             element.computed(),
-            annotation.map_or("", |annotation| self.ctx.slice(annotation.span))
         )
     }
 
