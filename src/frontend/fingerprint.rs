@@ -10331,7 +10331,7 @@ test('t', () => { g(r); });",
     #[test]
     fn constructor_final_outcomes() {
         use crate::model::Rule;
-        let observed = include_str!("../../fixtures/duplicates/rv2-constructor-effects.test.ts");
+        let observed = include_str!("../../fixtures/duplicates/constructor-effects.test.ts");
         assert!(complete_pair_findings(observed).is_empty());
         for (first, second) in [
             ("new Store(loadA())", "new Cart(loadA())"),
@@ -10471,8 +10471,7 @@ test('t', () => { g(r); });",
     #[test]
     fn owned_classes_distinguish_conflicting_final_outcomes() {
         use crate::model::Rule;
-        let observed =
-            include_str!("../../fixtures/duplicates/rv2-local-class-constructor.test.ts");
+        let observed = include_str!("../../fixtures/duplicates/local-class-constructor.test.ts");
         let findings = complete_pair_findings(observed);
         assert!(!findings.iter().any(|finding| matches!(
             finding.rule,
@@ -10544,25 +10543,25 @@ test('t', () => { g(r); });",
         assert_eq!(retained.len(), 1, "{retained:?}");
         assert_eq!(retained[0].rule, Rule::DuplicateTest);
 
-        let escaped = include_str!("../../fixtures/duplicates/rv2-escaped-instance-name.test.ts");
+        let escaped = include_str!("../../fixtures/duplicates/escaped-instance-name.test.ts");
         let escaped_findings = complete_pair_findings(escaped);
         assert_eq!(escaped_findings.len(), 1, "{escaped_findings:?}");
         assert_eq!(escaped_findings[0].rule, Rule::ParameterizationCandidate);
 
         let escaped_mismatch =
-            include_str!("../../fixtures/duplicates/rv2-escaped-instance-mismatch.test.ts");
+            include_str!("../../fixtures/duplicates/escaped-instance-mismatch.test.ts");
         let mismatch_findings = complete_pair_findings(escaped_mismatch);
         assert_eq!(mismatch_findings.len(), 1, "{mismatch_findings:?}");
         assert_eq!(mismatch_findings[0].rule, Rule::ParameterizationCandidate);
 
         let whole_instance =
-            include_str!("../../fixtures/duplicates/rv2-instance-name-assertion.test.ts");
+            include_str!("../../fixtures/duplicates/instance-name-assertion.test.ts");
         let whole_findings = complete_pair_findings(whole_instance);
         assert_eq!(whole_findings.len(), 1, "{whole_findings:?}");
         assert_eq!(whole_findings[0].rule, Rule::ParameterizationCandidate);
 
         let nonreflective =
-            include_str!("../../fixtures/duplicates/rv2-instance-nonreflective-assertion.test.ts");
+            include_str!("../../fixtures/duplicates/instance-nonreflective-assertion.test.ts");
         let nonreflective_findings = complete_pair_findings(nonreflective);
         assert_eq!(
             nonreflective_findings.len(),
@@ -10571,13 +10570,13 @@ test('t', () => { g(r); });",
         );
         assert_eq!(nonreflective_findings[0].rule, Rule::DuplicateTest);
 
-        let erased_type = include_str!("../../fixtures/duplicates/rv2-erased-field-type.test.ts");
+        let erased_type = include_str!("../../fixtures/duplicates/erased-field-type.test.ts");
         let typed_findings = complete_pair_findings(erased_type);
         assert_eq!(typed_findings.len(), 1, "{typed_findings:?}");
         assert_eq!(typed_findings[0].rule, Rule::DuplicateTest);
 
         let changed_effect =
-            include_str!("../../fixtures/duplicates/rv2-local-class-constructor.test.ts");
+            include_str!("../../fixtures/duplicates/local-class-constructor.test.ts");
         let changed_findings = complete_pair_findings(changed_effect);
         assert_eq!(changed_findings.len(), 1, "{changed_findings:?}");
         assert_eq!(changed_findings[0].rule, Rule::ParameterizationCandidate);
@@ -10594,15 +10593,15 @@ test('t', () => { g(r); });",
     fn owned_class_review_dynamic_write_scope() {
         use crate::model::Rule;
         for source in [
-            include_str!("../../fixtures/duplicates/rv2-loop-instance-write.test.ts"),
-            include_str!("../../fixtures/duplicates/rv2-class-mutation-after-instance.test.ts"),
-            include_str!("../../fixtures/duplicates/rv2-assigned-class-alias-mutation.test.ts"),
+            include_str!("../../fixtures/duplicates/loop-instance-write.test.ts"),
+            include_str!("../../fixtures/duplicates/class-mutation-after-instance.test.ts"),
+            include_str!("../../fixtures/duplicates/assigned-class-alias-mutation.test.ts"),
         ] {
             let findings = class_outcome_findings(source, 4, 2);
             assert_eq!(findings.len(), 1, "{source}: {findings:?}");
             assert_eq!(findings[0].rule, Rule::DuplicateTest);
         }
-        let hoisted = include_str!("../../fixtures/duplicates/rv2-hoisted-instance-write.test.ts");
+        let hoisted = include_str!("../../fixtures/duplicates/hoisted-instance-write.test.ts");
         let findings = class_outcome_findings(hoisted, 4, 2);
         assert_eq!(findings.len(), 1, "{findings:?}");
         assert_eq!(findings[0].rule, Rule::DuplicateTest);
