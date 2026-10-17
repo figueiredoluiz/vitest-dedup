@@ -151,6 +151,8 @@ const RUST_MODULES = {
   // production lines covered, not more tests: a table-driven test adds mostly uninstrumented
   // data lines, so volume alone moves this figure by hundredths.
   'src/frontend/fingerprint.rs': 98,
+  // Owned class normalization/state histories: measured at 83.82% (1259/1502 lines).
+  'src/frontend/fingerprint/classes.rs': 83,
   // Raised 2026-09-25 from 97.6, measured 97.88% (2309/2359). Production-only coverage is 98.45%
   // -- 13 of its 841 production lines uncovered, enumerated rather than excluded:
   //

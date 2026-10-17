@@ -87,7 +87,7 @@
 
 use super::fingerprint::{
     import_origins_from_program, module_export_name, render_inlined_helper_body, FunctionLike,
-    ImportOrigin, Mode,
+    HelperRendering, ImportOrigin, Mode,
 };
 use super::resolver::{self, Resolved};
 use oxc_allocator::Allocator;
@@ -135,7 +135,7 @@ pub(super) fn render_inline(
     argument_fragments: &[String],
     mode: Mode,
     depth: u32,
-) -> Option<String> {
+) -> Option<HelperRendering> {
     let path = origin.resolved.as_ref()?;
     let mut visited = HashSet::new();
     render_from(
@@ -414,7 +414,7 @@ fn render_from(
     depth: u32,
     visited: &mut HashSet<(PathBuf, String)>,
     hops: usize,
-) -> Option<String> {
+) -> Option<HelperRendering> {
     if hops > MAX_REEXPORT_HOPS || !visited.insert((path.to_path_buf(), export.to_owned())) {
         return None;
     }
@@ -428,7 +428,7 @@ fn render_from(
                 // The helper's own parse, made with its real source type: a TSX re-parse would
                 // reject valid `.ts` syntax and silently empty the map.
                 let imports = import_origins_from_program(program, path);
-                let semantic_return = SemanticBuilder::new().build(program);
+                let semantic_return = SemanticBuilder::new().with_build_nodes(true).build(program);
                 if !semantic_return.diagnostics.is_empty() {
                     return None;
                 }

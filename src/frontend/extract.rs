@@ -779,18 +779,15 @@ fn collect_mocked_modules(
                         // No second argument at all: a real automock.
                         None => MockFactory::Automock,
                         Some(argument) => match as_function_like(argument) {
-                            Some(function_like) => MockFactory::Factory(
-                                fingerprint(
-                                    function_like,
-                                    semantic,
-                                    source,
-                                    file,
-                                    // A mock factory is never a `.each` row callback -- nothing
-                                    // to substitute.
-                                    None,
-                                )
-                                .into_alpha_source(),
-                            ),
+                            Some(function_like) => {
+                                let body = fingerprint(function_like, semantic, source, file, None);
+                                if body.class_unresolved {
+                                    unresolved = true;
+                                    MockFactory::Unresolved
+                                } else {
+                                    MockFactory::Factory(body.into_alpha_source())
+                                }
+                            }
                             // A4: an imported or computed factory (identifier, call, member
                             // expression, ...) is not automock and must never be treated as one.
                             None => {
@@ -1534,6 +1531,7 @@ impl<'a> Walker<'a> {
             &self.file.path,
             None,
         );
+        let class_unresolved = body.class_unresolved;
         let hook = Hook {
             kind,
             location: self.location(call.span),
@@ -1547,6 +1545,7 @@ impl<'a> Walker<'a> {
             .hook_scopes
             .last_mut()
             .expect("root hook scope always present");
+        scope.unresolved |= class_unresolved;
         match kind {
             HookKind::BeforeAll => scope.before_all.push(hook),
             HookKind::BeforeEach => scope.before_each.push(hook),
@@ -2225,7 +2224,8 @@ impl<'a> Walker<'a> {
         // this case's identity is exactly as unknown as that suite's, even when its own title and
         // everything else about it is fully static -- see the doc on
         // `Walker::unresolved_suite_depth`.
-        let unresolved = fixtures_unresolved
+        let unresolved = body_fingerprint.as_ref().is_some_and(|body| body.class_unresolved)
+            || fixtures_unresolved
             || self.mocks_unresolved
             || is_unresolved_title
             || opaque_body

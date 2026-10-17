@@ -739,19 +739,28 @@ fn fixture_body_fingerprint(
     match value {
         // `None`: a fixture setup body is never a `.each` row callback, so there is nothing to
         // substitute here -- see `fingerprint.rs`'s row-substitution doc.
-        Expression::ArrowFunctionExpression(arrow) => FixtureValue::Setup(
-            fingerprint(FunctionLike::Arrow(arrow), semantic, source, file, None).alpha,
-        ),
-        Expression::FunctionExpression(function) => FixtureValue::Setup(
-            fingerprint(
+        Expression::ArrowFunctionExpression(arrow) => {
+            let body = fingerprint(FunctionLike::Arrow(arrow), semantic, source, file, None);
+            if body.class_unresolved {
+                FixtureValue::Unresolved
+            } else {
+                FixtureValue::Setup(body.alpha)
+            }
+        }
+        Expression::FunctionExpression(function) => {
+            let body = fingerprint(
                 FunctionLike::Function(function),
                 semantic,
                 source,
                 file,
                 None,
-            )
-            .alpha,
-        ),
+            );
+            if body.class_unresolved {
+                FixtureValue::Unresolved
+            } else {
+                FixtureValue::Setup(body.alpha)
+            }
+        }
         // Anything else: a statically readable value (string, number, boolean, null, bigint, a
         // substitution-free template, a signed number, an object or array of those, or simple
         // arithmetic on one) is a meaningful, comparable state -- `Literal(fingerprint)`, not

@@ -244,6 +244,8 @@
 //! `analysis.rs` (`dedup_by_declaration`) excludes same-`Location` members before alpha/structural
 //! equality is even consulted, so it holds regardless of what the bodies' fingerprints say.
 
+mod classes;
+
 use super::registry::property_key_name;
 use crate::model::{BehaviorTrace, BodyDigest, CallbackForm, Fingerprints};
 use oxc_allocator::Allocator;
@@ -513,7 +515,15 @@ pub(super) fn fingerprint(
         trivial,
         callback_form,
         inlined_imports,
+        class_unresolved: context.class_uncertain.get(),
     }
+}
+
+/// A helper body and the owned class uncertainty discovered while rendering it.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) struct HelperRendering {
+    pub text: String,
+    pub class_unresolved: bool,
 }
 
 /// Serializes one imported helper's body for inlining at a call site -- the rendering half of
@@ -566,7 +576,7 @@ pub(super) fn render_inlined_helper_body(
     argument_fragments: &[String],
     mode: Mode,
     depth: u32,
-) -> String {
+) -> HelperRendering {
     let mut arg_substitution = HashMap::with_capacity(argument_fragments.len());
     for (index, parameter) in body.params().items.iter().enumerate() {
         let BindingPattern::BindingIdentifier(binding) = &parameter.pattern else {
@@ -581,26 +591,20 @@ pub(super) fn render_inlined_helper_body(
     }
     let no_rows: HashMap<SymbolId, (&'static str, String)> = HashMap::new();
     let no_dataflow: HashMap<SymbolId, DataflowSubst<'_, '_>> = HashMap::new();
-    let context = FingerprintContext {
+    let mut context = FingerprintContext::new(
         semantic,
         source,
         imports,
-        file_key: path_key(file),
-        file: file.to_path_buf(),
-        body_span: body.span(),
-        row_substitution: &no_rows,
-        dataflow: &no_dataflow,
-        arg_substitution,
-        consumed_args: HashSet::new(),
-        inline_imported_helpers: false,
-        // The helper's own rendering records nothing: its accounting dies with the pass, and no
-        // module of the *importing* file is inlined-or-identity-rendered by the helper's body.
-        inlined_imports: HashSet::new(),
-        identity_imports: HashSet::new(),
-        local_prefix: "H",
-        canonical: HashMap::new(),
-        next_local: 0,
-    };
+        path_key(file),
+        file.to_path_buf(),
+        body.span(),
+        &no_rows,
+        &no_dataflow,
+    );
+    context.arg_substitution = arg_substitution;
+    context.inline_imported_helpers = false;
+    // Helper-local accounting dies with the pass and cannot claim an importing-file dependency.
+    context.local_prefix = "H";
     let mut serializer = Serializer::new(context, mode);
     let asyncness = if body.is_async() { "async " } else { "" };
     let generator = if body.is_generator() { "* " } else { "" };
@@ -651,13 +655,17 @@ pub(super) fn render_inlined_helper_body(
         })
         .filter_map(|(index, _)| argument_fragments.get(index).cloned())
         .collect();
-    if unread.is_empty() {
+    let text = if unread.is_empty() {
         format!("(helper-inline {asyncness}{generator}{form} {statements})")
     } else {
         format!(
             "(helper-inline {asyncness}{generator}{form} {statements} (args {}))",
             unread.join(" ")
         )
+    };
+    HelperRendering {
+        text,
+        class_unresolved: serializer.ctx.class_uncertain.get(),
     }
 }
 
@@ -694,6 +702,8 @@ pub(super) struct BodyFingerprint {
     /// exactly these from `Context::imports`; ignored by [`BodyFingerprint::digest`], which
     /// feeds only the comparison views to the IR.
     pub inlined_imports: Vec<String>,
+    /// Whether an owned class dependency cannot be compared safely.
+    pub class_unresolved: bool,
 }
 
 impl BodyFingerprint {
@@ -1368,14 +1378,8 @@ fn try_register_members<'a, 'b>(
 /// list. Never inspects declaration sites, only read (`IdentifierReference` with
 /// `Reference::is_read()`) uses.
 ///
-/// Deliberately does NOT use `Semantic::reference_span` (which requires the `AstNodes` store built
-/// via `SemanticBuilder::with_build_nodes(true)`): `extract.rs` builds this crate's `Semantic`
-/// without it (`SemanticBuilder::new().build(...)`), so that store is always empty here, and
-/// calling `reference_span` against an empty store panics rather than returning a useless answer.
-/// A bounded [`Visit`] walk over `statements` -- which this function already owns, unlike the node
-/// store -- finds read positions without needing it: every read is discovered in the same
-/// statement-by-statement order this function iterates in, so there is no span comparison to do at
-/// all.
+/// A bounded [`Visit`] walk discovers reads in statement order without depending on the optional
+/// semantic node store. This also supports synthetic serializer tests that build scoping only.
 fn read_statement_indices<'a>(
     semantic: &Semantic<'a>,
     statements: &[Statement<'a>],
@@ -2311,6 +2315,14 @@ struct FingerprintContext<'a, 'b, 's, 'm> {
     /// dynamic `import()` is the one place inside a body that carries one.
     file: PathBuf,
     body_span: Span,
+    class_uncertain: std::rc::Rc<std::cell::Cell<bool>>,
+    expand_classes: bool,
+    class_regions: Vec<Span>,
+    capture_stack: Vec<SymbolId>,
+    private_names: Vec<HashMap<String, String>>,
+    class_cache: std::rc::Rc<std::cell::RefCell<classes::ClassCache>>,
+    capture_frames: Vec<Vec<SymbolId>>,
+    class_uses: Vec<u32>,
     /// This row's substitution, already resolved to `SymbolId`s by [`resolve_row_substitution`] --
     /// empty (never populated) when `fingerprint` was not given a `.each` row substitution, or
     /// when this body's parameter shape did not qualify for one. See the module doc's "Row
@@ -2396,6 +2408,14 @@ impl<'a, 'b, 's, 'm> FingerprintContext<'a, 'b, 's, 'm> {
             file_key,
             file,
             body_span,
+            class_uncertain: std::rc::Rc::new(std::cell::Cell::new(false)),
+            expand_classes: false,
+            class_regions: Vec::new(),
+            capture_stack: Vec::new(),
+            private_names: Vec::new(),
+            class_cache: Default::default(),
+            capture_frames: Vec::new(),
+            class_uses: Vec::new(),
             row_substitution,
             dataflow,
             arg_substitution: HashMap::new(),
@@ -2422,6 +2442,14 @@ impl<'a, 'b, 's, 'm> FingerprintContext<'a, 'b, 's, 'm> {
             file_key: self.file_key.clone(),
             file: self.file.clone(),
             body_span: self.body_span,
+            class_uncertain: self.class_uncertain.clone(),
+            expand_classes: self.expand_classes,
+            class_regions: self.class_regions.clone(),
+            capture_stack: self.capture_stack.clone(),
+            private_names: self.private_names.clone(),
+            class_cache: self.class_cache.clone(),
+            capture_frames: self.capture_frames.clone(),
+            class_uses: self.class_uses.clone(),
             row_substitution: self.row_substitution,
             dataflow: self.dataflow,
             // Both inlining-related fields are per-pass constants in truth: an ordinary body's
@@ -2445,6 +2473,7 @@ impl<'a, 'b, 's, 'm> FingerprintContext<'a, 'b, 's, 'm> {
     fn fresh_for_pass_with(&self, dataflow: &'m HashMap<SymbolId, DataflowSubst<'a, 'b>>) -> Self {
         let mut fresh = self.fresh_for_pass();
         fresh.dataflow = dataflow;
+        fresh.expand_classes = true;
         fresh
     }
 
@@ -2579,13 +2608,19 @@ impl<'a, 'b, 's, 'm> Serializer<'a, 'b, 's, 'm> {
     /// different opaque constructs never accidentally collapse (they compare by literal text,
     /// idents and all), but two constructs whose only difference lives inside an opaque region
     /// stay indistinguishable to this fingerprint. See the module doc.
-    fn opaque(&self, span: Span) -> String {
+    fn opaque(&mut self, span: Span) -> String {
+        if !self.ctx.class_regions.is_empty() {
+            self.ctx.class_uncertain.set(true);
+        }
         format!("<opaque:{}>", self.ctx.slice(span))
     }
 
     /// Retain a depth-limit marker and the original source slice rather than claiming a
     /// complete rendering.
-    fn degraded(&self, span: Span) -> String {
+    fn degraded(&mut self, span: Span) -> String {
+        if !self.ctx.class_regions.is_empty() {
+            self.ctx.class_uncertain.set(true);
+        }
         format!("<max-depth:{}>", self.ctx.slice(span))
     }
 
@@ -2618,7 +2653,7 @@ impl<'a, 'b, 's, 'm> Serializer<'a, 'b, 's, 'm> {
     /// Only a resolved local symbol can have a substitution at all -- nothing this module
     /// resolves to `free`/`global` was ever a parameter of this body or a dataflow-canonicalized
     /// local (`analyze_dataflow` only ever registers a body-local symbol).
-    fn reference_or_literal(&mut self, ident: &IdentifierReference<'_>, depth: u32) -> String {
+    fn reference_or_literal(&mut self, ident: &IdentifierReference<'a>, depth: u32) -> String {
         // `arguments` is the other construct an arrow does not bind (see `this_or_arguments`).
         // It reaches here as an ordinary identifier reference; a *resolved* symbol by that name
         // is some user's own binding and carries none of the meaning, so only the free form --
@@ -2637,6 +2672,17 @@ impl<'a, 'b, 's, 'm> Serializer<'a, 'b, 's, 'm> {
                 .is_none()
         {
             self.this_or_arguments = true;
+        }
+        if self.ctx.expand_classes {
+            if let Some(class) = self.class_reference(ident, depth + 1) {
+                return class;
+            }
+            if let Some(instance) = self.class_instance_reference(ident, depth + 1) {
+                return instance;
+            }
+        }
+        if let Some(value) = self.class_capture(ident, depth + 1) {
+            return value;
         }
         let symbol_id = ident.reference_id.get().and_then(|reference_id| {
             self.ctx
@@ -2672,13 +2718,17 @@ impl<'a, 'b, 's, 'm> Serializer<'a, 'b, 's, 'm> {
 
     /// Allocate or reuse a canonical binding identity in this serialization context.
     fn binding(&mut self, name: &str, symbol_id: Option<SymbolId>) -> String {
-        binding_identity(
+        let binding = binding_identity(
             &mut self.ctx.canonical,
             &mut self.ctx.next_local,
             self.ctx.local_prefix,
             symbol_id,
             name,
-        )
+        );
+        if let Some(symbol) = symbol_id {
+            self.record_instance_binding(symbol, &binding);
+        }
+        binding
     }
 
     /// Renders a literal, always including its `kind` so two literals of different types that
@@ -2915,7 +2965,16 @@ impl<'a, 'b, 's, 'm> Serializer<'a, 'b, 's, 'm> {
         }
         match key {
             PropertyKey::StaticIdentifier(id) => format!("prop:{}", id.name.as_str()),
-            PropertyKey::PrivateIdentifier(id) => format!("prop:#{}", id.name.as_str()),
+            PropertyKey::PrivateIdentifier(id) => {
+                let name = self
+                    .ctx
+                    .private_names
+                    .iter()
+                    .rev()
+                    .find_map(|names| names.get(id.name.as_str()))
+                    .map_or(id.name.as_str(), String::as_str);
+                format!("prop:#{name}")
+            }
             _ => self.opaque(key.span()),
         }
     }
@@ -2969,6 +3028,12 @@ impl<'a, 'b, 's, 'm> Serializer<'a, 'b, 's, 'm> {
                     "(function-decl {name} {})",
                     self.ser_callable(&FunctionLike::Function(function), depth + 1)
                 )
+            }
+            Statement::ClassDeclaration(class) => {
+                if let Some(id) = &class.id {
+                    self.binding(id.name.as_str(), id.symbol_id.get());
+                }
+                self.ser_class(class, depth + 1)
             }
             Statement::IfStatement(if_statement) => {
                 let test = self.ser_expr(&if_statement.test, depth + 1);
@@ -3273,6 +3338,7 @@ impl<'a, 'b, 's, 'm> Serializer<'a, 'b, 's, 'm> {
             }
             Expression::CallExpression(call) => self.ser_call(call, depth + 1),
             Expression::NewExpression(new_expression) => self.ser_new(new_expression, depth + 1),
+            Expression::ClassExpression(class) => self.ser_class(class, depth + 1),
             Expression::AssignmentExpression(assignment) => format!(
                 "(assign {} {} {})",
                 assignment.operator.as_str(),
@@ -3366,6 +3432,19 @@ impl<'a, 'b, 's, 'm> Serializer<'a, 'b, 's, 'm> {
                 self.ser_computed_member(member, depth + 1)
             }
             Expression::PrivateFieldExpression(member) => self.ser_private_field(member, depth + 1),
+            Expression::PrivateInExpression(membership) => {
+                let name = self
+                    .ctx
+                    .private_names
+                    .iter()
+                    .rev()
+                    .find_map(|names| names.get(membership.left.name.as_str()))
+                    .map_or(membership.left.name.as_str(), String::as_str)
+                    .to_owned();
+                let object = self.ser_expr(&membership.right, depth + 1);
+                format!("(private-in #{name} {object})")
+            }
+
             // A dynamic `import()` names a module, and a module identity is exactly what this
             // scheme anchors everywhere else. Falling through to `opaque` rendered the verbatim
             // source slice instead, so two files each doing `await import('./recipes')` compared
@@ -3402,6 +3481,17 @@ impl<'a, 'b, 's, 'm> Serializer<'a, 'b, 's, 'm> {
         if depth > MAX_DEPTH {
             return self.degraded(member.span);
         }
+        if let Some(value) =
+            self.callable_reflection(&member.object, member.property.name.as_str(), depth + 1)
+        {
+            return value;
+        }
+        if member.property.name == "name" {
+            if let Some(value) = self.known_class_name(&member.object, depth + 1) {
+                return value;
+            }
+        }
+        self.class_reflection(&member.object, member.property.name.as_str(), depth + 1);
         let object = self.ser_expr(&member.object, depth + 1);
         let optional = if member.optional { "?." } else { "." };
         format!(
@@ -3414,6 +3504,11 @@ impl<'a, 'b, 's, 'm> Serializer<'a, 'b, 's, 'm> {
     fn ser_computed_member(&mut self, member: &ComputedMemberExpression<'a>, depth: u32) -> String {
         if depth > MAX_DEPTH {
             return self.degraded(member.span);
+        }
+        if let Some(value) =
+            self.computed_callable_reflection(&member.object, &member.expression, depth + 1)
+        {
+            return value;
         }
         let object = self.ser_expr(&member.object, depth + 1);
         let property = self.ser_expr(&member.expression, depth + 1);
@@ -3434,8 +3529,16 @@ impl<'a, 'b, 's, 'm> Serializer<'a, 'b, 's, 'm> {
         if depth > MAX_DEPTH {
             return self.degraded(member.span);
         }
+        self.private_callable_escape(member);
         let object = self.ser_expr(&member.object, depth + 1);
-        format!("(member {object} .#{})", member.field.name.as_str())
+        let name = self
+            .ctx
+            .private_names
+            .iter()
+            .rev()
+            .find_map(|names| names.get(member.field.name.as_str()))
+            .map_or(member.field.name.as_str(), String::as_str);
+        format!("(member {object} .#{name})")
     }
 
     /// A JSX element, structurally: name, attributes in source order, children in source order.
@@ -3745,15 +3848,17 @@ impl<'a, 'b, 's, 'm> Serializer<'a, 'b, 's, 'm> {
             .iter()
             .map(|argument| self.ser_argument(argument, depth + 1))
             .collect();
-        let rendered = super::helpers::render_inline(origin, &arguments, self.mode, depth);
+        let rendered = super::helpers::render_inline(origin, &arguments, self.mode, depth)?;
+        if rendered.class_unresolved {
+            self.ctx.class_uncertain.set(true);
+            return None;
+        }
         // Accounting: only a render that actually happened counts as inlined (see
         // `FingerprintContext::inlined_imports`). A refusal here leaves the module unrecorded,
         // and the callee then renders as an identity through `reference` below, which records
         // the other half.
-        if rendered.is_some() {
-            self.ctx.inlined_imports.insert(origin.component.clone());
-        }
-        rendered
+        self.ctx.inlined_imports.insert(origin.component.clone());
+        Some(rendered.text)
     }
 
     /// `new Foo<T>(...)`.
@@ -3936,75 +4041,6 @@ impl<'a, 'b, 's, 'm> Serializer<'a, 'b, 's, 'm> {
 // behavior events
 // ---------------------------------------------------------------------------------------------
 
-/// Accept import/global constructor paths through erased wrappers, without local aliases.
-fn external_constructor(callee: &Expression<'_>, semantic: &Semantic<'_>, depth: u32) -> bool {
-    if depth > MAX_DEPTH {
-        return false;
-    }
-    match callee {
-        Expression::Identifier(ident) => ident.reference_id.get().is_some_and(|id| {
-            semantic
-                .scoping()
-                .get_reference(id)
-                .symbol_id()
-                .is_none_or(|id| semantic.scoping().symbol_flags(id).is_import())
-        }),
-        Expression::StaticMemberExpression(member) => {
-            external_constructor(&member.object, semantic, depth + 1)
-        }
-        Expression::ParenthesizedExpression(wrapper) => {
-            external_constructor(&wrapper.expression, semantic, depth + 1)
-        }
-        Expression::TSAsExpression(wrapper) => {
-            external_constructor(&wrapper.expression, semantic, depth + 1)
-        }
-        Expression::TSSatisfiesExpression(wrapper) => {
-            external_constructor(&wrapper.expression, semantic, depth + 1)
-        }
-        Expression::TSNonNullExpression(wrapper) => {
-            external_constructor(&wrapper.expression, semantic, depth + 1)
-        }
-        Expression::TSTypeAssertion(wrapper) => {
-            external_constructor(&wrapper.expression, semantic, depth + 1)
-        }
-        _ => false,
-    }
-}
-
-/// Veto the whole callback if a nested or earlier local construction could enter a new event.
-struct ConstructorScope<'s, 'a> {
-    semantic: &'s Semantic<'a>,
-    supported: bool,
-    depth: u32,
-}
-impl<'a> Visit<'a> for ConstructorScope<'_, 'a> {
-    /// Bound recursive expressions and check constructors even inside atomic assertions.
-    fn visit_expression(&mut self, expression: &Expression<'a>) {
-        if !self.supported || self.depth >= MAX_DEPTH {
-            self.supported = false;
-            return;
-        }
-        self.depth += 1;
-        if let Expression::NewExpression(new) = expression {
-            self.supported = external_constructor(&new.callee, self.semantic, 0);
-        }
-        if self.supported {
-            walk::walk_expression(self, expression);
-        }
-        self.depth -= 1;
-    }
-    /// Bound statement nesting as well as expression nesting.
-    fn visit_statement(&mut self, statement: &Statement<'a>) {
-        if !self.supported || self.depth >= MAX_DEPTH {
-            self.supported = false;
-            return;
-        }
-        self.depth += 1;
-        walk::walk_statement(self, statement);
-        self.depth -= 1;
-    }
-}
-
 /// Collects the ordered behavior signature: canonical callee paths, assertions, awaits, and
 /// control-flow markers, in source order.
 struct BehaviorCollector<'a, 'b, 's, 'm> {
@@ -4012,7 +4048,6 @@ struct BehaviorCollector<'a, 'b, 's, 'm> {
     /// see [`FingerprintContext`].
     ctx: FingerprintContext<'a, 'b, 's, 'm>,
     events: Vec<String>,
-    constructor_events: bool,
 }
 
 impl<'a, 'b, 's, 'm> BehaviorCollector<'a, 'b, 's, 'm> {
@@ -4021,24 +4056,11 @@ impl<'a, 'b, 's, 'm> BehaviorCollector<'a, 'b, 's, 'm> {
         Self {
             ctx,
             events: Vec::new(),
-            constructor_events: false,
         }
     }
 
     /// Collect ordered behavior events from a callable body or concise arrow expression.
     fn run(mut self, body: &FunctionLike<'a, '_>) -> Vec<String> {
-        let mut scope = ConstructorScope {
-            semantic: self.ctx.semantic,
-            supported: true,
-            depth: 0,
-        };
-        match body {
-            FunctionLike::Arrow(arrow) => scope.visit_arrow_function_expression(arrow),
-            FunctionLike::Function(function) => {
-                scope.visit_function(function, oxc_syntax::scope::ScopeFlags::empty())
-            }
-        }
-        self.constructor_events = scope.supported;
         match body {
             FunctionLike::Arrow(arrow) => match &arrow.body {
                 ArrowFunctionBody::FunctionBody(function_body) => {
@@ -4155,10 +4177,7 @@ impl<'a, 'b, 's, 'm> BehaviorCollector<'a, 'b, 's, 'm> {
     }
 
     /// Append a behavior event, prefixing it when its execution is deferred.
-    fn push(&mut self, deferred: bool, mut event: String) {
-        if !self.constructor_events {
-            event.push_str("|unmodeled-constructor-scope");
-        }
+    fn push(&mut self, deferred: bool, event: String) {
         self.events.push(if deferred {
             format!("deferred-{event}")
         } else {
@@ -4199,6 +4218,9 @@ impl<'a, 'b, 's, 'm> BehaviorCollector<'a, 'b, 's, 'm> {
                         self.walk_expr(init, deferred, depth + 1);
                     }
                 }
+            }
+            Statement::ClassDeclaration(class) => {
+                self.walk_class_definition(class, deferred, depth + 1)
             }
             Statement::IfStatement(if_statement) => {
                 self.push(deferred, "if".to_owned());
@@ -4323,17 +4345,11 @@ impl<'a, 'b, 's, 'm> BehaviorCollector<'a, 'b, 's, 'm> {
         }
         match expr {
             Expression::CallExpression(call) => self.walk_call(call, deferred, depth + 1),
-            Expression::NewExpression(new) if self.constructor_events => {
-                let shape = self.shape(expr, Mode::Alpha, depth + 1);
-                self.push(deferred, format!("new:{shape}"));
-                self.walk_under_members(&new.callee, deferred, depth + 1);
-                for argument in &new.arguments {
-                    if let Some(inner) = argument.as_expression() {
-                        self.walk_expr(inner, deferred, depth + 1);
-                    } else if let Argument::SpreadElement(spread) = argument {
-                        self.walk_expr(&spread.argument, deferred, depth + 1);
-                    }
-                }
+            Expression::ClassExpression(class) => {
+                self.walk_class_definition(class, deferred, depth + 1)
+            }
+            Expression::NewExpression(new_expression) => {
+                self.walk_new(expr, new_expression, deferred, depth + 1)
             }
             Expression::AwaitExpression(await_expression) => {
                 self.push(deferred, "await".to_owned());
@@ -4621,6 +4637,41 @@ impl<'a, 'b, 's, 'm> BehaviorCollector<'a, 'b, 's, 'm> {
         result
     }
 
+    /// Collect only definition-time effects; inert methods do not increase substance counts.
+    fn walk_class_definition(
+        &mut self,
+        class: &oxc_ast::ast::Class<'a>,
+        deferred: bool,
+        depth: u32,
+    ) {
+        let mut serializer =
+            Serializer::new(self.ctx.fresh_for_pass_with(self.ctx.dataflow), Mode::Alpha);
+        serializer.ctx.canonical = self.ctx.canonical.clone();
+        serializer.ctx.next_local = self.ctx.next_local;
+        if let Some(event) = serializer.class_definition_effects(class, depth + 1) {
+            self.push(deferred, event);
+        }
+        self.ctx.canonical = serializer.ctx.canonical;
+        self.ctx.next_local = serializer.ctx.next_local;
+    }
+
+    /// Retain constructor identity and argument shapes, then collect their nested effects.
+    fn walk_new(
+        &mut self,
+        expression: &Expression<'a>,
+        new_expression: &NewExpression<'a>,
+        deferred: bool,
+        depth: u32,
+    ) {
+        if depth > MAX_DEPTH {
+            return;
+        }
+        let shape = self.shape(expression, Mode::Alpha, depth + 1);
+        self.push(deferred, format!("new:{shape}"));
+        self.walk_under_members(&new_expression.callee, deferred, depth + 1);
+        self.walk_arguments(&new_expression.arguments, deferred, depth + 1);
+    }
+
     /// Collect one atomic assertion event or ordinary call behavior, respecting nesting and
     /// deferred execution.
     fn walk_call(&mut self, call: &CallExpression<'a>, deferred: bool, depth: u32) {
@@ -4646,11 +4697,16 @@ impl<'a, 'b, 's, 'm> BehaviorCollector<'a, 'b, 's, 'm> {
         let arguments = self.call_argument_fragment(call, depth);
         self.push(deferred, format!("call:{path}{type_arguments}{arguments}"));
         self.walk_under_members(&call.callee, deferred, depth + 1);
-        for argument in &call.arguments {
-            if let Some(argument_expr) = argument.as_expression() {
-                self.walk_expr(argument_expr, deferred, depth + 1);
+        self.walk_arguments(&call.arguments, deferred, depth + 1);
+    }
+
+    /// Collect call and constructor argument effects, retaining spread and traversal depth.
+    fn walk_arguments(&mut self, arguments: &[Argument<'a>], deferred: bool, depth: u32) {
+        for argument in arguments {
+            if let Some(inner) = argument.as_expression() {
+                self.walk_expr(inner, deferred, depth);
             } else if let Argument::SpreadElement(spread) = argument {
-                self.walk_expr(&spread.argument, deferred, depth + 1);
+                self.walk_expr(&spread.argument, deferred, depth);
             }
         }
     }
@@ -4741,7 +4797,18 @@ impl<'a, 'b, 's, 'm> BehaviorCollector<'a, 'b, 's, 'm> {
     /// the same erasure the read position had, one event kind over. It reaches receivers too --
     /// `const { api } = useThing(); api.get()` renders `call:L0:prop:api.get` -- because
     /// `call_path` recurses through a member expression's object into this same arm.
-    fn path_identity(&mut self, ident: &IdentifierReference<'_>) -> String {
+    fn path_identity(&mut self, ident: &IdentifierReference<'a>) -> String {
+        let mut serializer = self.shape_serializer(Mode::Alpha);
+        if let Some(value) = serializer
+            .class_reference(ident, 0)
+            .or_else(|| serializer.class_instance_reference(ident, 0))
+        {
+            self.ctx.canonical = serializer.ctx.canonical;
+            self.ctx.next_local = serializer.ctx.next_local;
+            return value;
+        }
+        self.ctx.canonical = serializer.ctx.canonical;
+        self.ctx.next_local = serializer.ctx.next_local;
         let substitution = ident
             .reference_id
             .get()
@@ -5005,6 +5072,7 @@ impl<'a, 'b, 's, 'm> BehaviorCollector<'a, 'b, 's, 'm> {
         // and `shape` below is the return leg.
         ctx.canonical = std::mem::take(&mut self.ctx.canonical);
         ctx.next_local = self.ctx.next_local;
+        ctx.expand_classes = true;
         Serializer {
             ctx,
             mode,
@@ -5258,7 +5326,7 @@ mod tests {
             parsed.diagnostics
         );
         let program: &Program = &parsed.program;
-        let semantic_ret = SemanticBuilder::new().build(program);
+        let semantic_ret = SemanticBuilder::new().with_build_nodes(true).build(program);
         assert!(
             semantic_ret.diagnostics.is_empty(),
             "unexpected semantic diagnostics: {:?}",
@@ -5522,7 +5590,9 @@ mod tests {
     #[test]
     fn jsx_formatting_does_not_change_alpha() {
         assert_eq!(
-            alpha_of_tsx("const el = render(<Button variant=\"primary\" size=\"large\">Save</Button>);"),
+            alpha_of_tsx(
+                "const el = render(<Button variant=\"primary\" size=\"large\">Save</Button>);"
+            ),
             alpha_of_tsx(
                 "const el = render(\n  <Button variant=\"primary\" size=\"large\">\n    Save\n  </Button>,\n);"
             ),
@@ -5865,10 +5935,10 @@ mod tests {
         // statements restarted at depth 0 and rendered fully from any call site.
         for (levels, expect_full_body) in [(120, true), (125, false)] {
             let source = format!(
-            "import {{ check }} from './helpers';\ntest('x', () => {{ const deep = {}check('dashboard'){}; }});",
-            "[".repeat(levels),
-            "]".repeat(levels),
-        );
+                "import {{ check }} from './helpers';\ntest('x', () => {{ const deep = {}check('dashboard'){}; }});",
+                "[".repeat(levels),
+                "]".repeat(levels),
+            );
             let prints = fingerprint_all_at(&source, &dir.path().join("a.test.ts"));
             assert_eq!(prints.len(), 1);
             let alpha = &prints[0].alpha;
@@ -8000,7 +8070,7 @@ test('x', () => { const w = 1; f(w); });"#;
         let inside = MAX_DEPTH as usize;
         assert_eq!(
             events(nest(inside, "if(1);", false)),
-            vec!["if|unmodeled-constructor-scope".to_owned()],
+            vec!["if".to_owned()],
             "`walk_stmt` at depth MAX_DEPTH exactly must still record"
         );
         assert!(
@@ -8012,7 +8082,7 @@ test('x', () => { const w = 1; f(w); });"#;
         let inside = (MAX_DEPTH - 1) as usize;
         assert_eq!(
             events(nest(inside, "await f();", true)),
-            vec!["await|unmodeled-constructor-scope".to_owned()],
+            vec!["await".to_owned()],
             "`walk_expr` at depth MAX_DEPTH exactly must still record"
         );
         assert!(
@@ -8194,7 +8264,7 @@ test('x', () => { const w = 1; f(w); });"#;
         ("continue", "while(1){continue;}", "(continue)"),
         ("continue-label", "l: while(1){continue l;}", "(continue l)"),
         ("label", "l: 1;", "(label l (stmt <number:1>))"),
-        ("class-falls-back-to-raw-text", "class C {}", "<opaque:class C {}>"),
+        ("class-owned-summary", "class C {}", "(class C0 body="),
         // --- parameters and binding patterns ---
         ("param-identifier", "const v = (a) => a;", "(fn (L1) id:L1)"),
         ("param-object-pattern", "const v = ({a}) => a;", "(object-pattern (prop prop:a "),
@@ -10196,6 +10266,821 @@ test('t', () => { g(r); });",
         );
     }
 
+    /// Analyze two owned tests with explicit extraction and completeness assertions.
+    fn complete_pair_findings(source: &str) -> Vec<crate::model::Finding> {
+        class_outcome_findings(source, 2, 0)
+    }
+
+    /// Assert extraction, unresolved scope and final rule results for an owned class matrix.
+    fn class_outcome_findings(
+        source: &str,
+        tests: usize,
+        unresolved: usize,
+    ) -> Vec<crate::model::Finding> {
+        class_outcome_findings_with_files(source, tests, unresolved, &[])
+    }
+
+    /// Resolve owned dependency files before asserting extraction and final rule outcomes.
+    fn class_outcome_findings_with_files(
+        source: &str,
+        tests: usize,
+        unresolved: usize,
+        files: &[(&str, &str)],
+    ) -> Vec<crate::model::Finding> {
+        use crate::config::{Config, ConfigOverrides};
+        use crate::discovery::{ModuleFlavor, SourceFile, SourceLanguage};
+        let directory = tempfile::tempdir().unwrap();
+        for (name, content) in files {
+            std::fs::write(directory.path().join(name), content).unwrap();
+        }
+        let config_path = directory.path().join("settings.json");
+        let settings = files
+            .iter()
+            .find(|(name, _)| *name == "settings.json")
+            .map_or("{}", |(_, contents)| *contents);
+        std::fs::write(&config_path, settings).unwrap();
+        let config = Config::load(
+            directory.path(),
+            ConfigOverrides {
+                config_file: Some(config_path),
+                ..ConfigOverrides::default()
+            },
+        )
+        .unwrap();
+        let file = SourceFile::without_project_context(
+            directory.path().join("constructor.test.ts"),
+            SourceLanguage::TypeScript,
+            ModuleFlavor::ForcedEsm,
+        );
+        let extraction =
+            crate::frontend::extract(source, &file, crate::frontend::Globals::Disabled);
+        assert_eq!(extraction.tests.len(), tests, "{source}");
+        assert!(!extraction.incomplete, "{:?}", extraction.diagnostics);
+        let result =
+            crate::analysis::analyze(extraction.tests, &config, 1, Default::default()).unwrap();
+        assert_eq!(result.unresolved_tests, unresolved, "{source}");
+        assert_eq!(result.incomplete(), unresolved > 0, "{source}");
+        result.findings
+    }
+
+    /// Constructor execution and argument identity participate without disabling known matches.
+    #[test]
+    fn constructor_final_outcomes() {
+        use crate::model::Rule;
+        let observed = include_str!("../../fixtures/duplicates/rv2-constructor-effects.test.ts");
+        assert!(complete_pair_findings(observed).is_empty());
+        for (first, second) in [
+            ("new Store(loadA())", "new Cart(loadA())"),
+            ("new Store(loadA())", "new Store(loadB())"),
+            ("new constructors['a'](1)", "new constructors['b'](1)"),
+            ("new Store<string>(1)", "new Store<number>(1)"),
+            ("new Store(...firstArgs)", "new Store(...secondArgs)"),
+            ("new Store(1)", "Store(1)"),
+        ] {
+            for prefix in ["", "const subject = "] {
+                let source = format!(
+                    "import {{ test, expect }} from 'vitest'; test('a', () => {{ {prefix}{first}; tick(); expect(trace).toEqual([1]); }}); test('b', () => {{ {prefix}{second}; tick(); expect(trace).toEqual([1]); }});"
+                );
+                assert!(
+                    !complete_pair_findings(&source)
+                        .iter()
+                        .any(|f| f.rule == Rule::NearDuplicateTest),
+                    "{source}"
+                );
+            }
+        }
+        let duplicate = "import { test, expect } from 'vitest'; test('a', () => { const first = new Store(1); first.load(); expect(trace).toEqual([1]); }); test('b', () => { const renamed = new Store(1); renamed.load(); expect(trace).toEqual([1]); });";
+        assert!(complete_pair_findings(duplicate)
+            .iter()
+            .any(|f| f.rule == Rule::DuplicateTest));
+        let near = "import { test, expect } from 'vitest'; test('a', () => { new Store(1); tick(); expect(trace).toEqual([1]); }); test('b', () => { void 0; new Store(1); tick(); expect(trace).toEqual([1]); });";
+        assert!(complete_pair_findings(near)
+            .iter()
+            .any(|f| f.rule == Rule::NearDuplicateTest));
+
+        let literal = "import { test, expect } from 'vitest'; test('a', () => { new Store(1); tick(); expect(trace).toEqual([1]); }); test('b', () => { new Store(2); tick(); expect(trace).toEqual([1]); });";
+        let findings = complete_pair_findings(literal);
+        assert!(!findings.iter().any(|f| f.rule == Rule::NearDuplicateTest));
+        assert_eq!(
+            findings
+                .iter()
+                .filter(|f| f.rule == Rule::ParameterizationCandidate)
+                .count(),
+            1
+        );
+        for (first, second) in [
+            (
+                "new Store(first(), second());",
+                "new Store(second(), first());",
+            ),
+            (
+                "function build() { new Store(loadA()); } build();",
+                "function build() { new Store(loadB()); } build();",
+            ),
+            (
+                "const s = new Store(loadA()); s.load(); s.load();",
+                "const s = new Store(loadB()); s.load(); s.load();",
+            ),
+        ] {
+            let source = format!(
+                "import {{ test, expect }} from 'vitest'; test('a', () => {{ {first} tick(); expect(trace).toEqual([1]); }}); test('b', () => {{ {second} tick(); expect(trace).toEqual([1]); }});"
+            );
+            assert!(
+                !complete_pair_findings(&source)
+                    .iter()
+                    .any(|f| f.rule == Rule::NearDuplicateTest),
+                "{source}"
+            );
+        }
+    }
+
+    /// Equivalent owned class bodies retain comparison across names, aliases and captures.
+    #[test]
+    fn owned_classes_retain_known_positive_findings() {
+        use crate::model::Rule;
+        for (first, second) in [
+            (
+                "class C { value = 1; } const v = new C(); expect(v.value).toBe(1);",
+                "class Renamed { value = 1; } const v = new Renamed(); expect(v.value).toBe(1);",
+            ),
+            (
+                "class C { value = 1; } const K = C; new K(); expect(1).toBe(1);",
+                "class D { value = 1; } const Alias = D; new Alias(); expect(1).toBe(1);",
+            ),
+            (
+                "const trace = []; class C { constructor() { trace.push(1); } } new C(); expect(trace).toEqual([1]);",
+                "const trace = []; class C { constructor() { trace.push(1); } } new C(); expect(trace).toEqual([1]);",
+            ),
+            (
+                "let x = 1; class C { value = x; } x = 2; new C(); expect(x).toBe(2);",
+                "let x = 1; class C { value = x; } x = 2; new C(); expect(x).toBe(2);",
+            ),
+            (
+                "class A { value = 1; } class B { value = 2; } let K = A; K = B; new K(); expect(1).toBe(1);",
+                "class A { value = 1; } class B { value = 2; } let K = A; K = B; new K(); expect(1).toBe(1);",
+            ),
+            (
+                "const C = class { #value = 1; get value() { return this.#value; } }; const v = new C(); expect(v.value).toBe(1);",
+                "const C = class { #renamed = 1; get value() { return this.#renamed; } }; const v = new C(); expect(v.value).toBe(1);",
+            ),
+            (
+                "function C() { this.value = 1; } const v = new C(); expect(v.value).toBe(1);",
+                "function C() { this.value = 1; } const v = new C(); expect(v.value).toBe(1);",
+            ),
+        ] {
+            let source = format!(
+                "import {{test, expect}} from 'vitest'; test('first', () => {{ {first} }}); test('second', () => {{ {second} }});"
+            );
+            let findings = complete_pair_findings(&source);
+            assert_eq!(
+                findings
+                    .iter()
+                    .filter(|finding| finding.rule == Rule::DuplicateTest)
+                    .count(),
+                1,
+                "{source}: {findings:?}"
+            );
+        }
+        let near = "import {test,expect} from 'vitest'; test('a',()=>{class C{value=1} new C(); tick(); expect(1).toBe(1)}); test('b',()=>{void 0; class C{value=1} new C(); tick(); expect(1).toBe(1)});";
+        assert_eq!(
+            complete_pair_findings(near)
+                .iter()
+                .filter(|finding| finding.rule == Rule::NearDuplicateTest)
+                .count(),
+            1
+        );
+    }
+
+    /// Assert the prohibited merge outcomes without weakening extraction or uncertainty checks.
+    fn assert_class_distinct(findings: &[crate::model::Finding], source: &str) {
+        use crate::model::Rule;
+        assert!(
+            !findings.iter().any(|finding| matches!(
+                finding.rule,
+                Rule::DuplicateTest | Rule::NearDuplicateTest | Rule::SubsumedTest
+            )),
+            "{source}: {findings:?}"
+        );
+    }
+
+    /// Implementation, nominal identity, captured state and definition effects cannot merge.
+    #[test]
+    fn owned_classes_distinguish_conflicting_final_outcomes() {
+        use crate::model::Rule;
+        let observed =
+            include_str!("../../fixtures/duplicates/rv2-local-class-constructor.test.ts");
+        let findings = complete_pair_findings(observed);
+        assert!(!findings.iter().any(|finding| matches!(
+            finding.rule,
+            Rule::DuplicateTest | Rule::NearDuplicateTest | Rule::SubsumedTest
+        )));
+        assert_eq!(
+            findings
+                .iter()
+                .filter(|finding| finding.rule == Rule::ParameterizationCandidate)
+                .count(),
+            1
+        );
+        for (first, second) in [
+            (
+                "class C { constructor() { trace.push(first()); } } new C();",
+                "class C { constructor() { trace.push(second()); } } new C();",
+            ),
+            (
+                "const C = class { value = first(); }; new C();",
+                "const C = class { value = second(); }; new C();",
+            ),
+            (
+                "class C { get value() { return first(); } } new C();",
+                "class C { value() { return first(); } } new C();",
+            ),
+            (
+                "class C extends First { } new C();",
+                "class C extends Second { } new C();",
+            ),
+            (
+                "class C { static { first(); } } new C();",
+                "class C { static { second(); } } new C();",
+            ),
+            (
+                "class C { static value = first(); } new C();",
+                "class C { value = first(); } new C();",
+            ),
+            (
+                "class A {} class B {} new A();",
+                "class A {} class B {} new B();",
+            ),
+            (
+                "const x = 1; class C { value = x; } new C();",
+                "const x = 2; class C { value = x; } new C();",
+            ),
+            (
+                "let x = 1; class C { value = x; } x = 2; new C();",
+                "let x = 1; class C { value = x; } x = 3; new C();",
+            ),
+            (
+                "const trace = []; trace.push(1); class C { constructor() { trace.push(2); } } new C();",
+                "const trace = [99]; trace.push(1); class C { constructor() { trace.push(2); } } new C();",
+            ),
+        ] {
+            let source = format!(
+                "import {{test, expect}} from 'vitest'; const trace=[]; test('first', () => {{ {first} expect(trace).toEqual([1]); }}); test('second', () => {{ {second} expect(trace).toEqual([1]); }});"
+            );
+            let findings = complete_pair_findings(&source);
+            assert_class_distinct(&findings, &source);
+        }
+    }
+
+    /// Equal initializers cannot erase which enclosing binding a class or closure captures.
+    #[test]
+    fn owned_capture_bindings_preserve_identity_and_renaming() {
+        for source in [
+            include_str!("../../fixtures/duplicates/capture-binding-constructor.test.ts"),
+            include_str!("../../fixtures/duplicates/capture-binding-object.test.ts"),
+            include_str!("../../fixtures/duplicates/capture-binding-nested-static.test.ts"),
+            include_str!("../../fixtures/duplicates/capture-binding-callable-field.test.ts"),
+            include_str!("../../fixtures/duplicates/capture-binding-static.test.ts"),
+        ] {
+            let findings = complete_pair_findings(source);
+            assert!(findings.is_empty(), "{source}: {findings:?}");
+        }
+        let nested = include_str!("../../fixtures/duplicates/capture-binding-nested.test.ts");
+        let retained = class_outcome_findings(nested, 4, 2);
+        assert_eq!(retained.len(), 1, "{retained:?}");
+        assert_eq!(retained[0].rule, crate::model::Rule::DuplicateTest);
+        assert_eq!(retained[0].titles, ["control first", "control second"]);
+        for source in [
+            include_str!("../../fixtures/duplicates/capture-binding-renamed.test.ts"),
+            include_str!("../../fixtures/duplicates/capture-binding-closure-renamed.test.ts"),
+        ] {
+            let findings = complete_pair_findings(source);
+            assert_eq!(findings.len(), 1, "{findings:?}");
+            assert_eq!(findings[0].rule, crate::model::Rule::DuplicateTest);
+        }
+    }
+
+    /// Distinct constructions retain declaration identity even before their first observation.
+    #[test]
+    fn owned_instances_preserve_binding_identity() {
+        use crate::model::Rule;
+        let settings = r#"{"rules":{"subsumed-test":"warning"}}"#;
+        for source in [
+            include_str!("../../fixtures/duplicates/instance-binding-references.test.ts"),
+            include_str!("../../fixtures/duplicates/instance-binding-order.test.ts"),
+            include_str!("../../fixtures/duplicates/instance-binding-mutation.test.ts"),
+        ] {
+            let findings =
+                class_outcome_findings_with_files(source, 2, 0, &[("settings.json", settings)]);
+            assert!(findings.is_empty(), "{source}: {findings:?}");
+        }
+        for (source, rule) in [
+            (
+                include_str!("../../fixtures/duplicates/instance-binding-renamed.test.ts"),
+                Rule::DuplicateTest,
+            ),
+            (
+                include_str!("../../fixtures/duplicates/instance-binding-near.test.ts"),
+                Rule::NearDuplicateTest,
+            ),
+            (
+                include_str!("../../fixtures/duplicates/instance-binding-parameterized.test.ts"),
+                Rule::ParameterizationCandidate,
+            ),
+        ] {
+            let findings = complete_pair_findings(source);
+            assert_eq!(findings.len(), 1, "{source}: {findings:?}");
+            assert_eq!(findings[0].rule, rule, "{source}: {findings:?}");
+        }
+    }
+
+    /// Native and imported instances do not enter the owned-class write uncertainty path.
+    #[test]
+    fn owned_instance_tracking_excludes_external_constructors() {
+        use crate::model::Rule;
+        for source in [
+            include_str!("../../fixtures/duplicates/external-instance-conditional.test.ts"),
+            include_str!("../../fixtures/duplicates/external-instance-self.test.ts"),
+            include_str!("../../fixtures/duplicates/external-instance-reflection.test.ts"),
+            include_str!("../../fixtures/duplicates/external-instance-imported.test.ts"),
+        ] {
+            let findings = complete_pair_findings(source);
+            assert_eq!(findings.len(), 1, "{source}: {findings:?}");
+            assert_eq!(findings[0].rule, Rule::DuplicateTest);
+        }
+        let source =
+            include_str!("../../fixtures/duplicates/external-instance-owned-control.test.ts");
+        let findings = class_outcome_findings(source, 4, 2);
+        assert_eq!(findings.len(), 1, "{findings:?}");
+        assert_eq!(findings[0].rule, Rule::DuplicateTest);
+        assert_eq!(findings[0].titles, ["control first", "control second"]);
+        let aliases =
+            include_str!("../../fixtures/duplicates/external-instance-alias-control.test.ts");
+        let findings = class_outcome_findings(aliases, 6, 4);
+        assert_eq!(findings.len(), 1, "{findings:?}");
+        assert_eq!(findings[0].rule, Rule::DuplicateTest);
+        assert_eq!(findings[0].titles, ["control first", "control second"]);
+    }
+
+    /// Readable each-row cells participate in the owned capture environment.
+    #[test]
+    fn owned_classes_keep_each_row_capture_values() {
+        use crate::model::Rule;
+        let source = "import {test,expect} from 'vitest'; test.each([1])('a %s',(x)=>{class C{value=x} new C(); expect(1).toBe(1)}); test.each([2])('b %s',(x)=>{class C{value=x} new C(); expect(1).toBe(1)});";
+        let findings = complete_pair_findings(source);
+        assert!(!findings
+            .iter()
+            .any(|finding| matches!(finding.rule, Rule::DuplicateTest | Rule::NearDuplicateTest)));
+        assert_eq!(
+            findings
+                .iter()
+                .filter(|finding| finding.rule == Rule::ParameterizationCandidate)
+                .count(),
+            1
+        );
+    }
+
+    /// Deferred methods are not executed events and repeated construction stays compact.
+    #[test]
+    fn owned_class_summaries_are_compact_and_phase_separated() {
+        let inert = behavior_of("class C { method() { tick(); } } expect(1).toBe(1);");
+        assert_eq!(inert.len(), 1, "{inert:?}");
+        let initialized = behavior_of(
+            "class C { static { tick(); } method() { deferred(); } } new C(); expect(1).toBe(1);",
+        );
+        assert_eq!(initialized.len(), 3, "{initialized:?}");
+        assert!(initialized[0].starts_with("class-eval:"), "{initialized:?}");
+        assert!(initialized[1].starts_with("new:"), "{initialized:?}");
+        let methods = (0..100)
+            .map(|index| format!("method{index}() {{ return {index}; }}"))
+            .collect::<String>();
+        let events = behavior_of(&format!(
+            "class C {{ {methods} }} {}",
+            "new C();".repeat(20)
+        ));
+        assert_eq!(events.len(), 20);
+        assert!(
+            events.iter().all(|event| event.len() < 512),
+            "class body must not expand into each event"
+        );
+    }
+
+    /// Unsupported state is visible and scoped to its consumers, preserving unrelated matches.
+    #[test]
+    fn owned_class_uncertainty_is_visible_and_body_scoped() {
+        use crate::model::Rule;
+        for body in [
+            "const trace=[]; const alias=trace; class C{constructor(){trace.push(1)}} alias.push(99); new C(); expect(trace).toEqual([1]);",
+            "let x=1; if(flag) x=2; class C{value=x} new C(); expect(1).toBe(1);",
+            "class C{value=1} const Alias=C; Alias.value=2; new C(); expect(1).toBe(1);",
+            "class C{value=1} C.prototype.value=2; new C(); expect(1).toBe(1);",
+            "class C{value=1} expect(C.toString()).toBe('source'); new C();",
+
+        ] {
+            let source = format!(
+                "import {{test,expect}} from 'vitest'; test('a',()=>{{class C{{value=1}} new C(); expect(1).toBe(1)}}); test('b',()=>{{class C{{value=1}} new C(); expect(1).toBe(1)}}); test('uncertain',()=>{{{body}}});"
+            );
+            let findings = class_outcome_findings(&source, 3, 1);
+            assert_eq!(
+                findings
+                    .iter()
+                    .filter(|finding| finding.rule == Rule::DuplicateTest)
+                    .count(),
+                1,
+                "{source}: {findings:?}"
+            );
+            assert_eq!(
+                findings.len(),
+                1,
+                "only the known pair is comparable: {findings:?}"
+            );
+        }
+    }
+
+    /// Ordinary instance names are modeled properties, rather than class-name reflection.
+    #[test]
+    fn owned_class_review_instance_named_properties() {
+        let source = "import {test,expect} from 'vitest'; test('a',()=>{class User{name='a'; toString=1; prototype=2} const u=new User(); expect(u.name).toBe('a'); expect(u.toString).toBe(1); expect(u.prototype).toBe(2)}); test('b',()=>{class User{name='a'; toString=1; prototype=2} const u=new User(); expect(u.name).toBe('a'); expect(u.toString).toBe(1); expect(u.prototype).toBe(2)});";
+        assert_eq!(complete_pair_findings(source).len(), 1);
+    }
+
+    /// An unrelated built-in construction cannot invalidate a private owned capture.
+    #[test]
+    fn owned_class_review_unrelated_constructor() {
+        let source = "import {test,expect} from 'vitest'; test('a',()=>{const calls=[]; const map=new Map(); class C{constructor(){calls.push(1)}} new C(); expect(calls).toEqual([1])}); test('b',()=>{const calls=[]; const map=new Map(); class C{constructor(){calls.push(1)}} new C(); expect(calls).toEqual([1])});";
+        assert_eq!(complete_pair_findings(source).len(), 1);
+    }
+
+    /// Exact runtime source passes one test and fails one when an inferred callable name differs.
+    #[test]
+    fn owned_class_callable_name_runtime_counterexample() {
+        use crate::model::Rule;
+        let source="import {test,expect} from 'vitest';\ntest('first',()=>{const first=()=>1;class C{field=first.name}const c=new C();expect(c.field).toBe('first')});\ntest('second',()=>{const second=()=>1;class C{field=second.name}const c=new C();expect(c.field).toBe('first')});\n";
+        for source in [
+            source.to_owned(),
+            source
+                .replace(
+                    "class C{field=first.name}",
+                    "const key='name';class C{field=first[key]}",
+                )
+                .replace(
+                    "class C{field=second.name}",
+                    "const key='name';class C{field=second[key]}",
+                ),
+            source
+                .replace(
+                    "class C{field=first.name}",
+                    "const key='name';const alias=key;class C{field=first[alias]}",
+                )
+                .replace(
+                    "class C{field=second.name}",
+                    "const key='name';const alias=key;class C{field=second[alias]}",
+                ),
+        ] {
+            let findings = complete_pair_findings(&source);
+            assert!(
+                !findings.iter().any(|finding| matches!(
+                    finding.rule,
+                    Rule::DuplicateTest | Rule::NearDuplicateTest
+                )),
+                "{source}: {findings:?}"
+            );
+            assert_eq!(
+                findings
+                    .iter()
+                    .filter(|finding| finding.rule == Rule::ParameterizationCandidate)
+                    .count(),
+                1,
+                "{source}"
+            );
+        }
+    }
+
+    /// Observed private callable names preserve runtime values without blocking ordinary renaming.
+    #[test]
+    fn owned_class_private_callable_reflection() {
+        use crate::model::Rule;
+        let observed="import {test,expect} from 'vitest';\ntest('first',()=>{class C{#first(){return 1}read(){return this.#first.name}}const c=new C();expect(c.read()).toBe('#first')});\ntest('second',()=>{class C{#second(){return 1}read(){return this.#second.name}}const c=new C();expect(c.read()).toBe('#first')});\n";
+        let findings = complete_pair_findings(observed);
+        assert_class_distinct(&findings, observed);
+        assert_eq!(
+            findings
+                .iter()
+                .filter(|finding| finding.rule == Rule::ParameterizationCandidate)
+                .count(),
+            1
+        );
+        for (first,second,duplicate) in [
+            ("class C{#first(){return 1}read(){return this.#first()}}const c=new C();expect(c.read()).toBe(1)","class C{#second(){return 1}read(){return this.#second()}}const c=new C();expect(c.read()).toBe(1)",true),
+            ("class C{#first(){return 1}read(){return this.#first.call(this)}}const c=new C();expect(c.read()).toBe(1)","class C{#second(){return 1}read(){return this.#second.call(this)}}const c=new C();expect(c.read()).toBe(1)",true),
+            ("class C{#first(){return 1}read(){const alias=this.#first;return alias.name}}const c=new C();expect(c.read()).toBe('#first')","class C{#second(){return 1}read(){const alias=this.#second;return alias.name}}const c=new C();expect(c.read()).toBe('#first')",false),
+            ("class C{#first=()=>1;read(){return this.#first()}}const c=new C();expect(c.read()).toBe(1)","class C{#second=()=>1;read(){return this.#second()}}const c=new C();expect(c.read()).toBe(1)",true),
+            ("class C{#first=function stable(){return 1};read(){return this.#first.name}}const c=new C();expect(c.read()).toBe('stable')","class C{#second=function stable(){return 1};read(){return this.#second.name}}const c=new C();expect(c.read()).toBe('stable')",true),
+            ("class C{#first=()=>1;read(){return this.#first.name}}const c=new C();expect(c.read()).toBe('#first')","class C{#second=()=>1;read(){return this.#second.name}}const c=new C();expect(c.read()).toBe('#first')",false),
+            ("class C{static #first(){return 1}static read(){const key='name';return C.#first[key]}}expect(C.read()).toBe('#first')","class C{static #second(){return 1}static read(){const key='name';return C.#second[key]}}expect(C.read()).toBe('#first')",false),
+            ("class C{#state={name:'ready',toString:'shown'};read(){return this.#state.name+this.#state.toString}}const c=new C();expect(c.read()).toBe('readyshown')","class C{#renamed={name:'ready',toString:'shown'};read(){return this.#renamed.name+this.#renamed.toString}}const c=new C();expect(c.read()).toBe('readyshown')",true),
+            ("const state={name:'ready'};class C{#state=state;read(){return this.#state.name}}const c=new C();expect(c.read()).toBe('ready')","const state={name:'ready'};class C{#renamed=state;read(){return this.#renamed.name}}const c=new C();expect(c.read()).toBe('ready')",true),
+            ("class C{#state={name:'ready'};read(){const alias=this.#state;return alias.name}}const c=new C();expect(c.read()).toBe('ready')","class C{#renamed={name:'ready'};read(){const alias=this.#renamed;return alias.name}}const c=new C();expect(c.read()).toBe('ready')",true),
+        ] {
+            let source=format!("import {{test,expect}} from 'vitest';test('first',()=>{{{first}}});test('second',()=>{{{second}}});");
+            let findings=complete_pair_findings(&source);
+            if duplicate { assert_eq!(findings.iter().filter(|finding|finding.rule==Rule::DuplicateTest).count(),1,"{source}: {findings:?}"); }
+            else {assert_class_distinct(&findings,&source);}
+        }
+        for body in [
+            "class C{#first(){return 1}read(){return this.#first.toString()}}const c=new C();expect(c.read()).toBe('source')",
+            "class C{#first(){return 1}read(){return this.#first}}const c=new C();expect(c.read().name).toBe('#first')",
+            "class C{#first=()=>1;read(){const key='toString';return this.#first[key]()}}const c=new C();expect(c.read()).toBe('source')",
+            "class C{#first=()=>1;constructor(){this.#first=function replacement(){return 1}}read(){return this.#first.name}}const c=new C();expect(c.read()).toBe('replacement')",
+            "class C{#first=()=>1;read(){Object.defineProperty(this.#first,'name',{value:'changed'});return this.#first.name}}const c=new C();expect(c.read()).toBe('changed')",
+            "class C{#first=()=>1;read(){const alias=this.#first;Object.defineProperty(alias,'name',{value:'changed'});return this.#first.name}}const c=new C();expect(c.read()).toBe('changed')",
+            "class C{get #first(){return()=>1}read(){return this.#first.name}}const c=new C();expect(c.read()).toBe('first')",
+            "class C{#first(){return 1}read(){const key=unknown();return this.#first[key]}}const c=new C();expect(c.read()).toBe('first')",
+        ] {
+            let source=format!("import {{test,expect}} from 'vitest';test('first',()=>{{{body}}});test('second',()=>{{{body}}});");
+            assert!(class_outcome_findings(&source,2,2).is_empty(),"{source}");
+        }
+        let mixed="import {test,expect} from 'vitest';test('one',()=>{class C{#first(){return 1}read(){return this.#first()}}const c=new C();expect(c.read()).toBe(1)});test('two',()=>{class C{#second(){return 1}read(){return this.#second()}}const c=new C();expect(c.read()).toBe(1)});test('unknown',()=>{class C{#first(){return 1}read(){return this.#first.toString()}}const c=new C();expect(c.read()).toBe('source')});";
+        let findings = class_outcome_findings(mixed, 3, 1);
+        assert_eq!(
+            findings
+                .iter()
+                .filter(|finding| finding.rule == Rule::DuplicateTest)
+                .count(),
+            1
+        );
+    }
+
+    /// Exact getter-returned callable uncertainty survives local aliases and stays visible.
+    #[test]
+    fn owned_class_private_getter_alias_uncertainty() {
+        let source="import {test,expect} from 'vitest';\ntest('first',()=>{class C{get #fn(){return function first(){return 1}}read(){const alias=this.#fn;return alias.name}}const c=new C();expect(c.read()).toBe('first')});\ntest('second',()=>{class C{get #fn(){return function second(){return 1}}read(){const alias=this.#fn;return alias.name}}const c=new C();expect(c.read()).toBe('first')});\n";
+        assert!(class_outcome_findings(source, 2, 2).is_empty());
+        let computed = source.replace(
+            "return alias.name",
+            "const nested=alias;return nested['name']",
+        );
+        assert!(class_outcome_findings(&computed, 2, 2).is_empty());
+    }
+
+    /// Declared helpers retain equivalence, capture state, and observed callable names.
+    #[test]
+    fn owned_class_declared_helpers_and_callable_names() {
+        use crate::model::Rule;
+        let observed = "import {test,expect} from 'vitest';\ntest('first',()=>{function read(){return 'ready'}class C{field=read()}const c=new C();expect(c.field).toBe('ready')});\ntest('second',()=>{function read(){return 'ready'}class C{field=read()}const c=new C();expect(c.field).toBe('ready')});\n";
+        assert_eq!(
+            complete_pair_findings(observed)
+                .iter()
+                .filter(|finding| finding.rule == Rule::DuplicateTest)
+                .count(),
+            1
+        );
+        for (first, second, duplicate) in [
+            ("const input = 'ready'; function read(){return input} class C{field=read()} const c=new C(); expect(c.field).toBe('ready');",
+             "const renamed = 'ready'; function load(){return renamed} class C{field=load()} const c=new C(); expect(c.field).toBe('ready');", true),
+            ("function read(){return first()} class C{field=read()} const c=new C(); expect(c.field).toBe('ready');",
+             "function read(){return second()} class C{field=read()} const c=new C(); expect(c.field).toBe('ready');", false),
+            ("const input = 'ready'; function read(){return input} class C{field=read()} const c=new C(); expect(c.field).toBe('ready');",
+             "const input = 99; function read(){return input} class C{field=read()} const c=new C(); expect(c.field).toBe('ready');", false),
+            ("const first=()=>1;class C{field=first.name}const c=new C();expect(c.field).toBe('first')",
+             "const second=()=>1;class C{field=second.name}const c=new C();expect(c.field).toBe('first')", false),
+            ("function first(){return 1} const alias=first; class C{field=alias['name']} const c=new C();expect(c.field).toBe('first')",
+             "function second(){return 1} const alias=second; class C{field=alias['name']} const c=new C();expect(c.field).toBe('first')", false),
+            ("const read=function stable(){return 1}; class C{field=read.name} const c=new C();expect(c.field).toBe('stable')",
+             "const renamed=function stable(){return 1}; class C{field=renamed.name} const c=new C();expect(c.field).toBe('stable')", true),
+        ] {
+            let source = format!("import {{test,expect}} from 'vitest';test('first',()=>{{{first}}});test('second',()=>{{{second}}});");
+            let findings=complete_pair_findings(&source);
+            if duplicate { assert_eq!(findings.iter().filter(|finding| finding.rule == Rule::DuplicateTest).count(),1,"{source}: {findings:?}"); }
+            else { assert!(!findings.iter().any(|finding|matches!(finding.rule,Rule::DuplicateTest|Rule::NearDuplicateTest)),"{source}: {findings:?}"); }
+        }
+        for body in [
+            "const read=()=>1; class C{field=read.toString()} new C(); expect(1).toBe(1)",
+            "function read(){return 1} const alias=read; Object.defineProperty(alias,'name',{value:'changed'}); class C{field=read.name} new C(); expect(1).toBe(1)",
+            "const read=()=>1; class C{field=read.name} Object.defineProperty(read,'name',{value:'changed'}); new C(); expect(1).toBe(1)",
+            "const read=()=>1; class C{field=read['toString']()} new C(); expect(1).toBe(1)",
+            "const read=()=>1;const key=unknown();class C{field=read[key]} new C();expect(1).toBe(1)",
+            "const read=()=>1;let key='name';class C{field=read[key]}key='toString';new C();expect(1).toBe(1)",
+            "const input=[]; function read(){return input} class C{field=read()} new C(); expect(1).toBe(1)",
+        ] {
+            let source=format!("import {{test,expect}} from 'vitest';test('first',()=>{{{body}}});test('second',()=>{{{body}}});");
+            assert!(class_outcome_findings(&source,2,2).is_empty(),"{source}");
+        }
+    }
+
+    /// Advertised field/accessor, definition effects and observed static names stay comparable.
+    #[test]
+    fn owned_class_advertised_member_branches() {
+        use crate::model::Rule;
+        for body in [
+            "class C{field:number; accessor value:number=1; static accessor shared:number=2} const c=new C(); expect(c.value+C.shared).toBe(3)",
+            "class C{static field:number; static ['ready']=1; value:string='ready'} const c=new C(); expect(c.value).toBe('ready')",
+            "const key='ready'; class C{static [key]=1; accessor [key]=2} const c=new C(); expect(c.ready+C.ready).toBe(3)",
+            "const Factory=class {value=1}; const Alias=Factory; class C{field=Alias.name} const c=new C(); expect(c.field).toBe('Factory')",
+            "class Base{value=1} class C extends Base{get ready(){return this.value}} const c=new C(); expect(c.ready).toBe(1)",
+            "class C{static name='owned'; value=1} const c=new C(); expect(C.name).toBe('owned')",
+        ] {
+            let source=format!("import {{test,expect}} from 'vitest';test('first',()=>{{{body}}});test('second',()=>{{{body}}});");
+            assert_eq!(complete_pair_findings(&source).iter().filter(|finding|finding.rule==Rule::DuplicateTest).count(),1,"{source}");
+        }
+        for (first, second) in [
+            (
+                "class C{accessor value=first()} const c=new C(); expect(c.value).toBe(1)",
+                "class C{accessor value=second()} const c=new C(); expect(c.value).toBe(1)",
+            ),
+            (
+                "class C{static accessor value=first()} new C(); expect(C.value).toBe(1)",
+                "class C{accessor value=first()} const c=new C(); expect(c.value).toBe(1)",
+            ),
+            (
+                "class C{static name='first'} new C(); expect(C.name).toBe('first')",
+                "class C{static name='second'} new C(); expect(C.name).toBe('first')",
+            ),
+        ] {
+            let source=format!("import {{test,expect}} from 'vitest';test('first',()=>{{{first}}});test('second',()=>{{{second}}});");
+            let findings = complete_pair_findings(&source);
+            assert!(
+                !findings.iter().any(|finding| matches!(
+                    finding.rule,
+                    Rule::DuplicateTest | Rule::NearDuplicateTest
+                )),
+                "{source}: {findings:?}"
+            );
+        }
+    }
+
+    /// A stable owned closure can supply a modeled class value.
+    #[test]
+    fn owned_class_review_captured_closure() {
+        let source = "import {test,expect} from 'vitest'; test('a',()=>{const helper=()=>1; class C{value=helper()} new C(); expect(1).toBe(1)}); test('b',()=>{const helper=()=>1; class C{value=helper()} new C(); expect(1).toBe(1)});";
+        assert_eq!(complete_pair_findings(source).len(), 1);
+    }
+
+    /// A stable Vitest mock is an owned initialization effect, rather than an unknown capture.
+    #[test]
+    fn owned_class_review_captured_mock() {
+        let source = "import {test,expect,vi} from 'vitest'; test('a',()=>{const spy=vi.fn(); class C{constructor(){spy()}} new C(); expect(spy).toHaveBeenCalledOnce()}); test('b',()=>{const spy=vi.fn(); class C{constructor(){spy()}} new C(); expect(spy).toHaveBeenCalledOnce()});";
+        assert_eq!(complete_pair_findings(source).len(), 1);
+    }
+
+    /// TypeScript parameter properties retain their field and constructor-parameter relationship.
+    #[test]
+    fn owned_class_review_parameter_properties() {
+        let source = "import {test,expect} from 'vitest'; test('a',()=>{class C{constructor(private x:number){}} const c=new C(1); expect(c).toBeDefined()}); test('b',()=>{class C{constructor(private x:number){}} const c=new C(1); expect(c).toBeDefined()});";
+        assert_eq!(complete_pair_findings(source).len(), 1);
+    }
+
+    /// Proven owned construction effects remain comparable through a later instance method read.
+    #[test]
+    fn owned_class_review_mutable_capture_instance_read() {
+        let source = "import {test,expect} from 'vitest'; test('a',()=>{const trace=[]; class C{constructor(){trace.push(1)} read(){return trace}} const c=new C(); expect(c.read()).toEqual([1])}); test('b',()=>{const trace=[]; class C{constructor(){trace.push(1)} read(){return trace}} const c=new C(); expect(c.read()).toEqual([1])});";
+        assert_eq!(complete_pair_findings(source).len(), 1);
+    }
+
+    /// Independent runtime-backed holdouts retain owned state and effect ordering.
+    #[test]
+    fn owned_class_review_independent_state_history() {
+        use crate::model::Rule;
+        let source = r#"import { test, expect } from 'vitest';
+test('first',()=>{const trace=[];class Box{constructor(){trace.push(1)}read(){return trace}}const box=new Box();expect(box.read()).toEqual([1])});
+test('second',()=>{const log=[];class Container{constructor(){log.push(1)}read(){return log}}const item=new Container();expect(item.read()).toEqual([1])});
+"#;
+        let findings = complete_pair_findings(source);
+        assert_eq!(
+            findings
+                .iter()
+                .filter(|finding| finding.rule == Rule::DuplicateTest)
+                .count(),
+            1,
+            "{findings:?}"
+        );
+        let source = r#"import { test, expect } from 'vitest';
+test('first',()=>{const trace=[];class C{constructor(){trace.push(1)}read(){return trace}}const c=new C();expect(c.read()).toEqual([1])});
+test('second',()=>{const trace=['seed'];class C{constructor(){trace.push(1)}read(){return trace}}const c=new C();expect(c.read()).toEqual([1])});
+"#;
+        let findings = complete_pair_findings(source);
+        assert_class_distinct(&findings, source);
+        let source = r#"import { test, expect } from 'vitest';
+test('first',()=>{const trace=[];class C{static field=trace.push('field');static{trace.push('block')}read(){return trace}}const c=new C();expect(c.read()).toEqual(['field','block'])});
+test('second',()=>{const trace=[];class C{static{trace.push('block')}static field=trace.push('field');read(){return trace}}const c=new C();expect(c.read()).toEqual(['field','block'])});
+"#;
+        let findings = complete_pair_findings(source);
+        assert_class_distinct(&findings, source);
+        let source = r#"import { test, expect } from 'vitest';
+test('first',()=>{let value='ready';class C{field=value;read(){return this.field}}const c=new C();expect(c.read()).toBe('ready')});
+test('second',()=>{let value='ready';class C{field=value;read(){return this.field}}value={changed:true};const c=new C();expect(c.read()).toBe('ready')});
+"#;
+        let findings = complete_pair_findings(source);
+        assert_class_distinct(&findings, source);
+        let repeated = "import {test,expect} from 'vitest'; test('a',()=>{const trace=[]; class C{constructor(){trace.push(1)}} new C(); new C(); expect(trace).toEqual([1,1])}); test('b',()=>{const trace=[]; class C{constructor(){trace.push(1)}} new C(); new C(); expect(trace).toEqual([1,1])});";
+        assert_eq!(
+            complete_pair_findings(repeated)
+                .iter()
+                .filter(|finding| finding.rule == Rule::DuplicateTest)
+                .count(),
+            1
+        );
+    }
+
+    /// A known constructor name is an observed value, preserving literal consolidation.
+    #[test]
+    fn owned_class_review_known_constructor_names() {
+        use crate::model::Rule;
+        let source = r#"import { test, expect } from 'vitest';
+test('first',()=>{class First{field=1}const value=new First();expect(value.constructor.name).toBe('First')});
+test('second',()=>{class Second{field=1}const value=new Second();expect(value.constructor.name).toBe('First')});
+"#;
+        let findings = complete_pair_findings(source);
+        assert!(!findings
+            .iter()
+            .any(|finding| matches!(finding.rule, Rule::DuplicateTest | Rule::NearDuplicateTest)));
+        assert_eq!(
+            findings
+                .iter()
+                .filter(|finding| finding.rule == Rule::ParameterizationCandidate)
+                .count(),
+            1
+        );
+        let aliases = "import {test,expect} from 'vitest'; test('a',()=>{class C{} const K=C; expect(K.name).toBe('C')}); test('b',()=>{class C{} const Alias=C; expect(Alias.name).toBe('C')});";
+        assert_eq!(
+            complete_pair_findings(aliases)
+                .iter()
+                .filter(|finding| finding.rule == Rule::DuplicateTest)
+                .count(),
+            1
+        );
+    }
+
+    /// Owned class uncertainty reaches helpers and setup dependencies without silencing safe bodies.
+    #[test]
+    fn owned_class_dependency_uncertainty_reaches_all_consumers() {
+        use crate::model::Rule;
+        let helper = "export function make(flag) { let input=1; if(flag) input=2; class C { field=input } return new C() }";
+        let safe = "test('safe first',()=>{class C{field=1} new C(); expect(1).toBe(1)}); test('safe second',()=>{class C{field=1} new C(); expect(1).toBe(1)});";
+        let source = format!("import {{test,expect}} from 'vitest'; import {{make}} from './helper.js'; test('first',()=>{{const value=make(true);expect(value.field).toBe(2)}}); test('second',()=>{{const value=make(true);expect(value.field).toBe(2)}});{safe}");
+        let findings = class_outcome_findings_with_files(&source, 4, 2, &[("helper.js", helper)]);
+        assert_eq!(findings.len(), 1, "{findings:?}");
+        assert_eq!(findings[0].rule, Rule::DuplicateTest);
+        let hook = format!("import {{test,expect,describe,beforeEach}} from 'vitest'; describe('uncertain',()=>{{beforeEach(()=>{{let input=1;if(flag)input=2;class C{{field=input}}new C()}});test('a',()=>expect(1).toBe(1));test('b',()=>expect(1).toBe(1))}});{safe}");
+        assert_eq!(class_outcome_findings(&hook, 5, 2).len(), 1);
+        let fixture = format!("import {{test,expect}} from 'vitest'; const custom=test.extend({{value: async ({{}},use)=>{{let input=1;if(flag)input=2;class C{{field=input}}await use(new C())}}}});custom('first',({{value}})=>expect(value).toBeDefined());custom('second',({{value}})=>expect(value).toBeDefined());{safe}");
+        assert_eq!(class_outcome_findings(&fixture, 4, 2).len(), 1);
+        let mock = "import {test,expect,vi} from 'vitest';vi.mock('./module',()=>{let input=1;if(flag)input=2;class C{field=input}return new C()});test('first',()=>expect(1).toBe(1));test('second',()=>expect(1).toBe(1));";
+        assert!(class_outcome_findings(mock, 2, 2).is_empty());
+    }
+
+    /// One ordered prefix retains interleaving between owned construction and direct mutations.
+    #[test]
+    fn owned_class_history_preserves_interleaved_operations() {
+        let source = "import {test,expect} from 'vitest';test('first',()=>{const trace=[];class C{constructor(value){trace.push(value)}}new C('a');trace.push('external');new C('b');expect(trace).toEqual(['a','external','b'])});test('second',()=>{const trace=[];class C{constructor(value){trace.push(value)}}trace.push('external');new C('a');new C('b');expect(trace).toEqual(['a','external','b'])});";
+        let findings = complete_pair_findings(source);
+        assert_class_distinct(&findings, source);
+    }
+
+    /// Enabled subsumption retains strict constructor supersets and rejects changed class effects.
+    #[test]
+    fn owned_classes_participate_in_enabled_subsumption() {
+        use crate::model::Rule;
+        let settings = r#"{"rules":{"subsumed-test":"warning"}}"#;
+        for (first, second, expected) in [
+            ("new Store(1); expect(trace).toEqual([1]);", "new Store(1); tick(); expect(trace).toEqual([1]);", 1),
+            ("class C{constructor(){trace.push(1)}} new C(); expect(trace).toEqual([1]);", "class C{constructor(){trace.push(1)}} new C(); tick(); expect(trace).toEqual([1]);", 1),
+            ("class C{constructor(){trace.push(1)}} new C(); expect(trace).toEqual([1]);", "class C{constructor(){trace.push(2)}} new C(); tick(); expect(trace).toEqual([1]);", 0),
+            ("new Date(0); expect(trace).toEqual([1]);", "new Map([]); tick(); expect(trace).toEqual([1]);", 0),
+            ("new First(); expect(trace).toEqual([1]);", "new Second(); tick(); expect(trace).toEqual([1]);", 0),
+            ("new Store(first(),second()); expect(trace).toEqual([1]);", "new Store(second(),first()); tick(); expect(trace).toEqual([1]);", 0),
+        ] {
+            let source = format!("import {{test,expect}} from 'vitest'; import {{First,Second}} from './constructors.js'; const trace=[];test('small',()=>{{{first}}});test('large',()=>{{{second}}});");
+            let findings = class_outcome_findings_with_files(&source, 2, 0, &[("settings.json", settings), ("constructors.js", "export class First{} export class Second{}")]);
+            assert_eq!(findings.iter().filter(|finding| finding.rule == Rule::SubsumedTest).count(), expected, "{source}: {findings:?}");
+        }
+    }
+
+    /// Constructor traversal retains nested effects in source order and deferred scope.
+    #[test]
+    fn constructor_nested_events_keep_scope_and_argument_order() {
+        let events = behavior_of("new Store(first(), second());");
+        assert!(events[0].starts_with("new:"), "{events:?}");
+        let first = events
+            .iter()
+            .position(|event| event.starts_with("call:global:first"))
+            .unwrap();
+        let second = events
+            .iter()
+            .position(|event| event.starts_with("call:global:second"))
+            .unwrap();
+        assert!(first < second, "{events:?}");
+        let nested = behavior_of("function build() { new Store(first()); } build();");
+        assert!(
+            nested
+                .iter()
+                .any(|event| event.starts_with("deferred-new:")),
+            "{nested:?}"
+        );
+        assert!(
+            !nested.iter().any(|event| event.starts_with("new:")),
+            "{nested:?}"
+        );
+    }
     /// Check final rule outcomes with explicit extraction and completeness controls.
     fn constructor_rules(first: &str, second: &str) -> Vec<crate::model::Rule> {
         use crate::discovery::{ModuleFlavor, SourceFile, SourceLanguage};
@@ -10230,10 +11115,6 @@ test('t', () => { g(r); });",
             ("new Store<string>(1)", "new Store<number>(1)"),
             ("new Store(...a)", "new Store(...b)"),
             ("new Store(1)", "Store(1)"),
-            (
-                "class Local{constructor(){trace.push(2)}}new Store(1);new Local()",
-                "new Store(1)",
-            ),
         ] {
             let rules = constructor_rules(
                 &format!("{{{first};tick();expect(trace).toEqual([1])}}"),
@@ -10250,6 +11131,11 @@ test('t', () => { g(r); });",
             ("new Store(1);", "new Store(2);", ParameterizationCandidate),
             ("new Store(1);", "new Store(1);tick();", SubsumedTest),
             (
+                "class Local{constructor(){trace.push(2)}}new Store(1);new Local();",
+                "new Store(1);",
+                SubsumedTest,
+            ),
+            (
                 "class C{};new C();tick();",
                 "class C{};void 0;new C();tick();",
                 NearDuplicateTest,
@@ -10263,7 +11149,7 @@ test('t', () => { g(r); });",
         }
     }
 
-    /// Local/dynamic constructors veto outer events without changing the existing behavior trace.
+    /// Constructor events retain local and dynamic evidence in source order and deferred scope.
     #[test]
     fn external_constructor_scope_and_order() {
         for body in [
@@ -10276,7 +11162,7 @@ test('t', () => { g(r); });",
             "new Store();expect(new Local()).toBeDefined();class Local{}",
         ] {
             assert!(
-                !behavior_of(body)
+                behavior_of(body)
                     .iter()
                     .any(|event| event.starts_with("new:")),
                 "{body}"
@@ -10287,9 +11173,14 @@ test('t', () => { g(r); });",
             "load().then(()=>{new Store(1);tick();expect(trace).toEqual([1])})",
         );
         assert!(
-            !rules.contains(&crate::model::Rule::SubsumedTest),
+            rules.contains(&crate::model::Rule::SubsumedTest),
             "{rules:?}"
         );
+        assert!(!constructor_rules(
+            "load().then(()=>{new Store(1);new Local();tick();expect(trace).toEqual([1])})",
+            "load().then(()=>{new Cart(1);tick();expect(trace).toEqual([1])})",
+        )
+        .contains(&crate::model::Rule::SubsumedTest));
         let events = behavior_of("new Store(first(), ...second());");
         assert!(events[0].starts_with("new:"));
         assert!(
@@ -10445,28 +11336,38 @@ test('t', () => { g(r); });",
         .contains(&NearDuplicateTest));
     }
 
-    /// Wrappers cannot turn local or dynamic roots into supported constructor evidence.
+    /// Erased wrappers preserve local and dynamic constructor evidence and depth degradation.
     #[test]
     fn constructor_wrapper_scope() {
-        for body in [
-            "class C{};new (C as any)();",
-            "const C=Store;new (C satisfies any)();",
-            "const Store=class{};new Store!();",
-            "new ((factory()) as any)();",
-            "new (ns[pick()] as any)();",
-            "new Store();expect(new (Local as any)()).toBeDefined();class Local{}",
-            "function f(){class C{};new (C as any)();}new Store();",
-            "new (Store<string>)();",
+        for (wrapped, plain) in [
+            ("class C{};new (C as any)();", "class C{};new C();"),
+            (
+                "const C=Store;new (C satisfies any)();",
+                "const C=Store;new C();",
+            ),
+            (
+                "const Store=class{};new Store!();",
+                "const Store=class{};new Store();",
+            ),
+            ("new ((factory()) as any)();", "new (factory())();"),
+            ("new (ns[pick()] as any)();", "new (ns[pick()])();"),
+            (
+                "new Store();expect(new (Local as any)()).toBeDefined();class Local{}",
+                "new Store();expect(new Local()).toBeDefined();class Local{}",
+            ),
+            (
+                "function f(){class C{};new (C as any)();}new Store();",
+                "function f(){class C{};new C();}new Store();",
+            ),
         ] {
-            let events = behavior_of(&format!("{body}tick();"));
-            assert!(!events.is_empty(), "{body}");
-            assert!(
-                events
-                    .iter()
-                    .all(|e| e.ends_with("|unmodeled-constructor-scope")),
-                "{body}: {events:?}"
-            );
+            let events = behavior_of(&format!("{wrapped}tick();"));
+            assert!(!events.is_empty(), "{wrapped}");
+            assert_eq!(events, behavior_of(&format!("{plain}tick();")), "{wrapped}");
         }
+        assert_ne!(
+            behavior_of("new (Store<string>)();"),
+            behavior_of("new Store();")
+        );
         assert!(constructor_rules(
             "{new (<any>Local)();tick();expect(trace).toEqual([1])}",
             "{new Store();tick();expect(trace).toEqual([1])}",
@@ -10490,11 +11391,20 @@ test('t', () => { g(r); });",
         );
         let events = behavior_of(&format!("new {callee}();tick();"));
         assert!(
-            events
-                .iter()
-                .all(|e| e.ends_with("|unmodeled-constructor-scope")),
+            events.iter().any(|event| event.contains("<max-depth:")),
             "{events:?}"
         );
+        let source = format!("import {{test,expect}} from 'vitest';test('first',()=>{{new {callee}();tick()}});test('second',()=>{{new {callee}();tick()}});");
+        let file = crate::discovery::SourceFile::without_project_context(
+            std::path::PathBuf::from("deep-constructor.test.ts"),
+            crate::discovery::SourceLanguage::TypeScript,
+            crate::discovery::ModuleFlavor::ForcedEsm,
+        );
+        let extracted =
+            crate::frontend::extract(&source, &file, crate::frontend::Globals::Disabled);
+        assert_eq!(extracted.tests.len(), 0);
+        assert!(extracted.incomplete);
+        assert!(!extracted.diagnostics.is_empty());
     }
 
     /// Initializers/interpolations retain source order, deferred scope and single-use inlining.
