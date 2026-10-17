@@ -3958,9 +3958,33 @@ impl<'a, 'b, 's, 'm> Serializer<'a, 'b, 's, 'm> {
         }
         match property {
             ObjectPropertyKind::ObjectProperty(object_property) => {
-                let key = self.ser_property_key(&object_property.key, depth + 1);
-                let value = self.ser_expr(&object_property.value, depth + 1);
-                format!("(prop {key} {value})")
+                let oxc_ast::ast::ObjectProperty {
+                    node_id: _,
+                    span: _,
+                    kind,
+                    key,
+                    value,
+                    method,
+                    shorthand,
+                    computed,
+                    ..
+                } = &**object_property;
+                // Computed and shorthand __proto__ keys create ordinary own properties.
+                let prototype_setter = !computed
+                    && !shorthand
+                    && property_key_name(key).as_deref() == Some("__proto__");
+                let key = self.ser_property_key(key, depth + 1);
+                let value = self.ser_expr(value, depth + 1);
+                let descriptor = match (kind, *method) {
+                    (oxc_ast::ast::PropertyKind::Init, false) if prototype_setter => {
+                        "prop-prototype"
+                    }
+                    (oxc_ast::ast::PropertyKind::Init, false) => "prop",
+                    (oxc_ast::ast::PropertyKind::Init, true) => "prop-method",
+                    (oxc_ast::ast::PropertyKind::Get, _) => "prop-get",
+                    (oxc_ast::ast::PropertyKind::Set, _) => "prop-set",
+                };
+                format!("({descriptor} {key} {value})")
             }
             ObjectPropertyKind::SpreadProperty(spread) => {
                 format!("(spread {})", self.ser_expr(&spread.argument, depth + 1))

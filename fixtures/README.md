@@ -97,7 +97,7 @@ This directory contains a comprehensive fixture corpus of small Vitest test file
 - **discovery/** - include/exclude glob patterns, custom configs (3 files + 1 config + faux node_modules/)
 - **workspace/** - Legacy workspace.ts, test.projects configurations (2 files + config)
 - **edge/** - vi.mock hoisting, vi.hoisted patterns, doMock/unmock/doUnmock scoping (5 files)
-- **duplicates/** - Core test deduplication rule discrimination cases (107 files). The
+- **duplicates/** - Core test deduplication rule discrimination cases (160 files). The
   index above documents the first ten; the rest are self-documenting through their headers and
   their `@vitest-dedup:` blocks, which are what the gate reads.
 - **mixed/** - Cases where TWO named defects interact in one file (5 files). Admission

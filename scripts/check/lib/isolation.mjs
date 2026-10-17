@@ -80,6 +80,18 @@ import { runAnalyzerJsonl } from './run-analyzer.mjs'
  */
 export const DIMENSIONS = new Map([
   [
+    'object-property',
+    {
+      summary: 'an object property differs in accessor, method or prototype-setter semantics',
+      equal: ['contextKey', 'modifierKey'],
+      differ: ['alpha', 'structural'],
+      why:
+        'Accessors, concise methods, data properties and prototype setters have different ' +
+        'runtime descriptor semantics. That distinction must survive exact and structural ' +
+        'serialization even when their callable bodies or initializer values are identical.',
+    },
+  ],
+  [
     'literal',
     {
       summary: 'literal VALUES differ, of the same kind; nothing else does',
