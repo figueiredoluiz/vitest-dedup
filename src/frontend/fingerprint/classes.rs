@@ -188,30 +188,33 @@ pub(super) struct ClassCache {
     private_stability: HashMap<(u32, String), bool>,
 }
 
-/// Read an initializer from its resolved declaration rather than its spelling.
+/// Read an initializer only when the resolved declaration binds this whole value.
+/// A destructured child shares its declarator with the other children, but does not
+/// receive the declarator's entire initializer as its runtime value.
 fn initializer<'a>(semantic: &Semantic<'a>, symbol: SymbolId) -> Option<&'a Expression<'a>> {
     if semantic.nodes().iter().len() == 0 {
         return None;
     }
+    let declares_whole_value = |declarator: &VariableDeclarator<'a>| {
+        matches!(
+            &declarator.id,
+            BindingPattern::BindingIdentifier(binding)
+                if binding.symbol_id.get() == Some(symbol)
+        )
+    };
     match semantic
         .nodes()
         .get_node(semantic.scoping().symbol_declaration(symbol))
         .kind()
     {
-        AstKind::VariableDeclarator(declaration) => declaration.init.as_ref(),
-        AstKind::VariableDeclaration(declaration) => {
-            declaration
-                .declarations
-                .iter()
-                .find_map(|item| match &item.id {
-                    BindingPattern::BindingIdentifier(binding)
-                        if binding.symbol_id.get() == Some(symbol) =>
-                    {
-                        item.init.as_ref()
-                    }
-                    _ => None,
-                })
+        AstKind::VariableDeclarator(declaration) if declares_whole_value(declaration) => {
+            declaration.init.as_ref()
         }
+        AstKind::VariableDeclaration(declaration) => declaration
+            .declarations
+            .iter()
+            .find(|item| declares_whole_value(item))
+            .and_then(|item| item.init.as_ref()),
         _ => None,
     }
 }
