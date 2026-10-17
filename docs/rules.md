@@ -28,3 +28,7 @@ integration layers is sometimes deliberate.
 Constructor behavior events retain callee identity, ordered arguments and nested effects for identifier/static-member callees rooted in imports or globals.
 Other constructor shapes and depth-limited callbacks use legacy traversal in a separate behavior comparison scope.
 Their existing events remain comparable to each other; mixed-scope near-duplicate and subsumption comparisons are declined.
+
+Behavior collection visits `for` expression/declaration initializers and ordinary template
+interpolations, retaining nested calls, constructors and other modeled effects in source order
+and deferred scope. Tagged-template call modeling remains separate.

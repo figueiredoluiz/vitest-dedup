@@ -4194,6 +4194,17 @@ impl<'a, 'b, 's, 'm> BehaviorCollector<'a, 'b, 's, 'm> {
                 }
             }
             Statement::ForStatement(for_statement) => {
+                if let Some(init) = &for_statement.init {
+                    if let ForStatementInit::VariableDeclaration(declaration) = init {
+                        for declarator in &declaration.declarations {
+                            if let Some(value) = &declarator.init {
+                                self.walk_expr(value, deferred, depth + 1);
+                            }
+                        }
+                    } else if let Some(expression) = init.as_expression() {
+                        self.walk_expr(expression, deferred, depth + 1);
+                    }
+                }
                 self.push(deferred, "loop".to_owned());
                 if let Some(test) = &for_statement.test {
                     self.walk_expr(test, deferred, depth + 1);
@@ -4391,6 +4402,11 @@ impl<'a, 'b, 's, 'm> BehaviorCollector<'a, 'b, 's, 'm> {
             Expression::SequenceExpression(sequence) => {
                 for inner in &sequence.expressions {
                     self.walk_expr(inner, deferred, depth + 1);
+                }
+            }
+            Expression::TemplateLiteral(template) => {
+                for expression in &template.expressions {
+                    self.walk_expr(expression, deferred, depth + 1);
                 }
             }
             Expression::ArrayExpression(array) => {
@@ -10172,7 +10188,7 @@ test('t', () => { g(r); });",
         let settings = directory.path().join(".vitest-dedup.json");
         std::fs::write(&settings, r#"{"rules":{"subsumed-test":"warning"}}"#).unwrap();
         let config = crate::config::Config::load(directory.path(), Default::default()).unwrap();
-        let source = format!("import {{test,expect}} from 'vitest';import {{Store}} from './store.js';class Local{{constructor(){{trace.push(2)}}}}test('first',()=>{first});test('second',()=>{second});");
+        let source = format!("import {{test,expect}} from 'vitest';import {{Store,Cart}} from './store.js';class Local{{constructor(){{trace.push(2)}}}}test('first',()=>{first});test('second',()=>{second});");
         let file = SourceFile::without_project_context(
             directory.path().join("case.test.ts"),
             SourceLanguage::TypeScript,
@@ -10268,5 +10284,110 @@ test('t', () => { g(r); });",
         assert!(behavior_of("function f(){new Store()}f();")
             .iter()
             .any(|event| event.starts_with("deferred-new:")));
+    }
+
+    /// Newly visited constructor positions distinguish subjects without silencing valid matches.
+    #[test]
+    fn constructor_traversal_outcomes() {
+        use crate::model::Rule::*;
+        for (first, second) in [
+            ("for(new Store();false;){}", "for(new Cart();false;){}"),
+            (
+                "for(const value=new Store();false;){}",
+                "for(const value=new Cart();false;){}",
+            ),
+            ("`${new Store()}`;", "`${new Cart()}`;"),
+            (
+                "for(const value=seedA();false;){}",
+                "for(const value=seedB();false;){}",
+            ),
+            ("`${seedA()}`;", "`${seedB()}`;"),
+            ("`${`${new Store()}`}`;", "`${`${new Cart()}`}`;"),
+        ] {
+            let rules = constructor_rules(
+                &format!("{{{first}tick();expect(trace).toEqual([1])}}"),
+                &format!("{{{second}tick();expect(trace).toEqual([1])}}"),
+            );
+            assert!(rules.is_empty(), "{first}: {rules:?}");
+        }
+        for (first, second, rule) in [
+            (
+                "for(new Store(1);false;){}",
+                "for(new Store(1);false;){}",
+                DuplicateTest,
+            ),
+            (
+                "for(const v=new Store(1);false;){}",
+                "void 0;for(const v=new Store(1);false;){}",
+                NearDuplicateTest,
+            ),
+            (
+                "`${new Store(1)}`;",
+                "`${new Store(2)}`;",
+                ParameterizationCandidate,
+            ),
+            (
+                "`${new Store(1)}`;",
+                "`${new Store(1)}`;extra();",
+                SubsumedTest,
+            ),
+            ("`${seed()}`;", "`${seed()}`;extra();", SubsumedTest),
+            (
+                "class C{};for(new C();false;){}",
+                "class C{};void 0;for(new C();false;){}",
+                NearDuplicateTest,
+            ),
+        ] {
+            assert!(
+                constructor_rules(
+                    &format!("{{{first}tick();expect(trace).toEqual([1])}}"),
+                    &format!("{{{second}tick();expect(trace).toEqual([1])}}")
+                )
+                .contains(&rule),
+                "{first}: expected {rule:?}"
+            );
+        }
+    }
+
+    /// Initializers/interpolations retain source order, deferred scope and single-use inlining.
+    #[test]
+    fn constructor_traversal_order_and_deferred() {
+        let events =
+            behavior_of("for(const a=first(),b=new Store(second());condition();update()){body()}");
+        assert!(events[0].starts_with("call:global:first"), "{events:?}");
+        assert!(
+            events[1].starts_with("new:") && events[2].starts_with("call:global:second"),
+            "{events:?}"
+        );
+        assert_eq!(events[3], "loop");
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| event.starts_with("new:"))
+                .count(),
+            1
+        );
+        let events = behavior_of("`${first()}${new Store(second())}${third()}`;");
+        assert_eq!(events.len(), 4, "{events:?}");
+        for (event, prefix) in events.iter().zip([
+            "call:global:first",
+            "new:",
+            "call:global:second",
+            "call:global:third",
+        ]) {
+            assert!(event.starts_with(prefix), "{events:?}");
+        }
+        let events = behavior_of("function build(){for(new Store();false;){} `${new Store()}`;}");
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| event.starts_with("deferred-new:"))
+                .count(),
+            2
+        );
+        assert_eq!(
+            behavior_of("const value=`${new Store(1)}`;consume(value);"),
+            behavior_of("consume(`${new Store(1)}`);")
+        );
     }
 }
