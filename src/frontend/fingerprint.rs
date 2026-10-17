@@ -2958,6 +2958,26 @@ impl<'a, 'b, 's, 'm> Serializer<'a, 'b, 's, 'm> {
         }
     }
 
+    /// Keep a private member's lexical owner distinct from a nested class's local slot.
+    fn private_name(&self, original: &str) -> String {
+        self.ctx
+            .private_names
+            .iter()
+            .rev()
+            .enumerate()
+            .find_map(|(depth, names)| names.get(original).map(|name| (depth, name)))
+            .map_or_else(
+                || original.to_owned(),
+                |(depth, name)| {
+                    if depth == 0 {
+                        name.clone()
+                    } else {
+                        format!("{name}@outer{depth}")
+                    }
+                },
+            )
+    }
+
     /// Render static/private property names or expression-valued keys, retaining opaque
     /// unsupported syntax.
     fn ser_property_key(&mut self, key: &PropertyKey<'a>, depth: u32) -> String {
@@ -2970,14 +2990,7 @@ impl<'a, 'b, 's, 'm> Serializer<'a, 'b, 's, 'm> {
         match key {
             PropertyKey::StaticIdentifier(id) => format!("prop:{}", id.name.as_str()),
             PropertyKey::PrivateIdentifier(id) => {
-                let name = self
-                    .ctx
-                    .private_names
-                    .iter()
-                    .rev()
-                    .find_map(|names| names.get(id.name.as_str()))
-                    .map_or(id.name.as_str(), String::as_str);
-                format!("prop:#{name}")
+                format!("prop:#{}", self.private_name(id.name.as_str()))
             }
             _ => self.opaque(key.span()),
         }
@@ -3437,14 +3450,7 @@ impl<'a, 'b, 's, 'm> Serializer<'a, 'b, 's, 'm> {
             }
             Expression::PrivateFieldExpression(member) => self.ser_private_field(member, depth + 1),
             Expression::PrivateInExpression(membership) => {
-                let name = self
-                    .ctx
-                    .private_names
-                    .iter()
-                    .rev()
-                    .find_map(|names| names.get(membership.left.name.as_str()))
-                    .map_or(membership.left.name.as_str(), String::as_str)
-                    .to_owned();
+                let name = self.private_name(membership.left.name.as_str());
                 let object = self.ser_expr(&membership.right, depth + 1);
                 format!("(private-in #{name} {object})")
             }
@@ -3535,13 +3541,7 @@ impl<'a, 'b, 's, 'm> Serializer<'a, 'b, 's, 'm> {
         }
         self.private_callable_escape(member);
         let object = self.ser_expr(&member.object, depth + 1);
-        let name = self
-            .ctx
-            .private_names
-            .iter()
-            .rev()
-            .find_map(|names| names.get(member.field.name.as_str()))
-            .map_or(member.field.name.as_str(), String::as_str);
+        let name = self.private_name(member.field.name.as_str());
         format!("(member {object} .#{name})")
     }
 
