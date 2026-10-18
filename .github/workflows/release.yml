@@ -498,3 +498,49 @@ jobs:
       # rerun after a partial failure completes the set instead of conflicting on it.
       - name: Publish platform packages, then the launcher
         run: node scripts/release/publish-npm-packages.mjs
+
+  # ------------------------------------------------------------------------------------------
+  # Website
+  # ------------------------------------------------------------------------------------------
+  #
+  # Asks the website repository to rebuild once the release is out. It waits for the registries so
+  # the site never advertises a version nobody can install yet, and it cannot block them: a failure
+  # here unpublishes nothing, and the job can be re-run on its own. A normal publish triggers it
+  # from the GitHub release; an npm-only recovery triggers it once the packages land, because the
+  # first run stopped before reaching this job.
+  #
+  # `SITE_DISPATCH_TOKEN` is a fine-grained personal access token for the website repository only,
+  # with `Contents: read and write` (what `repository_dispatch` requires). It is the one long-lived
+  # secret in this file, because a cross-repository dispatch cannot use OIDC. It reaches the shell
+  # through `env`, never by interpolation into the script.
+  notify-site:
+    name: Trigger website rebuild
+    needs: [resolve, publish, publish-crate, publish-npm]
+    if: >-
+      ${{
+        !cancelled() &&
+        inputs.publish == true &&
+        (needs.publish.result == 'success' ||
+          (inputs.publish_npm_only && needs.publish-npm.result == 'success')) &&
+        needs.publish-crate.result != 'failure' &&
+        needs.publish-npm.result != 'failure'
+      }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Trigger website rebuild
+        shell: bash
+        env:
+          SITE_DISPATCH_TOKEN: ${{ secrets.SITE_DISPATCH_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "$SITE_DISPATCH_TOKEN" ]; then
+            echo "::error::SITE_DISPATCH_TOKEN is not set; the release is published, so re-run this job once it is"
+            exit 1
+          fi
+          curl -fsS --max-time 30 --retry 3 -X POST \
+            -H "Authorization: Bearer $SITE_DISPATCH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/figueiredoluiz/vitest-dedup-site/dispatches \
+            -d '{"event_type":"release-published"}'

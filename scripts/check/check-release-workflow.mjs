@@ -358,6 +358,34 @@ for (const [version, tag] of [
 }
 console.log(`publication channels: ${channelsChecked} npm argument cases checked`)
 
+// 5. The website rebuild trigger must stay after the registries, off the publishing path, and
+// must not interpolate its secret into the script.
+const siteJob = releaseYml.match(/^  notify-site:\r?\n((?:(?:    |\r?\n)[^\r\n]*\r?\n?)+)/m)
+if (!siteJob) {
+  fail('release.yml has no notify-site job: the website is not rebuilt after a release')
+} else {
+  const text = siteJob[1]
+  const needs = /^    needs: \[([^\]]*)\]/m.exec(text)?.[1].split(',').map((name) => name.trim()) ?? []
+  for (const required of ['publish', 'publish-crate', 'publish-npm']) {
+    if (!needs.includes(required)) fail(`notify-site must wait for ${required}, so the site never leads the registries`)
+  }
+  if (!/inputs\.publish == true/.test(text)) fail('notify-site must run only for a real publish, never a rehearsal')
+  if (!/needs\.publish-crate\.result != 'failure'/.test(text) || !/needs\.publish-npm\.result != 'failure'/.test(text)) {
+    fail('notify-site must not run after a failed registry job')
+  }
+  if (!/^    permissions: \{\}\r?$/m.test(text)) fail('notify-site needs no repository token: permissions must be {}')
+  if (/\brun:[^\n]*\n(?:[^\n]*\n)*?[^\n]*\$\{\{\s*secrets\./.test(text.replace(/^ {10}env:[\s\S]*?(?=^ {8}run:)/m, ''))) {
+    fail('notify-site must pass its secret through env, never interpolate it into the script')
+  }
+  if (!/^          SITE_DISPATCH_TOKEN: \$\{\{ secrets\.SITE_DISPATCH_TOKEN \}\}\r?$/m.test(text) || !text.includes('Bearer $SITE_DISPATCH_TOKEN')) {
+    fail('notify-site must authenticate with SITE_DISPATCH_TOKEN taken from env')
+  }
+  if (!text.includes('https://api.github.com/repos/figueiredoluiz/vitest-dedup-site/dispatches') || !text.includes(`'{"event_type":"release-published"}'`)) {
+    fail('notify-site must post event_type release-published to the website repository dispatches endpoint')
+  }
+}
+console.log(`website trigger: ${siteJob ? 'notify-site job checked' : 'job missing'}`)
+
 // ---------------------------------------------------------------------------------------------
 if (failures.length > 0) {
   console.error(`\nFAIL: ${failures.length} problem(s) with release.yml / target manifests:\n`)

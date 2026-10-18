@@ -149,7 +149,10 @@ test('npm publishing authenticates with OIDC and never a stored token', () => {
   // Matched against usage, not prose: the job's own comment explains why no token exists, and a
   // check that tripped over the explanation would have to be deleted rather than satisfied.
   assert.doesNotMatch(release, /NODE_AUTH_TOKEN:/)
-  assert.doesNotMatch(release, /\$\{\{\s*secrets\./)
+  // Registry credentials stay OIDC-only. The one stored secret is the website dispatch token, a
+  // cross-repository call that cannot use OIDC; any other secret reference fails.
+  const secretNames = [...release.matchAll(/\$\{\{\s*secrets\.([A-Za-z0-9_]+)/g)].map((match) => match[1])
+  assert.deepEqual(secretNames.filter((name) => name !== 'SITE_DISPATCH_TOKEN'), [])
 })
 
 test('the npm binaries are tied to the attested release archives before publishing', () => {

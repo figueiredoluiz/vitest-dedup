@@ -31,6 +31,26 @@ verifies the existing GitHub Release and its live tag at the dispatched commit, 
 the npm binaries against its archived binaries, then publishes only missing package versions. It
 does not recreate the GitHub Release or publish the crate.
 
+## Website rebuild
+
+After a publish, the `notify-site` job asks the website repository (`vitest-dedup-site`) to rebuild by
+sending it a `release-published` `repository_dispatch` event.
+
+- It waits for the GitHub release and the registry jobs, and does not run after a failed crate or npm
+  job, so the site never leads what users can install. A registry job that is switched off (a
+  `PUBLISH_NPM` or `PUBLISH_CRATES` variable that is not `true`) is skipped, not failed, so the site
+  is still rebuilt after the GitHub release.
+- It runs for a normal publish, and for an npm-only recovery once the packages land. It never runs for a
+  rehearsal.
+- A failure here unpublishes nothing. Re-run only that job.
+- It needs the repository secret `SITE_DISPATCH_TOKEN`: a fine-grained personal access token limited to
+  the website repository, with `Contents: read and write`, which `repository_dispatch` requires. This is
+  the one long-lived secret in the workflow, because a cross-repository dispatch cannot use OIDC. Without
+  it the job fails with a message saying so.
+- The website repository must have a workflow that runs `on: repository_dispatch` with the type
+  `release-published`.
+- Prereleases trigger it too; the dispatch carries no version.
+
 ## Checking a release
 
 Check the individual GitHub Release, npm, and crate jobs and their registry pages before calling the

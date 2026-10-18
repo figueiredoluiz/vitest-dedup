@@ -6,6 +6,8 @@
 
 A static analyzer that finds duplicate and near-duplicate Vitest tests.
 
+Website: [vitestdedup.dev](https://vitestdedup.dev)
+
 It reads project configuration and test files without importing or executing either one. A test's
 identity is its body: two tests that do the same thing under different titles are duplicates, and
 two textually identical bodies that run under different hooks, mocks, or fixtures are not.
@@ -176,8 +178,8 @@ finding is no longer evidence of its absence. `--fail-on-incomplete` turns that 
 
 ## Documentation
 
-Every page is listed in [docs/README.md](docs/README.md). To contribute, start at
-[CONTRIBUTING.md](CONTRIBUTING.md).
+The website is at [vitestdedup.dev](https://vitestdedup.dev). Every documentation page is listed in
+[docs/README.md](docs/README.md). To contribute, start at [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 
