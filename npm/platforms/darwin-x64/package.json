@@ -1,6 +1,6 @@
 {
   "name": "vitest-dedup-darwin-x64",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "macOS x64 native binary for vitest-dedup",
   "os": [
     "darwin"

@@ -1,6 +1,6 @@
 {
   "name": "vitest-dedup",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "Static analysis for duplicate and near-duplicate Vitest tests",
   "type": "module",
   "bin": {
@@ -91,14 +91,14 @@
     "cli"
   ],
   "optionalDependencies": {
-    "vitest-dedup-darwin-arm64": "0.5.0",
-    "vitest-dedup-darwin-x64": "0.5.0",
-    "vitest-dedup-linux-arm64-gnu": "0.5.0",
-    "vitest-dedup-linux-arm64-musl": "0.5.0",
-    "vitest-dedup-linux-x64-gnu": "0.5.0",
-    "vitest-dedup-linux-x64-musl": "0.5.0",
-    "vitest-dedup-windows-arm64-msvc": "0.5.0",
-    "vitest-dedup-windows-x64-msvc": "0.5.0"
+    "vitest-dedup-darwin-arm64": "0.5.1",
+    "vitest-dedup-darwin-x64": "0.5.1",
+    "vitest-dedup-linux-arm64-gnu": "0.5.1",
+    "vitest-dedup-linux-arm64-musl": "0.5.1",
+    "vitest-dedup-linux-x64-gnu": "0.5.1",
+    "vitest-dedup-linux-x64-musl": "0.5.1",
+    "vitest-dedup-windows-arm64-msvc": "0.5.1",
+    "vitest-dedup-windows-x64-msvc": "0.5.1"
   },
   "devDependencies": {
     "@babel/parser": "7.29.9",
