@@ -44,9 +44,6 @@ impl<'a, 'b> Visit<'a> for BodyCollector<'a, 'b> {
     }
 }
 
-/// Fingerprints every test body in `source`, as if it were the file at `file` -- callers that
-/// don't care which path is used (most of them; the shared identity helpers are what's under
-/// test elsewhere) should use [`fingerprint_all`] instead.
 /// Both bodies' behavior events, each sorted, asserting exactly two bodies: near-duplicate
 /// comparison is a multiset comparison, so order differences must not survive into what
 /// these tests assert on.
@@ -61,6 +58,10 @@ fn sorted_behavior_pair(prints: &[BodyFingerprint]) -> (Vec<String>, Vec<String>
 
 /// Parse and analyze a source fixture, then fingerprint its arrow test bodies using the
 /// supplied file identity.
+///
+/// Fingerprints every test body in `source`, as if it were the file at `file` -- callers that
+/// don't care which path is used (most of them; the shared identity helpers are what's under
+/// test elsewhere) should use [`fingerprint_all`] instead.
 fn fingerprint_all_at(source: &str, file: &Path) -> Vec<BodyFingerprint> {
     let allocator = Allocator::default();
     let source_type = SourceType::from_path(file).unwrap();

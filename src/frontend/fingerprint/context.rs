@@ -4,9 +4,8 @@ use super::*;
 // alpha / structural serialization
 // ---------------------------------------------------------------------------------------------
 
-/// Which of the two textual fingerprints is being produced.
 #[derive(Clone, Copy, PartialEq, Eq)]
-/// Which of the two exact-equality views a serialization pass produces. `pub(super)` only so
+/// Which of the two exact-equality views a serialization pass produces. `pub(crate)` only so
 /// `helpers.rs` can thread it through to [`render_inlined_helper_body`]; no other module matches
 /// on it.
 pub(crate) enum Mode {
@@ -16,12 +15,6 @@ pub(crate) enum Mode {
     Structural,
 }
 
-/// Produces a deterministic S-expression-shaped serialization of a callback body.
-///
-/// One `Serializer` is used for exactly one of `alpha`/`structural`; its `canonical` map
-/// is local to that one pass. Because the traversal order is a pure function of the AST plus the
-/// (shared, read-only) `Semantic`, the `alpha` and `structural` passes independently assign the
-/// same canonical names to the same symbols without needing to share state.
 /// The file-level construction context and canonicalization state that [`Serializer`] and
 /// [`BehaviorCollector`] share verbatim.
 ///

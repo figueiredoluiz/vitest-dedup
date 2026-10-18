@@ -173,27 +173,6 @@ fn determinism_across_repeated_runs() {
     assert_eq!(first, second);
 }
 
-/// A source-text version of "deeply nested input" is deliberately **not** used here.
-///
-/// Investigation (prompted by a coordinator report that the original version of this test
-/// stack-overflowed) traced the crash to `oxc_parser` itself: parsing ~1000+ levels of
-/// nested parenthesized expressions overflows the stack of the thread doing the parsing, on
-/// a default-size thread, before this module's code ever sees an AST. Proof: parsing the
-/// same source and then `std::mem::forget`-ing both the parse result and the `Allocator`
-/// (skipping every destructor) still overflows, which rules out this module's traversal and
-/// rules out `Drop` glue on the arena AST -- it isolates the crash to the parse call itself.
-/// Confirms as ordinary deep recursion rather than a runaway loop: raising the test
-/// thread's stack via `RUST_MIN_STACK` makes the same input parse successfully.
-///
-/// That is a real gap, but it is `extract.rs`'s to close (bound nesting depth, or reject
-/// pathologically deep input, before calling `Parser::parse`), not this module's: by the
-/// time `fingerprint` is ever called, the parse and semantic analysis already succeeded, so
-/// there is no source-text input this module could construct that would exercise its own
-/// depth guard via the real parser without first tripping the parser's own, much lower,
-/// limit. So this test builds the deep AST directly with `AstBuilder`, bypassing the parser
-/// entirely, to test the one thing this module actually owns: that `Serializer::ser_expr`'s
-/// explicit depth counter stops well short of the real call stack, for an AST deeper than
-/// the parser could ever hand it in practice.
 /// The substrate both depth-guard tests serialize their synthetic ASTs on: a trivial
 /// one-test parse, empty maps, a fresh Alpha serializer. A macro rather than a function
 /// because the serializer borrows four locals that must outlive it, and the two tests
@@ -227,6 +206,27 @@ macro_rules! with_trivial_serializer {
     }};
 }
 
+/// A source-text version of "deeply nested input" is deliberately **not** used here.
+///
+/// Investigation (prompted by a coordinator report that the original version of this test
+/// stack-overflowed) traced the crash to `oxc_parser` itself: parsing ~1000+ levels of
+/// nested parenthesized expressions overflows the stack of the thread doing the parsing, on
+/// a default-size thread, before this module's code ever sees an AST. Proof: parsing the
+/// same source and then `std::mem::forget`-ing both the parse result and the `Allocator`
+/// (skipping every destructor) still overflows, which rules out this module's traversal and
+/// rules out `Drop` glue on the arena AST -- it isolates the crash to the parse call itself.
+/// Confirms as ordinary deep recursion rather than a runaway loop: raising the test
+/// thread's stack via `RUST_MIN_STACK` makes the same input parse successfully.
+///
+/// That is a real gap, but it is `extract.rs`'s to close (bound nesting depth, or reject
+/// pathologically deep input, before calling `Parser::parse`), not this module's: by the
+/// time `fingerprint` is ever called, the parse and semantic analysis already succeeded, so
+/// there is no source-text input this module could construct that would exercise its own
+/// depth guard via the real parser without first tripping the parser's own, much lower,
+/// limit. So this test builds the deep AST directly with `AstBuilder`, bypassing the parser
+/// entirely, to test the one thing this module actually owns: that `Serializer::ser_expr`'s
+/// explicit depth counter stops well short of the real call stack, for an AST deeper than
+/// the parser could ever hand it in practice.
 #[test]
 fn ser_expr_depth_guard_bounds_an_ast_deeper_than_the_parser_could_produce() {
     let allocator = Allocator::default();
