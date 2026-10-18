@@ -150,9 +150,30 @@ const RUST_MODULES = {
   // which oxc's parser marks `unreachable!()` for an import specifier). Closing it needs
   // production lines covered, not more tests: a table-driven test adds mostly uninstrumented
   // data lines, so volume alone moves this figure by hundredths.
-  'src/frontend/fingerprint.rs': 98,
-  // Owned class normalization/state histories: measured at 83.82% (1259/1502 lines).
-  'src/frontend/fingerprint/classes.rs': 83,
+  // The former 11.9k-line fingerprint.rs and its 2.6k-line classes.rs were split into the modules
+  // below (a pure move: the same production lines, the same tests). These floors are re-measured,
+  // each the integer part of the figure the split produced. They are lower than the 98 and 83 the
+  // two files carried because their inline test modules, now `fingerprint/tests/`, were counted
+  // as covered lines in the old denominators; the production halves aggregate to 2846/2918 lines
+  // (97.53%) and 1821/2139 (85.13%). `classes/mod.rs` holds only module declarations and has no
+  // instrumented line, so it carries no floor.
+  'src/frontend/fingerprint.rs': 96,
+  'src/frontend/fingerprint/behavior.rs': 99,
+  'src/frontend/fingerprint/behavior_calls.rs': 98,
+  'src/frontend/fingerprint/context.rs': 100,
+  'src/frontend/fingerprint/dataflow.rs': 93,
+  'src/frontend/fingerprint/identity.rs': 97,
+  'src/frontend/fingerprint/imports.rs': 98,
+  'src/frontend/fingerprint/row_substitution.rs': 100,
+  'src/frontend/fingerprint/serializer.rs': 98,
+  'src/frontend/fingerprint/serializer_members.rs': 96,
+  'src/frontend/fingerprint/text.rs': 100,
+  'src/frontend/fingerprint/trivial.rs': 98,
+  'src/frontend/fingerprint/classes/captures.rs': 83,
+  'src/frontend/fingerprint/classes/callables.rs': 83,
+  'src/frontend/fingerprint/classes/escape.rs': 85,
+  'src/frontend/fingerprint/classes/identity.rs': 84,
+  'src/frontend/fingerprint/classes/summary.rs': 90,
   // Raised 2026-09-25 from 97.6, measured 97.88% (2309/2359). Production-only coverage is 98.45%
   // -- 13 of its 841 production lines uncovered, enumerated rather than excluded:
   //

@@ -30,10 +30,13 @@
 //
 // ## Scope is part of the number, so the gate owns it
 //
-// A full run is 2,927 mutants (~4h on the development machine, and cargo-mutants must rebuild and
-// re-run the suite for each one). The measured scope is `src/frontend/fingerprint.rs` and
-// `src/analysis.rs` -- 1,171 mutants, 71 minutes at `--jobs 2`. Those two are not an arbitrary
-// slice: fingerprint.rs is where every adjudicated false positive has lived and is the weakest
+// A full run is 6,075 mutants (`cargo mutants --list`, 2026-10-18; it listed 2,927 on 2026-09-18,
+// when a full run was estimated at ~4h on the development machine, and cargo-mutants must rebuild
+// and re-run the suite for each one). The measured scope is the fingerprint module's files
+// (except `classes/`) and `src/analysis.rs` -- 1,475 mutants enumerated. The 71 minutes at
+// `--jobs 2` below was timed on the 1,171 mutants of the earlier scope; the larger one has not
+// been re-timed. Those are not an arbitrary slice: the fingerprint module is where every
+// adjudicated false positive has lived and is the weakest
 // module in the coverage gate (71.30%), and analysis.rs turns its output into the findings users
 // act on. A mutant that survives in either is behaviour the product's verdicts depend on and no
 // test pins.
@@ -108,7 +111,7 @@ export const MINIMUM_SCORED = 1050
 // than quietly improve the score.
 //
 // Widened one file at a time, deliberately. The workflow is a single job with a 300-minute cap and
-// no sharding, and the 23 unmeasured files hold ~1,756 mutants against the 1,171 already in scope --
+// no sharding, and the 30 unmeasured files hold ~4,600 mutants against the 1,475 already in scope --
 // adding them all at once would most likely produce a timeout instead of a number, which is the one
 // outcome worse than a narrow score.
 //
@@ -151,8 +154,21 @@ export const MINIMUM_SCORED = 1050
 // unguarded scanning loop stays out of scope, which is most of the parsing code this gate most
 // needs to reach. The second is the status quo and it is the reason the scope is still two files.
 export const SCOPE = [
-  { file: 'src/frontend/fingerprint.rs', minimumMutants: 850 }, // 906 measured
-  { file: 'src/analysis.rs', minimumMutants: 250 }, // 265 measured
+  // The former single `src/frontend/fingerprint.rs` (1,206 mutants) is now these files. The classes/
+  // modules split from `fingerprint/classes.rs` stay out of scope, as that file was.
+  { file: 'src/frontend/fingerprint.rs', minimumMutants: 27 }, // 29 enumerated
+  { file: 'src/frontend/fingerprint/behavior.rs', minimumMutants: 207 }, // 221 enumerated
+  { file: 'src/frontend/fingerprint/behavior_calls.rs', minimumMutants: 78 }, // 84 enumerated
+  { file: 'src/frontend/fingerprint/context.rs', minimumMutants: 10 }, // 11 enumerated
+  { file: 'src/frontend/fingerprint/dataflow.rs', minimumMutants: 212 }, // 226 enumerated
+  { file: 'src/frontend/fingerprint/identity.rs', minimumMutants: 24 }, // 26 enumerated
+  { file: 'src/frontend/fingerprint/imports.rs', minimumMutants: 22 }, // 24 enumerated
+  { file: 'src/frontend/fingerprint/row_substitution.rs', minimumMutants: 9 }, // 10 enumerated
+  { file: 'src/frontend/fingerprint/serializer.rs', minimumMutants: 203 }, // 217 enumerated
+  { file: 'src/frontend/fingerprint/serializer_members.rs', minimumMutants: 280 }, // 298 enumerated
+  { file: 'src/frontend/fingerprint/text.rs', minimumMutants: 29 }, // 31 enumerated
+  { file: 'src/frontend/fingerprint/trivial.rs', minimumMutants: 27 }, // 29 enumerated
+  { file: 'src/analysis.rs', minimumMutants: 252 }, // 269 enumerated
 ]
 
 /**

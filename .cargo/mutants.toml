@@ -50,7 +50,7 @@
 #
 # The only exclusion is `src/analysis/tests.rs`, which is 2,928 lines of `#[cfg(test)]` unit tests
 # that happen to live under `src/` rather than in `tests/`. cargo-mutants 27.1.0 already skips it
-# (`cargo mutants --list` names 2,927 mutants, none in that file), so today this line changes
+# (`cargo mutants --list` names 6,075 mutants as of 2026-10-18, 2,927 on 2026-09-18, none in that file), so today this line changes
 # nothing. It is here so that a future cargo-mutants release cannot silently start mutating the
 # test suite and scoring it against itself -- a mutant in a test body that no *other* test catches
 # is not a finding about this project's code.
@@ -71,8 +71,8 @@
 #
 # ## Scope is not expressed here
 #
-# There is no `examine_globs` in this file. A full run is 2,927 mutants; the first measured scope
-# is two files. Putting that scope in the config would make `cargo mutants` silently mean
+# There is no `examine_globs` in this file. A full run is 6,075 mutants; the measured scope
+# is 13 files. Putting that scope in the config would make `cargo mutants` silently mean
 # "the scoped run" for every future invocation, including someone's exploratory run over a file
 # they just changed. The scope lives in the workflow's `--file` flags, where it is visible next to
 # the threshold it produced.

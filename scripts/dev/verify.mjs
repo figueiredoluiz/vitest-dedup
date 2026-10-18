@@ -10,6 +10,9 @@ const SELF = fileURLToPath(import.meta.url)
 const ZERO = /^0+$/
 const OID = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/
 const GIT_ENV = ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_COMMON_DIR', 'GIT_PREFIX', 'GIT_OBJECT_DIRECTORY', 'GIT_ALTERNATE_OBJECT_DIRECTORIES', 'GIT_CONFIG_PARAMETERS', 'GIT_CONFIG_COUNT']
+// Node's default 1 MiB output limit ends a run with ENOBUFS on a large pure-move diff, so raise it.
+const GIT_MAX_BUFFER = 256 * 1024 * 1024
+
 /**
  * Run Git in the selected repository, capturing output and propagating failures.
  * @param {string} root Repository directory.
@@ -17,13 +20,13 @@ const GIT_ENV = ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_COMMON_DIR',
  * @param {NodeJS.ProcessEnv} [env] Environment for this Git operation.
  * @returns {string} Captured stdout with surrounding whitespace removed.
  */
-const git = (root, args, env = process.env) => execFileSync('git', args, { cwd: root, env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim()
+const git = (root, args, env = process.env) => execFileSync('git', args, { cwd: root, env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: GIT_MAX_BUFFER }).trim()
 
 /** Capture the PR-wide diff, or the local change when no remote main exists. */
 export function scopeDiff(root, { revision, staged = false, env = process.env } = {}) {
   /** Capture Git output without shell expansion or inherited terminal output. */
   function git(args) {
-    return execFileSync('git', args, { cwd: root, env, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }).trimEnd()
+    return execFileSync('git', args, { cwd: root, env, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'], maxBuffer: GIT_MAX_BUFFER }).trimEnd()
   }
   let base
   try { base = git(['merge-base', revision ?? 'HEAD', 'origin/main']) }

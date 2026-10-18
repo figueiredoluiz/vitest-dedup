@@ -14,17 +14,19 @@ export const MINIMUM = 80
 export function changedLines(diff) {
   if (diff.trim() && !diff.startsWith('diff --git ')) throw new Error('Malformed Git diff')
   const files = new Map()
-  let path
+  let path, deleted = false
   for (const line of diff.split('\n')) {
-    if (line.startsWith('diff --git ')) path = undefined
+    if (line.startsWith('diff --git ')) { path = undefined; deleted = false }
     if (line.startsWith('+++ ')) {
       path = line.slice(4).replace(/^b\//, '')
-      if (path === '/dev/null') { path = undefined; continue }
+      // A deleted file adds no lines; its hunk is skipped rather than rejected as malformed.
+      if (path === '/dev/null') { path = undefined; deleted = true; continue }
       if (path.startsWith('"') || path.startsWith('/') || path.split('/').includes('..')) throw new Error('Unsupported diff path')
       files.set(path, [])
     }
     if (line.startsWith('@@ ')) {
       const match = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/.exec(line)
+      if (deleted && match) continue
       if (!path || !match) throw new Error('Malformed diff hunk')
       const start = Number(match[1]), count = Number(match[2] ?? 1)
       // A deletion touches the boundary on both sides, including removed documentation.

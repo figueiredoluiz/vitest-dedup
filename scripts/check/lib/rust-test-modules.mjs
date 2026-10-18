@@ -13,7 +13,7 @@
 // A real Rust parser would be the right tool for a bigger question; it is not needed for this one,
 // and `splitRustTestModules` asserts a partition invariant that would catch it going wrong.
 //
-// What it does NOT strip, deliberately: `#[cfg(test)]` on non-`mod` items. `fingerprint.rs` has
+// What it does NOT strip, deliberately: `#[cfg(test)]` on non-`mod` items. The fingerprint module has
 // three -- a const, a `thread_local!`, and an `#[inline(never)]` fn -- which together are the
 // recursion-depth instrumentation. They are a dozen lines, they are not test *setup*, and
 // recognizing arbitrary attributed items is the point where a scanner stops being honest. They

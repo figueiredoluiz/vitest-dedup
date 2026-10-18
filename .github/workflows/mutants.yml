@@ -1,9 +1,9 @@
 # Scheduled mutation testing of the fingerprint and analysis contracts.
 #
 # Why this is not a pull-request gate: cargo-mutants rebuilds and re-runs the whole suite once per
-# mutant, and the measured scope is 1,171 mutants -- around 75 minutes on the development machine
-# and longer on a hosted runner. Per-pull-request is impossible, and the answer changes slowly
-# enough that weekly is the right cadence.
+# mutant, and the scope is 1,475 mutants (the last timed run, of 1,171, took around 75 minutes
+# on the development machine, and longer on a hosted runner). Per-pull-request is impossible,
+# and the answer changes slowly enough that weekly is the right cadence.
 #
 # Why weekly is right *here*, when it is the wrong cadence
 # for the duplication and coverage ratchets: those guard a number that a single commit can move, so

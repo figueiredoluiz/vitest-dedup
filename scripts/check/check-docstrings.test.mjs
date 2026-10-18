@@ -83,6 +83,11 @@ test('unchanged undocumented functions are excluded but body edits and deleted d
 
 test('deleted files and non-source changes are N/A; malformed hunks and paths are refused', () => fixture(root => {
   assert.equal(coverage(root, 'diff --git a/a.rs b/a.rs\n+++ /dev/null\n').functions.length, 0)
+  // A deleted file's zero-context hunk (`+0,0`) adds nothing and must not be refused as malformed.
+  const removal = 'diff --git a/a.rs b/a.rs\ndeleted file mode 100644\n--- a/a.rs\n+++ /dev/null\n@@ -1,3 +0,0 @@\n-fn a() {}\n'
+  assert.equal(changedLines(removal).size, 0)
+  assert.equal(coverage(root, removal).functions.length, 0)
+  assert.equal(changedLines(removal + 'diff --git a/b.rs b/b.rs\n+++ b/b.rs\n@@ -0,0 +1 @@\n+fn b() {}\n').get('b.rs').length, 1)
   assert.equal(coverage(root, added('README.md', 'text')).functions.length, 0)
   assert.throws(() => changedLines('@@ -1 +1 @@'), /Malformed/)
   assert.throws(() => changedLines('not a diff'), /Malformed/)
