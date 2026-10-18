@@ -5,8 +5,8 @@ one as if its tests were written at the call site, so wrapper helpers do not hid
 
 ## What is extracted
 
-The frontend extracts static declarations from called first-party named function exports, including
-named re-export chains.
+The frontend extracts static declarations from called first-party function exports, including named
+re-export chains.
 
 - Source locations and fingerprints come from the helper.
 - Registration ownership, governing globals and configuration, and surrounding hooks come from the

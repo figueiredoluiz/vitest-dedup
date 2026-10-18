@@ -9,7 +9,7 @@ non-duplicate as two files mocking different modules.
 
 | Member | What it establishes | Modelled |
 | --- | --- | --- |
-| `vi.useFakeTimers()` / `vi.useRealTimers()` | The timer mode every test in the file runs under | **Yes**, `Context::ambient_state` (`src/model.rs`), as module-top-level whitespace-collapsed source text in source order |
+| `vi.useFakeTimers()` / `vi.useRealTimers()` | The timer mode every test in the file runs under | **Yes**, `Context::ambient_state` (`src/model.rs`), as raw module-top-level source text in source order |
 | `vi.stubEnv(key, value)` | A `process.env`/`import.meta.env` key's value | **Yes**, same terms |
 | `vi.stubGlobal(name, value)` | A global binding's value, the same call shape as `stubEnv` | **Yes**, same terms (no dedicated corpus case; recorded here so the choice is visible) |
 | `vi.spyOn(obj, prop).mockReturnValue(v)` (and the rest of the chain) | A spied binding's return value, the ordinary way to stub one export without `vi.mock` | **Yes**, the whole chained statement is captured, chain and arguments together |
@@ -20,7 +20,9 @@ same calls inside a hook body are that hook's body, inside a test body are that 
 `describe` are not facts every test in the file inherits. **A known family, not every `vi.*` /
 `expect.*` call**: `vi.mock`/`vi.unmock` stay the mock fold's territory (never also recorded here),
 and ordinary program text at module scope, a helper call, a plain `const`, is not ambient state.
-The payload is source text, so a formatting difference collapses while a genuinely different value
-never matches, and an unreadable payload suppresses a comparison rather than inventing one.
+The payload is raw source text, deliberately: collapsing whitespace would merge values that differ
+inside a string. A formatting difference therefore separates two files, which can only hide a
+duplicate, while a genuinely different value never matches. An unreadable payload suppresses a
+comparison rather than inventing one.
 
 Back to the [Vitest surface index](../vitest-surface.md).
