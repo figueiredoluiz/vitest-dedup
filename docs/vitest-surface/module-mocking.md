@@ -23,7 +23,7 @@ the way `vi.doMock` does. The distinction is easy to miss because the call shape
 
 - **Hoisted:** **Yes**, moved to top of file, before all imports
 - **Scope:** File-wide; affects every `import` of `path` in the file
-- **Notes:** The primitive already covered by fixture 56 (`vi-mock-hoisting.test.ts`). Factory runs once, cached. `{ spy: true }` automocks while preserving original implementations. **Modelled** when written as a module-top-level statement with a string-literal specifier: it becomes a registration event in the fold described below. Written anywhere else, inside a function, a hook, an `if`, it taints the file instead; see the fold's third bullet.
+- **Notes:** The primitive, covered by `fixtures/edge/vi-mock-hoisting.test.ts`. Factory runs once, cached. `{ spy: true }` automocks while preserving original implementations. **Modelled** when written as a module-top-level statement with a string-literal specifier: it becomes a registration event in the fold described below. Written anywhere else, inside a function, a hook, an `if`, it taints the file instead; see the fold's third bullet.
 
 ### `vi.doMock(path, factory?)`
 
