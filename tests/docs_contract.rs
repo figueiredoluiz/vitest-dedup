@@ -36,7 +36,7 @@ const RULES: &str = include_str!("../docs/rules.md");
 const AGENT_SKILL: &str = include_str!("../skills/vitest-dedup/SKILL.md");
 const REPORTS_DOC: &str = include_str!("../docs/reports.md");
 const JSON_REPORTER_SOURCE: &str = include_str!("../src/reporters/json.rs");
-const VITEST_SURFACE_DOC: &str = include_str!("../docs/vitest-surface.md");
+const VITEST_SURFACE_HAZARDS: &str = include_str!("../docs/vitest-surface/hazards.md");
 
 // ---------------------------------------------------------------------------------------------
 // Generic markdown-table parsing. Shared by every table-backed contract below so there is exactly
@@ -1045,7 +1045,7 @@ fn json_schema_field_lists_match_the_documented_example_at_every_nesting_level()
 // not just a missing marker, so adding this check there would just duplicate an existing signal
 // (and requires touching a directory this task does not own). The two places genuinely exposed --
 // `fixtures/edge/` and friends (demonstrative fixtures nothing executes a verdict against) and
-// `docs/vitest-surface.md`'s prose hazard list -- are exactly where all five findings actually
+// `docs/vitest-surface/hazards.md`'s prose hazard list -- are exactly where all five findings actually
 // lived, and where a false claim can otherwise sit unreviewed indefinitely.
 //
 // The phrase list is intentionally a subset of the obvious candidates: "silently" was tried and
@@ -1147,7 +1147,7 @@ fn is_top_level_numbered_item(line: &str) -> bool {
     saw_digit && chars.next() == Some(' ')
 }
 
-/// Splits `docs/vitest-surface.md`'s "Extraction hazards, ranked" numbered list into one
+/// Splits `docs/vitest-surface/hazards.md`'s "Extraction hazards, ranked" numbered list into one
 /// `DeficiencySite` per item (starting line number folded into `location`), by walking lines from
 /// the section header to the next `## ` heading or `---` divider.
 ///
@@ -1155,14 +1155,14 @@ fn is_top_level_numbered_item(line: &str) -> bool {
 /// have zero items -- the same "loud failure on reformat" discipline [`parse_table`] uses, so a
 /// heading rename doesn't silently stop this contract from checking anything.
 fn hazard_sites(doc: &str) -> Vec<DeficiencySite> {
-    const HEADER: &str = "## Extraction hazards, ranked";
+    const HEADER: &str = "# Extraction hazards, ranked";
     let lines: Vec<&str> = doc.lines().collect();
     let start = lines
         .iter()
         .position(|line| line.trim() == HEADER)
         .unwrap_or_else(|| {
             panic!(
-                "could not find the \"{HEADER}\" section in docs/vitest-surface.md -- either it \
+                "could not find the \"{HEADER}\" section in docs/vitest-surface/hazards.md -- either it \
                  was renamed (update hazard_sites in tests/docs_contract.rs) or removed (in which \
                  case this contract's target moved and needs a maintainer decision)"
             )
@@ -1178,7 +1178,7 @@ fn hazard_sites(doc: &str) -> Vec<DeficiencySite> {
         if is_top_level_numbered_item(line) {
             if let Some((start_line, text)) = current.take() {
                 sites.push(DeficiencySite {
-                    location: format!("docs/vitest-surface.md:{start_line}"),
+                    location: format!("docs/vitest-surface/hazards.md:{start_line}"),
                     text,
                 });
             }
@@ -1190,7 +1190,7 @@ fn hazard_sites(doc: &str) -> Vec<DeficiencySite> {
     }
     if let Some((start_line, text)) = current.take() {
         sites.push(DeficiencySite {
-            location: format!("docs/vitest-surface.md:{start_line}"),
+            location: format!("docs/vitest-surface/hazards.md:{start_line}"),
             text,
         });
     }
@@ -1204,9 +1204,11 @@ fn hazard_sites(doc: &str) -> Vec<DeficiencySite> {
     sites
 }
 
+/// Every deficiency claim in the ranked hazard list and in the demonstrative fixture headers
+/// must carry the `[status: current]` marker, so a stale claim cannot sit unreviewed.
 #[test]
 fn deficiency_claims_carry_a_checked_against_code_marker() {
-    let mut sites: Vec<DeficiencySite> = hazard_sites(VITEST_SURFACE_DOC);
+    let mut sites: Vec<DeficiencySite> = hazard_sites(VITEST_SURFACE_HAZARDS);
 
     let fixtures_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures");
     for path in fixture_ts_files_excluding_duplicates(&fixtures_root) {
