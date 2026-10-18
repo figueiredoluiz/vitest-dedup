@@ -2367,7 +2367,16 @@ fn fold_composite(expr: &Expression, depth: u32, resolve: Resolve<'_, '_>) -> Op
             }
             let rendered = fields
                 .iter()
-                .map(|(name, value)| format!("{}:{value}", escape_literal_delimiters(name)))
+                .map(|(name, value)| {
+                    // The escaped key's byte length pins where the key ends, so key text can
+                    // never impersonate the `name:value`, sibling `,` or bracket framing:
+                    // `{a:[],b:1}` and `{'a:[],b':1}` rendered identically until 2026-10-18,
+                    // collapsing two different tables' substituted bodies -- and two different
+                    // `test.extend` fixture values -- into one `duplicate-test` at error
+                    // severity. Scalar framing is covered by `escape_literal_delimiters`.
+                    let escaped = escape_literal_delimiters(name);
+                    format!("{}:{escaped}:{value}", escaped.len())
+                })
                 .collect::<Vec<_>>()
                 .join(",");
             Some(format!("{{{rendered}}}"))
@@ -4689,17 +4698,27 @@ mod tests {
             ("[1]", "[ 1 ]", "array", "[<number:1>]"),
             ("[1, 'a']", "[ 1, 'a' ]", "array", "[<number:1>,<string:a>]"),
             ("[]", "[]", "array", "[]"),
-            ("{ a: 1 }", "{ a: 1 }", "object", "{a:<number:1>}"),
+            ("{ a: 1 }", "{ a: 1 }", "object", "{1:a:<number:1>}"),
             ("{}", "{}", "object", "{}"),
-            ("{ 'a-b': 1 }", "{ 'a-b': 1 }", "object", "{a-b:<number:1>}"),
+            ("{ 'a-b': 1 }", "{ 'a-b': 1 }", "object", "{3:a-b:<number:1>}"),
             // A repeated key binds its last value at runtime, at its first position.
-            ("{ a: 1, a: 2 }", "{ a: 2 }", "object", "{a:<number:2>}"),
+            ("{ a: 1, a: 2 }", "{ a: 2 }", "object", "{1:a:<number:2>}"),
             // Nesting, and a cast inside one.
-            ("[[1], { a: [2] }]", "[ [ 1 ], { a: [ 2 ] } ]", "array", "[[<number:1>],{a:[<number:2>]}]"),
+            ("[[1], { a: [2] }]", "[ [ 1 ], { a: [ 2 ] } ]", "array", "[[<number:1>],{1:a:[<number:2>]}]"),
             ("[1 as const]", "[ 1 ]", "array", "[<number:1>]"),
             // A string that spells a delimiter cannot forge one: it is escaped, so this stays
             // distinguishable from a nested number.
             (r#"['<number:1\u003e']"#, r"[ '<number:1>' ]", "array", r"[<string:\<number:1\>>]"),
+            // A key that spells the framing cannot forge it either: the length prefix pins
+            // where the key ends, so these four stay two-by-two distinct where the bare
+            // rendering was one string.
+            ("{ a: [], b: 1 }", "{ a: [], b: 1 }", "object", "{1:a:[],1:b:<number:1>}"),
+            ("{ 'a:[],b': 1 }", "{ 'a:[],b': 1 }", "object", "{6:a:[],b:<number:1>}"),
+            ("{ a: {}, b: 2 }", "{ a: {}, b: 2 }", "object", "{1:a:{},1:b:<number:2>}"),
+            ("{ 'a:{},b': 2 }", "{ 'a:{},b': 2 }", "object", "{6:a:{},b:<number:2>}"),
+            // The prefix counts the key as rendered, escapes included: `a>b` is three bytes
+            // written and four once its delimiter is escaped.
+            (r#"{ 'a>b': 1 }"#, r#"{ 'a>b': 1 }"#, "object", r"{4:a\>b:<number:1>}"),
         ];
         for (literal, display, kind, raw) in readable {
             let value = cell(literal)
@@ -5229,7 +5248,11 @@ mod tests {
             ("100n", "100n"),
             ("`t`", "t"),
             ("[1, 'a']", "[<number:1>,<string:a>]"),
-            ("{ a: 1 }", "{a:<number:1>}"),
+            ("{ a: 1 }", "{1:a:<number:1>}"),
+            // A key that spells the framing cannot forge it: the length prefix keeps these
+            // two tables' identities apart where the bare rendering was one string.
+            ("{ a: [], b: 1 }", "{1:a:[],1:b:<number:1>}"),
+            ("{ 'a:[],b': 1 }", "{6:a:[],b:<number:1>}"),
             // A signed operand inside arithmetic is a unary expression, not a negative literal;
             // folding it is what makes the sum readable at all.
             ("1 + -2", "-1"),
@@ -5268,7 +5291,7 @@ mod tests {
             ("'1' + '2'", "<string:12>"),
             ("[1, 'a']", "<array:[<number:1>,<string:a>]>"),
             ("[]", "<array:[]>"),
-            ("{ a: 1 }", "<object:{a:<number:1>}>"),
+            ("{ a: 1 }", "<object:{1:a:<number:1>}>"),
             ("{}", "<object:{}>"),
         ] {
             assert_eq!(
