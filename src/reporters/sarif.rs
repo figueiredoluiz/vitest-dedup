@@ -67,7 +67,7 @@
 //! # Per-participant title and inert flag
 //!
 //! `json`/`jsonl` expose `titles`/`inert` as top-level arrays parallel to `locations`, per
-//! `docs/reports.md`'s "machine formats expose structured fields" rule. SARIF has no array-of-
+//! `docs/reports/findings.md`'s "machine formats expose structured fields" rule. SARIF has no array-of-
 //! strings extension point at the result level that keeps that parallel structure, but every
 //! `location` in `locations`/`relatedLocations` already carries its own optional `message`, which
 //! is exactly a per-location piece of text -- so each participant's title lands in *that*
@@ -79,7 +79,7 @@
 //! # Run-level context
 //!
 //! `invocations[0].properties.incomplete` mirrors [`AnalysisResult::incomplete`]: per
-//! `docs/reports.md`, "the absence of a finding proves nothing" when a run is incomplete, and a
+//! `docs/incomplete-runs.md`, "the absence of a finding proves nothing" when a run is incomplete, and a
 //! SARIF consumer has no other way to learn that short of comparing finding counts across runs.
 //! `executionSuccessful` is always `true` here because this reporter only ever runs after the
 //! analysis pipeline has already completed -- an operational failure exits before any reporter is
@@ -108,7 +108,7 @@
 //!
 //! Every interpolated string -- `message.text`, a location's `message.text`, and
 //! `artifactLocation.uri` -- goes through [`report_safe`]/[`report_safe_path`], identically to the
-//! `json` reporter (`docs/reports.md`'s output-safety contract, applied "by every reporter").
+//! `json` reporter (`docs/reports/safety.md`'s output-safety contract, applied "by every reporter").
 //! `verdict` and `partialFingerprints` are not, for the same reason `json` does not sanitize them:
 //! both are closed, tool-defined values, never text copied out of the analyzed repository.
 //! `serde_json` is built with the `preserve_order` feature crate-wide (`Cargo.toml`), so the

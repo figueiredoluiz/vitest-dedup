@@ -75,7 +75,7 @@ pub(super) fn forward_slash_path(path: &Path) -> String {
 /// a filename someone else chose, not something the analyzer generated — so it is attacker
 /// controlled in the same way. A bidi override or invisible formatting character embedded in a
 /// filename can visually reorder a rendered line just as effectively as one embedded in a title,
-/// which is precisely the hazard `docs/reports.md`'s output-safety contract exists to rule out for
+/// which is precisely the hazard `docs/reports/safety.md`'s output-safety contract exists to rule out for
 /// "all interpolated text." Every reporter must therefore run paths through this before emitting
 /// them, not just `forward_slash_path` on its own.
 ///

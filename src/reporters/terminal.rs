@@ -1187,7 +1187,7 @@ mod tests {
 
     #[test]
     fn windows_style_backslashes_are_normalized_to_forward_slashes() {
-        // R2: `docs/reports.md` states paths use forward slashes in every reporter's output; the
+        // R2: `docs/reports/safety.md` states paths use forward slashes in every reporter's output; the
         // terminal reporter must agree with json/jsonl/html rather than emitting host-native
         // separators.
         let result = rendered_result(vec![finding_with_title(

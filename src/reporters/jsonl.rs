@@ -1088,7 +1088,7 @@ mod tests {
     #[test]
     fn content_notice_names_paths_as_untrusted_alongside_message_and_titles() {
         // R3: `locations[].path` is exactly as repository-controlled as `message`/`titles` (see
-        // `docs/reports.md`'s output-safety contract), so the per-record notice must name it too —
+        // `docs/reports/safety.md`'s output-safety contract), so the per-record notice must name it too —
         // otherwise a consumer could reasonably treat a crafted filename as trusted structure.
         let lines = render_lines(&sample_result());
         let notice = lines[0]["contentNotice"].as_str().unwrap();

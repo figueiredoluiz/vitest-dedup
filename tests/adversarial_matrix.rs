@@ -8,12 +8,12 @@
 //! per-surface test cannot express; this file expresses it as one table of hostile values
 //! crossed with every injection site and every output surface, driven through the real
 //! `vitest-dedup` binary end to end (never the library reporters directly), matching how
-//! `docs/reports.md`'s output-safety contract is actually consumed.
+//! `docs/reports/safety.md`'s output-safety contract is actually consumed.
 //!
 //! # Dimensions
 //!
 //! - **Hazards** ([`HAZARDS`]): eleven values -- ten hostile, one legitimate-Unicode control. Each
-//!   carries a [`Category`] describing what the output-safety contract in `docs/reports.md`
+//!   carries a [`Category`] describing what the output-safety contract in `docs/reports/safety.md`
 //!   promises for it, which is what turns "does it survive" into a falsifiable expectation instead
 //!   of a guess per cell.
 //! - **Injection sites** ([`Site`]): a test title, a `describe` title, and a filename -- the three
@@ -68,7 +68,7 @@ use vitest_dedup::cli::ReporterKind;
 // The matrix's three typed dimensions.
 // =================================================================================================
 
-/// What the output-safety contract (`docs/reports.md`) promises for a hazard's raw content.
+/// What the output-safety contract (`docs/reports/safety.md`) promises for a hazard's raw content.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Category {
     /// Stripped by every sanitizer, unconditionally: bidirectional overrides, invisible
@@ -664,7 +664,7 @@ fn run_filename_stderr_cell(hazard: &Hazard) {
 
 /// Cross-checks every hazard's `filename_legal_everywhere` flag against its own `decoded` content,
 /// so the flag (which drives whether this file even attempts to write a hostile filename) cannot
-/// silently drift from reality the way `docs/reports.md`'s output-safety contract is not allowed
+/// silently drift from reality the way `docs/reports/safety.md`'s output-safety contract is not allowed
 /// to drift from the reporters' actual behavior. Reserved characters cover both Windows'
 /// restrictions (`< > : " \ | ? *`) and the one restriction every platform shares: `/` as a path
 /// separator, which is what made `</script>` unusable as a filename fragment at all (see the
@@ -906,7 +906,7 @@ filename_site_tests!(
 /// step), would silently remove it.
 ///
 /// This test makes it an invariant. It does not assert that `::error::` is stripped — the
-/// output-safety contract in `docs/reports.md` deliberately does not promise that, since the text
+/// output-safety contract in `docs/reports/safety.md` deliberately does not promise that, since the text
 /// is legitimate content in a test title. It asserts the weaker, sufficient, and actually-relied-on
 /// property: whatever the content, it never lands at column zero.
 #[test]
@@ -936,7 +936,7 @@ fn untrusted_content_never_begins_a_line_of_terminal_or_stderr_output() {
                 "{stream} line {index} begins with `::`, which GitHub Actions parses as a \
                  workflow command: {line:?}. Untrusted content must never reach column zero; if a \
                  report format changed, this invariant needs restoring or the output-safety \
-                 contract in docs/reports.md needs to promise stripping instead."
+                 contract in docs/reports/safety.md needs to promise stripping instead."
             );
         }
     }

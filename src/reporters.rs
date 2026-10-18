@@ -37,7 +37,7 @@ pub use terminal::{DetectionTiming, TerminalReportContext, TerminalReporter};
 /// hazard list changes.
 ///
 /// It lives on `reporters` because that is where the sanitizing contract is defined
-/// (`docs/reports.md`), and a terminal sanitizer hanging off `analysis` would be a surprising
+/// (`docs/reports/safety.md`), and a terminal sanitizer hanging off `analysis` would be a surprising
 /// place to find it.
 pub use shared::terminal_safe;
 
