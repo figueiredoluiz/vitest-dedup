@@ -67,7 +67,7 @@
 //! Two independent bounds keep a pathological or hostile config from turning this into unbounded
 //! work: [`MAX_PROJECTS`] caps the number of projects a single repository resolves into (real
 //! corpora observed top out under 30, the largest at ~26), and
-//! [`MAX_GLOB_WALK_ENTRIES`] caps the total filesystem entries visited while expanding every
+//! `MAX_GLOB_WALK_ENTRIES` caps the total filesystem entries visited while expanding every
 //! glob-shaped `projects` string (e.g. `'packages/*'`) across the whole resolution. Either limit
 //! being hit sets [`ProjectSet::truncated`] and [`ProjectSet::has_unresolved_entries`] rather than
 //! silently returning a partial-but-unflagged answer.
@@ -294,7 +294,7 @@ pub struct ProjectSet {
     /// Forces [`ProjectSet::governing_project`] to answer `Unknown` rather than `NotIncluded` for a
     /// file no *known* project claims, since the unresolved entry might have claimed it.
     pub has_unresolved_entries: bool,
-    /// Set when [`MAX_PROJECTS`] or [`MAX_GLOB_WALK_ENTRIES`] was hit before every entry could be
+    /// Set when [`MAX_PROJECTS`] or `MAX_GLOB_WALK_ENTRIES` was hit before every entry could be
     /// processed.
     pub truncated: bool,
     /// Whether a Vitest/Vite configuration file (or legacy `vitest.workspace.*`) was found at

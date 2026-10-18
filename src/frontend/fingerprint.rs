@@ -53,7 +53,7 @@
 //!       module could still read as different (a missed finding) and, in principle, an alias
 //!       could misread as matching an unrelated one. That was called out at the time as
 //!       `oxc_resolver`'s job, "a later milestone" -- this module now calls
-//!       [`resolver::resolve`] (see `resolver.rs`) to answer "what file does this specifier
+//!       [`resolver::resolve`](crate::frontend::resolver::resolve) (see `resolver.rs`) to answer "what file does this specifier
 //!       actually name" for real, and keys a successful resolution's identity on the resolved,
 //!       canonical path instead of the specifier text. `resolver.rs` lives in `src/frontend/`
 //!       alongside this module; `oxc_resolver` is a separately-versioned (11.x, ordinary semver),
@@ -68,7 +68,7 @@
 //!       failure must not silently fall back to anything that risks a false merge, so an
 //!       unresolved import keeps the old lexically-anchored specifier text (bare/package
 //!       specifiers used as written, directory-independent; relative specifiers anchored via
-//!       [`imports::normalize_relative_specifier`], unchanged from the scheme above) but the whole string
+//!       `imports::normalize_relative_specifier`, unchanged from the scheme above) but the whole string
 //!       is prefixed `unresolved:` -- structurally, not just by convention, so it can never equal
 //!       any `resolved:<path>` identity regardless of what path string a resolution could ever
 //!       produce. This was chosen over the one other sound option -- routing the failure
@@ -321,7 +321,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Component, Path, PathBuf};
 
 /// Everything the compared fingerprints need to know about one import binding, keyed by local
-/// binding name. `component`/`exported` are what [`identity::free_identity`] keys identity on (see the
+/// binding name. `component`/`exported` are what `identity::free_identity` keys identity on (see the
 /// module doc); `specifier`/`resolved` exist for imported-helper inlining (see `helpers.rs`),
 /// which needs the raw specifier (to refuse the framework itself, on the same text the registry
 /// keys that refusal on) and the resolved path (to go read the helper's body).
@@ -372,8 +372,8 @@ pub(super) type ImportOrigins = HashMap<String, ImportOrigin>;
 /// under-matching on input no human writes for stack margin, never precision on real input.
 ///
 /// The product of this constant and the frame size is now measured and asserted, rather than
-/// assumed, by [`tests::ser_expr_at_max_depth_stays_within_its_stack_budget`] against
-/// [`MAX_DEPTH_STACK_BUDGET_BYTES`].
+/// assumed, by `tests::ser_expr_at_max_depth_stays_within_its_stack_budget` against
+/// `MAX_DEPTH_STACK_BUDGET_BYTES`.
 const MAX_DEPTH: u32 = 256;
 
 /// Stack ceiling for a full-[`MAX_DEPTH`] [`Serializer::ser_expr`] recursion, asserted by

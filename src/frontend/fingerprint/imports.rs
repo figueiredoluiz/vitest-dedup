@@ -2,12 +2,12 @@ use super::*;
 
 /// Extracts, from a file's full source text, each top-level import's local binding name mapped to
 /// `(identity component, name on the exporting side)`. `file` is the path of the file being
-/// fingerprinted -- passed to [`resolver::resolve`] so a relative or aliased specifier resolves
+/// fingerprinted -- passed to [`resolver::resolve`](crate::frontend::resolver::resolve) so a relative or aliased specifier resolves
 /// against the file that actually wrote it, and used (via its parent directory) to anchor the
 /// unresolved fallback -- see [`normalize_relative_specifier`] and the module doc's discussion of
 /// why an unanchored fallback is a proved cross-file false-positive.
 ///
-/// The identity component is `resolved:<canonical path>` when [`resolver::resolve`] finds a real
+/// The identity component is `resolved:<canonical path>` when [`resolver::resolve`](crate::frontend::resolver::resolve) finds a real
 /// file, or `unresolved:<anchored specifier>` when it does not; see the module doc for why the two
 /// are prefixed distinctly and can never collide.
 ///
@@ -186,7 +186,7 @@ pub(crate) fn file_import_origins(source: &str, file: &Path) -> std::rc::Rc<Impo
 }
 
 /// Resolves `specifier`, as written in `file`, to a fingerprint-safe identity component:
-/// `resolved:<canonical path>` when [`resolver::resolve`] finds a real file on disk, or
+/// `resolved:<canonical path>` when [`resolver::resolve`](crate::frontend::resolver::resolve) finds a real file on disk, or
 /// `unresolved:<anchored specifier>` when it does not -- the two are prefixed distinctly so a
 /// failed resolution can never collide with a successful one, regardless of what path string a
 /// resolution could ever produce.
@@ -285,7 +285,7 @@ pub(crate) fn path_key(path: &Path) -> String {
 /// no filesystem access and no attempt at extension or index-file resolution.
 ///
 /// This is no longer the primary way a relative specifier's identity is computed -- that is now
-/// [`resolver::resolve`], which does real filesystem resolution. This function survives
+/// [`resolver::resolve`](crate::frontend::resolver::resolve), which does real filesystem resolution. This function survives
 /// as the *unresolved* fallback (see [`import_origins`]): when `resolver::resolve` cannot find a
 /// real file, this still stops two files in different directories that both write the same
 /// relative specifier (e.g. `import { helper } from './helpers'`) from being treated as the same

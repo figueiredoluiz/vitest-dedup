@@ -435,7 +435,7 @@ pub struct Context {
     /// decide a comparison the finer one had not already decided. A future context-only rule
     /// (comparing setup without also comparing bodies) would have made that exploitable, which is
     /// why it is fixed rather than left as a documented assumption: each entry here is now built
-    /// through the same [`crate::frontend::fingerprint::specifier_identity`] scheme
+    /// through the same `crate::frontend::fingerprint::specifier_identity` scheme
     /// `MockedModule::specifier` uses, `resolved:<canonical path>` when the specifier names a
     /// real file and `unresolved:<anchored specifier>` when it does not -- prefixed distinctly so
     /// the two families can never collide, and a bare/package specifier stays file-independent
@@ -1088,7 +1088,7 @@ pub const FINGERPRINT_VERSION: &str = "vitestDedupFingerprint/v1";
 
 /// Renders `path` with forward slashes regardless of host platform.
 ///
-/// A byte-for-byte duplicate of [`crate::reporters::shared::forward_slash_path`]'s separator
+/// A byte-for-byte duplicate of `crate::reporters::shared::forward_slash_path`'s separator
 /// normalization (without the sanitization step that function also applies, which matters for
 /// *display* safety and not for a hash of the raw bytes). Kept as its own copy rather than a call
 /// into `reporters` because `model` is the layer reporters are built on: reporters importing from
@@ -1185,7 +1185,7 @@ fn fnv1a_64(value: &str) -> u64 {
 /// colliding pair can be *constructed* rather than waited for, and the birthday arithmetic simply
 /// does not apply to it.
 ///
-/// `strong` is therefore SHA-256 truncated to its leading 128 bits ([`sha256_128`]). Against a
+/// `strong` is therefore SHA-256 truncated to its leading 128 bits (`sha256_128`). Against a
 /// collision-resistant hash, truncation to 128 bits leaves a best known attack at 2^64 work, and
 /// accidental collisions follow the birthday bound for real: n<sup>2</sup>/2<sup>129</sup> is
 /// ~9e-31 over a 25,000-body corpus and ~1.5e-25 over a ten-million-body monorepo -- below the
@@ -1450,7 +1450,7 @@ impl Default for BodyDigest {
 /// cannot collapse into a single hash the way [`BodyDigest`] does for a whole body. Per-event
 /// digests keep every one of those comparisons intact while dropping the text: 567,000 events
 /// across a 24k-test corpus, averaging ~117 bytes each, held 80 MB that nothing read the content
-/// of. Same hash and same width as [`BodyDigest::strong`] -- truncated SHA-256, for the reason
+/// of. Same hash and same width as `BodyDigest::strong` -- truncated SHA-256, for the reason
 /// that type's collision section gives -- and the same claim: a collision here would manufacture
 /// a `near-duplicate-test` or `subsumed-test` out of two events that are not the same event.
 pub type EventDigest = u128;
@@ -1660,7 +1660,7 @@ pub struct TestFingerprint {
 ///
 /// A [`Hook`] is attached to every test in the scopes under it, so the same declaration appears
 /// once per test in [`Context::hooks`]. `analysis::hook_fingerprints` deduplicates by [`Location`]
-/// -- exactly [`emit_redundant_hook`]'s own identity for a hook, which keys its pair map on hook
+/// -- exactly `emit_redundant_hook`'s own identity for a hook, which keys its pair map on hook
 /// `Location` and never on which test's chain it walked through to find it.
 ///
 /// # Why this is smaller than `TestFingerprint`
@@ -1671,7 +1671,7 @@ pub struct TestFingerprint {
 /// are not here at all, rather than present with a value that would always be the same:
 ///
 /// - **`comparable` (omitted).** [`Context::is_comparable`] is a fact about a *test's* resolved
-///   ambient state (mocks, fixtures, `.each` tables), not about a hook body -- [`fingerprint`]
+///   ambient state (mocks, fixtures, `.each` tables), not about a hook body -- `fingerprint`
 ///   always succeeds on a hook body exactly as it does on a test body, so there is no
 ///   "unresolved hook" state to report. Worse, the same hook declaration can sit in one test's
 ///   chain whose context resolved and another's that did not (fixtures differ per test even
@@ -1689,11 +1689,8 @@ pub struct TestFingerprint {
 ///   could not already assume.
 ///
 /// `alpha`, `structural`, `behavior`, and `trivial` all survive unchanged: each is a fact about
-/// the hook's own body, computed by the identical [`fingerprint`] pass a test body gets, and each
+/// the hook's own body, computed by the identical `fingerprint` pass a test body gets, and each
 /// is exactly as meaningful here as there.
-///
-/// [`fingerprint`]: crate::frontend::fingerprint
-/// [`emit_redundant_hook`]: crate::analysis::emit_redundant_hook
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HookFingerprint {

@@ -235,7 +235,7 @@ impl<'a, 'b, 's, 'm> FingerprintContext<'a, 'b, 's, 'm> {
     }
 
     /// The import binding `ident` resolves to, when it resolves to one -- by symbol identity,
-    /// the same dispatch [`super::identity::free_identity`] performs, so a local shadowing an import's name is
+    /// the same dispatch `super::identity::free_identity` performs, so a local shadowing an import's name is
     /// never recorded as a reference to that import.
     pub(super) fn import_origin_of(
         &self,

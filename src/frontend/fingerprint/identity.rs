@@ -24,9 +24,9 @@ pub(crate) fn is_local_symbol(
 /// history of getting this wrong in both directions.
 ///
 /// - An **import binding** names something that lives outside this file entirely, so its identity
-///   must be content-derived: the specifier's real, resolved module (via [`resolver::resolve`]) --
+///   must be content-derived: the specifier's real, resolved module (via [`resolver::resolve`](crate::frontend::resolver::resolve)) --
 ///   or, failing that, the specifier anchored to this file's directory (see
-///   [`super::imports::normalize_relative_specifier`]), tagged so it can never collide with a real resolution --
+///   `super::imports::normalize_relative_specifier`), tagged so it can never collide with a real resolution --
 ///   plus the name on the exporting side. Two files importing the same thing must agree.
 /// - A **module-level declaration or outer closure variable** names something that lives *inside*
 ///   this file, and sibling scopes routinely reuse a name (`describe.each` blocks each declaring

@@ -394,7 +394,7 @@ pub fn apply_baseline(findings: &mut [Finding], baseline: &Baseline) -> (usize, 
 /// Builds a [`Baseline`] directly from findings, with no file in between -- the
 /// `--baseline-from-ref` path, whose "baseline file" is the analyzed base revision itself.
 ///
-/// Same counting rule as [`build_baseline`]/`load_baseline`: one allowance entry per distinct
+/// Same counting rule as `build_baseline`/`load_baseline`: one allowance entry per distinct
 /// fingerprint with its multiplicity. Not a serialization round-trip: the base revision's
 /// findings never touch disk (the containment design below), so there is nothing to write or
 /// re-read.
@@ -414,7 +414,7 @@ pub fn baseline_from_findings(findings: &[Finding]) -> Baseline {
 ///
 /// Separate from [`apply_baseline`] because the file being matched against was written *from* this
 /// run: re-reading it to discover that it matches everything would be theatre. Zeroing
-/// [`AnalysisResult::had_error_finding`] and
+/// [`AnalysisResult::had_error_finding`](crate::model::AnalysisResult::had_error_finding) and
 /// [`AnalysisResult::error_finding_locations`](crate::model::AnalysisResult::error_finding_locations)
 /// here is sound only because the caller refuses to write a baseline from an incomplete run, and
 /// truncation is the only way a finding could exist that this result does not carry.
@@ -486,7 +486,7 @@ pub struct RevisionSource {
 ///   listed -- plumbing that reads objects from the database and runs nothing from the tree. The analyzed repository never
 ///   gets code execution from being analyzed.
 /// - **The revision never reaches git as an option.** It is resolved through
-///   [`resolve_commit`], which passes `--end-of-options` and verifies the `<commit>` suffix --
+///   `resolve_commit`, which passes `--end-of-options` and verifies the `<commit>` suffix --
 ///   the same treatment `--changed-since` gets, so a revision crafted to look like a flag is an
 ///   error, not an injection.
 /// - **Admission is narrow and fail-closed.** A base file is analyzed only if its extension
@@ -498,7 +498,7 @@ pub struct RevisionSource {
 ///   SHRINK the base run's finding set, which for a gate means reporting more findings as new
 ///   than strictly necessary -- the visible, fail-closed direction -- never silently accepting
 ///   one.
-/// - **Inherited `GIT_*` environment is stripped** ([`git_at`]), so a hook or CI matrix
+/// - **Inherited `GIT_*` environment is stripped** (`git_at`), so a hook or CI matrix
 ///   exporting `GIT_DIR` cannot point the base read at some other repository's objects.
 pub fn revision_sources(
     root: &Path,

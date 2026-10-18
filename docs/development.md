@@ -11,6 +11,9 @@ npm run check               # npm gates; see the omissions below
 npm run test:action          # the Action's logic, no network
 ```
 
+CI also builds rustdoc with warnings denied, so a broken intra-doc link fails the lint job. Run it locally with
+`RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --document-private-items`.
+
 `cargo test --lib` is the fast inner loop. It is not sufficient to trust a change to a rule or to
 extraction; see [Fixtures](../CONTRIBUTING.md#fixtures).
 

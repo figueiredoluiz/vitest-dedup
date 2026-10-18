@@ -30,9 +30,9 @@
 //!   preserves every case", never "detect boundary values". Equal-`alpha` members of an
 //!   equal-`structural` group are `duplicate-test`'s claim, not this rule's, so groups are
 //!   collapsed to one representative per distinct `alpha` before pairing -- see
-//!   [`representative_per_alpha`]. Also excludes same-`Location` members, for the same reason as
+//!   `representative_per_alpha`. Also excludes same-`Location` members, for the same reason as
 //!   the other two rules, and additionally requires a minimum of
-//!   [`MIN_BEHAVIOR_EVENTS_FOR_PARAMETERIZATION`] recorded behavior events, since `structural`
+//!   `MIN_BEHAVIOR_EVENTS_FOR_PARAMETERIZATION` recorded behavior events, since `structural`
 //!   alone can key-match two bodies with no comparable substance.
 //! - [`crate::model::Rule::NearDuplicateTest`]: same equivalent `Context`, same file, differing
 //!   `body.alpha`, but the **sorted multiset** of `body.behavior` events is equal. The ordered
@@ -50,8 +50,8 @@
 //!   any tuning: a multiset is unaffected by how much *identical* boilerplate surrounds a
 //!   differing event, but it is never equal when even one event differs, so the differing region
 //!   -- however small a fraction of the body it is -- always dominates the decision instead of
-//!   being diluted by shared setup. See [`MIN_BEHAVIOR_EVENTS_FOR_NEAR_DUPLICATE`] for the
-//!   substance floor and [`representative_per_alpha`] for why equal-`alpha` members never reach
+//!   being diluted by shared setup. See `MIN_BEHAVIOR_EVENTS_FOR_NEAR_DUPLICATE` for the
+//!   substance floor and `representative_per_alpha` for why equal-`alpha` members never reach
 //!   this rule (that pair is `duplicate-test`'s claim). Known gap, not yet bridged: two bodies
 //!   whose only difference is in statements that record *no* behavior event at all (for example
 //!   two differently-valued, never-read local declarations) would have equal multisets despite
@@ -63,8 +63,8 @@
 //!   between A and C that was never checked, and a cluster must never imply all three members are
 //!   interchangeable.
 //!   This rule does not have that risk, and not by accident: its grouping key
-//!   ([`NearDuplicateKey`]) is *exact* equality on a canonical value (path, equivalent context,
-//!   equivalent modifiers, sorted `behavior` multiset), grouped through [`pairs::group_and_order`]'s
+//!   (`NearDuplicateKey`) is *exact* equality on a canonical value (path, equivalent context,
+//!   equivalent modifiers, sorted `behavior` multiset), grouped through `pairs::group_and_order`'s
 //!   `BTreeMap` partition -- see that module's doc comment. Two tests land in one group iff their
 //!   keys are literally equal, and struct/string equality is transitive by construction, so every
 //!   member of a resulting cluster is already known to be pairwise key-equal to every other member
@@ -80,7 +80,7 @@
 //!   equivalent context, equivalent modifiers) with the file-scoping restriction lifted, so
 //!   groups can span every file in the run instead of one. To guarantee a pair is never reported
 //!   under both rules, this rule never compares two tests in the *same* file: each equality group
-//!   is collapsed to one representative per distinct file ([`representative_per_file`]) before
+//!   is collapsed to one representative per distinct file (`representative_per_file`) before
 //!   pairing, so every emitted pair spans a file boundary by construction and same-file relatives
 //!   stay `duplicate-test`'s to report (whether or not that rule happens to be enabled). Off by
 //!   default -- duplication across unit and integration layers is frequently intentional.
@@ -116,15 +116,15 @@
 //! # Grouping and pair emission
 //!
 //! Each equality-keyed rule groups test cases by its own exact key, then hands each group of 2+
-//! members to [`pairs::group_outcome`]: groups of up to four are reported as a linear spanning set
+//! members to `pairs::group_outcome`: groups of up to four are reported as a linear spanning set
 //! of pair findings, larger groups collapse into one cluster finding. See `src/analysis/pairs.rs`
 //! for the rationale (mirrors CukeDedup's `analysis::pairs`).
 //!
 //! The parts of that pipeline that are the *same* for every rule live in one place each, so they
 //! cannot drift apart between rules: which tests are even eligible
-//! ([`is_body_comparison_candidate`]), budget accounting and the spanning/cluster decision
-//! ([`emit_group_findings`]), the whole per-group loop ([`emit_collapsed_groups`]), and `Finding`
-//! assembly ([`finding_over`]). What stays at each rule's own site is what makes it a *different*
+//! (`is_body_comparison_candidate`), budget accounting and the spanning/cluster decision
+//! (`emit_group_findings`), the whole per-group loop (`emit_collapsed_groups`), and `Finding`
+//! assembly (`finding_over`). What stays at each rule's own site is what makes it a *different*
 //! claim: its equality key, the collapse it applies to a group before certifying it, and its
 //! message -- each with the reasoning for it. `subsumed-test` and `redundant-hook` share only the
 //! lower layers, for reasons given on their own functions.
@@ -209,7 +209,7 @@ pub struct RunModes<'a> {
 /// [`analyze`] call, before analysis stops early and marks the result incomplete.
 ///
 /// Charged for each relationship a rule is ready to report: one unit per emitted spanning pair,
-/// or `participants.len() - 1` for a cluster (see [`pairs::PairBudget`]). A finding suppressed as
+/// or `participants.len() - 1` for a cluster (see `pairs::PairBudget`). A finding suppressed as
 /// a redundant restatement costs nothing. Two million is the same order of magnitude CukeDedup
 /// budgets for its (much more expensive, fuzzy) pairwise similarity work; here the per-unit cost
 /// is a cheap key comparison plus a small `Finding` allocation, so this ceiling comfortably
@@ -218,7 +218,7 @@ pub struct RunModes<'a> {
 /// hanging.
 pub const MAX_PAIR_COMPARISONS: u64 = 2_000_000;
 
-/// Maximum hook-pair candidates inspected by [`emit_redundant_hook`].
+/// Maximum hook-pair candidates inspected by `emit_redundant_hook`.
 ///
 /// This is separate from [`MAX_PAIR_COMPARISONS`]: the latter is charged for relationships a
 /// rule is ready to report, while `redundant-hook` must first inspect the hook chain attached to
@@ -1058,7 +1058,7 @@ pub fn test_fingerprints(tests: &[TestCase]) -> Vec<TestFingerprint> {
 /// A [`crate::model::Hook`] is copied into every test's [`Context::hooks`] chain in the scopes
 /// under it, so walking `tests` and emitting one record per test visited would emit the same
 /// declaration once per test in that scope. Deduplicating by [`Location`] instead is exactly
-/// [`emit_redundant_hook`]'s own identity for a hook -- its pair map is keyed on hook `Location`,
+/// `emit_redundant_hook`'s own identity for a hook -- its pair map is keyed on hook `Location`,
 /// never on which test's chain it walked through to find it -- so two records can never disagree
 /// about what "the same hook" means. Every occurrence of one `Location` carries an identical
 /// [`crate::model::Hook`] by construction (the same call expression, fingerprinted once), so which

@@ -19,7 +19,7 @@
 //! The single filesystem walk here already visits every file in the tree regardless of
 //! in-source setting (it has to, to evaluate ordinary file includes), so supporting the feature
 //! adds no second walk. What it must avoid is the *per-file* cost of matching against in-source globs when the
-//! setting is absent (the common case): [`prepare_in_source_candidates`] returns an empty `Vec`
+//! setting is absent (the common case): `prepare_in_source_candidates` returns an empty `Vec`
 //! whenever every resolved project's two in-source fields have the Vitest default of `Known([])`, and an
 //! empty `Vec` costs one no-op iteration per file, not a glob match.
 //!
@@ -237,7 +237,7 @@ pub struct SourceFile {
     /// is why this file was discovered, when that is knowable.
     ///
     /// This exists to fix a regression: an in-source-testing candidate (`docs/vitest-surface.md`
-    /// "In-source testing", admitted via [`prepare_in_source_candidates`]) is ordinary application
+    /// "In-source testing", admitted via `prepare_in_source_candidates`) is ordinary application
     /// source, not a regular test or benchmark file, so it may match no project's ordinary
     /// include globs. Left to
     /// [`crate::vitest_projects::ProjectSet::globals_for`], which resolves a file against
@@ -256,7 +256,7 @@ pub struct SourceFile {
     /// fall back to [`crate::vitest_projects::ProjectSet::globals_for`] in that case, exactly as
     /// before this field existed. When `Some`, the value may itself be
     /// [`GlobalsDetection::Unknown`] for either of two reasons -- the admitting project's own
-    /// `globals` could not be read, or [`crate::vitest_projects::ProjectSet::ambiguous_after`]
+    /// `globals` could not be read, or `crate::vitest_projects::ProjectSet::ambiguous_after`
     /// found that a later, unresolved `test.projects` entry might match this file too and could
     /// out-rank the admitting project under "later occurrence wins" -- and a caller must not
     /// silently substitute the repository-wide fallback for either case: the uncertainty is real

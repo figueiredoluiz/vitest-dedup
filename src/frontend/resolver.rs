@@ -1,6 +1,6 @@
 //! Real module resolution for free-import identity.
 //!
-//! [`super::import_origins`] used to anchor a relative specifier lexically -- string manipulation
+//! `fingerprint::import_origins` used to anchor a relative specifier lexically -- string manipulation
 //! on the importer's own path, no filesystem access (see the removed `normalize_relative_specifier`
 //! in `fingerprint.rs`'s history). That stopped the cross-directory collision it was built for, but
 //! it is not resolution: it does not follow tsconfig `paths`, package `exports` maps, or symlinked
@@ -118,7 +118,7 @@ pub(super) enum Resolved {
 /// cannot be. Memoized per `(importing_file, specifier)` for the process's lifetime; see the module
 /// doc's cost section.
 ///
-/// `importing_file` is passed to [`oxc_resolver::ResolverGeneric::resolve_file`] rather than
+/// `importing_file` is passed to `oxc_resolver::ResolverGeneric::resolve_file` rather than
 /// `resolve` (the directory-based entry point) because only `resolve_file` honors
 /// `TsconfigDiscovery::Auto` (per `oxc_resolver`'s own doc comment) -- and because a tsconfig's
 /// `include`/`exclude` fields can in principle assign different files in the same directory to

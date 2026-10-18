@@ -6,7 +6,7 @@
 //! `free:import:resolved:<path>:checkActive` identity -- *which export it names*, never *what it
 //! does*. Two tests differing only by calling equivalent helpers (different modules, or different
 //! exports of one module) could not be recognized as duplicates, because identity is a name and
-//! the bodies were never compared. [`fingerprint::render_inlined_helper_body`] renders the
+//! the bodies were never compared. [`fingerprint::render_inlined_helper_body`](super::fingerprint::render_inlined_helper_body) renders the
 //! helper's own statements in place of the call (parameters substituted with the call site's
 //! serialized arguments); this module answers the two questions that must precede that rendering:
 //! which file and declaration the import actually names, and whether the parameter binding is
@@ -104,7 +104,7 @@ use std::path::{Path, PathBuf};
 /// How many named re-export hops a locate walk will follow before refusing.
 ///
 /// Resolution hops, not body-inlining depth (that is bounded to one level by
-/// [`fingerprint::render_inlined_helper_body`] itself). Real chains are one or two long -- a
+/// [`fingerprint::render_inlined_helper_body`](super::fingerprint::render_inlined_helper_body) itself). Real chains are one or two long -- a
 /// barrel re-exporting a runner that re-exports a package's export; eight is the same bound
 /// `extract.rs`'s helper expansion uses, and past it the refusal is the ordinary under-match.
 const MAX_REEXPORT_HOPS: usize = 8;

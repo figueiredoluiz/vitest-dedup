@@ -3,7 +3,7 @@
 //! This module never runs discovery, parsing, or analysis. It turns `argv` into [`ParsedArgs`],
 //! validates flag combinations clap's grammar cannot express on its own (such as "don't put a
 //! path before `check`"), and converts flags into
-//! [`ConfigOverrides`](crate::config::ConfigOverrides) for `Config::load`. Running the pipeline
+//! [`ConfigOverrides`] for `Config::load`. Running the pipeline
 //! and turning its outcome into a process exit code is the orchestrator's job -- see [`ExitCode`]
 //! for the contract it must honor.
 

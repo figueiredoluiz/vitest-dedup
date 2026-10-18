@@ -60,7 +60,7 @@
 //! `verdict` is [`crate::model::Rule::verdict`]'s output (`redundant` / `consolidatable` /
 //! `similar-uncertain` / `name-collision`): what the finding claims, and therefore what remedy is
 //! correct, without a consumer having to hardcode a rule-to-remedy table of its own. It is not run
-//! through [`report_safe`]/[`report_safe_path`] like `message`, `titles`, and `locations[].path`:
+//! through [`report_safe`]/[`report_safe_path`](super::shared::report_safe_path) like `message`, `titles`, and `locations[].path`:
 //! `Verdict` is a closed enum this tool defines and serializes by variant name, never text copied
 //! out of the analyzed repository, so it carries none of the injection surface those sanitizers
 //! exist for.

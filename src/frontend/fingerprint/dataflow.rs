@@ -330,7 +330,7 @@ impl DestructuredNameScan {
     /// where `.` is the member separator: with a dotted join, `const { api: { get } } = t(); get()`
     /// would render `call:L0:prop:api.get`, which is exactly what
     /// `const { api } = t(); api.get()` renders, and two different bodies would share an event.
-    /// `:` cannot appear in a JS identifier, and [`collect_pattern`] retains identifier-written
+    /// `:` cannot appear in a JS identifier, and [`collect_pattern`](DestructuredNameScan::collect_pattern) retains identifier-written
     /// keys only, so the joined path stays unambiguously decomposable.
     ///
     /// `depth` bounds the recursion the same way [`MAX_DEPTH`] bounds every other recursive walk

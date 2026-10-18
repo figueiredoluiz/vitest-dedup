@@ -286,7 +286,7 @@ pub(super) struct Row {
     /// be allowed to compare equal on that text alone -- exactly the same defect class
     /// `const_fold_tagged` and `test.extend` fixture bodies already close.
     ///
-    /// Row substitution reads this too: it is the gate [`crate::frontend::extract`]'s
+    /// Row substitution reads this too: it is the gate [`crate::frontend::extract`](mod@crate::frontend::extract)'s
     /// `row_substitution` uses to
     /// decide whether this row's body may be substituted at all -- a row with *any* unresolved
     /// cell never reaches substitution, full stop, rather than substituting only the cells that
@@ -352,7 +352,7 @@ impl Row {
 /// - `display`: the untagged text `.each` title rendering interpolates (from [`const_fold`]),
 ///   matching Vitest's own runtime formatting -- unchanged from before this struct existed.
 /// - `kind`/`raw`: that same value's kind and raw text, in exactly the shape
-///   [`crate::frontend::fingerprint::Serializer::literal`] expects, for row substitution. This is
+///   `Serializer::literal` expects, for row substitution. This is
 ///   deliberately *not* [`const_fold_tagged`]'s combined `<kind:raw>` string: that format special-
 ///   cases `null` as the bare `<null>` (no raw part at all, fine for the fixture/`skipIf` identity
 ///   comparisons `const_fold_tagged` itself serves), which cannot be fed back through `literal`
@@ -366,7 +366,7 @@ impl Row {
 pub(super) struct CellValue {
     /// What Vitest prints where this cell is referenced by name (`$field`).
     ///
-    /// A bare string at the top level and the inspect form otherwise -- see [`render_field`].
+    /// A bare string at the top level and the inspect form otherwise -- see [`field_within_budget`].
     /// The `%s` family does NOT read this: printf coercion and `$field` interpolation are
     /// different renderings of the same value in Vitest itself (an array is `1,2` under `%s` and
     /// `[ 1, 2 ]` under `$field`), so the positional arguments live on [`Row::title_args`].
@@ -2158,7 +2158,7 @@ pub(super) fn const_fold_tagged(expr: &Expression) -> Option<String> {
 /// [`const_fold_tagged`]'s kind and raw text, uncombined, for [`fold_cell`]/row substitution.
 ///
 /// Matches exactly the `(kind, raw)` pair
-/// [`crate::frontend::fingerprint::Serializer::literal`] would produce for the same value written
+/// `Serializer::literal` would produce for the same value written
 /// directly as a literal in source -- including `null`, where this returns `("null", "null")`
 /// rather than `const_fold_tagged`'s bare `<null>` (no raw part), because `Serializer::literal`
 /// itself always renders `null` as `self.literal("null", "null")`. Accepts exactly the same
@@ -2295,7 +2295,7 @@ const MAX_CELL_DEPTH: u32 = 8;
 /// excluded its whole row -- and therefore every test in that row -- from comparison.
 ///
 /// Injectivity is the whole requirement, because the result reaches
-/// [`crate::frontend::fingerprint::Serializer::literal`] as a `raw` and two different values that
+/// `Serializer::literal` as a `raw` and two different values that
 /// render alike would become a `duplicate-test` false positive at error severity. Each scalar
 /// carries its kind tag (`<number:1>` is not `<string:1>`), and each raw goes through
 /// [`escape_literal_delimiters`] -- the serializer's own function, shared rather than copied, so
@@ -3111,7 +3111,7 @@ fn unwrap_parens<'e, 'a>(expr: &'e Expression<'a>) -> &'e Expression<'a> {
 /// Strips the wrappers that carry no runtime value: parentheses, and the TypeScript casts
 /// (`as T`, `as const`, `satisfies T`, `<T>x`, `x!`).
 ///
-/// [`crate::frontend::fingerprint::Serializer::ser_expr`] already descends straight through every
+/// `Serializer::ser_expr` already descends straight through every
 /// one of these -- `TSAsExpression` serializes as its inner expression and nothing else -- so a
 /// cell written `1 as const` and a cell written `1` are the *same* value to every comparison this
 /// tool makes. Refusing to read the first was not caution; it excluded the test from comparison
