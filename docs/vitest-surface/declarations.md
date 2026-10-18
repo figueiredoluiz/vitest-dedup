@@ -1,6 +1,6 @@
 # Declarations: callables, modifiers and signatures
 
-## 1. Test-declaring callables
+## Test-declaring callables
 
 | Callable | Alias of | Import | Notes |
 | --- | --- | --- | --- |
@@ -35,7 +35,7 @@ The extractor supports **both shapes**, because the corpus contains both major v
 chain form below applies identically to both members of a pair. The pairs are not interchangeable
 with each other: `describe.only` and `test.only` are unrelated.
 
-## 2. Modifiers and chained forms
+## Modifiers and chained forms
 
 | Modifier | Applies to | Effect | Chainable with |
 | --- | --- | --- | --- |
@@ -87,7 +87,7 @@ links, with `.each`/`.for`/`.skipIf(...)`/`.runIf(...)` as the (at most one) cha
 call-taking members, rather than hard-coding a specific order, the docs demonstrate both orders
 are accepted and there is no indication the parser cares about order for the boolean flags.
 
-## 3. Signature variants
+## Signature variants
 
 ```ts
 // title forms

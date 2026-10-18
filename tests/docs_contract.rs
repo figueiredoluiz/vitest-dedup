@@ -1249,3 +1249,63 @@ fn deficiency_claims_carry_a_checked_against_code_marker() {
         unmarked.join("\n")
     );
 }
+
+// =================================================================================================
+// Contract: documentation page titles are plain text.
+//
+// The website takes each page's first heading as its title and sidebar label, and a folder's name
+// as its group name, so a section number ("4b. Title formatting") or an inline-code span in that
+// heading turns into a visible artifact there. Section numbers live only in the index tables, which
+// code comments cite; the pages themselves are named.
+// =================================================================================================
+
+/// Every tracked `docs/**/*.md` page has a first heading with no leading section number and no
+/// inline code.
+#[test]
+fn every_docs_page_title_is_plain_text() {
+    let listing = std::process::Command::new("git")
+        .args(["ls-files", "--", "docs"])
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()
+        .expect("git must be available to list the tracked documentation");
+    assert!(listing.status.success(), "git ls-files failed");
+    let mut checked = 0;
+    for path in String::from_utf8(listing.stdout).unwrap().lines() {
+        if !path.ends_with(".md") {
+            continue;
+        }
+        let text = fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join(path))
+            .unwrap_or_else(|error| panic!("could not read {path}: {error}"));
+        // The first heading outside a code fence is the page title and must be level one.
+        let mut in_fence = false;
+        let first_heading = text.lines().find(|line| {
+            if line.trim_start().starts_with("```") {
+                in_fence = !in_fence;
+            }
+            !in_fence && line.starts_with('#')
+        });
+        let title = first_heading
+            .and_then(|line| line.strip_prefix("# "))
+            .unwrap_or_else(|| {
+                panic!("{path}: the first heading is {first_heading:?}; a page opens with a level-one heading")
+            });
+        let numbered = title.split_once(". ").is_some_and(|(prefix, _)| {
+            !prefix.is_empty()
+                && prefix
+                    .trim_end_matches(|c: char| c.is_ascii_lowercase())
+                    .chars()
+                    .all(|c| c.is_ascii_digit())
+                && prefix.chars().next().is_some_and(|c| c.is_ascii_digit())
+        });
+        assert!(
+            !numbered && !title.contains('`'),
+            "{path}: the title `{title}` carries a section number or inline code; titles are plain \
+             text because the website uses them verbatim"
+        );
+        checked += 1;
+    }
+    assert!(
+        checked >= 25,
+        "only {checked} documentation pages were checked; the listing collapsed or pages moved"
+    );
+}

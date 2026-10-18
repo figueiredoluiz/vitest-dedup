@@ -1,4 +1,4 @@
-# Findings: `verdict`, `fingerprint` and structured fields
+# Findings, verdicts and fingerprints
 
 Machine formats carry both `verdict` and `fingerprint`.
 

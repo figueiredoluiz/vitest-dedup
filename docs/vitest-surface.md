@@ -8,8 +8,9 @@ breaking changes relative to v2-v4, the versions most repositories still run, ar
 `[v5 CHANGE]`. Anything not confirmed by the published docs is marked `UNVERIFIED`.
 
 **Start with [Extraction hazards, ranked](vitest-surface/hazards.md)** if you are reading this to
-understand where static analysis of Vitest gets hard. The numbered sections are the surface itself;
-code comments and fixtures cite them by number.
+understand where static analysis of Vitest gets hard. The sections in the table are the surface
+itself. Code comments and fixtures cite them by the number in the first column; the pages
+themselves are named, not numbered.
 
 | # | Section | Page |
 | --- | --- | --- |

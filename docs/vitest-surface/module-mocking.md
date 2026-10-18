@@ -1,4 +1,4 @@
-# 12. The `vi` module-mocking family
+# The vi module-mocking family
 
 The mocking surface is larger than `vi.mock`, and two pairs in it differ from `vi.mock` exactly
 the way `vi.doMock` does. The distinction is easy to miss because the call shape

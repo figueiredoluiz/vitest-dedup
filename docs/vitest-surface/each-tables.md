@@ -1,4 +1,4 @@
-# 4. `.each` and `.for` tables
+# Parameterized tables: .each and .for
 
 Title derivation for these tables is on [Title formatting](title-formatting.md).
 

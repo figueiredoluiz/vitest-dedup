@@ -1,4 +1,4 @@
-# 4b. Title formatting
+# Title formatting
 
 How Vitest renders a `.each` / `.for` title, and how far this analyzer reproduces it. The table
 shapes are on [`.each` and `.for` tables](each-tables.md).

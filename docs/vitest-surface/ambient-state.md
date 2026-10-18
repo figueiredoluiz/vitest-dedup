@@ -1,4 +1,4 @@
-# 12b. The module-scope ambient-state family
+# The module-scope ambient-state family
 
 Mocking is not the only way a file establishes state its tests run under. A second family of
 module-scope calls swaps the *conditions* rather than the *dependencies*: the timer mode, a

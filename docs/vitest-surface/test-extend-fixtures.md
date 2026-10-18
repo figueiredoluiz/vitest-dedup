@@ -1,4 +1,4 @@
-# 6. Fixtures (`test.extend`)
+# Fixtures and test.extend
 
 
 ```ts

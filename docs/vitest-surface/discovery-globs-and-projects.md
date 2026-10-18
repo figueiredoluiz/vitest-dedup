@@ -1,12 +1,12 @@
 # Default file globs and projects
 
-## 9. Default file globs
+## Default file globs
 
 | Option | Default | Purpose |
 | --- | --- | --- |
 | `include` | `['**/*.{test,spec}.?(c\|m)[jt]s?(x)']` | Which files are "test files" and get collected at all. Resolved relative to `root`. |
 | `exclude` | `['**/node_modules/**', '**/.git/**']` | Files never scanned regardless of `include`. |
-| `includeSource` | `[]` | Additional non-test source files scanned **only** for `import.meta.vitest` blocks (see [§8](in-source-testing.md)). Empty by default, in-source testing is entirely opt-in. |
+| `includeSource` | `[]` | Additional non-test source files scanned **only** for `import.meta.vitest` blocks (see [in-source testing](in-source-testing.md)). Empty by default, in-source testing is entirely opt-in. |
 | `benchmark.include` | `['**/*.{bench,benchmark}.?(c\|m)[jt]s?(x)']` | Legacy benchmark files collected independently of `include`. |
 | `benchmark.exclude` | `['node_modules', 'dist', '.idea', '.git', '.cache']` | Benchmark-file exclusions, independent of `exclude`. |
 | `benchmark.includeSource` | `[]` | Additional source files containing benchmarks; opt-in and independent of `includeSource`. |
@@ -23,7 +23,7 @@ any channel admits the file once. Custom test globs do not replace benchmark def
 benchmark globs do not replace test defaults, and the type-test defaults apply only when
 `typecheck.include` is not written.
 
-## 10. Projects / workspace
+## Projects and workspaces
 
 - Current mechanism: root `test.projects: (string | InlineProjectConfig)[]`. Entries can be:
   - glob strings matching directories containing a project config (`'packages/*'`), including
@@ -38,7 +38,7 @@ benchmark globs do not replace test defaults, and the type-test defaults apply o
   `tags` replaces rather than merges. Certain options (`coverage`, `reporters`,
   `resolveSnapshotPath`, `attachmentsDir`, and reportedly more per the "not supported inside a
   project" marker on the config reference pages) are **root-only** and cannot vary per project,
-  `UNVERIFIED` whether `globals` is on that restricted list; treat as project-overridable per [§7](availability-and-globals.md).
+  `UNVERIFIED` whether `globals` is on that restricted list; treat as project-overridable per [how the API becomes available](availability-and-globals.md#globals).
 - Legacy `vitest.workspace.{ts,js}` files are deprecated (since 3.2) but documented as still
   functionally equivalent to a `projects` array, the extractor should treat a discovered
   `vitest.workspace.*` the same as a root `projects` list.

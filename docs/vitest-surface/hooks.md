@@ -1,4 +1,4 @@
-# 5. Hooks
+# Hooks
 
 
 | Hook | Signature | Scope | Notes |
@@ -13,7 +13,7 @@
 ## `onTestFinished` and `onTestFailed` have two call forms
 
 Both are destructurable off
-`TestContext` (as shown in [§3](declarations.md)) *and* importable directly from `'vitest'` as named exports, the same
+`TestContext` (as shown in [signature variants](declarations.md#signature-variants)) *and* importable directly from `'vitest'` as named exports, the same
 shape as `beforeEach`/`afterEach`. Both forms throw if called outside a running test body. The
 docs explicitly warn the global/imported form is unsound under `.concurrent`: "If you are running
 tests concurrently, you should always use the `onTestFailed`/`onTestFinished` hook from the test

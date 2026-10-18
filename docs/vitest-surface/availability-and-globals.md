@@ -1,4 +1,4 @@
-# 7. How `describe`/`test`/etc. become available
+# How describe, test and the rest become available
 
 | Mode | Form | Notes |
 | --- | --- | --- |

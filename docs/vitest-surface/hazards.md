@@ -44,7 +44,7 @@
 11. **The mocking family is modelled only where hoisting makes a file-wide answer sound**:
     `collect_mocked_modules` folds module-top-level `vi.mock`/`vi.unmock` with string-literal
     specifiers into one mock set (last in source order wins per specifier, verified against a real
-    Vitest 5 run, see [§12](module-mocking.md)), and taints the whole file for everything else: the non-hoisted
+    Vitest 5 run, see [module mocking](module-mocking.md)), and taints the whole file for everything else: the non-hoisted
     `vi.doMock`/`vi.doUnmock`, an unreadable specifier or factory, and **any** of the four called
     outside module top level. A tainted file's tests are excluded from comparison entirely, which
     trades a possible false duplicate for a certain false negative, the same direction throughout.
@@ -52,7 +52,7 @@
     `vi.mock` found inside a `describe`, a test body, or an `if` must not be recorded as file-wide.
     Vitest 5 refuses to run such a file at all (`vitest:mocks`: "defined outside of the module's
     top level scope"), so there is no runtime context there to model, including in the
-    conditional case, where the call is hoisted out of the branch. See [§12](module-mocking.md) for the full table and
+    conditional case, where the call is hoisted out of the branch. See [module mocking](module-mocking.md) for the full table and
     `fixtures/edge/vi-unmock-file-wide.test.ts` / `vi-dounmock-scoped.test.ts`, which demonstrate
     the modelled and tainted shapes respectively, and the
     `fixtures/duplicates/not-duplicates-mock-then-unmock*` pair, which asserts the mocked and
