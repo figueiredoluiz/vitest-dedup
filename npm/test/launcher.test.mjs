@@ -6,9 +6,10 @@
 // as exit code 1, which is reserved for "the quality gate failed".
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { chmod, mkdir, mkdtemp, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, mkdtemp, readFile, readdir, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 import { TARGETS, detectLibc, resolveBinary, run, targetFor } from '../lib/launcher.mjs'
 
@@ -49,7 +50,7 @@ test('windows targets carry the .exe binary name', () => {
 test('an unsupported platform is named, not stack-traced', () => {
   assert.throws(
     () => targetFor('freebsd', 'x64'),
-    /unsupported platform freebsd-x64.*darwin-arm64.*win32-x64.*cargo install/s,
+    /unsupported platform freebsd-x64.*darwin-arm64.*win32-x64.*cargo install vitest-dedup/s,
   )
   // A 32-bit linux host is the realistic case: supported platform, unsupported architecture.
   assert.throws(() => targetFor('linux', 'ia32', 'gnu'), /unsupported platform linux-ia32-gnu/)
@@ -207,4 +208,19 @@ test('a signalled analyzer reports the shell convention, not a quality-gate fail
     130,
   )
   assert.match(diagnostic, /terminated by SIGINT/)
+})
+
+// Supply-chain scanners flag a URL or IP address literal in a package's code as something it may
+// fetch at runtime. The launcher fetches nothing, so none of its shipped code carries one.
+test('the shipped launcher code contains no URL or IP address literal', async () => {
+  const root = join(dirname(fileURLToPath(import.meta.url)), '..')
+  const files = []
+  for (const directory of ['bin', 'lib']) {
+    for (const name of await readdir(join(root, directory))) files.push(join(root, directory, name))
+  }
+  assert.ok(files.length >= 3, `expected the launcher files, found ${files.length}`)
+  for (const file of files) {
+    const source = await readFile(file, 'utf8')
+    assert.doesNotMatch(source, /\bhttps?:\/\/|\b\d{1,3}(?:\.\d{1,3}){3}\b/, `${file} carries a URL or IP address literal`)
+  }
 })

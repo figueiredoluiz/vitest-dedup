@@ -63,7 +63,7 @@ export function targetFor(
     throw new Error(
       `unsupported platform ${host}; vitest-dedup publishes prebuilt binaries for ` +
         `${Object.keys(TARGETS).join(', ')}. Build from source with ` +
-        '`cargo install --git https://github.com/figueiredoluiz/vitest-dedup` instead.',
+        '`cargo install vitest-dedup` instead.',
     )
   }
   return target
