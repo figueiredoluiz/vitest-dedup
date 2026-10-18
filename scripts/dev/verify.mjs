@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // Git hooks verify immutable snapshots, never the caller's unstaged files.
 import { execFileSync, spawnSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { existsSync, realpathSync, readdirSync, symlinkSync, unlinkSync, mkdirSync, mkdtempSync, openSync, closeSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
@@ -162,18 +163,42 @@ function validateSnapshotLinks(snapshot) {
 }
 
 /**
+ * Derive a short stable name for a repository from its common Git directory.
+ * Worktrees of one repository share the directory, and so the name; separate clones do not.
+ * @param {string} common Common Git directory of the repository.
+ * @returns {string} Twelve hex characters.
+ */
+export function repositoryKey(common) {
+  return createHash('sha256').update(realpathSync(common)).digest('hex').slice(0, 12)
+}
+
+/**
  * Export the index or a commit, validate links/whitespace, then check synchronously.
  * Include skip-worktree entries without changing the source index or sparse selection.
- * The temporary repository and commit index are removed on success or failure.
+ * The export directory and commit index are removed on success or failure; a fixed directory is
+ * also cleared of anything an interrupted run left before the export starts.
  * @template T
  * @param {string} root Source repository directory.
  * @param {string|null} revision Commit-ish, or null to export the staged index.
  * @param {(snapshot: string) => T} check Synchronous consumer of the exported source.
  * @param {NodeJS.ProcessEnv} [env] Environment used to access the source repository.
+ * @param {string|null} [work] Fixed export directory, under a parent the caller owns; null
+ *   creates a fresh temporary one.
  * @returns {T} The check's result; errors propagate after cleanup.
  */
-export function withSnapshot(root, revision, check, env = process.env) {
-  const work = mkdtempSync(join(tmpdir(), 'vitest-dedup-hook-'))
+export function withSnapshot(root, revision, check, env = process.env, work = null) {
+  if (work) {
+    // Private like `mkdtemp`'s directory: the export holds staged source other users cannot read.
+    // The name is predictable, so the directory is created exclusively: one that appears between
+    // the removal and the creation belongs to someone else and fails the run instead of receiving
+    // the export.
+    try {
+      rmSync(work, { recursive: true, force: true })
+      mkdirSync(work, { mode: 0o700 })
+    } catch (error) {
+      throw new Error(`Cannot prepare the hook export directory ${work}: ${error.message}. If another user owns it, point XDG_RUNTIME_DIR or TMPDIR at a private directory.`)
+    }
+  } else work = mkdtempSync(join(tmpdir(), 'vitest-dedup-hook-'))
   const snapshot = join(work, 'source')
   mkdirSync(snapshot)
   try {
@@ -254,7 +279,7 @@ export function withLock(common, body) {
   try { mkdirSync(lock) }
   catch (error) {
     if (error.code !== 'EEXIST') throw error
-    throw new Error(`Repository verification is already running. Lock: ${lock}. If its recorded process has exited, remove the stale lock and retry.`)
+    throw new Error(`Repository verification is already running. Lock: ${lock}. If its recorded process and the checks it spawned have all exited, remove the stale lock and retry.`)
   }
   try {
     writeFileSync(join(lock, 'owner'), `pid=${process.pid}\n`)
@@ -282,8 +307,10 @@ export function installHooks(root) {
 
 /**
  * Dispatch manual checks, staged/commit snapshot verification, or hook installation.
- * Manual modes check the checkout; hook modes check isolated exports under one lock.
- * Deletion-only pushes run no checks. Check logs are retained in the common Git directory.
+ * Manual modes check the checkout in its cache; hook modes check isolated exports under one lock,
+ * building in `hook-snapshot` beneath that cache so no artifact crosses between a snapshot and
+ * the checkout. Deletion-only pushes run no checks. Check logs are retained in the common Git
+ * directory.
  * @param {string[]} [args] Mode followed by optional pre-push remote arguments.
  * @param {object} [options] Caller environment, ref input, check/print adapters, and root.
  * @returns {void}
@@ -307,6 +334,28 @@ export function main(args = process.argv.slice(2), { env = process.env, input, c
     }
     const paths = git(root, ['diff', '--cached', '--no-renames', '--name-only', '--diff-filter=ACDMRT', '-z'], env).split('\0').filter(Boolean)
     const revisions = mode === 'pre-commit' ? [null] : commits
+    // Snapshots never build in the checkout's cache: a test binary bakes its export's
+    // `CARGO_MANIFEST_DIR`, and Cargo would hand it to the checkout once the export is gone. The
+    // cache is keyed by repository so two clones sharing one external cache cannot trade binaries
+    // either, and the caller's coverage and separate build directories are not honored: an
+    // instrumented binary is the same artifact class, and `build.build-dir` is where the
+    // fingerprints live, so a shared one defeats separate target directories. cargo-llvm-cov
+    // forwards its own build-directory variable to Cargo the same way.
+    //
+    // Every snapshot of the repository is exported to one fixed directory. Cargo names artifacts
+    // by their path relative to the workspace root and judges freshness by mtime, so a test binary
+    // built in one export could be reused by a later export with older files, carrying the first
+    // export's baked `CARGO_MANIFEST_DIR`; one path makes a reused artifact point at the current
+    // export, and the lock above keeps two runs from sharing it. The directory sits where the
+    // temporary one always did, outside the checkout: Cargo reads configuration and the discovery
+    // walker reads ignore files from every ancestor, so an export under the checkout or the home
+    // directory would see the caller's unstaged `.cargo/config.toml` or `~/.gitignore`. The
+    // user's runtime directory is private where a shared `/tmp` is not.
+    const key = repositoryKey(common)
+    const hookCache = join(cache, 'hook-snapshot', key)
+    const coverage = join(hookCache, 'llvm-cov-target')
+    const hookEnv = { ...runEnv, CARGO_TARGET_DIR: hookCache, CARGO_BUILD_BUILD_DIR: hookCache, CARGO_LLVM_COV_TARGET_DIR: coverage, CARGO_LLVM_COV_BUILD_DIR: coverage }
+    const work = join(env.XDG_RUNTIME_DIR || tmpdir(), `vitest-dedup-hook-${key}`)
     for (const [i, revision] of revisions.entries()) {
       print(revision ? `Verifying proposed commit ${revision}` : 'Verifying the staged index')
       mkdirSync(logs, { recursive: true })
@@ -314,8 +363,8 @@ export function main(args = process.argv.slice(2), { env = process.env, input, c
       writeFileSync(docDiff, scopeDiff(root, { revision: revision ?? undefined, staged: !revision, env }))
       withSnapshot(root, revision, snapshot => {
         // Full push verification includes coverage: a new ref may have no available remote base.
-        withNodeModules(snapshot, root, () => withTargetCache(snapshot, cache, () => check(snapshot, commands(mode === 'pre-commit' ? 'fast' : 'full', revision ? true : rustChanged(paths), docDiff), { env: runEnv, logRoot: join(logs, String(i)), print })))
-      }, env)
+        withNodeModules(snapshot, root, () => withTargetCache(snapshot, hookCache, () => check(snapshot, commands(mode === 'pre-commit' ? 'fast' : 'full', revision ? true : rustChanged(paths), docDiff), { env: hookEnv, logRoot: join(logs, String(i)), print })))
+      }, env, work)
     }
   })
   print(`Verification complete. Logs: ${logs}`)

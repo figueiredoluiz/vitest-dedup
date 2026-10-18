@@ -111,13 +111,25 @@ are local safeguards; CI remains authoritative and Git can bypass them.
 - A repository lock prevents two instances of this runner from sharing Cargo concurrently; other
   Cargo invocations must still be serialized by hand. A killed process can leave
   `delivery-check.lock` behind. Inspect its recorded PID and remove it only after confirming that
-  process has exited.
+  process and the checks it spawned (Cargo, Node) have all exited: the next hook run clears the
+  shared export directory, which a surviving check could still be reading.
 - By default, worktrees share the main checkout's `target/` and `target/llvm-cov-target/`, and
-  explicit Cargo target environment variables are respected. Temporary target links let the corpus
-  gates use the binary built in that cache, which avoids a cold dependency build per snapshot. An
-  existing target directory pointing elsewhere is rejected, and a cache nested inside the checkout's
+  explicit Cargo target environment variables are respected by the manual profiles. An existing
+  target directory pointing elsewhere is rejected, and a cache nested inside the checkout's
   `target/` is refused before any directory is created; choose `target/` itself or an external
   cache.
+- Hook snapshots build in `hook-snapshot/<repository>/` beneath that cache, never in the
+  checkout's own cache and never in a configured coverage or separate build directory: a test
+  binary bakes the path it was built in, and Cargo would otherwise hand a binary built in a deleted
+  snapshot to the next checkout run, or to another clone sharing the cache. Every snapshot of a
+  repository is exported to the same private directory under `XDG_RUNTIME_DIR`, or the system
+  temporary directory without one, so a reused artifact always points at the current export; the
+  export stays outside the checkout because Cargo and the discovery walker read configuration and
+  ignore files from every ancestor directory. On a host whose temporary directory is shared,
+  another user could hold that name; the run then fails naming the directory, and `TMPDIR` or
+  `XDG_RUNTIME_DIR` selects a private one. The first hook run after a fresh clone builds the
+  dependency tree into that cache once; a temporary target link lets the corpus gates reuse it on
+  later runs.
 
 ## Rust coverage before merge
 

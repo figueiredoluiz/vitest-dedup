@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict'
 import { execFileSync, spawnSync } from 'node:child_process'
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, realpathSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, realpathSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { basename, delimiter, join, resolve } from 'node:path'
+import { basename, delimiter, dirname, join, resolve, sep } from 'node:path'
 import { test } from 'node:test'
-import { cleanEnvironment, commands, installHooks, main, pushCommits, runSteps, rustChanged, withLock, withNodeModules, withSnapshot, withTargetCache } from './verify.mjs'
+import { cleanEnvironment, commands, installHooks, main, pushCommits, repositoryKey, runSteps, rustChanged, withLock, withNodeModules, withSnapshot, withTargetCache } from './verify.mjs'
 import { coverage } from '../check/check-docstrings.mjs'
 
 const oid = 'a'.repeat(40)
@@ -306,10 +306,11 @@ test('pre-commit checks staged Rust, pre-push checks the specified commit, and d
   const env = { ...process.env }
   delete env.CARGO_TARGET_DIR
   delete env.CARGO_LLVM_COV_TARGET_DIR
+  const hookCache = join(root, 'target/hook-snapshot', repositoryKey(join(root, '.git')))
   const check = (snapshot, steps, options) => {
     snapshots.push(snapshot)
-    assert.equal(options.env.CARGO_TARGET_DIR, join(root, 'target'))
-    assert.equal(options.env.CARGO_LLVM_COV_TARGET_DIR, join(root, 'target/llvm-cov-target'))
+    assert.equal(options.env.CARGO_TARGET_DIR, hookCache)
+    assert.equal(options.env.CARGO_LLVM_COV_TARGET_DIR, join(hookCache, 'llvm-cov-target'))
     assert.ok(steps.some(step => step[1] === 'clippy'))
   }
   writeFileSync(join(root, 'test.rs'), 'fn main() {}\n'); git(root, 'add', 'test.rs')
@@ -318,8 +319,81 @@ test('pre-commit checks staged Rust, pre-push checks the specified commit, and d
   main(['pre-push', 'origin', 'url'], { root, env, input: `ref ${revision} remote ${zero}`, check, print: line => output.push(line) })
   assert.equal(snapshots.length, 2)
   assert.ok(snapshots.every(p => !existsSync(p)))
+  assert.equal(snapshots[0], snapshots[1])
   main(['pre-push'], { root, env, input: `ref ${zero} remote ${revision}`, check: () => assert.fail(), print: line => output.push(line) })
   assert.match(output.at(-1), /No commits/)
+}))
+
+test('hook snapshots build beneath the configured cache in a directory the checkout never uses', () => fixture(root => {
+  // A snapshot's test binary bakes the export path; sharing the checkout's cache hands that
+  // binary to a later checkout run after the export is gone (backlog D4). The coverage directory
+  // is derived from the hook cache too, an instrumented binary being the same artifact class, and
+  // so is Cargo's separate build directory: a shared one holds the fingerprints and deps that make
+  // the target directory split meaningless (measured with a toy crate, cargo 1.98.1).
+  const shared = join(root, 'shared-build')
+  const env = { ...process.env, CARGO_TARGET_DIR: 'cache', CARGO_LLVM_COV_TARGET_DIR: 'coverage', CARGO_BUILD_BUILD_DIR: shared, CARGO_LLVM_COV_BUILD_DIR: shared }
+  const key = repositoryKey(join(root, '.git'))
+  const hookCache = join(root, 'cache/hook-snapshot', key)
+  writeFileSync(join(root, 'test.rs'), 'fn main() {}\n'); git(root, 'add', 'test.rs')
+  let checked = false
+  main(['pre-commit'], { root, env, print: () => {}, check: (snapshot, _steps, options) => {
+    checked = true
+    // The export stays outside the checkout, where no unstaged Cargo config or ignore file of the
+    // caller's is an ancestor, in the private runtime directory when the platform has one.
+    assert.equal(snapshot, join(env.XDG_RUNTIME_DIR || tmpdir(), `vitest-dedup-hook-${key}`, 'source'))
+    assert.equal(options.env.CARGO_TARGET_DIR, hookCache)
+    assert.equal(options.env.CARGO_BUILD_BUILD_DIR, hookCache)
+    assert.equal(options.env.CARGO_LLVM_COV_TARGET_DIR, join(hookCache, 'llvm-cov-target'))
+    assert.equal(options.env.CARGO_LLVM_COV_BUILD_DIR, join(hookCache, 'llvm-cov-target'))
+    assert.equal(realpathSync(join(snapshot, 'target')), realpathSync(hookCache))
+    assert.notEqual(realpathSync(join(snapshot, 'target')), realpathSync(join(root, 'cache')))
+    // The export is private, as `mkdtemp`'s directory was before the path became fixed.
+    if (process.platform !== 'win32') assert.equal(statSync(dirname(snapshot)).mode & 0o777, 0o700)
+  } })
+  assert.ok(checked)
+  assert.ok(existsSync(hookCache), 'the hook cache outlives the run so dependencies stay warm')
+  assert.equal(existsSync(join(root, 'coverage')), false)
+  assert.equal(existsSync(join(root, 'shared-build')), false)
+}))
+
+test('one repository exports every hook snapshot to one cleared directory and one cache; another repository gets its own', () => fixture(root => fixture(other => {
+  const seen = []; const caches = []
+  const run = (where) => main(['pre-commit'], { root: where, env: { ...process.env, CARGO_TARGET_DIR: join(root, 'external') }, print: () => {}, check: (snapshot, _steps, options) => {
+    seen.push(snapshot); caches.push(options.env.CARGO_TARGET_DIR)
+    assert.equal(existsSync(join(snapshot, 'leftover')), false, 'an interrupted run leaves nothing behind for the next export')
+  } })
+  run(root)
+  // Simulate an interrupted run: the export directory survives with a file no checkout tracks.
+  mkdirSync(seen[0], { recursive: true })
+  writeFileSync(join(seen[0], 'leftover'), 'from a killed run')
+  run(root)
+  run(other)
+  assert.equal(seen[0], seen[1])
+  assert.notEqual(seen[0], seen[2])
+  assert.ok(seen.every(p => !existsSync(p)))
+  // Two clones pointed at one external cache still build apart: Cargo would otherwise let the
+  // clone with older files reuse the other clone's binary once that export is gone.
+  assert.equal(caches[0], caches[1])
+  assert.notEqual(caches[0], caches[2])
+  for (const cache of caches) assert.ok(cache.startsWith(join(root, 'external', 'hook-snapshot') + sep), cache)
+})))
+
+test('hook exports prefer the private runtime directory and fail clearly when the fixed directory is not ours', { skip: process.platform === 'win32' && 'POSIX permissions' }, () => fixture(root => {
+  const runtime = join(root, 'runtime')
+  mkdirSync(runtime)
+  const env = { ...process.env, XDG_RUNTIME_DIR: runtime }
+  let snapshot
+  main(['pre-commit'], { root, env, print: () => {}, check: s => { snapshot = s } })
+  assert.equal(dirname(dirname(snapshot)), runtime)
+  if (typeof process.getuid === 'function' && process.getuid() === 0) return
+  // A directory at the fixed path that cannot be cleared stands in for one another user owns:
+  // the run must name it and the remedy rather than export beside or into it.
+  const taken = dirname(snapshot)
+  mkdirSync(join(taken, 'held'), { recursive: true })
+  chmodSync(taken, 0o500)
+  try {
+    assert.throws(() => main(['pre-commit'], { root, env, print: () => {}, check: () => assert.fail('exported into a directory it could not prepare') }), /Cannot prepare the hook export directory .*XDG_RUNTIME_DIR or TMPDIR/)
+  } finally { chmodSync(taken, 0o700) }
 }))
 
 test('manual profiles preserve configured caches; invalid usage fails', () => fixture(root => {
