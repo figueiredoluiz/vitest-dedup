@@ -221,7 +221,7 @@ you expected to match did not, diff those three to see which one disagrees.
 | Field | Meaning |
 | --- | --- |
 | `registrationFile` | Optional caller path when different from the declaration's `path`; otherwise `path` also identifies the registering file. |
-| `alpha` | Identifiers normalized to their resolved symbol; literal values preserved. |
+| `alpha` | Identifiers normalized to their resolved symbol; literal values preserved, except inert literal-data properties that a `const` object destructure does not select from its own object-literal initializer. |
 | `structural` | `alpha` with literal values collapsed to their kind. |
 | `behavior` | The ordered behavior events: callee paths, assertions, awaits, control flow. |
 | `trivial` | The body is empty or a recognized stub, and is excluded from comparison whatever the hashes say. |

@@ -257,10 +257,10 @@ use oxc_ast::ast::{
     IdentifierReference, IfStatement, ImportDeclarationSpecifier, JSXAttributeItem,
     JSXAttributeName, JSXAttributeValue, JSXChild, JSXElement, JSXElementName, JSXFragment,
     JSXMemberExpressionObject, ModuleExportName, NewExpression, ObjectPattern, ObjectPropertyKind,
-    PrivateFieldExpression, PropertyKey, SimpleAssignmentTarget, Statement, StaticMemberExpression,
-    SwitchCase, SwitchStatement, TSInstantiationExpression, TSTypeParameterInstantiation,
-    TaggedTemplateExpression, TemplateLiteral, TryStatement, VariableDeclaration,
-    VariableDeclarationKind, VariableDeclarator, WhileStatement,
+    PrivateFieldExpression, PropertyKey, PropertyKind, SimpleAssignmentTarget, Statement,
+    StaticMemberExpression, SwitchCase, SwitchStatement, TSInstantiationExpression,
+    TSTypeParameterInstantiation, TaggedTemplateExpression, TemplateLiteral, TryStatement,
+    VariableDeclaration, VariableDeclarationKind, VariableDeclarator, WhileStatement,
 };
 use oxc_ast_visit::{walk, Visit};
 use oxc_parser::Parser;
@@ -1552,6 +1552,69 @@ fn statement_has_effect_at(statement: &Statement<'_>, depth: u32) -> bool {
         // are conservatively treated as a possible effect: only the shapes explicitly recognized
         // above are known safe.
         _ => true,
+    }
+}
+
+/// Whether an expression is provably inert data: dropping it cannot change what a body does.
+///
+/// Stricter than [`expression_has_effect`] on purpose. That oracle treats identifier and
+/// member reads as pure for the statements it keeps, but an expression this serializer is
+/// about to *erase* can still throw (a TDZ read) or run a getter. Only literal data --
+/// scalars, pure templates, and arrays/objects of literal data -- may be dropped.
+///
+/// `coerced` marks a template substitution, which is converted to a string: that runs
+/// `toString`/`valueOf` on an object, array or regular expression and can throw, so only
+/// primitive data is inert there.
+fn pure_literal(expr: &Expression<'_>, depth: u32, coerced: bool) -> bool {
+    if depth > MAX_DEPTH {
+        return false;
+    }
+    match expr {
+        Expression::BooleanLiteral(_)
+        | Expression::NullLiteral(_)
+        | Expression::NumericLiteral(_)
+        | Expression::BigIntLiteral(_)
+        | Expression::StringLiteral(_) => true,
+        Expression::RegExpLiteral(_) => !coerced,
+        Expression::TemplateLiteral(template) => template
+            .expressions
+            .iter()
+            .all(|inner| pure_literal(inner, depth + 1, true)),
+        Expression::ArrayExpression(array) => {
+            !coerced
+                && array.elements.iter().all(|element| {
+                    element
+                        .as_expression()
+                        .is_some_and(|inner| pure_literal(inner, depth + 1, false))
+                })
+        }
+        Expression::ObjectExpression(object) => {
+            !coerced
+                && object.properties.iter().all(|property| {
+                    let ObjectPropertyKind::ObjectProperty(property) = property else {
+                        return false;
+                    };
+                    property.kind == PropertyKind::Init
+                        && !property.computed
+                        && !property.method
+                        && !property.shorthand
+                        && property_key_name(&property.key).is_some_and(|key| key != "__proto__")
+                        && pure_literal(&property.value, depth + 1, false)
+                })
+        }
+        Expression::ParenthesizedExpression(parenthesized) => {
+            pure_literal(&parenthesized.expression, depth + 1, coerced)
+        }
+        Expression::TSAsExpression(as_expression) => {
+            pure_literal(&as_expression.expression, depth + 1, coerced)
+        }
+        Expression::TSSatisfiesExpression(satisfies) => {
+            pure_literal(&satisfies.expression, depth + 1, coerced)
+        }
+        Expression::TSNonNullExpression(non_null) => {
+            pure_literal(&non_null.expression, depth + 1, coerced)
+        }
+        _ => false,
     }
 }
 
@@ -3186,11 +3249,7 @@ impl<'a, 'b, 's, 'm> Serializer<'a, 'b, 's, 'm> {
             VariableDeclarationKind::Using => "using",
             VariableDeclarationKind::AwaitUsing => "await-using",
         };
-        let declarators: Vec<String> = declaration
-            .declarations
-            .iter()
-            .map(|declarator| self.ser_declarator(declarator, depth + 1))
-            .collect();
+        let declarators = self.ser_declarators(declaration, depth);
         format!("({kind} {})", declarators.join(" "))
     }
 
@@ -3202,11 +3261,7 @@ impl<'a, 'b, 's, 'm> Serializer<'a, 'b, 's, 'm> {
         }
         match left {
             ForStatementLeft::VariableDeclaration(declaration) => {
-                let declarators: Vec<String> = declaration
-                    .declarations
-                    .iter()
-                    .map(|declarator| self.ser_declarator(declarator, depth + 1))
-                    .collect();
+                let declarators = self.ser_declarators(declaration, depth);
                 format!("(decl {})", declarators.join(" "))
             }
             ForStatementLeft::AssignmentTargetIdentifier(ident) => {
@@ -3228,16 +3283,117 @@ impl<'a, 'b, 's, 'm> Serializer<'a, 'b, 's, 'm> {
         }
     }
 
+    /// Render every declarator of a declaration; only `const` ones may drop unselected siblings.
+    fn ser_declarators(
+        &mut self,
+        declaration: &VariableDeclaration<'a>,
+        depth: u32,
+    ) -> Vec<String> {
+        let is_const = declaration.kind == VariableDeclarationKind::Const;
+        declaration
+            .declarations
+            .iter()
+            .map(|declarator| self.ser_declarator(declarator, depth + 1, is_const))
+            .collect()
+    }
+
     /// Render a declared binding pattern and any initializer expression.
-    fn ser_declarator(&mut self, declarator: &VariableDeclarator<'a>, depth: u32) -> String {
+    fn ser_declarator(
+        &mut self,
+        declarator: &VariableDeclarator<'a>,
+        depth: u32,
+        is_const: bool,
+    ) -> String {
         if depth > MAX_DEPTH {
             return self.degraded(declarator.span);
         }
         let pattern = self.ser_binding_pattern(&declarator.id, depth + 1);
         match &declarator.init {
-            Some(init) => format!("(decl {pattern} {})", self.ser_expr(init, depth + 1)),
+            Some(init) => {
+                let selected = if is_const {
+                    self.ser_selected_object_init(&declarator.id, init, depth + 1)
+                } else {
+                    None
+                };
+                match selected {
+                    Some(selected) => format!("(decl {pattern} {selected})"),
+                    None => format!("(decl {pattern} {})", self.ser_expr(init, depth + 1)),
+                }
+            }
             None => format!("(decl {pattern})"),
         }
+    }
+
+    /// Render a const object destructure's initializer keeping only the properties its pattern
+    /// selects: a property no binding can read is dead data, so `{ v: 1, w: 5 }` under
+    /// `const { v } = ...` serializes like `{ v: 1 }` -- the declaration-side half of the
+    /// invariance the class-capture path's `(selected key value)` rendering already carries.
+    ///
+    /// Refuses -- falling back to the full literal -- every shape whose dropped parts could
+    /// matter: non-static or repeated keys, spreads, accessors, methods, shorthand,
+    /// `__proto__`, rest or non-identifier pattern properties, non-`const` declarations, and
+    /// any unselected value that is not provably inert data ([`pure_literal`]), and any selected
+    /// key the literal does not define itself. An exact-match
+    /// object, with nothing to drop, renders byte-identically to the full form.
+    fn ser_selected_object_init(
+        &mut self,
+        pattern: &BindingPattern<'a>,
+        init: &Expression<'a>,
+        depth: u32,
+    ) -> Option<String> {
+        let BindingPattern::ObjectPattern(pattern) = pattern else {
+            return None;
+        };
+        if pattern.rest.is_some()
+            || pattern.properties.is_empty()
+            || pattern.properties.iter().any(|property| {
+                property.computed || !matches!(property.value, BindingPattern::BindingIdentifier(_))
+            })
+        {
+            return None;
+        }
+        let selected: HashSet<String> = pattern
+            .properties
+            .iter()
+            .map(|property| property_key_name(&property.key))
+            .collect::<Option<_>>()?;
+        let Expression::ObjectExpression(object) = init else {
+            return None;
+        };
+        let mut seen = HashSet::new();
+        let mut present = 0;
+        let mut kept: Vec<&ObjectPropertyKind<'a>> = Vec::new();
+        for kind in &object.properties {
+            let ObjectPropertyKind::ObjectProperty(property) = kind else {
+                return None;
+            };
+            let key = property_key_name(&property.key)?;
+            if property.kind != PropertyKind::Init
+                || property.computed
+                || property.method
+                || property.shorthand
+                || key == "__proto__"
+                || !seen.insert(key.clone())
+            {
+                return None;
+            }
+            if selected.contains(&key) {
+                present += 1;
+                kept.push(kind);
+            } else if !pure_literal(&property.value, 0, false) {
+                return None;
+            }
+        }
+        // A selected key the literal lacks falls through to the prototype chain, where an
+        // inherited getter can read the very siblings being dropped.
+        if present != selected.len() {
+            return None;
+        }
+        let properties: Vec<String> = kept
+            .iter()
+            .map(|property| self.ser_object_property(property, depth))
+            .collect();
+        Some(format!("(object {})", properties.join(" ")))
     }
 
     /// Render the optional catch binding and ordered handler statements.
@@ -8649,6 +8805,111 @@ test('x', () => { const w = 1; f(w); });"#;
             prints[0].structural, prints[1].structural,
             "a number and a string must never collapse to the same structural shape"
         );
+    }
+
+    /// Unselected literal siblings are dead data: a const object destructure serializes by
+    /// what its pattern selects, the declaration-side half of the invariance the class-capture
+    /// path's `(selected key value)` rendering carries.
+    ///
+    /// The refusal controls are load-bearing: anything not provably inert -- a call, a
+    /// computed key, a spread, a getter -- keeps the full literal, so a body whose dropped
+    /// property evaluates something stays distinct from one whose does not.
+    #[test]
+    fn unselected_literal_siblings_do_not_change_a_const_destructure() {
+        for (name, bare, sibling) in [
+            (
+                "scalar",
+                "const { v } = { v: 1 };",
+                "const { v } = { v: 1, w: 5 };",
+            ),
+            (
+                "string",
+                "const { v } = { v: 'a' };",
+                "const { v } = { v: 'a', w: 'b' };",
+            ),
+            (
+                "nested data",
+                "const { v } = { v: 1 };",
+                "const { v } = { v: 1, w: { deep: 2 } };",
+            ),
+            (
+                "scalar template",
+                "const { v } = { v: 1 };",
+                "const { v } = { v: 1, w: `a${1}b${'c'}` };",
+            ),
+        ] {
+            assert_eq!(
+                alpha_of(bare),
+                alpha_of(sibling),
+                "{name}: dead data the pattern cannot read is not identity"
+            );
+            assert_eq!(
+                structural_of(bare),
+                structural_of(sibling),
+                "{name}: ...at either serialization level"
+            );
+        }
+
+        // The selected value stays load-bearing: one edit (v: 1 -> v: 2) must separate them.
+        assert_ne!(
+            alpha_of("const { v } = { v: 1 };"),
+            alpha_of("const { v } = { v: 2 };")
+        );
+
+        // Everything the erasure refuses keeps today's full-literal rendering.
+        for (name, left, right) in [
+            (
+                "effectful value",
+                "const { v } = { v: 1 };",
+                "const { v } = { v: 1, w: f() };",
+            ),
+            (
+                "computed key",
+                "const { v } = { v: 1 };",
+                "const { v } = { v: 1, [k]: 2 };",
+            ),
+            (
+                "spread",
+                "const { v } = { v: 1 };",
+                "const { v } = { v: 1, ...rest };",
+            ),
+            (
+                "accessor",
+                "const { v } = { v: 1 };",
+                "const { v } = { v: 1, get w() { return 2 } };",
+            ),
+            (
+                "non-const declaration",
+                "let { v } = { v: 1 };",
+                "let { v } = { v: 1, w: 5 };",
+            ),
+            (
+                "pattern rest",
+                "const { v, ...rest } = { v: 1, w: 5 };",
+                "const { v, ...rest } = { v: 1, w: 6 };",
+            ),
+            (
+                "template coercion that can throw",
+                "const { v } = { v: 1 };",
+                "const { v } = { v: 1, w: `${{ toString: 0 }}` };",
+            ),
+            (
+                "regexp template coercion",
+                "const { v } = { v: 1 };",
+                "const { v } = { v: 1, w: `${/x/}` };",
+            ),
+            (
+                "selected key absent",
+                "const { v } = {};",
+                "const { v } = { w: 5 };",
+            ),
+        ] {
+            assert_ne!(
+                alpha_of(left),
+                alpha_of(right),
+                "{name}: the refusal keeps the dropped part visible"
+            );
+        }
     }
 
     /// The `walk_stmt`/`walk_expr` half of the same problem: an arm's job there is to *descend*,

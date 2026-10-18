@@ -226,6 +226,9 @@ fn selected_literal<'a>(
     symbol: SymbolId,
 ) -> Option<(String, &'a Expression<'a>)> {
     let nodes = semantic.nodes();
+    if nodes.iter().len() == 0 {
+        return None;
+    }
     let declaration = nodes.get_node(semantic.scoping().symbol_declaration(symbol));
     let declarator = match declaration.kind() {
         AstKind::VariableDeclarator(declarator) => {
@@ -2566,5 +2569,59 @@ impl<'a, 'b, 's, 'm> Serializer<'a, 'b, 's, 'm> {
                 serde_json::to_string(&environment).expect("definition environment serializes")
             )
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use oxc_ast::ast::BindingPattern;
+    use oxc_semantic::SemanticBuilder;
+    use std::path::Path;
+
+    /// `selected_literal` must refuse a semantic built without nodes exactly as `initializer`
+    /// and `value_at` do: `AstNodes::get_node` indexes a vector, so on an empty node table it
+    /// panics rather than degrading to an unresolved capture.
+    ///
+    /// Every production `SemanticBuilder` sets `with_build_nodes(true)`; this pins the
+    /// contract for node-less callers -- this crate's own harnesses build such semantics, and
+    /// a future diagnostic path must keep costing one unresolved capture, not a panic.
+    #[test]
+    fn selected_literal_refuses_a_node_less_semantic_instead_of_panicking() {
+        let allocator = Allocator::default();
+        let source = "const { chosen } = { chosen: 1 };";
+        let source_type = SourceType::from_path(Path::new("case.test.ts")).unwrap();
+        let parsed = Parser::new(&allocator, source, source_type).parse();
+        assert!(!parsed.fatal_error, "fixture failed to parse: {source}");
+        let program = &parsed.program;
+        let semantic = SemanticBuilder::new().build(program).semantic;
+        assert_eq!(
+            semantic.nodes().iter().len(),
+            0,
+            "precondition: the semantic was built without nodes"
+        );
+
+        let Statement::VariableDeclaration(declaration) = &program.body[0] else {
+            panic!("expected a variable declaration");
+        };
+        let BindingPattern::ObjectPattern(pattern) = &declaration.declarations[0].id else {
+            panic!("expected an object destructuring pattern");
+        };
+        let BindingPattern::BindingIdentifier(binding) = &pattern.properties[0].value else {
+            panic!("expected a plain binding property");
+        };
+        let symbol = binding
+            .symbol_id
+            .get()
+            .expect("scoping binds the destructured name");
+
+        assert!(
+            selected_literal(&semantic, symbol).is_none(),
+            "a node-less semantic must refuse the selected literal"
+        );
+        assert!(
+            initializer(&semantic, symbol).is_none(),
+            "...and the guarded sibling keeps the same refusal contract"
+        );
     }
 }
