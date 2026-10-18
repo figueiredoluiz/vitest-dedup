@@ -47,11 +47,14 @@ test('windows targets carry the .exe binary name', () => {
   assert.equal(targetFor('win32', 'arm64').packageName, 'vitest-dedup-windows-arm64-msvc')
 })
 
-test('an unsupported platform is named, not stack-traced', () => {
+test('an unsupported platform is named, not stack-traced', async () => {
   assert.throws(
     () => targetFor('freebsd', 'x64'),
-    /unsupported platform freebsd-x64.*darwin-arm64.*win32-x64.*cargo install vitest-dedup/s,
+    /unsupported platform freebsd-x64.*darwin-arm64.*win32-x64.*cargo install vitest-dedup@\d+\.\d+\.\d+/s,
   )
+  // The source-build hint names this launcher's own version, never "whatever is newest".
+  const { version } = JSON.parse(await readFile(join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'package.json'), 'utf8'))
+  assert.throws(() => targetFor('freebsd', 'x64'), new RegExp(`cargo install vitest-dedup@${version.replace(/\./g, '\\.')}`))
   // A 32-bit linux host is the realistic case: supported platform, unsupported architecture.
   assert.throws(() => targetFor('linux', 'ia32', 'gnu'), /unsupported platform linux-ia32-gnu/)
 })
@@ -212,15 +215,32 @@ test('a signalled analyzer reports the shell convention, not a quality-gate fail
 
 // Supply-chain scanners flag a URL or IP address literal in a package's code as something it may
 // fetch at runtime. The launcher fetches nothing, so none of its shipped code carries one.
+const NETWORK_LITERAL =
+  /\b[a-z][a-z0-9+.-]*:\/\/|\b\d{1,3}(?:\.\d{1,3}){3}\b|(?:[0-9a-f]{1,4}:){7}[0-9a-f]{1,4}|(?:[0-9a-f]{1,4}:){1,7}:(?:[0-9a-f]{1,4})?|::1\b/i
+
+test('the literal check recognizes every URL scheme and IP form in scope, and not ordinary text', () => {
+  for (const literal of ['http://a', 'https://a', 'ftp://example.com', 'wss://h/p', '10.0.0.1', '::1', 'fe80::1', '2001:db8::1', '1:2:3:4:5:6:7:8']) {
+    assert.match(literal, NETWORK_LITERAL, literal)
+  }
+  for (const text of ['node:fs', 'a ? b : c', '12:30', '1.2.3', 'v0.5.0', 'unsupported platform linux-x64']) {
+    assert.doesNotMatch(text, NETWORK_LITERAL, text)
+  }
+})
+
 test('the shipped launcher code contains no URL or IP address literal', async () => {
   const root = join(dirname(fileURLToPath(import.meta.url)), '..')
   const files = []
-  for (const directory of ['bin', 'lib']) {
-    for (const name of await readdir(join(root, directory))) files.push(join(root, directory, name))
+  // package.json ships npm/bin/ and npm/lib/ recursively, so the scan does too.
+  const collect = async (directory) => {
+    for (const entry of await readdir(directory, { withFileTypes: true })) {
+      const file = join(directory, entry.name)
+      if (entry.isDirectory()) await collect(file)
+      else files.push(file)
+    }
   }
+  for (const directory of ['bin', 'lib']) await collect(join(root, directory))
   assert.ok(files.length >= 3, `expected the launcher files, found ${files.length}`)
   for (const file of files) {
-    const source = await readFile(file, 'utf8')
-    assert.doesNotMatch(source, /\bhttps?:\/\/|\b\d{1,3}(?:\.\d{1,3}){3}\b/, `${file} carries a URL or IP address literal`)
+    assert.doesNotMatch(await readFile(file, 'utf8'), NETWORK_LITERAL, `${file} carries a URL or IP address literal`)
   }
 })

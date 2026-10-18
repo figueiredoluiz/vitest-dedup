@@ -27,6 +27,7 @@ import { dirname, resolve } from 'node:path'
 import { TARGETS, targetFor as resolveTarget } from './targets.mjs'
 
 const require = createRequire(import.meta.url)
+const { version } = require('../../package.json')
 
 export { TARGETS }
 
@@ -63,7 +64,9 @@ export function targetFor(
     throw new Error(
       `unsupported platform ${host}; vitest-dedup publishes prebuilt binaries for ` +
         `${Object.keys(TARGETS).join(', ')}. Build from source with ` +
-        '`cargo install vitest-dedup` instead.',
+        // Pinned: an unpinned `cargo install` would fetch the newest crate, which can be a different
+        // version from this launcher when the crate job is skipped or has not finished.
+        `\`cargo install vitest-dedup@${version}\` instead.`,
     )
   }
   return target
