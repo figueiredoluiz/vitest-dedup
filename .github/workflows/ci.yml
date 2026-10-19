@@ -327,6 +327,19 @@ jobs:
       # repository keeps rediscovering: every gate must assert a floor on work performed, because
       # one that can only report "nothing failed" also passes when nothing was measured.
       - run: npm run check:coverage:rust
+      # The report step reuses the profile data the ratchet's instrumented run left in `target/`;
+      # it does not run the suite a second time. This job never runs on pull requests, so the
+      # secret is always available here.
+      - name: Export Rust coverage as lcov
+        run: cargo llvm-cov report --lcov --output-path lcov.info
+      - name: Upload Rust coverage to Codecov
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: ./lcov.info
+          disable_search: true
+          flags: rust
+          fail_ci_if_error: true
 
   self-check:
     name: Analyze a known corpus
