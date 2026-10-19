@@ -162,7 +162,7 @@ export const OFF_BY_DEFAULT_RULES = new Set(['subsumed-test'])
 const DIRECTIVE_RE =
   /^\s*\/\/\s*@vitest-dedup:(extracted|expect|participant|isolates|isolation-violation|pending|not-runnable)\b\s*(.*?)\s*$/
 // The cross-file reference (`other-file#`) admits every script extension discovery can reach, not
-// just `.test.ts` -- the same `[cm]?[jt]sx?` class `check-recall.mjs`'s SOURCE_RE uses. A `.spec.js`
+// just `.test.ts` -- the same `[cm]?[jt]sx?` class `lib/recall-runner.mjs`'s SOURCE_RE uses. A `.spec.js`
 // or in-source `.ts` participant could never be named under the old `.test\.ts`-only shape, which
 // made a cross-file expectation over one unstateable (the `duplicate-test-bench` and in-source
 // pairs). The named file must still exist in the fixture directory (`knownFiles`), so widening the

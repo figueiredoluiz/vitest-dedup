@@ -324,6 +324,7 @@ const JS_MODULES = {
   'scripts/check/lib/js-tokens.mjs': 87,
   'scripts/check/lib/memory-corpus.mjs': 97,
   'scripts/check/lib/memory-record.mjs': 94,
+  'scripts/check/lib/recall-runner.mjs': 87,
   // Reached only as a dependency of `memory-record.mjs`, which imports it for the exit-code
   // contract. Its own callers all spawn a release binary, so the covered lines are the parsing
   // and the contract check, not the spawn paths -- it was in JS_NOT_MEASURED until the memory

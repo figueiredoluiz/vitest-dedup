@@ -97,10 +97,11 @@
 // This is the same `summary.incomplete` proxy `check-duplicates-corpus.mjs` uses, and it is usable
 // here for the same reason: every case is its own directory and its own run.
 import assert from 'node:assert/strict'
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
-import { join, resolve } from 'node:path'
+import { existsSync, readdirSync, readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { ALL_RULES } from './lib/fixture-directives.mjs'
-import { defaultBinary, runAnalyzerJsonl } from './lib/run-analyzer.mjs'
+import { describeMatcher, judgeRecallCase, newTotals, observeRecallCase } from './lib/recall-runner.mjs'
+import { defaultBinary } from './lib/run-analyzer.mjs'
 
 const binary = process.argv[2] ?? defaultBinary()
 const root = process.argv[3] ?? 'fixtures/recall'
@@ -110,45 +111,10 @@ const root = process.argv[3] ?? 'fixtures/recall'
 // fails THIS gate until it has a positive and a negative recall case, instead of arriving with
 // no recall coverage and nothing to say so.
 
-// Extensions discovery can reach. Only used to assert a case directory is not empty of analyzable
-// source -- the analyzer's own `include`/`exclude` decision is the real authority, and a case whose
-// files it declines is caught by the `expectedTests` assertion, not here.
-const SOURCE_RE = /\.(?:[cm]?[jt]sx?)$/
-
-/** `rule + sorted titles + sorted locations` is how a matcher addresses one finding. */
-function findingMatches(finding, expected) {
-  if (finding.rule !== expected.rule) return false
-  if (expected.severity && finding.severity !== expected.severity) return false
-  if (expected.titles) {
-    const actual = [...finding.titles].sort()
-    const wanted = [...expected.titles].sort()
-    if (actual.length !== wanted.length) return false
-    if (!actual.every((title, index) => title === wanted[index])) return false
-  }
-  if (expected.locations) {
-    // Sorted, because participant order is a presentation detail that differs by rule: a
-    // `redundant-hook` pair over `afterEach`/`afterAll` reports innermost-first, since
-    // `Context::hooks` is the chain and after-hooks run inward-out. A matcher that depended on
-    // that order would encode the reporting convention rather than the finding's identity.
-    const actual = finding.locations.map((loc) => `${loc.path}:${loc.line}`).sort()
-    const wanted = [...expected.locations].sort()
-    if (actual.length !== wanted.length) return false
-    if (!actual.every((loc, index) => loc === wanted[index])) return false
-  }
-  return true
-}
-
-/**
- * Render a rule matcher with any severity, title and location constraints for failure
- * diagnostics.
- */
-function describeMatcher(matcher) {
-  const parts = [matcher.rule]
-  if (matcher.severity) parts.push(`[${matcher.severity}]`)
-  if (matcher.titles) parts.push(`{${matcher.titles.join(' | ')}}`)
-  if (matcher.locations) parts.push(`@ ${matcher.locations.join(' + ')}`)
-  return parts.join(' ')
-}
+// Per-case running and judging live in `lib/recall-runner.mjs` (`observeRecallCase`, then
+// `judgeRecallCase`), so an evaluator can reuse the observation and classify instead of
+// asserting. Everything the gate prints on a per-case basis is that module's output contract;
+// the corpus-wide floors and the manifest validation stay here.
 
 /**
  * Rejects a manifest that cannot be measured, before anything is run.
@@ -466,253 +432,44 @@ function main() {
     process.exit(1)
   }
 
-  let detected = 0
-  let expectedFindings = 0
-  let knownMisses = 0
-  let knownFalsePositivesTotal = 0
-  let ran = 0
-  let testsAnalyzed = 0
   const pendingHeld = []
+  const totals = newTotals()
 
   for (const testCase of manifest.cases) {
-    // Assertions land here first and are promoted to failures only for a case that is not
-    // `pending`; see the marker's description in the header for the ratchet.
-    const problems = []
-    const label = `${testCase.name} (${testCase.path})`
-    const caseRoot = resolve(root, testCase.path)
-    if (!existsSync(caseRoot) || !statSync(caseRoot).isDirectory()) {
-      failures.push(
-        `FAIL ${label}: case directory is missing. A vanished case cannot fail its own ` +
-          `expectations, so it has to fail here`,
-      )
-      continue
-    }
-    // Recursive, because a case may hold SUBDIRECTORIES -- the `cross-file-duplicate` shapes need
-    // two same-named helper files that cannot share one directory (the plan's D4). Only used to
-    // assert a case is not empty of analyzable source; the analyzer's own include/exclude
-    // decision remains the real authority, caught by `expectedTests`.
-    const sources = readdirSync(caseRoot, { recursive: true }).filter((name) =>
-      SOURCE_RE.test(String(name).split(/[\\/]/).pop() ?? name),
+    judgeRecallCase(
+      testCase,
+      observeRecallCase({ binary, root, testCase }),
+      { failures, pendingHeld, totals },
     )
-    if (sources.length === 0) {
-      failures.push(`FAIL ${label}: case directory holds no analyzable source file`)
-      continue
-    }
-
-    const records = runAnalyzerJsonl(binary, [caseRoot, ...(testCase.arguments ?? [])])
-      .records
-    const summary = records.find((record) => record.type === 'summary')
-    if (!summary) {
-      failures.push(`FAIL ${label}: run produced no summary record`)
-      continue
-    }
-    // Type before arithmetic, for the reason `.github/workflows/ci.yml`'s smoke test now states:
-    // a renamed field makes this accumulator `NaN`, and `NaN === 0` is false, so the corpus-wide
-    // "nothing was measured" floor below would pass over a corpus that measured nothing.
-    if (!Number.isInteger(summary.testsAnalyzed) || summary.testsAnalyzed < 0) {
-      failures.push(
-        `FAIL ${label}: the summary record carries no non-negative integer \`testsAnalyzed\` ` +
-          `(got ${JSON.stringify(summary.testsAnalyzed)}); the analyzer and this gate disagree ` +
-          `about the report schema`,
-      )
-      continue
-    }
-    ran += 1
-    testsAnalyzed += summary.testsAnalyzed
-
-    if (summary.testsAnalyzed !== testCase.expectedTests) {
-      problems.push(
-        `FAIL ${label}: expected ${testCase.expectedTests} extracted test(s), got ` +
-          `${summary.testsAnalyzed}`,
-      )
-    }
-    if (summary.incomplete !== testCase.expectedIncomplete) {
-      problems.push(
-        `FAIL ${label}: expected incomplete=${testCase.expectedIncomplete}, got ` +
-          `${summary.incomplete}. ${
-            testCase.expectedIncomplete
-              ? 'This case\'s silence is only meaningful as `not-compared`; a complete run means ' +
-                'the pair WAS compared and the absent finding is now a real miss'
-              : 'This case\'s silence is claimed as `distinct`; an incomplete run means something ' +
-                'was excluded from comparison and the silence proves nothing'
-          }`,
-      )
-    }
-    if (
-      testCase.expectedUnresolved !== undefined &&
-      summary.unresolvedTests !== testCase.expectedUnresolved
-    ) {
-      problems.push(
-        `FAIL ${label}: expected ${testCase.expectedUnresolved} unresolved test(s), got ` +
-          `${summary.unresolvedTests ?? '<missing>'}`,
-      )
-    }
-
-    const active = records.filter((record) => record.type === 'finding' && !record.baselined)
-
-    // Known false positives first: every finding an entry matches is claimed by it, excused from
-    // `expectedAbsent`, and admitted by the unclassified-finding sweep below. An entry that no
-    // longer matches anything is the ratchet firing: the defect it named is fixed, and the entry
-    // must move to `expectedAbsent` with the baseline decremented.
-    const fpClaimed = new Set()
-    for (const falsePositive of testCase.knownFalsePositives ?? []) {
-      knownFalsePositivesTotal += 1
-      const expectedCount = falsePositive.expectCount ?? 1
-      const matches = active.filter((finding) => findingMatches(finding, falsePositive))
-      if (matches.length === 0) {
-        // A ratchet firing, not an unsatisfied expectation: the defect this entry named is FIXED.
-        // Routed straight to failures so a pending case (whose other assertions still hold it
-        // open) can never swallow the one signal that says the manifest is now stale.
-        failures.push(
-          `FAIL ${label}: known false positive ${falsePositive.id} is no longer reported -- the ` +
-            `fix it waited on has landed. Delete the entry and decrement ` +
-            `\`knownFalsePositiveBaseline\`, leaving \`expectedAbsent\` as the assertion`,
-        )
-      } else if (matches.length !== expectedCount) {
-        problems.push(
-          `FAIL ${label}: known false positive ${falsePositive.id} matched ${matches.length} ` +
-            `active finding(s), expected ${expectedCount}` +
-            (expectedCount === 1 ? '' : ' as declared by \`expectCount\`') +
-            `. Tighten the matcher (titles, locations) or correct \`expectCount\` -- an entry ` +
-            `that silently absorbs extra findings of its shape is a suppressed finding wearing ` +
-            `a classified label`,
-        )
-      } else {
-        for (const finding of matches) fpClaimed.add(finding)
-      }
-    }
-
-    if (!testCase.pending) expectedFindings += testCase.expectedFindings.length
-    for (const expected of testCase.expectedFindings) {
-      const matches = active.filter((finding) => findingMatches(finding, expected))
-      if (matches.length !== 1) {
-        const sameRule = active
-          .filter((finding) => finding.rule === expected.rule)
-          .map((finding) => `${finding.severity} {${finding.titles.join(' | ')}}`)
-        problems.push(
-          `FAIL ${label}: expected exactly 1 ${describeMatcher(expected)}, got ${matches.length}. ` +
-          `Findings of that rule in this case: ${sameRule.length ? sameRule.join('; ') : 'none'}`,
-        )
-      } else if (!testCase.pending) {
-        detected += 1
-      }
-    }
-
-    for (const expected of testCase.expectedAbsent) {
-      // A finding claimed by a known false positive of this same case is already classified; it
-      // is exactly the finding `expectedAbsent` names as the destination. Everything else must
-      // genuinely be absent.
-      const matches = active.filter(
-        (finding) => findingMatches(finding, expected) && !fpClaimed.has(finding),
-      )
-      if (matches.length !== 0) {
-        problems.push(
-          `FAIL ${label}: ${describeMatcher(expected)} must NOT be reported, got ` +
-            `${matches.length}. This is a precision regression: the case declares this pair is ` +
-            `not what the rule claims`,
-        )
-      }
-    }
-
-    for (const miss of testCase.knownMisses ?? []) {
-      knownMisses += 1
-      // Two assertions, because a known miss must fail loudly the moment it is FIXED -- otherwise
-      // the baseline drifts out of step with reality and the recall number understates the tool.
-      const matches = active.filter((finding) => findingMatches(finding, miss))
-      if (matches.length !== 0) {
-        failures.push(
-          `FAIL ${label}: known miss ${miss.id} is now reported. Move it to \`expectedFindings\` ` +
-            `and decrement \`knownMissBaseline\``,
-        )
-      }
-      // Stronger form, applied only where the case expects nothing else from that rule: the
-      // matcher's `titles` are a considered guess at the shape of a finding that does not exist
-      // yet, so "no finding of this rule at all in this case" is the claim that does not depend on
-      // the guess being right.
-      const ruleAlsoExpected = testCase.expectedFindings.some((entry) => entry.rule === miss.rule)
-      if (!ruleAlsoExpected) {
-        // A finding already claimed by this case's own known false positive is classified, not
-        // news: the pair above owns it. Only unclaimed findings of the rule contradict the
-        // miss's "reports nothing here" claim.
-        const anyOfRule = active.filter(
-          (finding) => finding.rule === miss.rule && !fpClaimed.has(finding),
-        )
-        if (anyOfRule.length !== 0) {
-          failures.push(
-            `FAIL ${label}: known miss ${miss.id} claims ${miss.rule} reports nothing here, but ` +
-              `${anyOfRule.length} ${miss.rule} finding(s) appeared. Either the miss is fixed ` +
-              `(move it to \`expectedFindings\`) or the rule is firing on the wrong participants`,
-          )
-        }
-      }
-    }
-
-    // Unclassified-finding sweep. Without it a case could satisfy every declared expectation while
-    // the analyzer also reported three things nobody asked about -- which is how a recall number
-    // survives a precision collapse. Findings claimed by a known false positive are classified by
-    // definition; everything else must be accounted for.
-    if (active.length !== testCase.expectedFindings.length + fpClaimed.size) {
-      const unclaimed = active
-        .filter(
-          (finding) =>
-            !fpClaimed.has(finding) &&
-            !testCase.expectedFindings.some((entry) => findingMatches(finding, entry)),
-        )
-        .map((finding) => `${finding.rule} [${finding.severity}] {${finding.titles.join(' | ')}}`)
-      problems.push(
-        `FAIL ${label}: ${active.length} active finding(s) against ` +
-          `${testCase.expectedFindings.length} declared and ${fpClaimed.size} classified as known ` +
-          `false positive(s). Unclassified: ${
-            unclaimed.length ? unclaimed.join('; ') : '(none -- a declared matcher matched twice)'
-          }`,
-      )
-    }
-
-    // The pending ratchet, last: a pending case holds while ANY assertion still fails, and fails
-    // the moment every one of them passes, so the marker can never outlive the defect it waits
-    // on. Operational failures above (missing directory, unreadable summary) are never excused:
-    // a pending case the gate cannot even measure is a broken case, not a held one.
-    if (testCase.pending) {
-      if (problems.length === 0) {
-        failures.push(
-          `FAIL ${label}: pending case now satisfies every declared expectation -- remove the ` +
-            `\`pending\` field so the expectations become hard assertions`,
-        )
-      } else {
-        pendingHeld.push(`${label}: ${problems.length} assertion(s) still failing -- ${testCase.pending}`)
-      }
-    } else {
-      failures.push(...problems)
-    }
   }
 
-  if (ran !== manifest.cases.length) {
+  if (totals.ran !== manifest.cases.length) {
     failures.push(
-      `FAIL: ${ran} of ${manifest.cases.length} manifest case(s) actually ran. A recall figure ` +
-        `computed over a subset of the corpus is not the corpus's recall`,
+      `FAIL: ${totals.ran} of ${manifest.cases.length} manifest case(s) actually ran. A recall ` +
+        `figure computed over a subset of the corpus is not the corpus's recall`,
     )
   }
-  if (testsAnalyzed === 0) {
+  if (totals.testsAnalyzed === 0) {
     failures.push('FAIL: the whole corpus extracted zero tests; nothing was measured')
   }
-  if (knownMisses !== manifest.knownMissBaseline) {
+  if (totals.knownMisses !== manifest.knownMissBaseline) {
     failures.push(
-      `FAIL: ${knownMisses} known miss(es) against a baseline of ${manifest.knownMissBaseline}. ` +
+      `FAIL: ${totals.knownMisses} known miss(es) against a baseline of ${manifest.knownMissBaseline}. ` +
         `The baseline ratchets in one direction: a fix moves an entry to \`expectedFindings\` and ` +
         `decrements it. Raising it to make this gate pass converts a recall gap into the new normal`,
     )
   }
-  if (knownFalsePositivesTotal !== manifest.knownFalsePositiveBaseline) {
+  if (totals.knownFalsePositivesTotal !== manifest.knownFalsePositiveBaseline) {
     failures.push(
-      `FAIL: ${knownFalsePositivesTotal} known false positive(s) against a baseline of ` +
+      `FAIL: ${totals.knownFalsePositivesTotal} known false positive(s) against a baseline of ` +
         `${manifest.knownFalsePositiveBaseline}. The baseline ratchets in one direction: a fix ` +
         `deletes the entry, leaves the \`expectedAbsent\` matcher behind, and decrements it. ` +
         `Raising it to make this gate pass converts a precision gap into the new normal`,
     )
   }
 
-  const desired = expectedFindings + knownMisses
-  const recall = desired === 0 ? 0 : detected / desired
+  const desired = totals.expectedFindings + totals.knownMisses
+  const recall = desired === 0 ? 0 : totals.detected / desired
   if (desired === 0) {
     failures.push('FAIL: no desired findings declared anywhere; recall is undefined, not perfect')
   } else if (recall < manifest.minimumRecall) {
@@ -736,9 +493,9 @@ function main() {
     for (const line of pendingHeld) console.log(`  ${line}`)
   }
   console.log(
-    `Recall corpus: ${ran} case(s) across ${ALL_RULES.size} rule(s), ${testsAnalyzed} test(s) ` +
-      `extracted, ${detected}/${expectedFindings} expected finding(s) matched, ${knownMisses} ` +
-      `known miss(es), ${knownFalsePositivesTotal} known false positive(s) (${pendingHeld.length} ` +
+    `Recall corpus: ${totals.ran} case(s) across ${ALL_RULES.size} rule(s), ${totals.testsAnalyzed} test(s) ` +
+      `extracted, ${totals.detected}/${totals.expectedFindings} expected finding(s) matched, ${totals.knownMisses} ` +
+      `known miss(es), ${totals.knownFalsePositivesTotal} known false positive(s) (${pendingHeld.length} ` +
       `pending case(s) excluded from the recall figure).`,
   )
   console.log(
