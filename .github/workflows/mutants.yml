@@ -60,7 +60,7 @@ jobs:
           # only serves the baseline build, and a tool upgrade is the one thing that invalidates
           # how that build is produced.
           key: cargo-mutants-27.1.0
-      - uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8 # v2
+      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2
         with:
           tool: cargo-mutants@27.1.0
           # No fallback to `cargo install`: a silent 20-minute source build of the tool would make
