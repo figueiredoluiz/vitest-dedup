@@ -10,6 +10,7 @@ import { TARGETS } from '../lib/targets.mjs'
 
 const release = await readFile(new URL('../../.github/workflows/release.yml', import.meta.url), 'utf8')
 const ci = await readFile(new URL('../../.github/workflows/ci.yml', import.meta.url), 'utf8')
+const audit = await readFile(new URL('../../.github/workflows/audit.yml', import.meta.url), 'utf8')
 const rootManifest = JSON.parse(await readFile(new URL('../../package.json', import.meta.url), 'utf8'))
 
 test('release publication is manual and all jobs check out the event commit', () => {
@@ -210,6 +211,23 @@ test('the JavaScript coverage job provisions gitleaks before running scanner tes
   assert.match(setup, /GITLEAKS_SHA256: [a-f0-9]{64}/)
   assert.match(setup, /sha256sum --check --strict/)
   assert.match(setup, /GITHUB_PATH/)
+})
+
+test('both history scans use the pinned gitleaks with the repository config', () => {
+  const scans = [
+    ['ci.yml', ci.slice(ci.indexOf('\n  secret-history:'), ci.indexOf('\n  rust-msrv:'))],
+    ['audit.yml', audit.slice(audit.indexOf('\n  secret-history:'))],
+  ]
+  for (const [name, job] of scans) {
+    assert.ok(job.length > 0, `${name} has no secret-history job`)
+    assert.match(job, /GITLEAKS_VERSION: \d+\.\d+\.\d+/, `${name}: unpinned gitleaks`)
+    assert.match(job, /GITLEAKS_SHA256: [a-f0-9]{64}/, `${name}: unverified gitleaks`)
+    assert.match(job, /sha256sum --check --strict/, `${name}: checksum not enforced`)
+    assert.match(job, /gitleaks git --config \.gitleaks\.toml /, `${name}: scan ignores the allowlist config`)
+    assert.doesNotMatch(job, /gitleaks-action/, `${name}: bundled gitleaks engine`)
+  }
+  const version = (job) => /GITLEAKS_VERSION: (\S+)/.exec(job)[1]
+  assert.equal(version(scans[0][1]), version(scans[1][1]), 'the two scans must run the same gitleaks version')
 })
 
 test('every npm script CI invokes exists in package.json', () => {
