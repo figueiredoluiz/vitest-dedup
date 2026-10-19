@@ -217,13 +217,7 @@ fn a_nodes_descendants_are_the_run_after_it_whose_parent_is_not_before_it() {
             .semantic;
         let nodes = semantic.nodes();
         for (root, _) in nodes.iter_enumerated() {
-            let run: Vec<_> = nodes
-                .iter_enumerated()
-                .skip(root.index())
-                .map_while(|(id, _)| {
-                    (id == root || nodes.parent_id(id).index() >= root.index()).then_some(id)
-                })
-                .collect();
+            let run: Vec<_> = body_run(nodes, root).map(|node| node.id()).collect();
             let walked: Vec<_> = nodes
                 .iter_enumerated()
                 .filter(|(id, _)| {

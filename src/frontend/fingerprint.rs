@@ -266,6 +266,8 @@ mod text;
 mod trivial;
 
 use behavior::BehaviorCollector;
+#[cfg(test)]
+use context::body_run;
 use context::FingerprintContext;
 pub(crate) use context::Mode;
 pub(super) use dataflow::analyze_dataflow;
@@ -320,7 +322,7 @@ use oxc_ast::ast::{
 use oxc_ast::AstKind;
 use oxc_ast_visit::{walk, Visit};
 use oxc_parser::Parser;
-use oxc_semantic::{NodeId, Semantic};
+use oxc_semantic::{AstNode, AstNodes, NodeId, Semantic};
 use oxc_span::{GetSpan, SourceType, Span};
 use oxc_syntax::operator::UnaryOperator;
 use oxc_syntax::reference::ReferenceId;

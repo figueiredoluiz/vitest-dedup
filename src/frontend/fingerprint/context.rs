@@ -113,6 +113,20 @@ pub(super) struct FingerprintContext<'a, 'b, 's, 'm> {
     pub(super) next_local: u32,
 }
 
+/// The nodes of the subtree rooted at `root`, `root` first. Descendants are the run of ids after a
+/// node whose parent is not before it, so the walk starts at the root by index (never by skipping
+/// over everything before it) and ends at the first node outside the subtree.
+pub(super) fn body_run<'n, 'a>(
+    nodes: &'n AstNodes<'a>,
+    root: NodeId,
+) -> impl Iterator<Item = &'n AstNode<'a>> {
+    (root.index()..nodes.len())
+        .map(NodeId::from_usize)
+        .map_while(move |id| {
+            (id == root || nodes.parent_id(id).index() >= root.index()).then(|| nodes.get_node(id))
+        })
+}
+
 /// One identifier reference that resolves to a symbol, with where that symbol is declared.
 struct RawReference<'a> {
     start: u32,
@@ -283,15 +297,7 @@ impl<'a, 'b, 's, 'm> FingerprintContext<'a, 'b, 's, 'm> {
         // belongs to it exactly while its parent does not precede that node. This keeps the cost
         // to the body, not the file -- a file with a thousand tests would otherwise be scanned a
         // thousand times.
-        let nodes = self.semantic.nodes();
-        let root = self.body_node;
-        for node in nodes
-            .iter_enumerated()
-            .skip(root.index())
-            .map_while(|(id, node)| {
-                (id == root || nodes.parent_id(id).index() >= root.index()).then_some(node)
-            })
-        {
+        for node in body_run(self.semantic.nodes(), self.body_node) {
             let span = node.span();
             let is_this = match node.kind() {
                 AstKind::ThisExpression(_) | AstKind::NewTarget(_) => true,
