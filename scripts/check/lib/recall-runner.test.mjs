@@ -436,3 +436,70 @@ test('judgeRecallCase fires both known-miss assertions when a miss is fixed', ()
   assert.match(notExpected.failures[2], /Unclassified: name-collision/)
   assert.equal(notExpected.totals.knownMisses, 1)
 })
+
+test('judgeRecallCase explains an incomplete-run mismatch in the direction that was claimed', () => {
+  const complete = context()
+  judgeRecallCase(
+    testCase({ expectedIncomplete: true }),
+    observation(),
+    complete,
+  )
+  assert.match(complete.failures[0], /expected incomplete=true, got false\. .*a complete run means the pair WAS compared/)
+
+  const incomplete = context()
+  const summary = { type: 'summary', testsAnalyzed: 2, incomplete: true, unresolvedTests: 0 }
+  judgeRecallCase(testCase(), observation({ summary, records: [finding(), summary] }), incomplete)
+  assert.match(incomplete.failures[0], /expected incomplete=false, got true\. .*an incomplete run means something was excluded/)
+})
+
+test('judgeRecallCase names a missing unresolved count rather than printing undefined', () => {
+  const judged = context()
+  const summary = { type: 'summary', testsAnalyzed: 2, incomplete: false }
+  judgeRecallCase(
+    testCase({ expectedUnresolved: 1 }),
+    observation({ summary, records: [finding(), summary] }),
+    judged,
+  )
+  assert.deepEqual(judged.failures, [
+    'FAIL sample (cases/sample): expected 1 unresolved test(s), got <missing>',
+  ])
+})
+
+test('judgeRecallCase fails a known false positive whose count differs from expectCount', () => {
+  const entry = { id: 'fp', rule: 'duplicate-test', titles: ['suite > a', 'suite > b'] }
+  const implicit = context()
+  judgeRecallCase(
+    testCase({ expectedFindings: [], knownFalsePositives: [entry] }),
+    observation({ records: [finding(), finding(), observation().summary] }),
+    implicit,
+  )
+  assert.match(implicit.failures[0], /known false positive fp matched 2 active finding\(s\), expected 1\. Tighten/)
+  assert.doesNotMatch(implicit.failures[0], /as declared by/)
+
+  const declared = context()
+  judgeRecallCase(
+    testCase({ expectedFindings: [], knownFalsePositives: [{ ...entry, expectCount: 2 }] }),
+    observation({ records: [finding(), observation().summary] }),
+    declared,
+  )
+  assert.match(declared.failures[0], /matched 1 active finding\(s\), expected 2 as declared by .expectCount./)
+})
+
+test('judgeRecallCase reports an expectedAbsent match unless a known false positive claims it', () => {
+  const absent = { rule: 'duplicate-test', titles: ['suite > a', 'suite > b'] }
+  const reported = context()
+  judgeRecallCase(testCase({ expectedAbsent: [absent] }), observation(), reported)
+  assert.match(reported.failures[0], /must NOT be reported, got 1\. This is a precision regression/)
+
+  const claimed = context()
+  judgeRecallCase(
+    testCase({
+      expectedFindings: [],
+      expectedAbsent: [absent],
+      knownFalsePositives: [{ id: 'fp', ...absent }],
+    }),
+    observation(),
+    claimed,
+  )
+  assert.deepEqual(claimed.failures, [])
+})
