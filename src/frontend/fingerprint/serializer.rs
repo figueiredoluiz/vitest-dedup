@@ -111,13 +111,13 @@ impl<'a, 'b, 's, 'm> Serializer<'a, 'b, 's, 'm> {
         format!("<{marker}:{}{suffix}>", self.ctx.slice(span))
     }
 
-    /// What a binding used inside a raw slice stands for: the value a `.each` row substitutes for
-    /// it, otherwise its identity (canonical local slot, outer declaration or import).
-    /// Deliberately not [`Serializer::reference_or_literal`]: that also expands classes and
-    /// dataflow, which recurse and mark the body uncertain, while a name in a raw slice only needs
-    /// to be tied to the binding it means -- the binding's own contents are rendered where it is
-    /// declared. An inlined helper's parameter is never marked consumed by a raw slice, so the
-    /// call's arguments stay visible in the inlined wrapper.
+    /// What a binding used inside a raw slice stands for: the argument an inlined helper was called
+    /// with, the value a `.each` row substitutes for it, otherwise its identity (canonical local
+    /// slot, outer declaration or import). Deliberately not [`Serializer::reference_or_literal`]:
+    /// that also expands classes and dataflow, which recurse and mark the body uncertain, while a
+    /// name in a raw slice only needs to be tied to the binding it means -- the binding's own
+    /// contents are rendered where it is declared. A helper parameter is not marked consumed, so
+    /// the call's arguments stay visible in the inlined wrapper.
     fn raw_binding_identity(&mut self, ident: &IdentifierReference<'a>) -> String {
         let symbol = ident.reference_id.get().and_then(|reference| {
             self.ctx
@@ -127,6 +127,11 @@ impl<'a, 'b, 's, 'm> Serializer<'a, 'b, 's, 'm> {
                 .symbol_id()
         });
         if let Some(symbol) = symbol {
+            // The argument an inlined helper was called with, not marked consumed: the wrapper
+            // keeps listing the call's arguments, and the slice says which one it wrote to.
+            if let Some(fragment) = self.ctx.arg_substitution.get(&symbol).cloned() {
+                return fragment;
+            }
             if let Some((kind, raw)) = self.ctx.row_substitution.get(&symbol).cloned() {
                 return self.literal(kind, &raw);
             }

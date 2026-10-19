@@ -445,3 +445,31 @@ test('x', () => { const w = 1; f(w); });"#;
         "renaming the caller local passed as an argument must not change the alpha"
     );
 }
+
+/// Two helpers that mutate different parameters through a raw-text slice must not inline to the
+/// same text: `f(a, b)` and `g(b, a)` called with `(left, right)` write to different objects.
+#[test]
+fn helpers_that_mutate_different_parameters_through_a_raw_slice_stay_distinct() {
+    let dir = tempfile::tempdir().unwrap();
+    write_helper(
+        dir.path(),
+        "helpers.ts",
+        "export function f(a, b) { ;[a.value] = [1]; return 1; }\n\
+         export function g(b, a) { ;[a.value] = [1]; return 1; }",
+    );
+    let call = |export_name: &str| {
+        let source = format!(
+            "import {{ {export_name} as callme }} from './helpers';\n\
+             test('x', () => {{ callme(left, right); }});"
+        );
+        let prints = fingerprint_all_at(&source, &dir.path().join("a.test.ts"));
+        assert_eq!(prints.len(), 1);
+        prints[0].alpha.clone()
+    };
+    let (first, second) = (call("f"), call("g"));
+    assert!(
+        first.contains("helper-inline"),
+        "the helper must inline: {first}"
+    );
+    assert_ne!(first, second, "different parameters written to");
+}
