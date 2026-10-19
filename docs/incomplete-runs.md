@@ -10,9 +10,10 @@ How each reporter says so:
 
 | Reporter | Where |
 | --- | --- |
-| `terminal`, `html` | A banner before the findings. |
+| `terminal` | A banner before the findings. |
+| `html` | A banner before the findings, plus `incompleteCauses` in the page's JSON island. |
 | `json`, `jsonl` | The `incomplete` flag, plus `incompleteCauses`, which enumerates the reasons, counted. |
-| `sarif` | `invocations[0].properties.incomplete`. SARIF does not carry the causes. |
+| `sarif` | `runs[0].invocations[0].properties.incomplete` and `incompleteCauses`, keyed as in the `json` report. |
 
 `--fail-on-incomplete` turns the flag into a non-zero exit. A file in which every test was excluded
 is a blind spot; see [Blind spots](#blind-spots).
@@ -82,9 +83,9 @@ Linux, macOS and Windows.
 - `--no-memory-cap` disables both checks.
 
 The checks run at file boundaries, so a single file or the later analysis phase can exceed either
-threshold. Files after that point are not analyzed and are counted in `filesOverMemoryBudget` (JSON
-and JSONL; the terminal and HTML banners name the cause). Every rule runs over the files read, with
-the same findings as a run over exactly those files. `--baseline-from-ref` applies the same budget
-to the base revision.
+threshold. Files after that point are not analyzed and are counted in `filesOverMemoryBudget`
+(`json`, `jsonl`, `sarif` and the HTML island all carry it; the terminal and HTML banners also name
+the cause). Every rule runs over the files read, with the same findings as a run over exactly those
+files. `--baseline-from-ref` applies the same budget to the base revision.
 
 Back to the [documentation index](README.md).

@@ -63,7 +63,9 @@ pub trait Reporter {
 /// because five near-identical copies is five places a new `Finding` field lands four times.
 #[cfg(test)]
 pub(crate) mod test_support {
-    use crate::model::{AnalysisResult, Finding, Location, Position, Rule, Severity, Span};
+    use crate::model::{
+        AnalysisResult, Finding, IncompleteCauses, Location, Position, Rule, Severity, Span,
+    };
     use std::path::PathBuf;
 
     /// A one-line `Location` whose span runs five columns on one line -- the shape every
@@ -143,6 +145,28 @@ pub(crate) mod test_support {
             tests_analyzed: 2,
             files_analyzed: 1,
             ..AnalysisResult::default()
+        }
+    }
+
+    /// Every incompleteness cause fired, each with a distinct value -- the input the
+    /// causes-carrying tests share, so a reporter that dropped (or hand-shrank) any one cause
+    /// fails against the serde serialization of this fixture rather than against a subset that
+    /// happens to match what it emits.
+    pub(crate) fn all_fired_causes() -> IncompleteCauses {
+        IncompleteCauses {
+            discovery_failed: true,
+            project_config_degraded: true,
+            nothing_read: true,
+            files_too_large: 1,
+            files_unreadable: 2,
+            files_partially_read: 3,
+            files_globals_undetermined: 4,
+            unresolved_contexts: 5,
+            pair_budget_exhausted: true,
+            hook_scan_exhausted: true,
+            files_over_memory_budget: 6,
+            findings_truncated: 7,
+            withheld_unchanged: 8,
         }
     }
 }

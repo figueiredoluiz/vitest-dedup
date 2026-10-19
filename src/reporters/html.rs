@@ -422,6 +422,8 @@ fn report_data(result: &AnalysisResult) -> serde_json::Value {
         "testsAnalyzed": result.tests_analyzed,
         "filesAnalyzed": result.files_analyzed,
         "incomplete": result.incomplete(),
+        // Serialized from the struct, so a new cause appears without a second registration.
+        "incompleteCauses": result.incomplete_causes,
         // Closed, tool-owned counters with no analyzed-repository text in them, so unlike every
         // string below they need no sanitization. Present for the same reason `incomplete` is:
         // a page-local reader must be able to tell a narrowed report from a clean one.
@@ -471,7 +473,9 @@ fn pluralize(count: usize, noun: &str) -> String {
 mod tests {
     use super::*;
     use crate::model::{AnalysisResult, IncompleteCauses, ModeSummary, Rule};
-    use crate::reporters::test_support::{finding_with_title, location, rendered_result};
+    use crate::reporters::test_support::{
+        all_fired_causes, finding_with_title, location, rendered_result,
+    };
 
     /// The first location's path inside the report's JSON island -- what every hostile-path
     /// test reads back, distinct from the escaped HTML rendering of the same path.
@@ -1054,6 +1058,46 @@ mod tests {
         assert!(
             alert_pos < findings_pos,
             "the incomplete alert must appear before the findings section"
+        );
+    }
+
+    /// Regression fixture for HTML report: the JSON island carries every incompleteness cause,
+    /// keyed and valued exactly as the struct serializes -- the same object `json`/`jsonl` emit.
+    /// The banner names the fired causes in prose; the island is what a tool reading this page
+    /// counts from, and its expectation is derived from `IncompleteCauses` itself so a dropped
+    /// or hand-shrunk cause fails here rather than shipping silently.
+    #[test]
+    fn json_island_carries_every_incompleteness_cause() {
+        let mut result = rendered_result(vec![finding_with_title(
+            Rule::DuplicateTest,
+            "src/a.test.ts",
+            "a test",
+        )]);
+        let causes = all_fired_causes();
+        result.incomplete_causes = causes.clone();
+        let output = render_str(&result);
+        let island: serde_json::Value =
+            serde_json::from_str(json_island(&output)).expect("island must remain valid JSON");
+        let emitted = &island["incompleteCauses"];
+        let expected = serde_json::to_value(&causes).unwrap();
+        assert_eq!(
+            emitted, &expected,
+            "every cause must carry its key and its value"
+        );
+    }
+
+    /// Regression fixture for HTML report: a complete run's island still carries the causes
+    /// object, all false and zero, matching `json`/`jsonl` -- a reader never has to distinguish
+    /// "no causes" from "causes not reported".
+    #[test]
+    fn complete_run_island_still_carries_the_causes_object() {
+        let output = render_str(&AnalysisResult::default());
+        let island: serde_json::Value =
+            serde_json::from_str(json_island(&output)).expect("island must remain valid JSON");
+        assert_eq!(island["incomplete"], false);
+        assert_eq!(
+            island["incompleteCauses"],
+            serde_json::to_value(IncompleteCauses::default()).unwrap()
         );
     }
 

@@ -40,7 +40,12 @@ struct Run {
 /// Runs the analyzer on `root` with `flags` and the JSON reporter (plus any `reporters`).
 fn analyze_with(root: &Path, reporters: &str, flags: &[&str]) -> Run {
     let output = tempfile::tempdir().unwrap();
-    let prefix = output.path().join("report");
+    analyze_into(root, reporters, flags, output.path())
+}
+
+/// As `analyze_with`, leaving every reporter's file under `output` for the caller to read.
+fn analyze_into(root: &Path, reporters: &str, flags: &[&str], output: &Path) -> Run {
+    let prefix = output.join("report");
     let result = Command::cargo_bin("vitest-dedup")
         .unwrap()
         .arg(root)
@@ -136,6 +141,39 @@ fn a_truncated_run_equals_a_run_over_the_files_it_read() {
         .0,
         2
     );
+}
+
+/// The roof's count reaches every report that states an incomplete run: the SARIF invocation and
+/// the HTML page's JSON island carry `incompleteCauses` exactly as the JSON report does.
+#[test]
+fn the_roof_count_reaches_the_sarif_and_html_reports() {
+    let root = tempfile::tempdir().unwrap();
+    write_tree(root.path(), 0..FILES);
+    let output = tempfile::tempdir().unwrap();
+    let prefix = output.path().join("report");
+    let causes = analyze_into(
+        root.path(),
+        "json,sarif,html",
+        &["--max-memory", "1"],
+        output.path(),
+    )
+    .report["incompleteCauses"]
+        .clone();
+    let read = |extension: &str| std::fs::read_to_string(prefix.with_extension(extension)).unwrap();
+    assert!(causes["filesOverMemoryBudget"].as_u64().unwrap() > 0);
+
+    let sarif: serde_json::Value = serde_json::from_str(&read("sarif")).unwrap();
+    assert_eq!(
+        &sarif["runs"][0]["invocations"][0]["properties"]["incompleteCauses"],
+        &causes
+    );
+
+    let html = read("html");
+    let marker = r#"<script type="application/json" id="report-data">"#;
+    let start = html.find(marker).unwrap() + marker.len();
+    let end = start + html[start..].find("</script>").unwrap();
+    let island: serde_json::Value = serde_json::from_str(&html[start..end]).unwrap();
+    assert_eq!(island["incompleteCauses"], causes);
 }
 
 /// Without a cap, or with the default budget, the generated tree is read in full.

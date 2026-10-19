@@ -12,7 +12,8 @@ SARIF 2.1.0. The log names the published schema in `$schema`.
   `enabled: false`, and a rule turned off for the run still shows its built-in default. A rule that
   is off for the run is not computed, so it never backs a result.
 - `verdict` travels in a result property, since SARIF has no field for it.
-- An incomplete run sets `invocations[0].properties.incomplete`. SARIF does not carry the counted
-  causes; use the `json` or `jsonl` report for those.
+- An incomplete run sets `runs[0].invocations[0].properties.incomplete`.
+  `runs[0].invocations[0].properties.incompleteCauses` counts the causes, keyed and valued as in the
+  `json` report, and is present with false/zero values on a complete run.
 
 Back to [Reports](../reports.md).

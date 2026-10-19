@@ -86,6 +86,11 @@
 //! invoked, so this field cannot usefully vary and is not a proxy for `incomplete`, which is a
 //! coverage fact, not a crash.
 //!
+//! `invocations[0].properties.incompleteCauses` carries [`crate::model::IncompleteCauses`] as the
+//! `json`/`jsonl` reports serialize it, on a complete run too (all false/zero). `incomplete` alone
+//! cannot tell "the analyzer was undersized for this corpus" from "twelve files failed to read",
+//! which call for opposite responses.
+//!
 //! `invocations[0].properties.modes` mirrors [`crate::model::ModeSummary`], for the same reason:
 //! `withheldUnchanged` counts findings this log deliberately does not contain, and a consumer that
 //! only read `results[]` would have no way to tell a `--changed-since` run's narrowed view from a
@@ -225,6 +230,8 @@ fn invocation(result: &AnalysisResult) -> Value {
         "executionSuccessful": true,
         "properties": {
             "incomplete": result.incomplete(),
+            // Serialized from the struct, so a new cause appears without a second registration.
+            "incompleteCauses": result.incomplete_causes,
             "testsAnalyzed": result.tests_analyzed,
             "filesAnalyzed": result.files_analyzed,
             "unresolvedTests": result.unresolved_tests,
@@ -318,8 +325,10 @@ fn verdict_id(verdict: Verdict) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{Rule, Severity};
-    use crate::reporters::test_support::{append_third_participant, cross_file_result};
+    use crate::model::{IncompleteCauses, Rule, Severity};
+    use crate::reporters::test_support::{
+        all_fired_causes, append_third_participant, cross_file_result,
+    };
     use std::path::PathBuf;
 
     /// Build a cross-file finding fixture for SARIF rule, result and location assertions.
@@ -533,6 +542,39 @@ mod tests {
         assert_eq!(
             value["runs"][0]["invocations"][0]["executionSuccessful"],
             true
+        );
+    }
+
+    /// Check SARIF output: the invocation carries every incompleteness cause, keyed and valued
+    /// exactly as the struct serializes. The expectation is derived from `IncompleteCauses`
+    /// itself, so a cause the invocation omitted -- or a hand-built key list that dropped one --
+    /// fails here rather than shipping silently, which is how this property came to omit the
+    /// causes entirely.
+    #[test]
+    fn invocation_carries_every_incompleteness_cause() {
+        let mut result = sample_result();
+        let causes = all_fired_causes();
+        result.incomplete_causes = causes.clone();
+        let value = render_value(&result);
+        let emitted = &value["runs"][0]["invocations"][0]["properties"]["incompleteCauses"];
+        let expected = serde_json::to_value(&causes).unwrap();
+        assert_eq!(
+            emitted, &expected,
+            "every cause must carry its key and its value"
+        );
+    }
+
+    /// Check SARIF output: a complete run still carries the causes object, all false and zero --
+    /// the same unconditional emission `json`/`jsonl` practice, so a consumer never has to
+    /// distinguish "no causes" from "causes not reported".
+    #[test]
+    fn complete_run_still_carries_the_causes_object() {
+        let value = render_value(&sample_result());
+        let properties = &value["runs"][0]["invocations"][0]["properties"];
+        assert_eq!(properties["incomplete"], false);
+        assert_eq!(
+            properties["incompleteCauses"],
+            serde_json::to_value(IncompleteCauses::default()).unwrap()
         );
     }
 
