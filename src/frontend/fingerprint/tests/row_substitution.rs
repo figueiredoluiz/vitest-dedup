@@ -39,7 +39,10 @@ fn fingerprint_row(source: &str, substitution: &RowSubstitution) -> BodyFingerpr
     let parsed = Parser::new(&allocator, source, source_type).parse();
     assert!(!parsed.fatal_error, "fixture failed to parse: {source}");
     let program: &Program = &parsed.program;
-    let semantic = SemanticBuilder::new().build(program).semantic;
+    let semantic = SemanticBuilder::new()
+        .with_build_nodes(true)
+        .build(program)
+        .semantic;
     let mut collector = RowBodyCollector {
         semantic: &semantic,
         source,
@@ -723,5 +726,35 @@ fn owned_classes_keep_each_row_capture_values() {
             .filter(|finding| finding.rule == Rule::ParameterizationCandidate)
             .count(),
         1
+    );
+}
+
+/// A `.each` parameter named inside a raw-text slice takes the row's value like it does anywhere
+/// else, so two rows whose only difference sits inside the slice stay distinct.
+#[test]
+fn a_row_parameter_inside_a_raw_slice_is_replaced_by_the_rows_value() {
+    let (open, close) = ("[".repeat(300), "]".repeat(300));
+    let source = format!("test('t', (n) => {{ const x = {open}n{close}; }});");
+    let one = fingerprint_row(
+        &source,
+        &RowSubstitution::Positional(vec![cell("number", "1")]),
+    );
+    let two = fingerprint_row(
+        &source,
+        &RowSubstitution::Positional(vec![cell("number", "2")]),
+    );
+    assert!(one.alpha.contains("<max-depth:"), "the slice is raw text");
+    assert_ne!(
+        one.alpha, two.alpha,
+        "different rows behind identical raw text"
+    );
+    assert_eq!(
+        one.alpha,
+        fingerprint_row(
+            &source,
+            &RowSubstitution::Positional(vec![cell("number", "1")])
+        )
+        .alpha,
+        "the same row, the same text"
     );
 }

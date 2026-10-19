@@ -217,6 +217,7 @@ mod helper_inlining;
 mod helper_inlining_cases;
 mod jsx;
 mod node_matrix;
+mod raw_fallback;
 mod row_substitution;
 mod row_substitution_each;
 mod type_arguments;

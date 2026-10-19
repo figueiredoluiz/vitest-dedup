@@ -138,12 +138,20 @@
 //! bias toward false negatives (two different things stay different) rather than risk a false
 //! positive (two different things collapse). Each is called out at the match arm that does it:
 //! parenthesization and TS type-only wrappers (`as`, `satisfies`, non-null `!`, type assertions)
-//! are transparently unwrapped everywhere because they carry no runtime identity, but destructuring
+//! are transparently unwrapped everywhere because they carry no runtime identity (the one
+//! exception is a parenthesized optional chain used as a receiver, which ends the chain and is
+//! marked `chain-end`), but destructuring
 //! *assignment* targets (not declarations), decorators, class bodies, and most TS-only declaration
 //! forms are rendered as opaque raw text. JSX is the one construct that outgrew that treatment and
 //! is serialized structurally (`ser_jsx_element`) -- component tests are too large a share of real
 //! suites for the whitespace sensitivity of a raw slice to be an acceptable under-match, and an
 //! attribute literal hidden inside one is a value this module's `structural` view needs to see.
+//!
+//! Raw text only under-matches when it carries its own meaning. A slice keeps the original
+//! spelling of every name, so identical text can resolve to different bindings: the fallback
+//! therefore appends the identity of each binding declared outside the slice
+//! (`Serializer::raw_fallback`), and a slice using `this`, `arguments` or `new.target` of a
+//! function outside it makes the body depend on its callback form.
 //!
 //! ## Explicit type arguments
 //!
@@ -309,9 +317,10 @@ use oxc_ast::ast::{
     TSTypeParameterInstantiation, TaggedTemplateExpression, TemplateLiteral, TryStatement,
     VariableDeclaration, VariableDeclarationKind, VariableDeclarator, WhileStatement,
 };
+use oxc_ast::AstKind;
 use oxc_ast_visit::{walk, Visit};
 use oxc_parser::Parser;
-use oxc_semantic::Semantic;
+use oxc_semantic::{NodeId, Semantic};
 use oxc_span::{GetSpan, SourceType, Span};
 use oxc_syntax::operator::UnaryOperator;
 use oxc_syntax::reference::ReferenceId;
@@ -443,6 +452,14 @@ pub(super) enum FunctionLike<'a, 'b> {
 }
 
 impl<'a> FunctionLike<'a, '_> {
+    /// The callable's own node in the semantic model.
+    fn node_id(&self) -> NodeId {
+        match self {
+            Self::Arrow(arrow) => arrow.node_id.get(),
+            Self::Function(function) => function.node_id.get(),
+        }
+    }
+
     /// The span covering the whole callable, params through body.
     ///
     /// This is the boundary the renamer uses to decide "local vs. free": any symbol declared
@@ -534,6 +551,7 @@ pub(super) fn fingerprint(
         file_key,
         file.to_path_buf(),
         body.span(),
+        body.node_id(),
         &substitution,
         &no_dataflow,
     );
@@ -645,6 +663,7 @@ pub(super) fn render_inlined_helper_body(
         path_key(file),
         file.to_path_buf(),
         body.span(),
+        body.node_id(),
         &no_rows,
         &no_dataflow,
     );

@@ -37,7 +37,13 @@ pub(super) struct FingerprintContext<'a, 'b, 's, 'm> {
     /// dynamic `import()` is the one place inside a body that carries one.
     pub(super) file: PathBuf,
     pub(super) body_span: Span,
+    /// The callable's own node, the root of the run [`Self::collect_raw_sites`] scans.
+    pub(super) body_node: NodeId,
     pub(super) class_uncertain: std::rc::Rc<std::cell::Cell<bool>>,
+    /// What a raw-text fallback needs to know about the body, built on first use and shared by
+    /// the passes of one `fingerprint` call. See [`Self::raw_slice_binds_this`] and
+    /// [`Self::raw_slice_references`].
+    pub(super) raw_sites: std::rc::Rc<std::cell::OnceCell<RawSites<'a>>>,
     pub(super) expand_classes: bool,
     pub(super) class_regions: Vec<Span>,
     pub(super) capture_stack: Vec<SymbolId>,
@@ -107,6 +113,25 @@ pub(super) struct FingerprintContext<'a, 'b, 's, 'm> {
     pub(super) next_local: u32,
 }
 
+/// One identifier reference that resolves to a symbol, with where that symbol is declared.
+struct RawReference<'a> {
+    start: u32,
+    ident: &'a IdentifierReference<'a>,
+    symbol: SymbolId,
+    declared: Span,
+}
+
+/// The positions a raw-text fallback searches, collected once per body. Both lists are sorted by
+/// source offset so a slice finds its own entries by binary search.
+#[derive(Default)]
+pub(super) struct RawSites<'a> {
+    /// `this`, `new.target` and a free `arguments`, each with the span of the non-arrow function
+    /// that binds it (`None` when no function does).
+    this_sites: Vec<(u32, Option<Span>)>,
+    /// Every identifier reference that resolves to a symbol.
+    references: Vec<RawReference<'a>>,
+}
+
 impl<'a, 'b, 's, 'm> FingerprintContext<'a, 'b, 's, 'm> {
     // Every parameter is a distinct piece of construction context with no natural grouping --
     // same rationale as `reference_identity`'s own `#[allow]` above.
@@ -120,6 +145,7 @@ impl<'a, 'b, 's, 'm> FingerprintContext<'a, 'b, 's, 'm> {
         file_key: String,
         file: PathBuf,
         body_span: Span,
+        body_node: NodeId,
         row_substitution: &'m HashMap<SymbolId, (&'static str, String)>,
         dataflow: &'m HashMap<SymbolId, DataflowSubst<'a, 'b>>,
     ) -> Self {
@@ -130,7 +156,9 @@ impl<'a, 'b, 's, 'm> FingerprintContext<'a, 'b, 's, 'm> {
             file_key,
             file,
             body_span,
+            body_node,
             class_uncertain: std::rc::Rc::new(std::cell::Cell::new(false)),
+            raw_sites: Default::default(),
             expand_classes: false,
             class_regions: Vec::new(),
             capture_stack: Vec::new(),
@@ -164,7 +192,9 @@ impl<'a, 'b, 's, 'm> FingerprintContext<'a, 'b, 's, 'm> {
             file_key: self.file_key.clone(),
             file: self.file.clone(),
             body_span: self.body_span,
+            body_node: self.body_node,
             class_uncertain: self.class_uncertain.clone(),
+            raw_sites: self.raw_sites.clone(),
             expand_classes: self.expand_classes,
             class_regions: self.class_regions.clone(),
             capture_stack: self.capture_stack.clone(),
@@ -200,6 +230,123 @@ impl<'a, 'b, 's, 'm> FingerprintContext<'a, 'b, 's, 'm> {
         fresh.dataflow = dataflow;
         fresh.expand_classes = true;
         fresh
+    }
+
+    /// The sites a raw-text fallback searches, collected on first use.
+    fn raw_sites(&self) -> &RawSites<'a> {
+        self.raw_sites.get_or_init(|| self.collect_raw_sites())
+    }
+
+    /// Whether the raw source under `span` uses `this`, `arguments` or `new.target` of a function
+    /// that is not itself inside the text. Such a slice means different things under an arrow
+    /// callback and a `function` one, and nothing else in the fingerprint can say so.
+    pub(super) fn raw_slice_binds_this(&self, span: Span) -> bool {
+        let sites = self.raw_sites();
+        let first = sites
+            .this_sites
+            .partition_point(|&(start, _)| start < span.start);
+        sites.this_sites[first..]
+            .iter()
+            .take_while(|&&(start, _)| start < span.end)
+            .any(|&(_, function)| {
+                function
+                    .is_none_or(|function| function.start < span.start || function.end > span.end)
+            })
+    }
+
+    /// The references inside the raw source under `span` to a symbol declared outside it, first
+    /// occurrence of each symbol only, in source order. The caller renders them: a slice keeps
+    /// the original spelling of every name, while the rest of the body is alpha-renamed, so the
+    /// text alone cannot say which binding a name meant.
+    pub(super) fn raw_slice_references(&self, span: Span) -> Vec<&'a IdentifierReference<'a>> {
+        let sites = self.raw_sites();
+        let first = sites
+            .references
+            .partition_point(|reference| reference.start < span.start);
+        let mut seen = HashSet::new();
+        sites.references[first..]
+            .iter()
+            .take_while(|reference| reference.start < span.end)
+            .filter(|reference| {
+                !(reference.declared.start >= span.start && reference.declared.end <= span.end)
+            })
+            .filter(|reference| seen.insert(reference.symbol))
+            .map(|reference| reference.ident)
+            .collect()
+    }
+
+    /// The offsets [`Self::raw_slice_binds_this`] and [`Self::raw_slice_references`] search.
+    fn collect_raw_sites(&self) -> RawSites<'a> {
+        let scoping = self.semantic.scoping();
+        let mut sites = RawSites::default();
+        // The body's nodes are one contiguous run starting at the callable's own node, and a node
+        // belongs to it exactly while its parent does not precede that node. This keeps the cost
+        // to the body, not the file -- a file with a thousand tests would otherwise be scanned a
+        // thousand times.
+        let nodes = self.semantic.nodes();
+        let root = self.body_node;
+        for node in nodes
+            .iter_enumerated()
+            .skip(root.index())
+            .map_while(|(id, node)| {
+                (id == root || nodes.parent_id(id).index() >= root.index()).then_some(node)
+            })
+        {
+            let span = node.span();
+            let is_this = match node.kind() {
+                AstKind::ThisExpression(_) | AstKind::NewTarget(_) => true,
+                AstKind::IdentifierReference(ident) => {
+                    let resolved = ident
+                        .reference_id
+                        .get()
+                        .and_then(|reference| scoping.get_reference(reference).symbol_id());
+                    if let Some(symbol) = resolved {
+                        sites.references.push(RawReference {
+                            start: span.start,
+                            ident,
+                            symbol,
+                            declared: scoping.symbol_span(symbol),
+                        });
+                    }
+                    resolved.is_none() && ident.name == "arguments"
+                }
+                _ => false,
+            };
+            if is_this {
+                let in_initializer = |value: &Option<Expression<'_>>| {
+                    value.as_ref().is_some_and(|value| {
+                        value.span().start <= span.start && span.end <= value.span().end
+                    })
+                };
+                // `this`, `arguments` and `new.target` belong to the nearest enclosing
+                // non-arrow function.
+                let function = self
+                    .semantic
+                    .nodes()
+                    .ancestor_kinds(node.id())
+                    .find_map(|kind| match kind {
+                        AstKind::Function(function) => Some(function.span),
+                        // A static block and a field initializer bind `this` to the class and its
+                        // instance; a computed key does not, it is evaluated in the outer scope.
+                        AstKind::StaticBlock(block) => Some(block.span),
+                        AstKind::PropertyDefinition(property)
+                            if in_initializer(&property.value) =>
+                        {
+                            Some(property.span)
+                        }
+                        AstKind::AccessorProperty(property) if in_initializer(&property.value) => {
+                            Some(property.span)
+                        }
+                        _ => None,
+                    });
+                sites.this_sites.push((span.start, function));
+            }
+        }
+        sites
+            .references
+            .sort_unstable_by_key(|reference| reference.start);
+        sites.this_sites.sort_unstable_by_key(|&(start, _)| start);
+        sites
     }
 
     /// The source text under `span` (empty when the span is out of range).

@@ -63,24 +63,75 @@ impl<'a, 'b, 's, 'm> Serializer<'a, 'b, 's, 'm> {
         (text, self.outermost_this_dependent)
     }
 
-    /// Raw-text fallback for anything not explicitly modeled. Deliberately under-matching: two
-    /// different opaque constructs never accidentally collapse (they compare by literal text,
-    /// idents and all), but two constructs whose only difference lives inside an opaque region
-    /// stay indistinguishable to this fingerprint. See the module doc.
+    /// Raw-text fallback for anything not explicitly modeled. Two different opaque constructs
+    /// never accidentally collapse (they compare by literal text, idents and all). The text alone
+    /// cannot say what its names mean, so [`Serializer::raw_fallback`] adds that. See the module
+    /// doc.
     pub(super) fn opaque(&mut self, span: Span) -> String {
-        if !self.ctx.class_regions.is_empty() {
-            self.ctx.class_uncertain.set(true);
-        }
-        format!("<opaque:{}>", self.ctx.slice(span))
+        self.raw_fallback("opaque", span)
     }
 
     /// Retain a depth-limit marker and the original source slice rather than claiming a
-    /// complete rendering.
+    /// complete rendering, with the same additions as [`Serializer::opaque`].
     pub(super) fn degraded(&mut self, span: Span) -> String {
+        self.raw_fallback("max-depth", span)
+    }
+
+    /// The verbatim source under `span`, plus what the rest of the body knows about it.
+    ///
+    /// A slice keeps the original spelling of every name, while the body around it is alpha-renamed,
+    /// row-substituted and import-anchored. Two bodies whose slices read alike can therefore mean
+    /// different things: `[x] = [1]` assigns whichever variable `x` names, and `config.v` reads
+    /// whichever `config` is in scope. So the slice is followed by the identity of each binding it
+    /// uses from outside the slice ([`Serializer::raw_binding_identity`]), and a slice that uses
+    /// `this`, `arguments` or `new.target` of a function outside the slice marks the body as
+    /// dependent on its callback form.
+    fn raw_fallback(&mut self, marker: &str, span: Span) -> String {
         if !self.ctx.class_regions.is_empty() {
             self.ctx.class_uncertain.set(true);
         }
-        format!("<max-depth:{}>", self.ctx.slice(span))
+        // Without a node table the slice cannot be checked, so the body is not compared.
+        if self.ctx.semantic.nodes().is_empty() {
+            self.ctx.class_uncertain.set(true);
+        }
+        if self.ctx.raw_slice_binds_this(span) {
+            self.this_or_arguments = true;
+        }
+        let identities: Vec<String> = self
+            .ctx
+            .raw_slice_references(span)
+            .into_iter()
+            .map(|ident| format!("{}={}", ident.name, self.raw_binding_identity(ident)))
+            .collect();
+        let suffix = if identities.is_empty() {
+            String::new()
+        } else {
+            format!("|{}", identities.join(","))
+        };
+        format!("<{marker}:{}{suffix}>", self.ctx.slice(span))
+    }
+
+    /// What a binding used inside a raw slice stands for: the value a `.each` row substitutes for
+    /// it, otherwise its identity (canonical local slot, outer declaration or import).
+    /// Deliberately not [`Serializer::reference_or_literal`]: that also expands classes and
+    /// dataflow, which recurse and mark the body uncertain, while a name in a raw slice only needs
+    /// to be tied to the binding it means -- the binding's own contents are rendered where it is
+    /// declared. An inlined helper's parameter is never marked consumed by a raw slice, so the
+    /// call's arguments stay visible in the inlined wrapper.
+    fn raw_binding_identity(&mut self, ident: &IdentifierReference<'a>) -> String {
+        let symbol = ident.reference_id.get().and_then(|reference| {
+            self.ctx
+                .semantic
+                .scoping()
+                .get_reference(reference)
+                .symbol_id()
+        });
+        if let Some(symbol) = symbol {
+            if let Some((kind, raw)) = self.ctx.row_substitution.get(&symbol).cloned() {
+                return self.literal(kind, &raw);
+            }
+        }
+        format!("id:{}", self.ctx.reference(ident))
     }
 
     /// An explicit type-argument list, rendered identically in all three modes.

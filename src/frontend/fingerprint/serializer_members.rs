@@ -21,7 +21,7 @@ impl<'a, 'b, 's, 'm> Serializer<'a, 'b, 's, 'm> {
             }
         }
         self.class_reflection(&member.object, member.property.name.as_str(), depth + 1);
-        let object = self.ser_expr(&member.object, depth + 1);
+        let object = self.ser_receiver(&member.object, member.optional, depth + 1);
         let optional = if member.optional { "?." } else { "." };
         format!(
             "(member {object} {optional}{})",
@@ -43,7 +43,7 @@ impl<'a, 'b, 's, 'm> Serializer<'a, 'b, 's, 'm> {
         {
             return value;
         }
-        let object = self.ser_expr(&member.object, depth + 1);
+        let object = self.ser_receiver(&member.object, member.optional, depth + 1);
         let property = self.ser_expr(&member.expression, depth + 1);
         // `?.[k]` is not `[k]`: the first yields `undefined` on a nullish receiver, the second
         // throws. Two tests differing only in that guard are different tests, and without this
@@ -57,6 +57,26 @@ impl<'a, 'b, 's, 'm> Serializer<'a, 'b, 's, 'm> {
         format!("(index{optional} {object} {property})")
     }
 
+    /// A member object, callee or tag. Parentheses around an optional chain end it: `(o?.b).c`
+    /// throws when `o` is nullish, where `o?.b.c` short-circuits to `undefined`. When the access
+    /// applied to it is itself optional (`(o?.b)?.c`) the parentheses change nothing, because that
+    /// `?.` short-circuits on the same nullish value. A chain that is not parenthesized is one
+    /// `ChainExpression` and never reaches this position as a receiver, so every spelling that
+    /// serialized before keeps its text.
+    pub(super) fn ser_receiver(
+        &mut self,
+        receiver: &Expression<'a>,
+        access_is_optional: bool,
+        depth: u32,
+    ) -> String {
+        let text = self.ser_expr(receiver, depth);
+        if !access_is_optional && ends_optional_chain(receiver) {
+            format!("(chain-end {text})")
+        } else {
+            text
+        }
+    }
+
     /// Render a private-field access with its receiver and private member name.
     pub(super) fn ser_private_field(
         &mut self,
@@ -67,9 +87,10 @@ impl<'a, 'b, 's, 'm> Serializer<'a, 'b, 's, 'm> {
             return self.degraded(member.span);
         }
         self.private_callable_escape(member);
-        let object = self.ser_expr(&member.object, depth + 1);
+        let object = self.ser_receiver(&member.object, member.optional, depth + 1);
+        let optional = if member.optional { "?." } else { "." };
         let name = self.private_name(member.field.name.as_str());
-        format!("(member {object} .#{name})")
+        format!("(member {object} {optional}#{name})")
     }
 
     /// A JSX element, structurally: name, attributes in source order, children in source order.
@@ -295,7 +316,7 @@ impl<'a, 'b, 's, 'm> Serializer<'a, 'b, 's, 'm> {
         if let Some(inlined) = self.try_inline_imported_helper(call, depth) {
             return inlined;
         }
-        let callee = self.ser_expr(&call.callee, depth + 1);
+        let callee = self.ser_receiver(&call.callee, call.optional, depth + 1);
         let type_arguments = self.ser_type_arguments(call.type_arguments.as_deref());
         let arguments: Vec<String> = call
             .arguments
@@ -425,7 +446,7 @@ impl<'a, 'b, 's, 'm> Serializer<'a, 'b, 's, 'm> {
         if depth > MAX_DEPTH {
             return self.degraded(tagged.span);
         }
-        let tag = self.ser_expr(&tagged.tag, depth + 1);
+        let tag = self.ser_receiver(&tagged.tag, false, depth + 1);
         let type_arguments = self.ser_type_arguments(tagged.type_arguments.as_deref());
         let quasi = self.ser_template(&tagged.quasi, depth + 1);
         format!("(tagged {tag}{type_arguments} {quasi})")
@@ -826,6 +847,27 @@ impl<'a, 'b, 's, 'm> Serializer<'a, 'b, 's, 'm> {
             // textually different forms DO compare unequal; what it loses is alpha-renaming and
             // import anchoring inside the slice, and it is whitespace-sensitive.
             _ => self.opaque(expr.span()),
+        }
+    }
+}
+
+/// Whether `receiver` is an optional chain that parentheses cut off from the member or call
+/// applied to it, looking through type-only wrappers that do not change the runtime value.
+fn ends_optional_chain(receiver: &Expression<'_>) -> bool {
+    let mut current = receiver;
+    let mut parenthesized = false;
+    loop {
+        match current {
+            Expression::ParenthesizedExpression(inner) => {
+                parenthesized = true;
+                current = &inner.expression;
+            }
+            Expression::TSNonNullExpression(wrapper) => current = &wrapper.expression,
+            Expression::TSAsExpression(wrapper) => current = &wrapper.expression,
+            Expression::TSSatisfiesExpression(wrapper) => current = &wrapper.expression,
+            Expression::TSTypeAssertion(wrapper) => current = &wrapper.expression,
+            Expression::ChainExpression(_) => return parenthesized,
+            _ => return false,
         }
     }
 }

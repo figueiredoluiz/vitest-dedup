@@ -197,6 +197,7 @@ macro_rules! with_trivial_serializer {
                 "trivial.test.ts".to_owned(),
                 PathBuf::from("trivial.test.ts"),
                 SPAN,
+                NodeId::ROOT,
                 &row_substitution,
                 &dataflow,
             ),
@@ -424,6 +425,7 @@ fn ordinary_call_arguments_are_part_of_behavior_identity() {
     );
 }
 
+/// A destructured property name is part of the behavior identity of the call it feeds.
 #[test]
 fn destructured_property_names_are_part_of_behavior_identity() {
     let prints = fingerprint_all(
@@ -447,6 +449,7 @@ fn destructured_property_names_are_part_of_behavior_identity() {
         .any(|event| event.contains(":prop:isSameAsInitial")));
 }
 
+/// A destructured callable that is never reassigned fingerprints like the direct member access.
 #[test]
 fn safe_destructured_callable_still_matches_direct_member_access() {
     let prints = fingerprint_all(
@@ -463,3 +466,15 @@ fn safe_destructured_callable_still_matches_direct_member_access() {
 }
 
 // -----------------------------------------------------------------------------------------
+
+/// A raw slice cannot be checked against a semantic model that has no node table, so the body
+/// that holds one is marked unresolved instead of being compared on its text alone.
+#[test]
+fn a_raw_slice_without_a_node_table_marks_the_body_unresolved() {
+    with_trivial_serializer!(|serializer| {
+        assert!(!serializer.ctx.class_uncertain.get());
+        let text = serializer.opaque(SPAN);
+        assert_eq!(text, "<opaque:>");
+        assert!(serializer.ctx.class_uncertain.get());
+    });
+}

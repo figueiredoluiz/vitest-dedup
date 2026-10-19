@@ -190,6 +190,16 @@ fn optionality_is_part_of_every_member_and_call_form() {
             "const v = o?.[0].k;",
         ),
         ("computed member as an argument", "f(o[0]);", "f(o?.[0]);"),
+        (
+            "private field",
+            "class A { #v = 1; static r(o) { return o.#v; } }",
+            "class A { #v = 1; static r(o) { return o?.#v; } }",
+        ),
+        (
+            "private field in a chain",
+            "class A { #v = {}; static r(o) { return o.#v.k; } }",
+            "class A { #v = {}; static r(o) { return o?.#v.k; } }",
+        ),
     ];
     for (name, plain, optional) in pairs {
         assert_ne!(
@@ -207,6 +217,80 @@ fn optionality_is_part_of_every_member_and_call_form() {
         alpha_of("const v = o[0];"),
         "the same body must still serialize identically"
     );
+}
+
+/// Parentheses that end an optional chain are part of the body.
+///
+/// `o?.b.c` short-circuits to `undefined` when `o` is nullish; `(o?.b).c` evaluates the chain
+/// first and then reads `.c` of its `undefined`, which throws. The serializer unwrapped the
+/// parentheses and the chain alike, so the pair collapsed into one `duplicate-test` finding at
+/// error severity. The marker is placed only where a parenthesized chain is a receiver, so every
+/// other spelling keeps its text.
+#[test]
+fn parentheses_that_end_an_optional_chain_are_part_of_the_body() {
+    let pairs = [
+        ("member", "const v = o?.b.c;", "const v = (o?.b).c;"),
+        ("call", "const v = o?.b();", "const v = (o?.b)();"),
+        ("index", "const v = o?.b[0];", "const v = (o?.b)[0];"),
+        (
+            "private field",
+            "class A { #c = 1; static r(o) { return o?.b.#c; } }",
+            "class A { #c = 1; static r(o) { return (o?.b).#c; } }",
+        ),
+        (
+            "past a type wrapper",
+            "const v = o?.b.c;",
+            "const v = (o?.b)!.c;",
+        ),
+        (
+            "type wrapper inside the parentheses",
+            "const v = o?.b.c;",
+            "const v = (o?.b as any).c;",
+        ),
+    ];
+    for (name, chained, ended) in pairs {
+        assert_ne!(
+            alpha_of(chained),
+            alpha_of(ended),
+            "{name}: ending the chain must change `alpha`"
+        );
+    }
+
+    // Controls: only the chain boundary is claimed to matter.
+    assert_eq!(
+        alpha_of("const v = (o?.b).c;"),
+        alpha_of("const v = ((o?.b)).c;"),
+        "nested parentheses around the same chain are one boundary"
+    );
+    assert_eq!(
+        alpha_of("const v = (o?.b);"),
+        alpha_of("const v = o?.b;"),
+        "parentheses that are not a receiver stay transparent"
+    );
+    // The outer `?.` short-circuits on the same nullish value, so the parentheses change nothing.
+    for (name, chained, ended) in [
+        ("member", "const v = o?.b?.c;", "const v = (o?.b)?.c;"),
+        ("index", "const v = o?.b?.[0];", "const v = (o?.b)?.[0];"),
+        ("call", "const v = o?.b?.();", "const v = (o?.b)?.();"),
+    ] {
+        assert_eq!(
+            alpha_of(chained),
+            alpha_of(ended),
+            "{name}: an optional access after the parentheses makes them irrelevant"
+        );
+    }
+    assert_eq!(
+        alpha_of("const v = (o).b;"),
+        alpha_of("const v = o.b;"),
+        "parentheses around a non-chain receiver stay transparent"
+    );
+    assert!(
+        !alpha_of("const v = o?.b.c;").contains("chain-end"),
+        "an unparenthesized chain keeps its previous text"
+    );
+    // A chain cannot be a tag without parentheses, so there is no unparenthesized spelling to
+    // compare; the receiver path is still the one marking it.
+    assert!(alpha_of("const v = (o?.b)`x`;").contains("chain-end"));
 }
 
 /// `for await` selects a different iteration protocol, so it is part of the loop's identity.

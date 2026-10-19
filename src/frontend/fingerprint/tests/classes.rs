@@ -9,6 +9,7 @@ use super::*;
 // suites do this (a test helper class, a describe-per-class layout), and the whole
 // `PrivateFieldExpression`/`Super` family of arms is otherwise unreachable.
 
+/// Every position a private field reference can take is modeled, with its optional link kept.
 #[test]
 fn a_private_field_reference_is_modeled_everywhere_it_can_appear() {
     let in_class = |body: &str| {
@@ -39,11 +40,12 @@ fn a_private_field_reference_is_modeled_everywhere_it_can_appear() {
             .contains("(update ++ false (member this .#p))"),
         "a private field update target must be modeled"
     );
-    // `ser_chain` -> `ser_private_field`
+    // `ser_chain` -> `ser_private_field`; the optional link is part of the text, so it cannot
+    // collapse into the plain read above.
     assert!(
         in_class("const v = this?.#p;")
             .alpha
-            .contains("(member this .#p)"),
+            .contains("(member this ?.#p)"),
         "an optional private field read must be modeled"
     );
     // `ser_for_left` -> `ser_private_field`
@@ -190,6 +192,7 @@ fn every_variable_declaration_kind_is_named_in_the_fingerprint() {
     );
 }
 
+/// A destructuring default and an unmodeled for-of target each keep their own shape.
 #[test]
 fn a_destructuring_default_and_an_unmodeled_for_target_keep_their_own_shapes() {
     assert!(
@@ -203,11 +206,12 @@ fn a_destructuring_default_and_an_unmodeled_for_target_keep_their_own_shapes() {
     // A destructuring for-of target (reassigning existing bindings, not declaring) is rare
     // in test bodies; raw text is the deliberate fallback.
     assert!(
-        alpha_of("let a; for ([a] of o) 1;").contains("<opaque:[a]>"),
-        "an unmodeled for-of target falls back to verbatim source"
+        alpha_of("let a; for ([a] of o) 1;").contains("<opaque:[a]|a=id:L0>"),
+        "an unmodeled for-of target falls back to verbatim source, tied to the variable it names"
     );
 }
 
+/// Every import form resolves to a free identity that depends on the module, not on the local name.
 #[test]
 fn every_import_form_yields_a_stable_free_identity() {
     // A default import's exported name is `default`, not the local binding's name, so two
