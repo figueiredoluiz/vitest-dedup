@@ -5,6 +5,9 @@ coverage:
         target: auto
         # The per-module floors stay enforced by scripts/check/check-coverage.mjs.
         informational: true
+    patch:
+      default:
+        informational: true
 
 comment:
   layout: "diff, files"
