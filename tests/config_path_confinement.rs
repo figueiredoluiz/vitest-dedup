@@ -201,10 +201,10 @@ fn a_root_reached_through_a_symlink_keeps_its_inside_paths() {
     if !try_symlink(&layout.root, &alias) {
         return;
     }
-    let mut entries = vec!["pkg".to_owned()];
-    // A canonical Windows path carries a `\\?\` prefix, whose `?` reads as a glob metacharacter.
-    #[cfg(not(windows))]
-    entries.push(js(&layout.root.canonicalize().unwrap().join("pkg")));
+    // A canonical Windows path carries a `\\?\` prefix, whose `?` reads as a glob metacharacter,
+    // so the absolute spelling is only tried elsewhere.
+    let absolute = (!cfg!(windows)).then(|| js(&layout.root.canonicalize().unwrap().join("pkg")));
+    let entries: Vec<String> = ["pkg".to_owned()].into_iter().chain(absolute).collect();
     for entry in &entries {
         write(
             &layout.root,
