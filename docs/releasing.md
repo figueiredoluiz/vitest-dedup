@@ -24,6 +24,33 @@ build provenance, then publishes to each enabled registry.
 - Set `PUBLISH_NPM=true` and, after crates.io setup, `PUBLISH_CRATES=true` as repository variables
   to enable those jobs.
 
+### The recall corpus comparison
+
+Every rehearsal and publish first runs the `compare` job. It finds the newest published release
+other than the one being built, downloads that release's Linux archive, checks its sha256 and its
+build-provenance attestation, and runs the recall corpus (`fixtures/recall`) through the new build
+and the previous binary with `scripts/check/evaluate-corpus.mjs`. The outcome classes are described
+in [the recall corpus README](../fixtures/recall/README.md#comparing-two-binaries).
+
+- A rehearsal prints the section that the notes would carry in the job summary and in the
+  `corpus-comparison` artifact, which also holds the full per-case detail.
+- A publish adds that section to the top of the generated release notes, between markers, after the
+  release is created. A retry replaces the section rather than adding another.
+- A comparison that cannot be made (the previous archive missing, altered or unattested, or the
+  evaluation failing) fails the job and so stops the release. It is never written as a clean result.
+  The first release of a repository has no earlier release and says so in its notes.
+- Regressions are reported, not blocking: the section lists them, and whether to ship is the
+  releaser's decision.
+- An npm-only recovery does not run the comparison and does not touch the release notes.
+- If the step that writes the section fails after the release is created, the `publish` job fails and
+  the crate, npm and site jobs do not run. Re-run the `publish` job: it updates the existing release
+  and puts the section back, once. Do not use an npm-only recovery for this, which leaves the notes
+  alone.
+
+To run it locally against a published release: `GH_REPO=<owner>/<repo> node
+scripts/release/release-comparison.mjs compare --version <version> --binary <binary> --out <dir>
+--target <platform key>`, with a `--target` that matches the machine, such as `darwin-arm64`.
+
 ### If npm publication stops partway through
 
 Dispatch the workflow again on the same tag with `publish: true` and `publish_npm_only: true`. This

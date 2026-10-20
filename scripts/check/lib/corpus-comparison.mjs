@@ -191,6 +191,23 @@ export function compareCorpus(candidates, baselines, labelChanges) {
 }
 
 /**
+ * The cases whose results got worse because of the detector: a lost or newly forbidden finding, a
+ * new unlabelled one, or an extraction that stopped matching. Pending cases and cases new or changed
+ * since the baseline are not among them.
+ *
+ * @param {object} comparison Output of {@link compareCorpus}.
+ * @returns {object[]}
+ */
+export function regressedCases(comparison) {
+  return comparison.cases.filter(
+    (c) =>
+      c.pending === null &&
+      c.labelChange === null &&
+      (c.newUnclaimed.length > 0 || c.extraction === 'regressed' || c.expectations.some((o) => ['regressed', 'new-forbidden'].includes(o.class))),
+  )
+}
+
+/**
  * Lines for the terminal.
  *
  * @param {object} comparison Output of {@link compareCorpus}.
@@ -210,13 +227,7 @@ export function renderComparison(comparison) {
     lines.push(`  labels or files changed since the baseline (${comparison.labelChangedCases.length} case(s); not detector changes): ${row(labelChanged)}`)
   }
   for (const rule of comparison.byRule) lines.push(`    ${rule.rule}: ${row(rule)}`)
-  const changed = comparison.cases.filter(
-    (c) =>
-      c.pending === null &&
-      c.labelChange === null &&
-      (c.newUnclaimed.length > 0 || c.extraction === 'regressed' || c.expectations.some((o) => ['regressed', 'new-forbidden'].includes(o.class))),
-  )
-  for (const c of changed) {
+  for (const c of regressedCases(comparison)) {
     const items = c.expectations.filter((o) => ['regressed', 'new-forbidden'].includes(o.class)).map((o) => `${o.id} ${o.class}`)
     for (const f of c.newUnclaimed) items.push(`new unclaimed ${f.rule} @ ${f.locations.join(' + ')}`)
     if (c.extraction === 'regressed') items.push('extraction no longer matches the labels')

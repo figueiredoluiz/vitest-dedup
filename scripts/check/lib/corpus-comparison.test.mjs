@@ -18,6 +18,7 @@ import {
   compareCorpus,
   corpusDigest,
   readLabelChanges,
+  regressedCases,
   renderComparison,
   runGit,
 } from './corpus-comparison.mjs'
@@ -131,6 +132,15 @@ test('unavailable cases are counted and a baseline that ran on none is an error'
   assert.equal(compare([ok, crashedPending]).unavailableCases, 1, 'a pending case does not excuse a crashed baseline')
   assert.throws(() => compareCorpus([], [], new Map()), /no comparable run/)
   assert.throws(() => compareCorpus([ok[0]], [], new Map()), /0 baseline result\(s\) for 1 candidate/)
+})
+
+test('only detector regressions on unchanged, non-pending cases are listed as regressed', () => {
+  const lost = [evaluated('lost', ['missing']), { evaluated: evaluated('lost', ['satisfied']) }]
+  const moved = [evaluated('moved', ['missing']), { evaluated: evaluated('moved', ['satisfied']) }]
+  const held = [evaluated('held', ['missing'], [], { pending: 'waits on a named defect' }), { evaluated: evaluated('held', ['satisfied']) }]
+  const fine = [evaluated('fine', ['satisfied']), { evaluated: evaluated('fine', ['satisfied']) }]
+  const out = compare([lost, moved, held, fine], new Map([['moved', 'new case']]))
+  assert.deepEqual(regressedCases(out).map((c) => c.name), ['lost'])
 })
 
 test('the text report names regressions, unavailable and label-changed cases', () => {

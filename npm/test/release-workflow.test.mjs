@@ -19,9 +19,9 @@ test('release publication is manual and all jobs check out the event commit', ()
   const trigger = release.slice(release.indexOf('\non:'), release.indexOf('\npermissions:'))
   assert.match(trigger, /workflow_dispatch:/)
   assert.doesNotMatch(trigger, /\n  push:/)
-  assert.equal((release.match(/- uses: actions\/checkout@[a-f0-9]{40}/g) ?? []).length, 6)
-  assert.equal((release.match(/ref: \$\{\{ github\.sha \}\}/g) ?? []).length, 6)
-  assert.equal((release.match(/persist-credentials: false/g) ?? []).length, 6)
+  assert.equal((release.match(/- uses: actions\/checkout@[a-f0-9]{40}/g) ?? []).length, 7)
+  assert.equal((release.match(/ref: \$\{\{ github\.sha \}\}/g) ?? []).length, 7)
+  assert.equal((release.match(/persist-credentials: false/g) ?? []).length, 7)
   const resolve = release.slice(release.indexOf('\n  resolve:'), release.indexOf('\n  build:'))
   assert.match(resolve, /fetch-depth: 0/)
   assert.match(resolve, /node scripts\/release\/validate-release-context\.mjs/)
@@ -29,6 +29,54 @@ test('release publication is manual and all jobs check out the event commit', ()
     resolve.indexOf('validate-release-context.mjs --remote') < resolve.indexOf('check-recovery-release.mjs'),
     'the live tag and main ancestry must be checked before npm-only recovery')
   assert.match(resolve, /tag_sha=\$\(git rev-parse --verify "refs\/tags\/v\$\{RELEASE_VERSION\}\^\{commit\}"\)/)
+})
+
+/** The text of one job of release.yml, up to the next job. */
+function job(name) {
+  const start = release.indexOf(`\n  ${name}:\n`)
+  assert.ok(start > -1, `release.yml has no ${name} job`)
+  const next = release.slice(start + 1).search(/\n  [a-z-]+:\n/)
+  return next === -1 ? release.slice(start) : release.slice(start, start + 1 + next)
+}
+
+test('the corpus comparison runs before both rehearsal and publication, and never in npm-only recovery', () => {
+  const compare = job('compare')
+  assert.match(compare, /needs: \[resolve, build\]/)
+  assert.match(compare, /if: inputs\.publish_npm_only != true/)
+  assert.match(compare, /fetch-depth: 0/, 'the previous tag must be reachable')
+  assert.match(compare, /name: binary-x86_64-unknown-linux-gnu/)
+  assert.match(compare, /release-comparison\.mjs compare/)
+  assert.match(compare, /name: corpus-comparison/)
+  assert.match(compare, /contents: read/)
+  assert.doesNotMatch(compare, /contents: write|id-token/, 'comparing needs no write access')
+  assert.match(job('rehearse'), /needs: \[resolve, build, compare\]/)
+  assert.match(job('publish'), /needs: \[resolve, build, compare\]/)
+  for (const name of ['publish-crate', 'publish-npm']) {
+    assert.doesNotMatch(job(name), /needs:[^\n]*compare/, `${name} must not wait for a comparison`)
+  }
+})
+
+test('rehearsal shows the comparison section and publication writes it into the notes exactly once', () => {
+  const rehearse = job('rehearse')
+  assert.match(rehearse, /name: corpus-comparison/)
+  assert.match(rehearse, /test -s release-comparison\/notes-section\.md/, 'a missing section fails the rehearsal')
+  const publish = job('publish')
+  const create = publish.indexOf('softprops/action-gh-release')
+  const add = publish.indexOf('release-comparison.mjs apply')
+  assert.ok(create > -1 && add > create, 'the section is added after the release and its notes exist')
+  assert.match(publish, /name: corpus-comparison/)
+  assert.doesNotMatch(publish.slice(create, add), /body(_path)?:/, 'the release step does not also carry the section')
+  assert.match(publish, /--section release-comparison\/notes-section\.md/)
+  // Nothing follows the notes step in the job, so its failure fails the job and holds the jobs that need it.
+  const steps = [...publish.matchAll(/^      - (?:name|uses|id): ([^\n]+)/gm)].map((match) => match[1])
+  assert.equal(steps.at(-1), 'Add the corpus comparison to the release notes', 'the notes step is the last step of publish')
+  assert.match(job('publish-npm'), /needs: \[resolve, build, publish\]/)
+  assert.match(release, /generate_release_notes: true/)
+})
+
+test('the comparison artifact is not picked up by the release-asset globs', () => {
+  assert.doesNotMatch(release, /name: release-comparison/)
+  assert.doesNotMatch(release, /pattern: corpus-/)
 })
 
 test('npm publishing runs only after the GitHub release exists', () => {
@@ -123,7 +171,7 @@ test('manual dispatch rehearses by default and publishing requires an explicit c
   const rehearse = release.slice(rehearseStart, publishStart)
   const publish = release.slice(publishStart, release.indexOf('\n  publish-crate:'))
   assert.match(rehearse, /if: inputs\.publish != true/)
-  assert.match(rehearse, /needs: \[resolve, build\]/)
+  assert.match(rehearse, /needs: \[resolve, build, compare\]/)
   assert.match(rehearse, /verify-npm-binaries\.mjs/)
   assert.match(rehearse, /install-simulation\.test\.mjs/)
   assert.match(rehearse, /prepare-npm-packages\.mjs native/)
