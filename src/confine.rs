@@ -196,7 +196,10 @@ mod tests {
     }
 
     /// Check path confinement: a nonexistent path behind a symlinked directory and `..` is judged
-    /// where the filesystem sends `..`, not where a textual fold would.
+    /// where the operating system sends `..`. Unix resolves the symlink first, so `link/../missing`
+    /// lands beside the link's target; Windows folds `..` textually before it looks at symlinks, so
+    /// the same spelling opens `root/missing`. Either way the judgment matches the path that would be
+    /// opened.
     #[test]
     fn dotdot_after_a_symlinked_directory_follows_the_filesystem() {
         let directory = tempfile::tempdir().unwrap();
@@ -205,10 +208,12 @@ mod tests {
         fs::create_dir_all(&root).unwrap();
         fs::create_dir_all(&deep).unwrap();
         with_symlink(&deep, &root.join("link"), || {
-            assert_eq!(
-                confine(&root, &root.join("link/../missing")),
-                Confinement::Outside
-            );
+            let beside_the_link = confine(&root, &root.join("link/../missing"));
+            if cfg!(windows) {
+                assert!(matches!(beside_the_link, Confinement::Missing(_)));
+            } else {
+                assert_eq!(beside_the_link, Confinement::Outside);
+            }
             assert!(matches!(
                 confine(&root, &root.join("link/../../root/missing")),
                 Confinement::Missing(_)
