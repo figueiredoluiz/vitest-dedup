@@ -35,8 +35,8 @@ format escapes them for its own needs:
 - HTML escapes the five HTML-special characters, encodes `<` and `>` inside the JSON island so the
   browser's tokenizer cannot see `</script`, and strips invisible bidirectional-override characters
   that would otherwise reorder a rendered line to point at a different file.
-- JSON, JSONL, and SARIF emit valid encodings of the bytes they were given, with the same bidi and
-  control-character stripping.
+- JSON, JSONL, and SARIF emit valid encodings of the bytes they were given, with the same bidi,
+  format-character, line-separator and control-character stripping.
 - The terminal reporter strips ANSI escapes and control characters so a title cannot move the
   cursor or recolour later output.
 

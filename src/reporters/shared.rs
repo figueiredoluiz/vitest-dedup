@@ -21,25 +21,52 @@ fn sanitize(value: &str, keep_whitespace: bool) -> String {
         .chars()
         .filter(|character| {
             let allowed_control = keep_whitespace && matches!(*character, '\n' | '\r' | '\t');
-            (!character.is_control() || allowed_control)
-                && !matches!(
-                    *character,
-                    '\u{00ad}'
-                        | '\u{061c}'
-                        | '\u{200b}'..='\u{200f}'
-                        | '\u{202a}'..='\u{202e}'
-                        // U+2060..=U+206F: the full "General Punctuation" invisible-formatting
-                        // block, not just its isolates (U+2066..=U+2069). U+206A..=U+206F are the
-                        // deprecated-but-still-live bidi/shaping controls (inhibit/activate
-                        // symmetric swapping, Arabic form shaping, national digit shapes) — none
-                        // of them are `char::is_control()`, so leaving the range short at U+2069
-                        // let them pass straight through into a rendered report.
-                        | '\u{2060}'..='\u{206f}'
-                        | '\u{feff}'
-                        | '\u{e0000}'..='\u{e007f}'
-                )
+            allowed_control || !is_dropped(*character)
         })
         .collect()
+}
+
+/// Whether `character` is dropped from every report, whatever the format.
+///
+/// Dropped: control characters (`Cc`), every format character (`Cf`: bidi overrides and isolates,
+/// zero-width and joiner characters, the soft hyphen, tag characters), and the line and paragraph
+/// separators (`Zl` U+2028, `Zp` U+2029). The separators are not controls and `serde_json` writes
+/// them unescaped, so a title carrying one splits a JSONL record for any consumer that treats them
+/// as line breaks, as ECMAScript does.
+///
+/// Rust's standard library has no general-category lookup, so the `Cf`/`Zl`/`Zp` set is spelled
+/// out below from Unicode 16.0 (the `Cf` set is identical in 17.0). Two spans are wider than the
+/// categories on purpose and cover unassigned scalars, so a character assigned there later is
+/// already dropped: U+2065 inside the General Punctuation formatting block, and the whole Tags
+/// block U+E0000..=U+E007F.
+///
+/// Dropping rather than escaping is the convention for every reporter (see [`report_safe_path`]).
+/// It also drops U+200C and U+200D, so an emoji ZWJ sequence renders as its parts and Persian or
+/// Indic text loses its ZWNJ. Variation selectors are `Mn`, not `Cf`, and survive.
+fn is_dropped(character: char) -> bool {
+    character.is_control()
+        || matches!(
+            character,
+            '\u{00ad}'
+                | '\u{0600}'..='\u{0605}'
+                | '\u{061c}'
+                | '\u{06dd}'
+                | '\u{070f}'
+                | '\u{0890}'..='\u{0891}'
+                | '\u{08e2}'
+                | '\u{180e}'
+                | '\u{200b}'..='\u{200f}'
+                | '\u{2028}'..='\u{202e}'
+                | '\u{2060}'..='\u{206f}'
+                | '\u{feff}'
+                | '\u{fff9}'..='\u{fffb}'
+                | '\u{110bd}'
+                | '\u{110cd}'
+                | '\u{13430}'..='\u{1343f}'
+                | '\u{1bca0}'..='\u{1bca3}'
+                | '\u{1d173}'..='\u{1d17a}'
+                | '\u{e0000}'..='\u{e007f}'
+        )
 }
 
 /// Sanitizes text for the terminal reporter, where even a bare newline would forge a report
@@ -272,6 +299,91 @@ mod tests {
         assert!(!sanitized.contains('\u{1b}'));
         // The bracket/letter text after ESC is inert without the ESC byte, so it may remain.
         assert_eq!(sanitized, "line oneline two[31mred[0mtabbed");
+    }
+
+    /// Every `Cf`, `Zl` and `Zp` scalar, as inclusive ranges. Enumerated independently of the
+    /// production `matches!` (from ICU via Node 26, Unicode 17.0, and cross-checked against
+    /// Python's `unicodedata`, Unicode 16.0): 172 scalars in both.
+    const FORMAT_AND_SEPARATOR_RANGES: &[(u32, u32)] = &[
+        (0x00ad, 0x00ad),
+        (0x0600, 0x0605),
+        (0x061c, 0x061c),
+        (0x06dd, 0x06dd),
+        (0x070f, 0x070f),
+        (0x0890, 0x0891),
+        (0x08e2, 0x08e2),
+        (0x180e, 0x180e),
+        (0x200b, 0x200f),
+        (0x2028, 0x2029),
+        (0x202a, 0x202e),
+        (0x2060, 0x2064),
+        (0x2066, 0x206f),
+        (0xfeff, 0xfeff),
+        (0xfff9, 0xfffb),
+        (0x110bd, 0x110bd),
+        (0x110cd, 0x110cd),
+        (0x13430, 0x1343f),
+        (0x1bca0, 0x1bca3),
+        (0x1d173, 0x1d17a),
+        (0xe0001, 0xe0001),
+        (0xe0020, 0xe007f),
+    ];
+
+    /// Check shared report fields: the dropped set is exactly the control, format and separator
+    /// scalars plus the three unassigned slots kept on purpose.
+    ///
+    /// Sweeping every scalar probes both edge neighbours of every range, which is what lets this
+    /// observe a range that stops one short or runs one long.
+    #[test]
+    fn dropped_set_is_exactly_controls_format_separators_and_the_kept_unassigned_slots() {
+        let pinned: u32 = FORMAT_AND_SEPARATOR_RANGES
+            .iter()
+            .map(|(low, high)| high - low + 1)
+            .sum();
+        assert_eq!(pinned, 172, "the pinned list lost or gained a scalar");
+
+        let mut dropped = 0_u32;
+        for scalar in 0..=0x10_ffff_u32 {
+            let Some(character) = char::from_u32(scalar) else {
+                continue;
+            };
+            let in_category = FORMAT_AND_SEPARATOR_RANGES
+                .iter()
+                .any(|(low, high)| (*low..=*high).contains(&scalar));
+            // Unassigned, but inside a block that holds only invisible formatting characters.
+            let kept_unassigned = matches!(scalar, 0x2065 | 0xe0000 | 0xe0002..=0xe001f);
+            let expected = character.is_control() || in_category || kept_unassigned;
+            assert_eq!(
+                is_dropped(character),
+                expected,
+                "U+{scalar:04X}: dropped must be {expected}"
+            );
+            dropped += u32::from(expected);
+        }
+        // 65 controls (Cc), 172 pinned, 1 + 1 + 30 unassigned slots.
+        assert_eq!(dropped, 65 + 172 + 32);
+    }
+
+    /// Check shared report fields: line and paragraph separators and newly covered format
+    /// characters are dropped by both sanitizers, and neighbouring text and spaces survive.
+    #[test]
+    fn separators_and_format_characters_are_dropped_and_their_neighbours_kept() {
+        for hostile in [
+            '\u{2028}',
+            '\u{2029}',
+            '\u{0600}',
+            '\u{180e}',
+            '\u{fff9}',
+            '\u{1d173}',
+        ] {
+            let input = format!("a{hostile}b");
+            assert_eq!(terminal_safe(&input), "ab", "U+{:04X}", u32::from(hostile));
+            assert_eq!(report_safe(&input), "ab", "U+{:04X}", u32::from(hostile));
+        }
+        // Just outside each edge of the separator span, and a variation selector: all text.
+        let kept = "a\u{2027}b\u{202f}c\u{205f}d\u{fe0f}e\u{e0100}f";
+        assert_eq!(terminal_safe(kept), kept);
+        assert_eq!(report_safe(kept), kept);
     }
 
     /// Check shared report fields: report safe keeps intentional whitespace but strips escapes

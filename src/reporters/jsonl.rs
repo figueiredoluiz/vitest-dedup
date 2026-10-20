@@ -1017,6 +1017,34 @@ mod tests {
         assert!(title.contains('\n'));
     }
 
+    /// A title with U+2028 or U+2029 stays one record for a consumer that splits on them.
+    ///
+    /// `serde_json` writes both unescaped, and ECMAScript treats them as line terminators.
+    #[test]
+    fn title_with_line_and_paragraph_separators_stays_one_record() {
+        let mut result = sample_result();
+        result.findings[0].titles[0] = "one\u{2028}{\"type\":\"forged\"}\u{2029}two".to_string();
+        let mut buffer = Vec::new();
+        JsonlReporter::new()
+            .write_report(&result, &mut buffer)
+            .unwrap();
+        let text = String::from_utf8(buffer).unwrap();
+        assert!(!text.contains(['\u{2028}', '\u{2029}']));
+        let records: Vec<&str> = text
+            .split(['\n', '\u{2028}', '\u{2029}'])
+            .filter(|line| !line.is_empty())
+            .collect();
+        assert_eq!(records.len(), 2, "one finding and one summary: {text:?}");
+        for record in records {
+            serde_json::from_str::<serde_json::Value>(record).expect("each record parses alone");
+        }
+        let lines = render_lines(&result);
+        assert_eq!(
+            lines[0]["titles"][0].as_str().unwrap(),
+            "one{\"type\":\"forged\"}two"
+        );
+    }
+
     /// Verify non ascii path is forward slashed and preserved.
     #[test]
     fn non_ascii_path_is_forward_slashed_and_preserved() {

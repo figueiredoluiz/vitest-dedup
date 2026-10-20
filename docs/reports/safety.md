@@ -21,9 +21,13 @@ printed, or compared.
 
 ### Applied by every reporter
 
-- Control characters, ANSI escapes, and bidirectional or invisible Unicode formatting characters are
-  stripped from interpolated text. A bidi override in a title can visually reorder a line so a
-  finding appears to point at a different file.
+- Control characters, ANSI escapes, every Unicode format character (general category `Cf`: bidi
+  overrides, zero-width and joiner characters, the soft hyphen, tag characters), and the line and
+  paragraph separators U+2028 and U+2029 are stripped from interpolated text. A bidi override in a
+  title can visually reorder a line so a finding appears to point at a different file, and a
+  U+2028 would split a `jsonl` record for a consumer that treats it as a line break. Stripping
+  includes U+200C and U+200D, so an emoji joined sequence shows as its parts. Variation selectors
+  and ordinary spaces are kept.
 - Paths use forward slashes on every platform, so a report generated on Windows is comparable to one
   from Linux CI.
 

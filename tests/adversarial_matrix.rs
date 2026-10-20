@@ -12,7 +12,8 @@
 //!
 //! # Dimensions
 //!
-//! - **Hazards** ([`HAZARDS`]): eleven values -- ten hostile, one legitimate-Unicode control. Each
+//! - **Hazards** ([`HAZARDS`]): seventeen values -- fifteen hostile, two legitimate-Unicode
+//!   controls, one of them a set of scalars one step outside each stripped span. Each
 //!   carries a [`Category`] describing what the output-safety contract in `docs/reports/safety.md`
 //!   promises for it, which is what turns "does it survive" into a falsifiable expectation instead
 //!   of a guess per cell.
@@ -230,6 +231,43 @@ const HAZARDS: &[Hazard] = &[
         filename_legal_everywhere: true,
     },
     Hazard {
+        id: "lineseparator",
+        decoded: "\u{2028}",
+        js_source_spelling: r" ",
+        category: Category::AlwaysStripped,
+        filename_legal_everywhere: true,
+    },
+    Hazard {
+        id: "paragraphseparator",
+        decoded: "\u{2029}",
+        js_source_spelling: r" ",
+        category: Category::AlwaysStripped,
+        filename_legal_everywhere: true,
+    },
+    Hazard {
+        // Arabic number sign, a `Cf` in the Basic Multilingual Plane outside the old ranges.
+        id: "arabicnumbersign",
+        decoded: "\u{0600}",
+        js_source_spelling: r"؀",
+        category: Category::AlwaysStripped,
+        filename_legal_everywhere: true,
+    },
+    Hazard {
+        id: "mongolianvowelseparator",
+        decoded: "\u{180e}",
+        js_source_spelling: r"᠎",
+        category: Category::AlwaysStripped,
+        filename_legal_everywhere: true,
+    },
+    Hazard {
+        // A `Cf` outside the Basic Multilingual Plane and outside the Tags block.
+        id: "musicalbeam",
+        decoded: "\u{1d173}",
+        js_source_spelling: r"\u{1d173}",
+        category: Category::AlwaysStripped,
+        filename_legal_everywhere: true,
+    },
+    Hazard {
         id: "newline",
         decoded: "\n",
         js_source_spelling: r"\n",
@@ -289,6 +327,17 @@ const HAZARDS: &[Hazard] = &[
         id: "legitimateunicode",
         decoded: "café-日本語のタイトル",
         js_source_spelling: "café-日本語のタイトル",
+        category: Category::MustSurvive,
+        filename_legal_everywhere: true,
+    },
+    Hazard {
+        // Each character sits one scalar outside a stripped span, or is a variation selector
+        // (`Mn`): U+2027 below the separators, U+202F after the bidi overrides, U+205F before the
+        // invisible-operator block, U+FE0F, and U+E0100 after the tags. A stripper that widened
+        // by one scalar, or by category, would drop one of them.
+        id: "edgeunicode",
+        decoded: "a\u{2027}b\u{202f}c\u{205f}d\u{fe0f}e\u{e0100}f",
+        js_source_spelling: r"a‧b c d️e\u{e0100}f",
         category: Category::MustSurvive,
         filename_legal_everywhere: true,
     },
@@ -503,6 +552,12 @@ fn extract_field_sarif(report: &serde_json::Value, site: Site) -> String {
 /// exists to catch -- a raw newline inside hazard content forged an extra record boundary instead
 /// of being escaped as data.
 fn parse_single_finding_jsonl(jsonl_stdout: &str) -> serde_json::Value {
+    // `str::lines` splits on LF only, but ECMAScript and several log tools also split on these two,
+    // and `serde_json` writes them unescaped: none may reach the stream.
+    assert!(
+        !jsonl_stdout.contains(['\u{2028}', '\u{2029}']),
+        "a Unicode line separator reached the jsonl stream: {jsonl_stdout:?}"
+    );
     let mut lines = jsonl_stdout.lines();
     let finding_line = lines
         .next()
@@ -782,6 +837,68 @@ filename_site_tests!(
     "unicodetag",
     unicode_tag_in_filename,
     unicode_tag_filename_reaches_stderr
+);
+
+// --- line and paragraph separators, other format characters --------------------------------------
+title_site_tests!(
+    "lineseparator",
+    line_separator_in_test_title,
+    line_separator_in_describe_title
+);
+filename_site_tests!(
+    "lineseparator",
+    line_separator_in_filename,
+    line_separator_filename_reaches_stderr
+);
+title_site_tests!(
+    "paragraphseparator",
+    paragraph_separator_in_test_title,
+    paragraph_separator_in_describe_title
+);
+filename_site_tests!(
+    "paragraphseparator",
+    paragraph_separator_in_filename,
+    paragraph_separator_filename_reaches_stderr
+);
+title_site_tests!(
+    "arabicnumbersign",
+    arabic_number_sign_in_test_title,
+    arabic_number_sign_in_describe_title
+);
+filename_site_tests!(
+    "arabicnumbersign",
+    arabic_number_sign_in_filename,
+    arabic_number_sign_filename_reaches_stderr
+);
+title_site_tests!(
+    "mongolianvowelseparator",
+    mongolian_vowel_separator_in_test_title,
+    mongolian_vowel_separator_in_describe_title
+);
+filename_site_tests!(
+    "mongolianvowelseparator",
+    mongolian_vowel_separator_in_filename,
+    mongolian_vowel_separator_filename_reaches_stderr
+);
+title_site_tests!(
+    "musicalbeam",
+    musical_beam_in_test_title,
+    musical_beam_in_describe_title
+);
+filename_site_tests!(
+    "musicalbeam",
+    musical_beam_in_filename,
+    musical_beam_filename_reaches_stderr
+);
+title_site_tests!(
+    "edgeunicode",
+    edge_unicode_survives_in_test_title,
+    edge_unicode_survives_in_describe_title
+);
+filename_site_tests!(
+    "edgeunicode",
+    edge_unicode_survives_in_filename,
+    edge_unicode_survives_in_stderr
 );
 
 // --- newline ------------------------------------------------------------------------------------
