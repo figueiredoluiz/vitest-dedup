@@ -232,7 +232,15 @@ test('duplicate case names, repeated matchers and contradictions fail', () => {
 })
 
 test('mixed-rule coverage entries resolve to a declared case', () => {
-  const base = manifestOf(makeCase('c'))
+  const base = manifestOf(
+    makeCase('c', {
+      expectedFindings: [
+        { rule: 'duplicate-test', severity: 'error', titles: ['a', 'b'] },
+        { rule: 'duplicate-test-name', severity: 'warning', titles: ['a', 'b'] },
+      ],
+      expectedAbsent: [],
+    }),
+  )
   const cannot = 'never share a participant at all'
   const ok = buildRecallLabels({
     ...base,
@@ -250,6 +258,63 @@ test('mixed-rule coverage entries resolve to a declared case', () => {
   const short = { ...base, mixedRuleCoverage: [{ pair: ['duplicate-test'], case: 'c' }] }
   assert.match(problemsOf(short), /exactly two rules/)
   assert.deepEqual(buildRecallLabels(base).controls, [])
+})
+
+test('a malformed mixed-rule control is refused, as the recall gate refuses it', () => {
+  const covering = makeCase('c', {
+    expectedFindings: [
+      { rule: 'duplicate-test', severity: 'error', titles: ['a', 'b'] },
+      { rule: 'duplicate-test-name', severity: 'warning', titles: ['a', 'b'] },
+    ],
+    expectedAbsent: [],
+  })
+  const base = manifestOf(covering)
+  const pair = ['duplicate-test', 'duplicate-test-name']
+  const cannot = 'never share a participant at all'
+  const withControls = (...mixedRuleCoverage) => ({ ...base, mixedRuleCoverage })
+
+  // A misspelled key leaves neither `case` nor `cannotCoOccur`; naming both is as bad.
+  assert.match(problemsOf(withControls({ pair, csae: 'c' })), /exactly one of `case`/)
+  assert.match(problemsOf(withControls({ pair, case: 'c', cannotCoOccur: cannot })), /exactly one of `case`/)
+  assert.match(problemsOf(withControls({ pair, cannotCoOccur: 'too short' })), /reason of 20\+ characters/)
+  assert.match(problemsOf(withControls({ pair, case: '' })), /must name a declared case/)
+  // A valid field next to a malformed second one is refused, not returned with both.
+  assert.match(problemsOf(withControls({ pair, case: 'c', cannotCoOccur: 'too short' })), /exactly one of `case`/)
+  assert.match(problemsOf(withControls({ pair, cannotCoOccur: cannot, case: '' })), /exactly one of `case`/)
+
+  // The inventory itself must be an array.
+  assert.match(problemsOf({ ...base, mixedRuleCoverage: null }), /mixedRuleCoverage: must be an array/)
+  // A covering case whose own findings are malformed is reported, not crashed on.
+  const broken = manifestOf(makeCase('c', { expectedFindings: {} }))
+  assert.match(
+    problemsOf({ ...broken, mixedRuleCoverage: [{ pair, case: 'c' }] }),
+    /recall label problem\(s\)[\s\S]*`expectedFindings` must be an array[\s\S]*include no .duplicate-test. finding/,
+  )
+  assert.match(problemsOf({ ...base, mixedRuleCoverage: { pair } }), /mixedRuleCoverage: must be an array/)
+
+  // Both members must be distinct rules the analyzer implements.
+  assert.match(problemsOf(withControls({ pair: ['duplicate-test', 'no-such-rule'], case: 'c' })), /distinct rules/)
+  assert.match(problemsOf(withControls({ pair: ['duplicate-test', 'duplicate-test'], case: 'c' })), /distinct rules/)
+
+  // A pair is recorded once, whichever way round it is written.
+  assert.match(
+    problemsOf(withControls({ pair, case: 'c' }, { pair: [...pair].reverse(), cannotCoOccur: cannot })),
+    /recorded more than once/,
+  )
+
+  // Coverage means both rules fire in the named case.
+  const oneRule = manifestOf(makeCase('c'))
+  assert.match(
+    problemsOf({ ...oneRule, mixedRuleCoverage: [{ pair, case: 'c' }] }),
+    /include no .duplicate-test-name. finding/,
+  )
+
+  // Controls: the same entries written correctly are returned, in either pair order.
+  const ok = buildRecallLabels(
+    withControls({ pair, case: 'c' }, { pair: ['duplicate-test', 'duplicate-suite'], cannotCoOccur: cannot }),
+  )
+  assert.equal(ok.controls.length, 2)
+  assert.doesNotThrow(() => buildRecallLabels(withControls({ pair: [...pair].reverse(), case: 'c' })))
 })
 
 test('every problem is reported together, not just the first', () => {

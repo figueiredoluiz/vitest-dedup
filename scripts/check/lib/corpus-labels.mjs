@@ -120,6 +120,51 @@ function matcherProblems(entry, label) {
 }
 
 /**
+ * Problems with one `mixedRuleCoverage` entry, mirroring the recall gate: a pair of two distinct
+ * rules the analyzer implements, recorded once whichever way round it is written, and exactly one
+ * of `case` (a declared case in which BOTH rules are expected to fire) or `cannotCoOccur` (a reason
+ * of 20+ characters). Records the pair in `seenPairs`.
+ */
+function mixedControlProblems(entry, where, casesByName, seenPairs) {
+  if (!Array.isArray(entry?.pair) || entry.pair.length !== 2) {
+    return [`${where}: \`pair\` must name exactly two rules`]
+  }
+  const [first, second] = entry.pair
+  if (!ALL_RULES.has(first) || !ALL_RULES.has(second) || first === second) {
+    return [`${where}: both members must be distinct rules the analyzer implements`]
+  }
+  const key = [first, second].sort().join('\n')
+  if (seenPairs.has(key)) return [`${where}: this pair is recorded more than once`]
+  seenPairs.add(key)
+  // Presence decides which field the entry claims; only then is its value judged, so an entry
+  // that also carries a malformed second field is refused instead of returned with both.
+  const declaresCase = entry.case !== undefined
+  if (declaresCase === (entry.cannotCoOccur !== undefined)) {
+    return [
+      `${where}: an entry names exactly one of \`case\` (the case covering the pair) or ` +
+        '`cannotCoOccur` (a reason of 20+ characters naming the structural impossibility)',
+    ]
+  }
+  if (!declaresCase) {
+    return typeof entry.cannotCoOccur === 'string' && entry.cannotCoOccur.length >= 20
+      ? []
+      : [`${where}: \`cannotCoOccur\` must be a reason of 20+ characters`]
+  }
+  if (!isNonEmptyString(entry.case)) return [`${where}: \`case\` must name a declared case`]
+  const covering = casesByName.get(entry.case)
+  if (!covering) return [`${where}: names case "${entry.case}", which the manifest does not declare`]
+  const findings = Array.isArray(covering.expectedFindings) ? covering.expectedFindings : []
+  const firing = new Set(findings.map((finding) => finding?.rule))
+  return [first, second]
+    .filter((rule) => !firing.has(rule))
+    .map(
+      (rule) =>
+        `${where}: names case "${entry.case}", whose \`expectedFindings\` include no \`${rule}\` ` +
+        'finding. Coverage means both rules fire in the case',
+    )
+}
+
+/**
  * Builds the case and expectation labels from a parsed recall manifest.
  *
  * @param {object} manifest The parsed `manifest.json`.
@@ -233,16 +278,19 @@ export function buildRecallLabels(manifest) {
   })
 
   const controls = []
-  const byName = new Set(cases.map((label) => label.name))
-  for (const entry of manifest.mixedRuleCoverage ?? []) {
+  const byName = new Map(
+    manifest.cases.filter((c) => c !== null && typeof c === 'object').map((c) => [c.name, c]),
+  )
+  const seenPairs = new Set()
+  const coverage = manifest.mixedRuleCoverage === undefined ? [] : manifest.mixedRuleCoverage
+  if (!Array.isArray(coverage)) {
+    problems.push('mixedRuleCoverage: must be an array with one entry per unordered pair of rules')
+  }
+  for (const entry of Array.isArray(coverage) ? coverage : []) {
     const where = `mixedRuleCoverage ${JSON.stringify(entry?.pair ?? entry)}`
-    if (!Array.isArray(entry?.pair) || entry.pair.length !== 2) {
-      problems.push(`${where}: \`pair\` must name exactly two rules`)
-      continue
-    }
-    if (typeof entry.case === 'string' && !byName.has(entry.case)) {
-      problems.push(`${where}: names case "${entry.case}", which the manifest does not declare`)
-    }
+    const controlProblems = mixedControlProblems(entry, where, byName, seenPairs)
+    problems.push(...controlProblems)
+    if (controlProblems.length > 0) continue
     controls.push({
       pair: [...entry.pair],
       caseName: typeof entry.case === 'string' ? entry.case : null,
