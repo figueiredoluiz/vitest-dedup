@@ -384,6 +384,34 @@ fn an_unreadable_merge_base_in_a_chain_is_reported_when_a_project_discards_it() 
     }
 }
 
+/// An `extends` the scan cannot follow is reported as a refused one is, whatever the project sets.
+#[test]
+fn an_unfollowable_extends_is_reported_even_when_the_project_sets_everything_itself() {
+    let layout = layout();
+    write(&layout.outside, "base.ts", "export default {};\n");
+    write(
+        &layout.root,
+        "middle.ts",
+        "import { mergeConfig } from 'vitest/config';\nimport b from '../outside/base.ts';\nconst settings = {};\nexport default mergeConfig(b, { test: settings });\n",
+    );
+    for extends in ["'./middle.ts'", "someBase"] {
+        write(
+            &layout.root,
+            "vitest.config.ts",
+            &format!(
+                "export default {{ test: {{ projects: [{{ extends: {extends}, test: {{ {EXPLICIT_SETTINGS} }} }}] }} }};\n"
+            ),
+        );
+        let outcome = run(&layout.root);
+        assert!(outcome.incomplete, "{extends}\n{}", outcome.stderr);
+        assert!(
+            outcome.stderr.contains("extends"),
+            "{extends}: no reason on stderr\n{}",
+            outcome.stderr
+        );
+    }
+}
+
 /// A nested configuration with a refused base is reported even when the tests it governs are
 /// never emitted: the report names the refusal, not only the tests it excluded.
 #[test]

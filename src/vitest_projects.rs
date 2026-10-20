@@ -3023,9 +3023,9 @@ fn canonical_or_self(path: &Path) -> PathBuf {
 /// Builds one [`Project`] from an inline `test.projects`/workspace-array object entry
 /// (`{ extends?, test: { ... } }`).
 ///
-/// A string `extends` that resolves outside the analysis root is recorded in `refusal`, besides
-/// reaching the fields it would have supplied: a project that sets every such field itself would
-/// otherwise hide that a configuration path was refused.
+/// An `extends` that is refused, cannot be loaded, or is not a boolean or string literal is
+/// recorded in `refusal`, besides reaching the fields it would have supplied: a project that sets
+/// every such field itself would otherwise hide that its base was not read.
 // Every parameter is a distinct piece of context with no natural grouping, as for
 // `resolve_project_entry` below.
 #[allow(clippy::too_many_arguments)]
@@ -3071,25 +3071,27 @@ fn build_inline_project(
                                     *refusal = fields.refusal;
                                     (ExtendsMode::Inherit, fields.effective)
                                 }
-                                None => (
-                                    ExtendsMode::Unresolvable(format!(
+                                None => {
+                                    let reason = format!(
                                         "{} extends `{target}`, which this scan could not load \
                                          and parse as a base configuration",
                                         display_path(defining_config, root)
-                                    )),
-                                    default_base.clone(),
-                                ),
+                                    );
+                                    *refusal = Some(reason.clone());
+                                    (ExtendsMode::Unresolvable(reason), default_base.clone())
+                                }
                             }
                         }
                     }
-                    None => (
-                        ExtendsMode::Unresolvable(format!(
+                    None => {
+                        let reason = format!(
                             "{} sets `extends` to something other than a boolean or a string \
                              literal",
                             display_path(defining_config, root)
-                        )),
-                        default_base.clone(),
-                    ),
+                        );
+                        *refusal = Some(reason.clone());
+                        (ExtendsMode::Unresolvable(reason), default_base.clone())
+                    }
                 },
             }
         }
