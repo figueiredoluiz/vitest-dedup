@@ -33,10 +33,11 @@ Paths named by Vitest or TypeScript configuration, such as project entries, `ext
 imports, a project's `root` or `dir`, and tsconfig `paths`, are resolved before use, and one that
 leaves the analyzed directory is refused: the file is not opened, a diagnostic names the path, and
 the run is incomplete. Symlinks and `..` segments are judged by where they land. Imports written
-in test source, and the tsconfig `extends` chain itself, are not confined. The import
-resolver checks where a tsconfig `paths` entry lands, not what it touches on the way: it may read a
-`package.json` under a mapped directory outside the tree, and a `main` that points back inside is
-followed. No file outside the tree is parsed as source or configuration.
+in test source, and the tsconfig `extends` chain itself, are not confined, so a relative import or an
+`extends` can still lead the analyzer to parse a file outside the tree. The import resolver checks
+where a tsconfig `paths` entry lands, not what it touches on the way: it may read a `package.json`
+under a mapped directory outside the tree, and a `main` that points back inside is followed. For the
+path kinds listed above, no file outside the tree is parsed as source or configuration.
 
 ## Analyzed content is untrusted input
 
