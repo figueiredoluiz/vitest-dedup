@@ -89,7 +89,11 @@ inputs:
     default: ${{ github.token }}
 outputs:
   exit-code:
-    description: Native VitestDedup exit code (0 clean, 1 quality gate failed, 2 operational error)
+    description: >-
+      Native VitestDedup exit code (0 clean, 1 quality gate failed, 2 operational error). Always
+      set, including when the install fails or the report cannot be read (both 2). Finding outputs
+      are omitted when there is no readable report; `json-report` is still set for an unreadable
+      one, so an operator can inspect the file.
   findings:
     description: Total number of findings
   errors:

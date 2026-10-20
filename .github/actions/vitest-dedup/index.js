@@ -590,8 +590,30 @@ export function analyzerEnvironment(env) {
 /**
  * Read Action inputs, obtain and run the analyzer, validate its report and publish outputs;
  * return the effective exit code.
+ *
+ * Any failure before the outputs are published (input handling, install, an unremovable stale
+ * report) still publishes `exit-code` = 2 and then rethrows. No analyzer verdict exists then, so
+ * the exit code is the one output that can be stated truthfully, and a later step reading it must
+ * not see an empty string and mistake the failure for a pass.
  */
 export async function runAction({ env = process.env, cwd = process.cwd() } = {}) {
+  const state = { published: false };
+  try {
+    return await analyze({ env, cwd }, state);
+  } catch (error) {
+    if (!state.published) {
+      try {
+        setOutput(env, "exit-code", "2");
+      } catch {
+        // The original failure is the one worth reporting.
+      }
+    }
+    throw error;
+  }
+}
+
+/** The body of `runAction`; sets `state.published` once the outputs are written. */
+async function analyze({ env, cwd }, state) {
   const inputs = {
     path: readInput(env, "path", "."),
     config: readInput(env, "config", ""),
@@ -633,21 +655,20 @@ export async function runAction({ env = process.env, cwd = process.cwd() } = {})
 
   // Escape hatch used by index.test.mjs (and available to anyone running the action against a
   // locally built binary): skip the network entirely when a binary path is provided directly.
-  const { binary, attestation } = env.VITEST_DEDUP_BINARY
-    ? { binary: resolve(env.VITEST_DEDUP_BINARY), attestation: null }
-    : await installRelease(
-        inputs.version,
-        (() => {
-          const target = releaseTarget();
-          if (!target) {
-            throw new Error(
-              `unsupported platform: no VitestDedup release is published for ${process.platform}/${process.arch}`,
-            );
-          }
-          return target;
-        })(),
-        env,
+  let binary;
+  let attestation;
+  if (env.VITEST_DEDUP_BINARY) {
+    binary = resolve(env.VITEST_DEDUP_BINARY);
+    attestation = null;
+  } else {
+    const target = releaseTarget();
+    if (!target) {
+      throw new Error(
+        `unsupported platform: no VitestDedup release is published for ${process.platform}/${process.arch}`,
       );
+    }
+    ({ binary, attestation } = await installRelease(inputs.version, target, env));
+  }
 
   // `stdio: "inherit"` streams the child's stdout/stderr directly to the workflow log as it is
   // produced, rather than buffering it and printing it only after the process exits -- the
@@ -670,8 +691,25 @@ export async function runAction({ env = process.env, cwd = process.cwd() } = {})
   // Only a report this invocation just produced may be read -- the stale copy was already removed
   // above, so its mere presence here proves this run wrote it.
   const reportProduced = existsSync(jsonReportPath);
-  let report = reportProduced ? JSON.parse(readFileSync(jsonReportPath, "utf8")) : null;
-  if (!reportProduced) {
+  let report = null;
+  let unreadableReason = null;
+  if (reportProduced) {
+    try {
+      report = JSON.parse(readFileSync(jsonReportPath, "utf8"));
+    } catch (error) {
+      unreadableReason = error.message;
+    }
+  }
+  if (unreadableReason !== null) {
+    // A report that exists but cannot be read or parsed (truncated mid-write, a directory at the
+    // path) is the same operational failure as a malformed one. Throwing here would skip every
+    // output, including the exit code.
+    exitCode = 2;
+    errorAnnotation(
+      `the report at ${jsonReportPath} could not be read as JSON: ${unreadableReason}. Treating this as an ` +
+        "operational failure, not a clean run. Finding-related outputs will not be published.",
+    );
+  } else if (!reportProduced) {
     if (exitCode === 0) {
       // A native exit code of 0 is a promise that the run was clean *and fully reported*. No
       // report file breaks that promise -- the binary either crashed after already deciding on a
@@ -745,6 +783,7 @@ export async function runAction({ env = process.env, cwd = process.cwd() } = {})
   // Outputs are published before the step is allowed to fail below, so a later step that reads
   // `outputs.errors` (e.g. to post a PR comment) still works even when this step's own exit code
   // is non-zero.
+  state.published = true;
   for (const [name, value] of Object.entries(outputs)) {
     setOutput(env, name, value);
   }

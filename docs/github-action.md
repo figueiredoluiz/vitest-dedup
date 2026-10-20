@@ -42,7 +42,7 @@ The inputs are `path`, `config`, `threshold`, `reporters`, `output`, `rule`, `gl
 
 | Output | Description |
 | --- | --- |
-| `exit-code` | Native exit code (0, 1, or 2) |
+| `exit-code` | Native exit code (0, 1, or 2). Always set; `2` when the install failed or the report was unreadable (`json-report` still names an unreadable file) |
 | `findings` | Total findings, baselined or not |
 | `errors` | Error-severity findings |
 | `warnings` | Warning-severity findings |

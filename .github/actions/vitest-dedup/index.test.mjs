@@ -2,7 +2,7 @@ import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { createHash } from "node:crypto";
 
 import {
@@ -568,6 +568,10 @@ describe("runAction", () => {
           env: { VITEST_DEDUP_BINARY: binaryPath, GITHUB_OUTPUT: githubOutputPath, ...inputs },
         });
       },
+      /** Run without a supplied binary, so the Action takes its install path. */
+      runUnpinned(inputs = {}) {
+        return runAction({ cwd: dir, env: { GITHUB_OUTPUT: githubOutputPath, ...inputs } });
+      },
       outputs: () => parseGithubOutput(readFileSync(githubOutputPath, "utf8")),
     };
   }
@@ -653,6 +657,51 @@ describe("runAction", () => {
     assert.equal(outputs["exit-code"], "2");
     assert.equal(outputs.findings, undefined, "no finding counts may be published from an untrusted report");
     assert.equal(outputs["json-report"], fixture.reportPath, "the path is still published so an operator can inspect the file");
+  });
+
+  test("an unparseable report is an operational failure that still publishes exit-code and the report path", async (t) => {
+    const fixture = actionFixture(t);
+    // Truncated mid-write: the file exists, so existsSync passes, and JSON.parse throws.
+    const script = [
+      'import { writeFileSync } from "node:fs";',
+      `writeFileSync(${JSON.stringify(fixture.reportPath)}, '{"schemaVersion": "0.1", "findings": [');`,
+      "process.exit(1);",
+    ].join("\n");
+    const exitCode = await fixture.run(script);
+    assert.equal(exitCode, 2, "an unreadable report must not keep the native gate code");
+    const outputs = fixture.outputs();
+    assert.equal(outputs["exit-code"], "2");
+    assert.equal(outputs.findings, undefined, "no finding counts may be published from an unreadable report");
+    assert.equal(outputs["json-report"], fixture.reportPath);
+  });
+
+  test("a failed install still publishes exit-code 2 before the error propagates", async (t) => {
+    const fixture = actionFixture(t);
+    // The version is rejected before any network access.
+    await assert.rejects(
+      fixture.runUnpinned({ INPUT_VERSION: "1.0.0+build" }),
+      /invalid release version/,
+    );
+    const outputs = fixture.outputs();
+    assert.equal(outputs["exit-code"], "2");
+    assert.deepEqual(Object.keys(outputs), ["exit-code"], "nothing but the exit code can be stated truthfully");
+  });
+
+  test("an unwritable output file does not mask the original failure", async (t) => {
+    const fixture = actionFixture(t);
+    // A directory cannot be appended to, so the fallback publish itself fails.
+    await assert.rejects(
+      fixture.runUnpinned({ INPUT_VERSION: "1.0.0+build", GITHUB_OUTPUT: dirname(fixture.reportPath) }),
+      /invalid release version/,
+    );
+  });
+
+  test("a failure before the install, such as an unremovable stale report, still publishes exit-code 2", async (t) => {
+    const fixture = actionFixture(t);
+    // A non-empty directory at the report path makes the upfront cleanup throw.
+    mkdirSync(join(fixture.reportPath, "nested"), { recursive: true });
+    await assert.rejects(fixture.run("process.exit(0);"));
+    assert.deepEqual(fixture.outputs(), { "exit-code": "2" });
   });
 
   test("names the expected path and the output input when the html reporter was selected but wrote nothing", async (t) => {
