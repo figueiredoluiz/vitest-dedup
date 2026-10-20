@@ -630,7 +630,14 @@ pub fn discover(config: &Config, project_set: Option<&ProjectSet>) -> Result<Dis
 
         match classify_source_file(&path) {
             Some((language, module_flavor)) => {
-                let config_scope = nearest_config_scope(&path, &config.root, &mut config_scopes);
+                let mut refusals = Vec::new();
+                let config_scope =
+                    nearest_config_scope(&path, &config.root, &mut config_scopes, &mut refusals);
+                if !refusals.is_empty() {
+                    result.incomplete = true;
+                    result.project_config_degraded = true;
+                    result.errors.extend(refusals);
+                }
                 result.files.push(SourceFile {
                     path,
                     language,
@@ -892,10 +899,14 @@ fn prepare_in_source_channel<'a>(
 /// Walks up from the file's own directory and stops AT the analysis root: the root's own config
 /// is already applied to every file by the ordinary path, so including it here would say nothing
 /// and would make every file in a flat repository carry the same redundant scope.
+///
+/// A config that cannot be read is pushed to `refusals` once, when it is first read, so the reason
+/// is reported whether or not any file under it goes on to emit a test.
 fn nearest_config_scope(
     path: &Path,
     root: &Path,
     cache: &mut HashMap<PathBuf, Option<Result<String, String>>>,
+    refusals: &mut Vec<String>,
 ) -> Option<Result<String, String>> {
     let mut dir = path.parent()?;
     loop {
@@ -924,7 +935,10 @@ fn nearest_config_scope(
             let scope = match found {
                 Some(Ok(None)) | None => None,
                 Some(Ok(Some(text))) => Some(Ok(text)),
-                Some(Err(reason)) => Some(Err(reason)),
+                Some(Err(reason)) => {
+                    refusals.push(reason.clone());
+                    Some(Err(reason))
+                }
             };
             cache.insert(dir.to_path_buf(), scope.clone());
             if scope.is_some() {

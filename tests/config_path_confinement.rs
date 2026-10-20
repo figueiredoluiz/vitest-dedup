@@ -286,6 +286,7 @@ fn an_outside_merge_base_is_reported_even_when_its_fields_are_discarded() {
         )
     };
     for (specifier, refused) in [("../outside/base", true), ("./shared/base", false)] {
+        let _ = fs::remove_file(layout.root.join("pkg/vitest.config.ts"));
         let head = merged(specifier);
         // The root config's own base, with an inline project that discards what it inherited.
         write(
@@ -351,6 +352,35 @@ fn an_outside_merge_base_is_reported_even_when_its_fields_are_discarded() {
             outcome.stderr
         );
     }
+}
+
+/// A nested configuration with a refused base is reported even when the tests it governs are
+/// never emitted: the report names the refusal, not only the tests it excluded.
+#[test]
+fn a_nested_config_with_an_outside_base_is_reported_without_any_test_to_exclude() {
+    let layout = layout();
+    write(
+        &layout.outside,
+        "base.ts",
+        "export default { test: { environment: 'node' } };\n",
+    );
+    write(
+        &layout.root,
+        "pkg/vitest.config.ts",
+        "import { mergeConfig } from 'vitest/config';\nimport base from '../../outside/base';\nexport default mergeConfig(base, { test: {} });\n",
+    );
+    write(
+        &layout.root,
+        "pkg/empty.test.ts",
+        "import { test } from 'vitest';\ntest.each([])('empty', () => {});\n",
+    );
+    let outcome = run(&layout.root);
+    assert!(outcome.incomplete, "{}", outcome.stderr);
+    assert!(
+        outcome.stderr.contains(REFUSAL),
+        "no refusal on stderr\n{}",
+        outcome.stderr
+    );
 }
 
 /// A `mergeConfig` base import is confined; one folding back inside is kept.
