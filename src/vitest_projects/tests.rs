@@ -4172,3 +4172,72 @@ fn project_root_through_a_symlink_is_judged_by_its_target() {
         "an inside symlink resolves to its target",
     );
 }
+
+/// The alternatives a brace pattern stands for, or `None` when it is not enumerated.
+fn listed(pattern: &str) -> Option<Vec<String>> {
+    match brace_alternatives(pattern) {
+        BraceAlternatives::Listed(all) => Some(all),
+        BraceAlternatives::None | BraceAlternatives::TooMany => None,
+    }
+}
+
+/// Only a comma alternation with a closing brace is enumerated; nested groups multiply out and
+/// an excess is reported as too many rather than cut short.
+#[test]
+fn brace_alternatives_enumerates_only_comma_groups_within_the_limit() {
+    assert!(matches!(
+        brace_alternatives("pkg/*"),
+        BraceAlternatives::None
+    ));
+    assert!(matches!(
+        brace_alternatives("{pkg,other"),
+        BraceAlternatives::None
+    ));
+    assert!(matches!(
+        brace_alternatives("pkg/{1..3}"),
+        BraceAlternatives::None
+    ));
+    assert_eq!(
+        listed("a/{b,c}/d").unwrap(),
+        ["a/b/d", "a/c/d"],
+        "one group"
+    );
+    assert_eq!(
+        listed("{a,b}/{c,d}").unwrap(),
+        ["a/c", "a/d", "b/c", "b/d"],
+        "groups multiply"
+    );
+    let wide = format!("{{{}}}/{{x,y}}", "p,".repeat(40) + "q");
+    assert!(
+        matches!(brace_alternatives(&wide), BraceAlternatives::TooMany),
+        "41 x 2 alternatives exceed the limit through a nested group"
+    );
+    let flat = format!("{{{}q}}", "p,".repeat(70));
+    assert!(matches!(
+        brace_alternatives(&flat),
+        BraceAlternatives::TooMany
+    ));
+}
+
+/// Without an analysis root the unreadable base is named by its path rather than relative to it.
+#[test]
+fn an_unreadable_merge_base_is_recorded_without_a_root() {
+    let directory = tempfile::tempdir().unwrap();
+    write(directory.path(), "base.ts", "export default makeConfig();");
+    write(
+        directory.path(),
+        "merged.ts",
+        "import { mergeConfig } from 'vitest/config'\nimport base from './base'\nexport default mergeConfig(base, { test: { globals: true } });",
+    );
+    let mut refused = false;
+    let fields = resolve_standalone_config_bounded(
+        None,
+        &directory.path().join("merged.ts"),
+        None,
+        &mut Vec::new(),
+        &mut refused,
+    )
+    .unwrap();
+    let reason = fields.refusal.expect("the unreadable base is recorded");
+    assert!(reason.contains("could not be read"), "{reason}");
+}
