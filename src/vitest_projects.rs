@@ -1946,11 +1946,22 @@ fn note_unresolved_position(position: &mut Option<usize>, declared_at: usize) {
     *position = Some(position.map_or(declared_at, |current| current.max(declared_at)));
 }
 
-/// The patterns a comma alternation in `pattern` stands for, or `None` when it holds none, or too
-/// many to enumerate.
-fn brace_alternatives(pattern: &str) -> Option<Vec<String>> {
+/// What a comma alternation in a pattern stands for.
+enum BraceAlternatives {
+    /// No alternation to expand.
+    None,
+    /// The patterns it stands for.
+    Listed(Vec<String>),
+    /// More than the enumeration limit.
+    TooMany,
+}
+
+/// The patterns a comma alternation in `pattern` stands for.
+fn brace_alternatives(pattern: &str) -> BraceAlternatives {
     const MAX_ALTERNATIVES: usize = 64;
-    let open = pattern.find('{')?;
+    let Some(open) = pattern.find('{') else {
+        return BraceAlternatives::None;
+    };
     let mut depth = 0usize;
     let mut close = None;
     let mut cuts = vec![open];
@@ -1968,9 +1979,11 @@ fn brace_alternatives(pattern: &str) -> Option<Vec<String>> {
             _ => {}
         }
     }
-    let close = close?;
+    let Some(close) = close else {
+        return BraceAlternatives::None;
+    };
     if cuts.len() < 2 {
-        return None;
+        return BraceAlternatives::None;
     }
     cuts.push(close);
     let (head, tail) = (&pattern[..open], &pattern[close + 1..]);
@@ -1978,14 +1991,15 @@ fn brace_alternatives(pattern: &str) -> Option<Vec<String>> {
     for pair in cuts.windows(2) {
         let candidate = format!("{head}{}{tail}", &pattern[pair[0] + 1..pair[1]]);
         match brace_alternatives(&candidate) {
-            Some(nested) => all.extend(nested),
-            None => all.push(candidate),
+            BraceAlternatives::Listed(nested) => all.extend(nested),
+            BraceAlternatives::None => all.push(candidate),
+            BraceAlternatives::TooMany => return BraceAlternatives::TooMany,
         }
         if all.len() > MAX_ALTERNATIVES {
-            return None;
+            return BraceAlternatives::TooMany;
         }
     }
-    Some(all)
+    BraceAlternatives::Listed(all)
 }
 
 /// Whether `pattern` names a location outside its own directory without consulting the
@@ -2026,17 +2040,24 @@ fn expand_project_path(root: &Path, pattern: &str, budget: &mut Budget) -> Expan
     // The walk starts from the pattern's literal prefix, so an alternative like `{pkg,../other}`
     // that leaves the tree would never be visited, let alone judged. An alternation holding one
     // is split into its alternatives, each expanded and confined on its own.
-    if let Some(alternatives) = brace_alternatives(pattern)
-        .filter(|all| all.iter().any(|one| leaves_the_tree_lexically(one)))
-    {
-        let mut paths = BTreeSet::new();
-        for alternative in alternatives {
-            let part = expand_project_path(root, &alternative, budget);
-            expanded.outside += part.outside;
-            paths.extend(part.paths);
+    match brace_alternatives(pattern) {
+        BraceAlternatives::Listed(all) if all.iter().any(|one| leaves_the_tree_lexically(one)) => {
+            let mut paths = BTreeSet::new();
+            for alternative in all {
+                let part = expand_project_path(root, &alternative, budget);
+                expanded.outside += part.outside;
+                paths.extend(part.paths);
+            }
+            expanded.paths = paths.into_iter().collect();
+            return expanded;
         }
-        expanded.paths = paths.into_iter().collect();
-        return expanded;
+        // Too many to judge one by one. A `..` anywhere in the pattern could be one of them, so
+        // it is refused rather than guessed at.
+        BraceAlternatives::TooMany if pattern.contains("..") => {
+            expanded.outside += 1;
+            return expanded;
+        }
+        _ => {}
     }
 
     if !looks_like_glob(pattern) {

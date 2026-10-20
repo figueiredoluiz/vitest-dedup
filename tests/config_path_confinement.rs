@@ -670,7 +670,15 @@ fn a_brace_alternative_that_leaves_the_tree_is_reported() {
     move_tests_into_pkg(&layout);
     write(&layout.root, "pkg/vitest.config.ts", PROJECT);
     write(&layout.outside, "vitest.config.ts", PROJECT);
-    for (entry, refused) in [("{pkg,../outside}", true), ("{pkg,pkg/../pkg}", false)] {
+    // More alternatives than are enumerated, so the entry cannot be judged one by one.
+    let many = |last: &str| format!("{{{}{last}}}", "pkg,".repeat(70));
+    let (many_out, many_in) = (many("../outside"), many("pkg"));
+    for (entry, refused) in [
+        ("{pkg,../outside}", true),
+        ("{pkg,pkg/../pkg}", false),
+        (many_out.as_str(), true),
+        (many_in.as_str(), false),
+    ] {
         write(
             &layout.root,
             "vitest.config.ts",
