@@ -354,6 +354,36 @@ fn an_outside_merge_base_is_reported_even_when_its_fields_are_discarded() {
     }
 }
 
+/// A `mergeConfig` base that cannot be read is reported, not only one that is refused: the chain
+/// through it is unknown, and a project that discards what it inherits must not hide that.
+#[test]
+fn an_unreadable_merge_base_in_a_chain_is_reported_when_a_project_discards_it() {
+    let layout = layout();
+    write(&layout.outside, "base.ts", "export default {};\n");
+    write(&layout.root, "inbase.ts", "export default {};\n");
+    write(
+        &layout.root,
+        "vitest.config.ts",
+        "import { mergeConfig } from 'vitest/config';\nimport middle from './middle.ts';\nexport default mergeConfig(middle, { test: { projects: [{ extends: false, test: { name: 'local' } }] } });\n",
+    );
+    for specifier in ["../outside/base.ts", "./inbase.ts"] {
+        // A non-literal `test` makes the middle config unreadable whatever it extends.
+        write(
+            &layout.root,
+            "middle.ts",
+            &format!(
+                "import {{ mergeConfig }} from 'vitest/config';\nimport b from '{specifier}';\nconst settings = {{}};\nexport default mergeConfig(b, {{ test: settings }});\n"
+            ),
+        );
+        let outcome = run(&layout.root);
+        assert!(
+            outcome.incomplete && outcome.stderr.contains("middle.ts"),
+            "{specifier}\n{}",
+            outcome.stderr
+        );
+    }
+}
+
 /// A nested configuration with a refused base is reported even when the tests it governs are
 /// never emitted: the report names the refusal, not only the tests it excluded.
 #[test]

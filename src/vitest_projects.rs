@@ -2831,6 +2831,20 @@ fn resolve_standalone_config_inner(
                 if resolved.is_none() && (*refused || base.named_export.is_some()) {
                     return None;
                 }
+                // A base that exists and cannot be read contributes unknown fields. Left only in
+                // those fields, it vanishes when a project sets them itself or `extends: false`.
+                if resolved.is_none() {
+                    base_refusal = root.map_or_else(
+                        || Some(format!("{} could not be read", base.path.display())),
+                        |root| {
+                            Some(format!(
+                                "{}, the mergeConfig base of {}, could not be read",
+                                display_path(&base.path, root),
+                                display_path(path, root)
+                            ))
+                        },
+                    );
+                }
                 resolved
             }
             Some(Err(reason)) => {
