@@ -608,6 +608,33 @@ fn a_glob_match_that_is_a_symlink_out_of_the_tree_is_reported() {
     assert_refused(&run(&layout.root), "glob matching a symlink out");
 }
 
+/// A symlinked directory in the middle of a project glob is never entered, but Vitest follows it:
+/// one that leaves the tree is reported, one that stays inside is not.
+#[test]
+fn a_symlinked_directory_inside_a_project_glob_is_judged_by_its_target() {
+    let layout = layout();
+    fs::remove_file(layout.root.join("arith.test.ts")).unwrap();
+    write(&layout.root, "packages/local/arith.test.ts", TESTS);
+    write(&layout.root, "packages/local/vitest.config.ts", PROJECT);
+    write(&layout.outside, "vitest.config.ts", PROJECT);
+    write(
+        &layout.root,
+        "vitest.config.ts",
+        "export default { test: { projects: ['packages/*/vitest.config.ts'] } };\n",
+    );
+    if !try_symlink(
+        &layout.root.join("packages/local"),
+        &layout.root.join("packages/alias"),
+    ) {
+        return;
+    }
+    assert_kept(&run(&layout.root), "a link that stays inside");
+    if !try_symlink(&layout.outside, &layout.root.join("packages/escape")) {
+        return;
+    }
+    assert_refused(&run(&layout.root), "a link that leaves the tree");
+}
+
 /// Every setting an inline project can inherit, spelled out so nothing depends on the base file.
 const EXPLICIT_SETTINGS: &str = "name: 'p', globals: false, environment: 'node', \
 include: ['**/*.test.ts'], exclude: [], includeSource: [], \

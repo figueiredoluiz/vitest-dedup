@@ -2009,6 +2009,19 @@ fn expand_project_path(root: &Path, pattern: &str, budget: &mut Budget) -> Expan
         .split('/')
         .take_while(|segment| !looks_like_glob(segment))
         .collect();
+    // The walk does not follow links, so a symlinked directory in the middle of the pattern is
+    // never entered. Vitest follows it, and it may hold a project; these match the directory
+    // prefixes of the pattern so such a link is still counted when it leaves the tree.
+    let directory_matchers: Vec<_> = (1..pattern.split('/').count())
+        .filter_map(|keep| {
+            let prefix = pattern.split('/').take(keep).collect::<Vec<_>>().join("/");
+            GlobBuilder::new(&prefix)
+                .literal_separator(true)
+                .build()
+                .ok()
+                .map(|glob| glob.compile_matcher())
+        })
+        .collect();
     let start_dir = root.join(prefix_segments.join("/"));
     if matches!(confine(root, &start_dir), Confinement::Outside) {
         // Not even listed: enumerating a directory outside the tree is itself a read.
@@ -2045,6 +2058,13 @@ fn expand_project_path(root: &Path, pattern: &str, budget: &mut Budget) -> Expan
         let relative = path.strip_prefix(root).unwrap_or(path);
         let relative = relative.to_string_lossy().replace('\\', "/");
         if !matcher.is_match(&relative) {
+            if entry.file_type().is_some_and(|kind| kind.is_symlink())
+                && directory_matchers.iter().any(|dir| dir.is_match(&relative))
+                && path.is_dir()
+                && matches!(confine(root, path), Confinement::Outside)
+            {
+                expanded.outside += 1;
+            }
             continue;
         }
         let config = match entry.file_type() {
