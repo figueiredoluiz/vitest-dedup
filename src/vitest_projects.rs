@@ -2041,6 +2041,14 @@ fn expand_project_path(root: &Path, pattern: &str, budget: &mut Budget) -> Expan
         let config = match entry.file_type() {
             Some(file_type) if file_type.is_file() => Some(path.to_path_buf()),
             Some(file_type) if file_type.is_dir() => find_project_config(path),
+            // Links are not followed, so a link inside the tree is not a second project. One that
+            // leaves it is still reported, so a refused entry is never silent.
+            Some(file_type) if file_type.is_symlink() => {
+                if matches!(confine(root, path), Confinement::Outside) {
+                    expanded.outside += 1;
+                }
+                None
+            }
             _ => None,
         };
         match config {

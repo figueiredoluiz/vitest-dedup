@@ -347,7 +347,13 @@ test('doubles three', () => { check(3) })\ntest('doubles three again', () => { c
         )
     };
     write(&layout.root, "tsconfig.json", &config("../outside/*"));
-    assert_refused(&run(&layout.root), "tsconfig paths out");
+    // The binary canonicalizes its root, which is a verbatim `\\?\` path on Windows, and the
+    // resolver does not apply tsconfig `paths` from such a path at all (see
+    // `tsconfig_alias_is_judged_from_canonical_paths`): the alias never resolves there, so nothing
+    // outside is read and there is nothing to refuse.
+    if !cfg!(windows) {
+        assert_refused(&run(&layout.root), "tsconfig paths out");
+    }
     write(&layout.root, "tsconfig.json", &config("helpers/*"));
     assert_kept(&run(&layout.root), "tsconfig paths in");
 }
@@ -411,4 +417,22 @@ fn a_workspace_file_symlinked_out_of_the_tree_is_refused() {
         return;
     }
     assert_refused(&run(&layout.root), "workspace file symlinked out");
+}
+
+/// A glob that also matches a symlink out of the tree reports it, even when another match resolves.
+#[test]
+fn a_glob_match_that_is_a_symlink_out_of_the_tree_is_reported() {
+    let layout = layout();
+    move_tests_into_pkg(&layout);
+    write(&layout.outside, "vitest.config.ts", PROJECT);
+    write(&layout.root, "pkg/vitest.config.ts", PROJECT);
+    if !try_symlink(&layout.outside, &layout.root.join("pkz")) {
+        return;
+    }
+    write(
+        &layout.root,
+        "vitest.config.ts",
+        "export default { test: { projects: ['pk*'] } };\n",
+    );
+    assert_refused(&run(&layout.root), "glob matching a symlink out");
 }
