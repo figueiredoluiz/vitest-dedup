@@ -4241,3 +4241,83 @@ fn an_unreadable_merge_base_is_recorded_without_a_root() {
     let reason = fields.refusal.expect("the unreadable base is recorded");
     assert!(reason.contains("could not be read"), "{reason}");
 }
+
+/// A group nested inside one that is within the limit can itself exceed it.
+#[test]
+fn a_nested_brace_group_over_the_limit_is_too_many() {
+    let nested = format!("{{a,{{{}q}}}}", "p,".repeat(70));
+    assert!(matches!(
+        brace_alternatives(&nested),
+        BraceAlternatives::TooMany
+    ));
+}
+
+/// The comparison scope of a config whose `mergeConfig` base cannot be read is an error, so the
+/// file is not compared as if the base were absent.
+#[test]
+fn a_scope_through_an_unreadable_merge_base_is_an_error() {
+    let directory = tempfile::tempdir().unwrap();
+    write(directory.path(), "base.ts", "export default makeConfig();");
+    write(
+        directory.path(),
+        "merged.ts",
+        "import { mergeConfig } from 'vitest/config'\nimport base from './base'\nexport default mergeConfig(base, { test: { globals: true } });",
+    );
+    assert!(resolved_config_test_scope(&directory.path().join("merged.ts")).is_err());
+}
+
+/// A declared `root` that does not exist yet is kept as written rather than refused.
+#[test]
+fn a_declared_project_root_that_does_not_exist_is_kept_as_written() {
+    let directory = tempfile::tempdir().unwrap();
+    write(
+        directory.path(),
+        "vitest.config.ts",
+        "export default { test: { projects: [{ test: { name: 'p', root: './later' } }] } };",
+    );
+    let set = resolve_projects(directory.path());
+    assert_eq!(set.projects.len(), 1, "{set:?}");
+    assert!(
+        set.projects[0].base_dir.ends_with("later"),
+        "{:?}",
+        set.projects[0].base_dir
+    );
+    assert!(!set.has_unresolved_entries, "{set:?}");
+}
+
+/// Two configs that merge each other have no resolvable chain: the scope is an error and the
+/// root config's project set is unresolved rather than built from half a chain.
+#[test]
+fn a_cyclic_merge_chain_is_refused_for_scope_and_for_projects() {
+    let directory = tempfile::tempdir().unwrap();
+    write(
+        directory.path(),
+        "vitest.config.ts",
+        "import { mergeConfig } from 'vitest/config'\nimport other from './other'\nexport default mergeConfig(other, { test: { globals: true } });",
+    );
+    write(
+        directory.path(),
+        "other.ts",
+        "import { mergeConfig } from 'vitest/config'\nimport back from './vitest.config'\nexport default mergeConfig(back, { test: { globals: false } });",
+    );
+    let error = resolved_config_test_scope(&directory.path().join("vitest.config.ts"))
+        .expect_err("a cycle has no scope");
+    assert!(error.contains("cyclic"), "{error}");
+    let set = resolve_projects(directory.path());
+    assert_unresolved_with_diagnostic(&set, "merged default export could not be resolved");
+}
+
+/// A named import whose export is not a readable literal makes the scope an error.
+#[test]
+fn a_named_merge_base_that_is_not_a_literal_is_an_error_for_scope() {
+    let directory = tempfile::tempdir().unwrap();
+    write(directory.path(), "base.ts", "export const other = {};");
+    write(
+        directory.path(),
+        "merged.ts",
+        "import { mergeConfig } from 'vitest/config'\nimport { base } from './base'\nexport default mergeConfig(base, { test: { globals: true } });",
+    );
+    let error = resolved_config_test_scope(&directory.path().join("merged.ts"))
+        .expect_err("the named export is missing");
+    assert!(error.contains("export cannot be read"), "{error}");
+}
