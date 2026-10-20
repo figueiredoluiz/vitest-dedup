@@ -383,6 +383,27 @@ mod tests {
         assert!(take_refusals().is_empty(), "taking drains the list");
     }
 
+    /// The analyzer canonicalizes its root, which on Windows yields a verbatim `\\?\` path, and
+    /// hands the resolver files under it. The alias must resolve and be refused from such a path
+    /// exactly as from an ordinary one.
+    #[test]
+    fn tsconfig_alias_is_judged_from_canonical_paths() {
+        let (_guard, root, importer) = escaping_alias();
+        let root = root.canonicalize().unwrap();
+        let importer = importer.canonicalize().unwrap();
+
+        begin_file(None);
+        let unconfined = resolve(&importer, "@out/target");
+        assert!(
+            matches!(unconfined, Resolved::Module(_)),
+            "an alias from a canonical importer must resolve: {unconfined:?}"
+        );
+
+        begin_file(Some(&root));
+        assert_eq!(resolve(&importer, "@out/target"), Resolved::Unresolved);
+        assert_eq!(take_refusals().len(), 1);
+    }
+
     /// A relative import that leaves the root is not tsconfig-derived and keeps resolving, as does
     /// an alias that stays inside.
     #[test]
