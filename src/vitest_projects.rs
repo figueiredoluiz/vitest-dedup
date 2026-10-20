@@ -3092,7 +3092,8 @@ fn unresolved_project(
 /// Build a project from a config file, retaining unknown effective fields when static
 /// resolution fails.
 ///
-/// A refused `mergeConfig` base is recorded in `refusal`, as for [`build_inline_project`].
+/// A refused `mergeConfig` base, or a file that cannot be read, is recorded in `refusal`, as for
+/// [`build_inline_project`].
 fn build_file_project(
     root: &Path,
     path: &Path,
@@ -3119,6 +3120,7 @@ fn build_file_project(
                  malformed, or its `test` value is not an object literal)",
                 path.display()
             );
+            *refusal = Some(reason.clone());
             unresolved_project(
                 base_dir,
                 Some(path.to_path_buf()),
@@ -3141,14 +3143,14 @@ fn canonical_or_self(path: &Path) -> PathBuf {
     path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
 }
 
+// Every parameter is a distinct piece of context with no natural grouping, as for
+// `resolve_project_entry` below.
 /// Builds one [`Project`] from an inline `test.projects`/workspace-array object entry
 /// (`{ extends?, test: { ... } }`).
 ///
-/// An `extends` that is refused, cannot be loaded, or is not a boolean or string literal is
-/// recorded in `refusal`, besides reaching the fields it would have supplied: a project that sets
-/// every such field itself would otherwise hide that its base was not read.
-// Every parameter is a distinct piece of context with no natural grouping, as for
-// `resolve_project_entry` below.
+/// Whatever leaves the entry unresolved is recorded in `refusal`, besides reaching the project's
+/// fields: an `extends` that is refused, cannot be loaded, or is not a boolean or string literal;
+/// a `root`/`dir` outside the analysis root; a `test` value that cannot be read.
 #[allow(clippy::too_many_arguments)]
 fn build_inline_project(
     root: &Path,
@@ -3226,6 +3228,7 @@ fn build_inline_project(
                 "a `test.projects` entry in {} sets `test` to something this scan cannot read",
                 display_path(defining_config, root)
             );
+            *refusal = Some(reason.clone());
             return unresolved_project(
                 root.to_path_buf(),
                 None,
@@ -3286,6 +3289,7 @@ fn build_inline_project(
                          resolves outside the analysis root",
                         display_path(defining_config, root)
                     );
+                    *refusal = Some(reason.clone());
                     return unresolved_project(
                         root.to_path_buf(),
                         None,

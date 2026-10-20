@@ -4321,3 +4321,41 @@ fn a_named_merge_base_that_is_not_a_literal_is_an_error_for_scope() {
         .expect_err("the named export is missing");
     assert!(error.contains("export cannot be read"), "{error}");
 }
+
+/// An entry left unresolved is a set-level diagnostic and an unresolved entry, not only `Unknown`
+/// fields on its project: those are ignored once a later project governs the same files.
+#[test]
+fn an_unresolved_entry_is_recorded_on_the_set() {
+    let directory = tempfile::tempdir().unwrap();
+    write(
+        directory.path(),
+        "pkg/vitest.config.ts",
+        "export default makeConfig();",
+    );
+    for (entry, needle) in [
+        (
+            "{ test: { name: 'a', root: '../outside' } }",
+            "resolves outside",
+        ),
+        ("{ test: someTests }", "sets `test` to something"),
+        (
+            "'./pkg/vitest.config.ts'",
+            "could not be read as a standalone",
+        ),
+    ] {
+        write(
+            directory.path(),
+            "vitest.config.ts",
+            &format!(
+                "export default {{ test: {{ projects: [{entry}, {{ test: {{ name: 'b' }} }}] }} }};"
+            ),
+        );
+        let set = resolve_projects(directory.path());
+        assert!(set.has_unresolved_entries, "{entry}: {set:?}");
+        assert!(
+            set.diagnostics.iter().any(|note| note.contains(needle)),
+            "{entry}: {:?}",
+            set.diagnostics
+        );
+    }
+}
