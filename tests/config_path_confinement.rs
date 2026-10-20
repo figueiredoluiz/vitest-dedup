@@ -19,6 +19,10 @@ struct Outcome {
     incomplete: bool,
     tests: u64,
     stderr: String,
+    /// The raw summary record, so a failed assertion shows the causes the run reported.
+    summary: String,
+    /// Every record the run wrote, for the same reason.
+    records: String,
 }
 
 /// A root with a sibling `outside` directory, both under one temporary directory.
@@ -74,6 +78,8 @@ fn run(root: &Path) -> Outcome {
         incomplete: summary["incomplete"].as_bool().unwrap(),
         tests: summary["testsAnalyzed"].as_u64().unwrap(),
         stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+        summary: summary.to_string(),
+        records: stdout.into_owned(),
     }
 }
 
@@ -81,10 +87,14 @@ fn run(root: &Path) -> Outcome {
 fn assert_refused(outcome: &Outcome, why: &str) {
     assert!(
         outcome.incomplete,
-        "{why}: expected an incomplete run\n{}",
-        outcome.stderr
+        "{why}: expected an incomplete run\n{}\nsummary: {}\nrecords:\n{}",
+        outcome.stderr, outcome.summary, outcome.records
     );
-    assert_eq!(outcome.tests, 2, "{why}: {}", outcome.stderr);
+    assert_eq!(
+        outcome.tests, 2,
+        "{why}: {}\nsummary: {}",
+        outcome.stderr, outcome.summary
+    );
     assert!(
         outcome.stderr.contains(REFUSAL),
         "{why}: no refusal on stderr\n{}",
@@ -96,10 +106,14 @@ fn assert_refused(outcome: &Outcome, why: &str) {
 fn assert_kept(outcome: &Outcome, why: &str) {
     assert!(
         !outcome.incomplete,
-        "{why}: expected a complete run\n{}",
-        outcome.stderr
+        "{why}: expected a complete run\n{}\nsummary: {}",
+        outcome.stderr, outcome.summary
     );
-    assert_eq!(outcome.tests, 2, "{why}: {}", outcome.stderr);
+    assert_eq!(
+        outcome.tests, 2,
+        "{why}: {}\nsummary: {}",
+        outcome.stderr, outcome.summary
+    );
     assert!(
         !outcome.stderr.contains(REFUSAL),
         "{why}: {}",
@@ -107,12 +121,16 @@ fn assert_kept(outcome: &Outcome, why: &str) {
     );
 }
 
-/// Creates a directory symlink or reports why not, so a caller can skip visibly.
+/// Creates a symlink to a file or directory, or reports why not, so a caller can skip visibly.
 fn try_symlink(target: &Path, link: &Path) -> bool {
     #[cfg(unix)]
     let created = std::os::unix::fs::symlink(target, link);
     #[cfg(windows)]
-    let created = std::os::windows::fs::symlink_dir(target, link);
+    let created = if target.is_dir() {
+        std::os::windows::fs::symlink_dir(target, link)
+    } else {
+        std::os::windows::fs::symlink_file(target, link)
+    };
     match created {
         Ok(()) => true,
         Err(error) => {
