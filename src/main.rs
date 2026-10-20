@@ -237,7 +237,11 @@ fn run() -> Result<ExitCode> {
 
 /// Run the pipeline with an injectable current-RSS reader for deterministic boundary tests.
 fn run_with_rss(args: ParsedArgs, mut resident: impl FnMut() -> Option<u64>) -> Result<ExitCode> {
-    let mut stderr = std::io::stderr().lock();
+    // The unlocked handle, by type: `Stderr` takes the process lock for each write only, while a
+    // `StderrLock` held for the whole run would block any stderr write made on the extraction
+    // worker thread that the main thread joins below. Annotated so putting `.lock()` back does not
+    // compile.
+    let mut stderr: std::io::Stderr = std::io::stderr();
     let config = Config::load(&args.root, args.to_overrides())?;
 
     // Resolved before any analysis, so an unusable revision, a shallow clone, or a non-repository
