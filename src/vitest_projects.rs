@@ -1946,6 +1946,56 @@ fn note_unresolved_position(position: &mut Option<usize>, declared_at: usize) {
     *position = Some(position.map_or(declared_at, |current| current.max(declared_at)));
 }
 
+/// The patterns a comma alternation in `pattern` stands for, or `None` when it holds none, or too
+/// many to enumerate.
+fn brace_alternatives(pattern: &str) -> Option<Vec<String>> {
+    const MAX_ALTERNATIVES: usize = 64;
+    let open = pattern.find('{')?;
+    let mut depth = 0usize;
+    let mut close = None;
+    let mut cuts = vec![open];
+    for (offset, ch) in pattern[open..].char_indices() {
+        match ch {
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    close = Some(open + offset);
+                    break;
+                }
+            }
+            ',' if depth == 1 => cuts.push(open + offset),
+            _ => {}
+        }
+    }
+    let close = close?;
+    if cuts.len() < 2 {
+        return None;
+    }
+    cuts.push(close);
+    let (head, tail) = (&pattern[..open], &pattern[close + 1..]);
+    let mut all = Vec::new();
+    for pair in cuts.windows(2) {
+        let candidate = format!("{head}{}{tail}", &pattern[pair[0] + 1..pair[1]]);
+        match brace_alternatives(&candidate) {
+            Some(nested) => all.extend(nested),
+            None => all.push(candidate),
+        }
+        if all.len() > MAX_ALTERNATIVES {
+            return None;
+        }
+    }
+    Some(all)
+}
+
+/// Whether `pattern` names a location outside its own directory without consulting the
+/// filesystem: an absolute path or a `..` segment.
+fn leaves_the_tree_lexically(pattern: &str) -> bool {
+    Path::new(pattern).is_absolute()
+        || pattern.starts_with('/')
+        || pattern.split('/').any(|segment| segment == "..")
+}
+
 /// Recognize path segments containing a supported glob metacharacter.
 fn looks_like_glob(segment: &str) -> bool {
     segment.contains(['*', '?', '[', '{'])
@@ -1972,6 +2022,22 @@ fn expand_project_path(root: &Path, pattern: &str, budget: &mut Budget) -> Expan
         outside: 0,
     };
     let pattern = pattern.strip_prefix("./").unwrap_or(pattern);
+
+    // The walk starts from the pattern's literal prefix, so an alternative like `{pkg,../other}`
+    // that leaves the tree would never be visited, let alone judged. An alternation holding one
+    // is split into its alternatives, each expanded and confined on its own.
+    if let Some(alternatives) = brace_alternatives(pattern)
+        .filter(|all| all.iter().any(|one| leaves_the_tree_lexically(one)))
+    {
+        let mut paths = BTreeSet::new();
+        for alternative in alternatives {
+            let part = expand_project_path(root, &alternative, budget);
+            expanded.outside += part.outside;
+            paths.extend(part.paths);
+        }
+        expanded.paths = paths.into_iter().collect();
+        return expanded;
+    }
 
     if !looks_like_glob(pattern) {
         let candidate = root.join(pattern);
@@ -2354,6 +2420,20 @@ fn merge_config_base_path(
             }
             return Some(Ok(ImportedConfigBase { path, named_export }));
         }
+    }
+    // No candidate exists, but a base spelled outside the tree is refused all the same, as an
+    // `extends` is: nothing was read, and the base's contributions are unknown.
+    if let Some(root) = root.filter(|root| {
+        matches!(
+            confine(root, &base_dir.join(&literal)),
+            Confinement::Outside
+        )
+    }) {
+        return Some(Err(format!(
+            "{}'s mergeConfig base `{literal}` resolves outside the analysis root and was not \
+             read",
+            display_path(config_path, root)
+        )));
     }
     None
 }

@@ -64,9 +64,10 @@ tsconfig import is unresolved. Paths that stay inside are not refused, including
 back and symlinks that point within the tree. The root's own `vitest.config.*` or
 `vitest.workspace.*` is held to the same rule, so a symlink to a file outside the directory is
 refused. A refused `extends` or `mergeConfig` base is reported whatever the project sets for
-itself, and whether or not any test runs under it. Relative imports in test files are not configuration and may still reach outside, and
-the import resolver may read a `package.json` under a tsconfig-mapped directory outside the tree
-to decide which file inside it an import resolves to.
+itself, and whether or not any test runs under it. Relative imports in test files are not
+configuration and may still reach outside. The import resolver may read a `package.json` under a
+tsconfig-mapped directory outside the tree to decide which file inside it an import resolves to,
+and follows a tsconfig `references` entry wherever it points.
 
 ### Globals
 

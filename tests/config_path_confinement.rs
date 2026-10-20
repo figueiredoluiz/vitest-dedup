@@ -354,6 +354,33 @@ fn an_outside_merge_base_is_reported_even_when_its_fields_are_discarded() {
     }
 }
 
+/// A `mergeConfig` base spelled outside the tree is refused whether or not the file exists; one
+/// that is missing inside the tree is not a refusal.
+#[test]
+fn a_missing_merge_base_is_refused_when_it_is_spelled_outside_the_tree() {
+    let layout = layout();
+    for (specifier, refused) in [
+        ("../outside/missing.ts", true),
+        ("./shared/missing.ts", false),
+    ] {
+        write(
+            &layout.root,
+            "vitest.config.ts",
+            &format!(
+                "import {{ mergeConfig }} from 'vitest/config';\nimport base from '{specifier}';\nexport default mergeConfig(base, {{ test: {{ projects: [{{ extends: false, test: {{ name: 'local' }} }}] }} }});\n"
+            ),
+        );
+        let outcome = run(&layout.root);
+        assert_eq!(
+            outcome.stderr.contains(REFUSAL),
+            refused,
+            "{specifier}\n{}",
+            outcome.stderr
+        );
+        assert!(outcome.incomplete || !refused, "{specifier}");
+    }
+}
+
 /// A `mergeConfig` base that cannot be read is reported, not only one that is refused: the chain
 /// through it is unknown, and a project that discards what it inherits must not hide that.
 #[test]
@@ -633,6 +660,29 @@ fn a_symlinked_directory_inside_a_project_glob_is_judged_by_its_target() {
         return;
     }
     assert_refused(&run(&layout.root), "a link that leaves the tree");
+}
+
+/// An alternative inside a brace group is judged on its own: one that leaves the tree is reported
+/// although the others match, and one that folds back inside is kept.
+#[test]
+fn a_brace_alternative_that_leaves_the_tree_is_reported() {
+    let layout = layout();
+    move_tests_into_pkg(&layout);
+    write(&layout.root, "pkg/vitest.config.ts", PROJECT);
+    write(&layout.outside, "vitest.config.ts", PROJECT);
+    for (entry, refused) in [("{pkg,../outside}", true), ("{pkg,pkg/../pkg}", false)] {
+        write(
+            &layout.root,
+            "vitest.config.ts",
+            &format!("export default {{ test: {{ projects: ['{entry}'] }} }};\n"),
+        );
+        let outcome = run(&layout.root);
+        if refused {
+            assert_refused(&outcome, entry);
+        } else {
+            assert_kept(&outcome, entry);
+        }
+    }
 }
 
 /// Every setting an inline project can inherit, spelled out so nothing depends on the base file.
