@@ -3,6 +3,10 @@
 // own: a throw is a failure, failures go to stderr, and an imported module does nothing at all.
 
 import assert from "node:assert/strict";
+import { mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
+import { realpathSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 import { pathToFileURL } from "node:url";
 
@@ -93,4 +97,41 @@ test("the arguments after the script path are what runCli receives", () => {
     return { status: 0, lines: [] };
   }, "some", { argv: ["node", SCRIPT, "--verbose", "7"], ...h.io });
   assert.deepEqual(seen, ["--verbose", "7"]);
+});
+
+/** A real script and a link to it in a fresh directory. */
+function linkedScript() {
+  const directory = realpathSync(mkdtempSync(join(tmpdir(), "gate-main-")));
+  const real = join(directory, "gate.mjs");
+  writeFileSync(real, "export {}\n");
+  const link = join(directory, "link.mjs");
+  symlinkSync(real, link);
+  return { real, link };
+}
+
+/** Starts a gate from `argv[1] = link` whose module URL is `moduleUrl`; returns what happened. */
+function startThrough(moduleUrl, link) {
+  const h = harness();
+  const ran = runAsGate(moduleUrl, () => ({ status: 0, lines: ["ran"] }), "some", { argv: ["node", link], ...h.io });
+  return { ran, out: h.out, exits: h.exits };
+}
+
+test("a gate reached through a symlinked path still runs, because Node reports the real path", { skip: process.platform === "win32" }, () => {
+  const { real, link } = linkedScript();
+  const started = startThrough(pathToFileURL(real).href, link);
+  assert.deepEqual([started.ran, started.out, started.exits], [true, ["ran"], [0]]);
+});
+
+test("a gate started with the link preserved still runs", { skip: process.platform === "win32" }, () => {
+  const { link } = linkedScript();
+  assert.equal(startThrough(pathToFileURL(link).href, link).ran, true);
+});
+
+test("a script path that does not exist is compared as written", () => {
+  const h = harness();
+  const ran = runAsGate(pathToFileURL("/nowhere/gate.mjs").href, () => ({ status: 0, lines: [] }), "some", {
+    argv: ["node", "/nowhere/gate.mjs"],
+    ...h.io,
+  });
+  assert.equal(ran, true);
 });

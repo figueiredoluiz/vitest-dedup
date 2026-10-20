@@ -204,6 +204,17 @@ test('observeRecallCase runs the binary on the case and returns its records and 
   assert.equal(observed.summary.args, `${caseDir} --min-lines 3 --reporters jsonl`)
 })
 
+test('observeRecallCase passes extra arguments after the case\'s own and only when asked', { skip: process.platform === 'win32' }, () => {
+  const scratch = mkdtempSync(join(tmpdir(), 'recall-runner-'))
+  writeFileSync(join(scratch, 'a.test.ts'), 'export {}')
+  const binary = fakeBinary(scratch)
+  const testCase = { name: 'extra', path: '.', arguments: ['--min-lines', '3'] }
+  const plain = observeRecallCase({ binary, root: scratch, testCase })
+  assert.equal(plain.summary.args, `${scratch} --min-lines 3 --reporters jsonl`)
+  const extra = observeRecallCase({ binary, root: scratch, testCase, extraArguments: ['--emit-test-fingerprints'] })
+  assert.equal(extra.summary.args, `${scratch} --min-lines 3 --emit-test-fingerprints --reporters jsonl`)
+})
+
 test('observeRecallCase returns a null summary when the run wrote none', { skip: process.platform === 'win32' }, () => {
   const scratch = mkdtempSync(join(tmpdir(), 'recall-runner-'))
   writeFileSync(join(scratch, 'a.test.ts'), 'export {}')

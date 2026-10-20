@@ -330,6 +330,8 @@ const JS_MODULES = {
   'scripts/check/lib/memory-record.mjs': 94,
   'scripts/check/lib/recall-runner.mjs': 87,
   'scripts/check/lib/corpus-labels.mjs': 98,
+  'scripts/check/lib/corpus-evaluation.mjs': 98,
+  'scripts/check/evaluate-corpus.mjs': 98,
   'scripts/check/lib/manifest-schema.mjs': 100,
   // Reached only as a dependency of `memory-record.mjs`, which imports it for the exit-code
   // contract. Its own callers all spawn a release binary, so the covered lines are the parsing
@@ -388,6 +390,7 @@ const JS_TEST_FILES = [
   'scripts/check/check-docstrings.test.mjs',
   ...globSync('npm/test/*.test.mjs', { cwd: ROOT }).sort(),
   ...globSync('scripts/check/lib/*.test.mjs', { cwd: ROOT }).sort(),
+  'scripts/check/evaluate-corpus.test.mjs',
   'scripts/check/check-doc-accuracy.test.mjs',
   'scripts/check/check-mutation-score.test.mjs',
   'scripts/check/check-name-leak.test.mjs',

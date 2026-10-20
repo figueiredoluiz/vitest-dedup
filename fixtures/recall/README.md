@@ -153,4 +153,31 @@ gets routed around, after which the number it guards is worse than unmeasured. `
 records the destination. The corpus currently detects every one of its 123 desired findings, so
 both measured recall and the enforced floor are 100%, with `knownMissBaseline: 0`.
 
+## Evaluating a binary
+
+`npm run evaluate:corpus` runs every case against the release binary and reports, per rule, what
+each expectation resolved to instead of stopping at the first failure:
+
+```bash
+node scripts/check/evaluate-corpus.mjs ./target/release/vitest-dedup --json report.json
+```
+
+For each rule it prints expected findings satisfied, forbidden findings held, known misses and known
+false positives still in place, findings nobody labelled, and extraction counts that differ from the
+case. Every ratio shows its denominator, and an empty population prints `n/a` rather than a
+percentage. For each held `expectedAbsent` entry it also says whether the pair was eligible for
+comparison: `eligible` lists the keys that differ (a pair whose keys are equal is counted apart,
+because the analyzer keeps one representative per equality group and the silence is that, not
+distinctness), `not compared` means a participant was set aside, the rule was off for the case by
+default, by its `.vitest-dedup.json` or by `--rule`, or the pair spans two files for a rule that groups by file, and `unresolved`
+means the entry names a suite or a row, or hooks whose chain the records do not show. `eligible` is
+necessary, not sufficient: the records cannot show
+whether `.each` rows belong to one declaration, or which hooks share a chain. Pending cases are
+listed apart and left out of the per-rule figures.
+
+A violation is data and exits 0; `--fail-on-violation` turns it into exit 1. A run that did not
+measure the corpus (a case that cannot run, no summary record, a malformed record, zero extracted
+tests, a binary that emits no test records) always fails. The evaluator is not part of
+`npm run check`; the recall gate remains the enforced contract.
+
 The fixtures are synthetic and contain no third-party source.

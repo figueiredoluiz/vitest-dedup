@@ -17,7 +17,26 @@
 //     its output is read in a terminal; a failure that arrives on stdout is indistinguishable from
 //     the success it replaced.
 
+import { realpathSync } from "node:fs";
 import { pathToFileURL } from "node:url";
+
+/**
+ * The file URLs a main module may be reported under: of `path` with symlinks resolved, which is what
+ * Node reports by default (`/tmp` on macOS is `/private/tmp`), and as written, which is what
+ * `--preserve-symlinks-main` reports. Matching only one would make a gate started through a link
+ * look imported, and it would exit 0 without running.
+ *
+ * @param {string} path The script path from `argv[1]`.
+ * @returns {string[]} The candidate file URLs.
+ */
+function mainModuleUrls(path) {
+  const written = pathToFileURL(path).href;
+  try {
+    return [pathToFileURL(realpathSync(path)).href, written];
+  } catch {
+    return [written];
+  }
+}
 
 /**
  * Runs `runCli` as a command-line gate when `moduleUrl` is the module Node was asked to execute.
@@ -33,7 +52,7 @@ export function runAsGate(
   name,
   { argv = process.argv, exit = process.exit, log = console.log, error = console.error } = {},
 ) {
-  if (!argv[1] || moduleUrl !== pathToFileURL(argv[1]).href) return false;
+  if (!argv[1] || !mainModuleUrls(argv[1]).includes(moduleUrl)) return false;
   let result;
   try {
     result = runCli(argv.slice(2));

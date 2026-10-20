@@ -92,6 +92,8 @@ export function newTotals() {
  * @param {string} options.binary Path to the analyzer binary.
  * @param {string} options.root Recall corpus root (the directory holding `manifest.json`).
  * @param {object} options.testCase Recall manifest case.
+ * @param {string[]} [options.extraArguments] CLI tokens appended after the case's own, for a
+ *   consumer that needs more records (the evaluator's `--emit-test-fingerprints`).
  * @returns {{label: string, caseRoot: string, directoryPresent: boolean, sourceFiles: string[],
  *   records: object[] | null, summary: object | null}} The case's run label and resolved root;
  *   whether its directory exists; the analyzable source files found under it; the parsed jsonl
@@ -99,7 +101,7 @@ export function newTotals() {
  *   a missing or sourceless directory exactly as the gate's inline loop skipped it, so the judge
  *   sees the same facts it always did); `summary` is `null` when the run wrote no summary record.
  */
-export function observeRecallCase({ binary, root, testCase }) {
+export function observeRecallCase({ binary, root, testCase, extraArguments = [] }) {
   const label = `${testCase.name} (${testCase.path})`
   const caseRoot = resolve(root, testCase.path)
   const directoryPresent = existsSync(caseRoot) && statSync(caseRoot).isDirectory()
@@ -116,7 +118,11 @@ export function observeRecallCase({ binary, root, testCase }) {
   if (sourceFiles.length === 0) {
     return { label, caseRoot, directoryPresent, sourceFiles, records: null, summary: null }
   }
-  const records = runAnalyzerJsonl(binary, [caseRoot, ...(testCase.arguments ?? [])]).records
+  const records = runAnalyzerJsonl(binary, [
+    caseRoot,
+    ...(testCase.arguments ?? []),
+    ...extraArguments,
+  ]).records
   return {
     label,
     caseRoot,

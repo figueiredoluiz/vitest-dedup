@@ -168,7 +168,10 @@ function mixedControlProblems(entry, where, casesByName, seenPairs) {
  * Builds the case and expectation labels from a parsed recall manifest.
  *
  * @param {object} manifest The parsed `manifest.json`.
- * @returns {{cases: object[], expectations: object[], controls: object[]}} `cases` holds one label
+ * @returns {{cases: object[], expectations: object[], controls: object[], minimumCases: number | null,
+ *   knownMissBaseline: number | null, knownFalsePositiveBaseline: number | null}}
+ *   `minimumCases` and the two baselines are the manifest's declared case floor and known-entry
+ *   populations, carried so a consumer can refuse a label set that shrank below or away from them. `cases` holds one label
  *   per case (identity, role, origin, verdict, classifiedAt, `pending` reason or `null`, extraction
  *   and completeness expectations, CLI arguments); `expectations` one per matcher (`id`, `caseName`,
  *   `index`, `kind`, `outcome`, `rule`, `severity`, `titles`, `locations`, the case's labels,
@@ -189,6 +192,14 @@ export function buildRecallLabels(manifest) {
   const names = new Set()
   const knownIds = new Set()
   problems.push(...validateRootKeys(manifest).map((line) => line.replace(/^FAIL /, '')))
+  if (manifest.minimumCases !== undefined && !(Number.isInteger(manifest.minimumCases) && manifest.minimumCases > 0)) {
+    problems.push('`minimumCases` must be a positive integer')
+  }
+  for (const field of ['knownMissBaseline', 'knownFalsePositiveBaseline']) {
+    if (manifest[field] !== undefined && !(Number.isInteger(manifest[field]) && manifest[field] >= 0)) {
+      problems.push(`\`${field}\` must be a non-negative integer`)
+    }
+  }
   manifest.cases.forEach((testCase, caseIndex) => {
     const labelProblems = validateCaseLabels(testCase, caseIndex)
     if (testCase === null || typeof testCase !== 'object' || Array.isArray(testCase)) {
@@ -301,7 +312,14 @@ export function buildRecallLabels(manifest) {
   if (problems.length > 0) {
     throw new Error(`${problems.length} recall label problem(s):\n${problems.map((line) => `  ${line}`).join('\n')}`)
   }
-  return { cases, expectations, controls }
+  return {
+    cases,
+    expectations,
+    controls,
+    minimumCases: manifest.minimumCases ?? null,
+    knownMissBaseline: manifest.knownMissBaseline ?? null,
+    knownFalsePositiveBaseline: manifest.knownFalsePositiveBaseline ?? null,
+  }
 }
 
 /**
