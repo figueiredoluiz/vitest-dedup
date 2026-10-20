@@ -29,6 +29,7 @@ retention existed. This directory is the other one.
   "minimumRecall": 1.0, "recallDestination": 1.0,
   "cases": [
     { "name": "…", "path": "…", "rule": "duplicate-test", "role": "positive",
+      "origin": "synthetic", "verdict": "generated", "classifiedAt": "2026-10-20",
       "expectedTests": 2, "expectedIncomplete": false,
       "arguments": ["--rule", "subsumed-test=warning"],
       "expectedFindings": [ { "rule": "…", "severity": "error", "titles": ["…", "…"] } ],
@@ -62,6 +63,13 @@ floor on work performed: a case that silently extracts nothing would satisfy eve
 expectation it declares. The second separates `distinct` (compared, found different) from `not-compared` (never
 eligible, because a context was unresolved). Both produce no finding, and conflating them is how a
 rule that analyzes nothing passes a precision gate.
+
+`origin` (`synthetic`, `real`, `regression`), `verdict` (`reviewed` once someone has read the case
+against its source, `generated` otherwise) and `classifiedAt` (a `YYYY-MM-DD` date) are required on
+every case and format-checked only; nothing in a run can confirm them. A key the schema does not
+name fails the gate. The schema is `scripts/check/lib/manifest-schema.mjs`, and
+`scripts/check/lib/corpus-labels.mjs` turns the manifest into a flat list of cases and
+expectations, each with a stable `<case>#<n>` id.
 
 `arguments` passes extra CLI tokens to a case's run. One rule ships `Severity::Off`
 (`subsumed-test`), so its two cases pass `--rule subsumed-test=warning`: without the override such

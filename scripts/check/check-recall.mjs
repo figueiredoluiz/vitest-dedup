@@ -100,6 +100,7 @@ import assert from 'node:assert/strict'
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { ALL_RULES } from './lib/fixture-directives.mjs'
+import { validateManifestLabels } from './lib/manifest-schema.mjs'
 import { describeMatcher, judgeRecallCase, newTotals, observeRecallCase } from './lib/recall-runner.mjs'
 import { defaultBinary } from './lib/run-analyzer.mjs'
 
@@ -294,6 +295,9 @@ function validateManifest(manifest, failures) {
       }
     }
   }
+
+  // Label fields (origin, verdict, classifiedAt) and unknown keys: `lib/manifest-schema.mjs`.
+  failures.push(...validateManifestLabels(manifest))
 
   validateMixedCoverage(manifest, failures)
 
