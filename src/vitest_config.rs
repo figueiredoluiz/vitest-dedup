@@ -191,6 +191,18 @@ pub fn detect_globals_with_projects(
         };
     };
 
+    if matches!(
+        crate::confine::confine(root, &config_path),
+        crate::confine::Confinement::Outside
+    ) {
+        return GlobalsDetection::Unknown {
+            reason: format!(
+                "{} resolves outside the analysis root and was not read",
+                display_path(&config_path, root)
+            ),
+        };
+    }
+
     let source = match read_bounded(&config_path) {
         Ok(source) => source,
         Err(reason) => return GlobalsDetection::Unknown { reason },
@@ -1304,6 +1316,37 @@ mod tests {
     /// Write a config fixture file directly beneath root, panicking on filesystem failure.
     fn write(root: &Path, name: &str, contents: &str) {
         fs::write(root.join(name), contents).unwrap();
+    }
+
+    /// Check static Vitest config: a root configuration symlinked out of the analysis root is not
+    /// read, while one linked within it is. Skipped where symlinks cannot be created.
+    #[test]
+    fn a_root_config_symlinked_out_of_the_tree_is_not_read_for_globals() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("root");
+        fs::create_dir_all(&root).unwrap();
+        let shared = "export default defineConfig({ test: { globals: true } });";
+        write(directory.path(), "outside.config.ts", shared);
+        write(&root, "shared.config.ts", shared);
+        let config = root.join("vitest.config.ts");
+        if !crate::confine::try_symlink(&directory.path().join("outside.config.ts"), &config) {
+            return;
+        }
+        match detect_globals(&root) {
+            GlobalsDetection::Unknown { reason } => {
+                assert!(reason.contains("outside the analysis root"), "{reason}");
+            }
+            other => panic!("an outside configuration must not be read: {other:?}"),
+        }
+        fs::remove_file(&config).unwrap();
+        assert!(crate::confine::try_symlink(
+            &root.join("shared.config.ts"),
+            &config
+        ));
+        assert!(matches!(
+            detect_globals(&root),
+            GlobalsDetection::Enabled { .. }
+        ));
     }
 
     /// Check static Vitest config: vitest config with globals true is enabled.

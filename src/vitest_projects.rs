@@ -810,6 +810,13 @@ pub fn resolve_projects(root: &Path) -> ProjectSet {
 /// position in the file is suspect and no depth-tracking scan over it means anything. Stating that
 /// pair once is what keeps a new entry point from accepting a file the existing ones reject.
 fn read_masked_source(path: &Path, root: &Path) -> Result<(Vec<char>, Vec<char>), String> {
+    // The analysis root's own configuration file can be a symlink out of the tree too.
+    if matches!(confine(root, path), Confinement::Outside) {
+        return Err(format!(
+            "{} resolves outside the analysis root and was not read",
+            display_path(path, root)
+        ));
+    }
     let source = read_bounded(path)?;
     let Some(masked) = mask_non_code(&source) else {
         return Err(format!(

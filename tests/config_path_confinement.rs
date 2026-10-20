@@ -352,3 +352,45 @@ test('doubles three', () => { check(3) })\ntest('doubles three again', () => { c
     );
     assert_kept(&run(&layout.root), "relative import");
 }
+
+/// The analysis root's own configuration file is judged by where it points: a symlink out of the
+/// tree is refused, one to a file inside is read.
+#[test]
+fn a_root_configuration_symlinked_out_of_the_tree_is_refused() {
+    let layout = layout();
+    // An outside configuration that would take effect if it were read: it narrows `include` so the
+    // root's tests are no longer discovered.
+    write(
+        &layout.outside,
+        "base.ts",
+        "export default { test: { include: ['**/*.nomatch.ts'] } };\n",
+    );
+    write(
+        &layout.root,
+        "shared.config.ts",
+        "export default { test: { environment: 'node' } };\n",
+    );
+    let config = layout.root.join("vitest.config.ts");
+    if !try_symlink(&layout.outside.join("base.ts"), &config) {
+        return;
+    }
+    assert_refused(&run(&layout.root), "root config symlinked out");
+
+    fs::remove_file(&config).unwrap();
+    assert!(try_symlink(&layout.root.join("shared.config.ts"), &config));
+    assert_kept(&run(&layout.root), "root config symlinked within the tree");
+}
+
+/// The legacy workspace file is confined the same way as the root configuration.
+#[test]
+fn a_workspace_file_symlinked_out_of_the_tree_is_refused() {
+    let layout = layout();
+    write(&layout.outside, "workspace.ts", "export default ['pkg'];\n");
+    if !try_symlink(
+        &layout.outside.join("workspace.ts"),
+        &layout.root.join("vitest.workspace.ts"),
+    ) {
+        return;
+    }
+    assert_refused(&run(&layout.root), "workspace file symlinked out");
+}
