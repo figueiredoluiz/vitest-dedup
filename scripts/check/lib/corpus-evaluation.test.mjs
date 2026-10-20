@@ -144,7 +144,7 @@ test('an expected absence is held until a finding of that shape appears', () => 
   })
   const evaluated = evaluate(testCase, present)
   assert.equal(statusOf(evaluated, 'c#2'), 'violated')
-  assert.equal(evaluated.unclaimed.length, 1, 'the forbidden finding is also unclaimed')
+  assert.equal(evaluated.unclaimed.length, 0, 'the forbidden finding is one violation, not also an unlabelled one')
 })
 
 test('known misses and known false positives keep or lose their label', () => {
@@ -165,7 +165,7 @@ test('known misses and known false positives keep or lose their label', () => {
 
   const wrongCount = evaluate(testCase, observation({ records: records([fp()]) }))
   assert.equal(statusOf(wrongCount, 'c#4'), 'count-mismatch')
-  assert.equal(wrongCount.unclaimed.length, 1, 'a miscounted false positive owns nothing')
+  assert.equal(statusOf(wrongCount, 'c#2'), 'violated', 'a miscounted false positive owns nothing, so the forbidden finding stands')
 
   const nowReported = evaluate(testCase, observation({ records: records([finding({ rule: 'near-duplicate-test', severity: 'warning' }), fp(), fp()]) }))
   assert.equal(statusOf(nowReported, 'c#3'), 'now-reported')

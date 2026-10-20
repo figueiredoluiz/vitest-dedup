@@ -331,6 +331,7 @@ const JS_MODULES = {
   'scripts/check/lib/recall-runner.mjs': 87,
   'scripts/check/lib/corpus-labels.mjs': 98,
   'scripts/check/lib/corpus-evaluation.mjs': 98,
+  'scripts/check/lib/corpus-comparison.mjs': 98,
   'scripts/check/evaluate-corpus.mjs': 98,
   'scripts/check/lib/manifest-schema.mjs': 100,
   // Reached only as a dependency of `memory-record.mjs`, which imports it for the exit-code

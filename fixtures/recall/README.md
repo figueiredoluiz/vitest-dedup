@@ -180,4 +180,26 @@ measure the corpus (a case that cannot run, no summary record, a malformed recor
 tests, a binary that emits no test records) always fails. The evaluator is not part of
 `npm run check`; the recall gate remains the enforced contract.
 
+### Comparing two binaries
+
+`--baseline-binary FILE` runs the same corpus through an older binary and classes every expectation
+by what changed: `retained`, `newly-satisfied` (a wanted finding gained), `corrected` (a forbidden
+or known false-positive finding gone), `regressed` (a wanted finding lost), `new-forbidden` (a
+forbidden finding gained) or `still-unmet`. Findings nobody labelled are compared the same way. A
+case the baseline cannot be run or read on (a crash, an old report schema, no extracted tests) is
+`unavailable` with the reason; it is never read as zero findings, and a baseline that ran on no case
+is an error. The baseline is not asked for `--emit-test-fingerprints`, since it may predate it.
+Classes follow the labels as written: a known false positive whose `expectCount` the candidate no
+longer meets leaves its overlapping `expectedAbsent` entry violated, and is reported as such.
+
+`--baseline-ref REF` names the commit the baseline was built from. Cases that are new there, whose
+expectations differ, or whose files or governing configuration (the nearest `.vitest-dedup.json`,
+or the one `--config` names) differ are totalled apart, because a difference on them is not a
+detector change. A case is taken to be self-contained: a change confined to a file it imports from
+outside its own directory is not seen. The baseline tree is extracted with `git archive`, so `git`
+and `tar` are needed. `--json` carries the whole comparison and a run record: both binaries by
+sha256 and `--version`, the corpus by sha256, the checkout and baseline commits, and the arguments
+each case ran with. `--fail-on-regression` exits 1 on a regression, a new unclaimed finding, a case that no longer
+extracts what its labels say, or an unavailable case; a baseline that cannot run a case new or changed since it was built stays data.
+
 The fixtures are synthetic and contain no third-party source.

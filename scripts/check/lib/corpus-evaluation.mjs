@@ -116,7 +116,7 @@ function isFile(path) {
  * @param {string[]} argumentsList The case's CLI arguments.
  * @returns {string | null} The path as written, or `null` when none is given.
  */
-function explicitConfigPath(argumentsList) {
+export function explicitConfigPath(argumentsList) {
   let found = null
   argumentsList.forEach((token, index) => {
     if (token === '--config' || token === '-c') found = argumentsList[index + 1] ?? ''
@@ -348,12 +348,22 @@ function evaluateExpectation(expectation, active, claimed, testRecords, disabled
  * @param {object} caseLabel The case's label from `buildRecallLabels`.
  * @param {object[]} expectations The labels of this case's expectations.
  * @param {object} observation The `observeRecallCase` result for the case.
+ * @param {object} [options]
+ * @param {boolean} [options.requireTestRecords] Whether the run must carry one `test` record per
+ *   analyzed test; false for a baseline binary that may predate `--emit-test-fingerprints`.
+ * @param {boolean} [options.allowPendingZeroTests] Whether a pending case may analyze zero tests; false
+ *   for a baseline, which has no pending claim to wait on and must have measured something.
  * @returns {object} Extraction facts, one outcome per expectation, and the unclaimed findings.
  * @throws {Error} When the case did not produce usable evidence (missing directory, no source, no
  *   summary, malformed records, a non-integer `testsAnalyzed`), because none of those can be
  *   scored as a miss.
  */
-export function evaluateCase(caseLabel, expectations, observation) {
+export function evaluateCase(
+  caseLabel,
+  expectations,
+  observation,
+  { requireTestRecords = true, allowPendingZeroTests = true } = {},
+) {
   const { label, directoryPresent, sourceFiles, records, summary } = observation
   if (!directoryPresent) throw new Error(`${label}: case directory is missing`)
   if (sourceFiles.length === 0) throw new Error(`${label}: case directory holds no analyzable source file`)
@@ -362,7 +372,7 @@ export function evaluateCase(caseLabel, expectations, observation) {
     throw new Error(`${label}: the summary has no non-negative integer \`testsAnalyzed\``)
   }
   // A pending case waits on an extraction defect, so zero tests is what it may be holding.
-  if (summary.testsAnalyzed === 0 && caseLabel.pending === null) {
+  if (summary.testsAnalyzed === 0 && !(allowPendingZeroTests && caseLabel.pending !== null)) {
     throw new Error(`${label}: the run analyzed zero tests; a case labelled with tests measured nothing`)
   }
   if (typeof summary.incomplete !== 'boolean') {
@@ -380,7 +390,7 @@ export function evaluateCase(caseLabel, expectations, observation) {
   if (summary.recordCount !== findingRecords.length) {
     throw new Error(`${label}: the summary counts ${summary.recordCount} finding(s) but ${findingRecords.length} \`finding\` record(s) arrived; the stream is partial`)
   }
-  if (testRecords.length !== summary.testsAnalyzed) {
+  if (requireTestRecords && testRecords.length !== summary.testsAnalyzed) {
     throw new Error(`${label}: ${summary.testsAnalyzed} test(s) analyzed but ${testRecords.length} \`test\` record(s) emitted; the stream is partial or the binary lacks --emit-test-fingerprints`)
   }
   const active = records.filter((record) => record.type === 'finding' && !record.baselined)
@@ -406,8 +416,9 @@ export function evaluateCase(caseLabel, expectations, observation) {
     }
   }
 
-  // A finding a known miss addresses is already reported once, as that miss no longer holding.
-  const owners = expectations.filter((e) => e.kind === 'expected-finding' || e.kind === 'known-miss')
+  // A finding that a label addresses is already accounted for by that label: reported once, as a known
+  // miss no longer holding or as a forbidden finding present, and not again as unlabelled.
+  const owners = expectations.filter((e) => ['expected-finding', 'known-miss', 'expected-absent'].includes(e.kind))
   const unclaimed = active
     .filter((finding) => !claimed.has(finding) && !owners.some((e) => findingMatches(finding, e)))
     .map((finding) => ({
