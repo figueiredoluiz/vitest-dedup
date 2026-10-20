@@ -63,10 +63,10 @@ is not read. The run reports which one and is incomplete: the entry is an unreso
 tsconfig import is unresolved. Paths that stay inside are not refused, including `..` that folds
 back and symlinks that point within the tree. The root's own `vitest.config.*` or
 `vitest.workspace.*` is held to the same rule, so a symlink to a file outside the directory is
-refused. A refused `extends` shows through the fields it would have supplied, as an `extends` the
-scan cannot load does. Relative imports in test files are not configuration and may still reach
-outside, and the import resolver may read a `package.json` under a tsconfig-mapped directory outside
-the tree to decide which file inside it an import resolves to.
+refused. A refused `extends` or `mergeConfig` base is reported whatever the project sets for
+itself. Relative imports in test files are not configuration and may still reach outside, and
+the import resolver may read a `package.json` under a tsconfig-mapped directory outside the tree
+to decide which file inside it an import resolves to.
 
 ### Globals
 

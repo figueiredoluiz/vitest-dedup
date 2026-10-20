@@ -270,6 +270,89 @@ fn extends_outside_the_root_is_refused() {
     }
 }
 
+/// A refused `mergeConfig` base is reported whatever consumes the merged fields: a project that
+/// sets everything itself, or `extends: false`, discards the inherited values the refusal was
+/// first recorded in.
+#[test]
+fn an_outside_merge_base_is_reported_even_when_its_fields_are_discarded() {
+    let layout = layout();
+    move_tests_into_pkg(&layout);
+    let base = "export default { test: { globals: true } };\n";
+    write(&layout.outside, "base.ts", base);
+    write(&layout.root, "shared/base.ts", base);
+    let merged = |specifier: &str| {
+        format!(
+            "import {{ mergeConfig }} from 'vitest/config';\nimport base from '{specifier}';\nexport default mergeConfig(base, "
+        )
+    };
+    for (specifier, refused) in [("../outside/base", true), ("./shared/base", false)] {
+        let head = merged(specifier);
+        // The root config's own base, with an inline project that discards what it inherited.
+        write(
+            &layout.root,
+            "vitest.config.ts",
+            &format!(
+                "{head}{{ test: {{ projects: [{{ extends: false, test: {{ {EXPLICIT_SETTINGS} }} }}] }} }});\n"
+            ),
+        );
+        let outcome = run(&layout.root);
+        assert_eq!(
+            outcome.stderr.contains(REFUSAL),
+            refused,
+            "root config, {specifier}\n{}",
+            outcome.stderr
+        );
+        assert!(outcome.incomplete || !refused, "root config, {specifier}");
+        // A project config file whose own base is refused, and the project sets every field.
+        let head = merged(&format!("../{specifier}"));
+        write(
+            &layout.root,
+            "pkg/vitest.config.ts",
+            &format!("{head}{{ test: {{ {EXPLICIT_SETTINGS} }} }});\n"),
+        );
+        write(
+            &layout.root,
+            "vitest.config.ts",
+            "export default { test: { projects: ['./pkg/vitest.config.ts'] } };\n",
+        );
+        let outcome = run(&layout.root);
+        assert_eq!(
+            outcome.stderr.contains(REFUSAL),
+            refused,
+            "project file, {specifier}\n{}",
+            outcome.stderr
+        );
+        // The same file found by a `glob.sync` project list.
+        write(
+            &layout.root,
+            "vitest.config.ts",
+            "import { glob } from 'glob';\nexport default { test: { projects: glob.sync('./pkg/vitest.config.ts') } };\n",
+        );
+        let outcome = run(&layout.root);
+        assert_eq!(
+            outcome.stderr.contains(REFUSAL),
+            refused,
+            "glob project list, {specifier}\n{}",
+            outcome.stderr
+        );
+        // The same file as an `extends` target.
+        write(
+            &layout.root,
+            "vitest.config.ts",
+            &format!(
+                "export default {{ test: {{ projects: [{{ extends: './pkg/vitest.config.ts', test: {{ {EXPLICIT_SETTINGS} }} }}] }} }};\n"
+            ),
+        );
+        let outcome = run(&layout.root);
+        assert_eq!(
+            outcome.stderr.contains(REFUSAL),
+            refused,
+            "extends target, {specifier}\n{}",
+            outcome.stderr
+        );
+    }
+}
+
 /// A `mergeConfig` base import is confined; one folding back inside is kept.
 #[test]
 fn merge_config_imports_outside_the_root_are_refused() {
@@ -435,4 +518,41 @@ fn a_glob_match_that_is_a_symlink_out_of_the_tree_is_reported() {
         "export default { test: { projects: ['pk*'] } };\n",
     );
     assert_refused(&run(&layout.root), "glob matching a symlink out");
+}
+
+/// Every setting an inline project can inherit, spelled out so nothing depends on the base file.
+const EXPLICIT_SETTINGS: &str = "name: 'p', globals: false, environment: 'node', \
+include: ['**/*.test.ts'], exclude: [], includeSource: [], \
+benchmark: { include: [], exclude: [], includeSource: [] }, typecheck: { enabled: false }";
+
+/// A refused `extends` is reported whatever the project sets itself: the settings that would have
+/// come from the refused file being explicit must not make the refusal vanish.
+#[test]
+fn an_outside_extends_is_reported_even_when_the_project_sets_everything_itself() {
+    let layout = layout();
+    write(
+        &layout.outside,
+        "base.ts",
+        "export default { test: { globals: true } };\n",
+    );
+    write(
+        &layout.root,
+        "shared/base.ts",
+        "export default { test: { globals: true } };\n",
+    );
+    for (target, refused) in [("../outside/base.ts", true), ("./shared/base.ts", false)] {
+        write(
+            &layout.root,
+            "vitest.config.ts",
+            &format!(
+                "export default {{ test: {{ projects: [{{ extends: '{target}', test: {{ {EXPLICIT_SETTINGS} }} }}] }} }};\n"
+            ),
+        );
+        let outcome = run(&layout.root);
+        if refused {
+            assert_refused(&outcome, target);
+        } else {
+            assert_kept(&outcome, target);
+        }
+    }
 }

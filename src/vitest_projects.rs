@@ -751,9 +751,11 @@ pub fn resolve_projects(root: &Path) -> ProjectSet {
     let is_merge = find_export_default_value_start(&masked).is_some_and(|value_start| {
         merge_config_overrides_literal(&masked, &original, value_start).is_some()
     });
-    let merged_fields = is_merge
+    let merged = is_merge
         .then(|| resolve_standalone_config_within(root, &config_path))
         .flatten();
+    let base_refusal = merged.as_ref().and_then(|fields| fields.refusal.clone());
+    let merged_fields = merged.map(|fields| (fields.name, fields.effective));
     if is_merge && merged_fields.is_none() {
         return unresolved_set(
             root,
@@ -765,7 +767,7 @@ pub fn resolve_projects(root: &Path) -> ProjectSet {
         );
     }
 
-    match locate_test_object(&masked, config_object.0 + 1..config_object.1) {
+    let mut set = match locate_test_object(&masked, config_object.0 + 1..config_object.1) {
         TestObject::Absent => match merged_fields {
             Some((name, effective)) => {
                 single_project_set_from_effective(root, &config_path, name, effective)
@@ -798,7 +800,14 @@ pub fn resolve_projects(root: &Path) -> ProjectSet {
                 single_project_set(root, &config_path, &masked, &original, Some(body))
             }
         }
+    };
+    // Recorded here rather than left in the merged fields: an inline project that sets
+    // everything itself, or `extends: false`, discards them and the refusal would vanish.
+    if let Some(reason) = base_refusal {
+        set.diagnostics.push(reason);
+        set.has_unresolved_entries = true;
     }
+    set
 }
 
 /// Reads `path` and returns `(masked, original)` character vectors for the scanners, or the one
@@ -2335,6 +2344,10 @@ struct StandaloneConfigFields {
     name: Option<String>,
     effective: EffectiveTestFields,
     specified: RawTestFields,
+    /// Why a `mergeConfig` base in the chain was refused as outside the analysis root. Carried
+    /// beside `effective` because a consumer that sets every field itself discards the `Unknown`
+    /// values that record it there.
+    refusal: Option<String>,
 }
 
 /// Recognize a direct nullish property value, refusing a potentially shadowed undefined
@@ -2579,29 +2592,20 @@ fn named_config_literal(masked: &[char], original: &[char], name: &str) -> Optio
     None
 }
 
-/// Resolve a standalone config to its optional project name and effective fields, returning
-/// None when resolution fails. Every file the `mergeConfig` chain reads must lie under `root`.
-fn resolve_standalone_config_within(
-    root: &Path,
-    path: &Path,
-) -> Option<(Option<String>, EffectiveTestFields)> {
-    resolve_standalone_config_at(Some(root), path)
+/// Resolve a standalone config to its project name, effective fields and any refused
+/// `mergeConfig` base, returning None when resolution fails. Every file the `mergeConfig` chain
+/// reads must lie under `root`.
+fn resolve_standalone_config_within(root: &Path, path: &Path) -> Option<StandaloneConfigFields> {
+    let mut refused = false;
+    resolve_standalone_config_bounded(Some(root), path, None, &mut Vec::new(), &mut refused)
 }
 
 /// [`resolve_standalone_config_within`] without a root to confine the chain to.
 #[cfg(test)]
 fn resolve_standalone_config(path: &Path) -> Option<(Option<String>, EffectiveTestFields)> {
-    resolve_standalone_config_at(None, path)
-}
-
-/// Shared body of the two standalone-config entry points.
-fn resolve_standalone_config_at(
-    root: Option<&Path>,
-    path: &Path,
-) -> Option<(Option<String>, EffectiveTestFields)> {
     let mut refused = false;
     let fields =
-        resolve_standalone_config_bounded(root, path, None, &mut Vec::new(), &mut refused)?;
+        resolve_standalone_config_bounded(None, path, None, &mut Vec::new(), &mut refused)?;
     Some((fields.name, fields.effective))
 }
 
@@ -2848,10 +2852,11 @@ fn resolve_standalone_config_inner(
                 name,
                 effective,
                 specified: fields,
+                refusal: base.refusal,
             });
         }
         merge_config_arrays(&mut fields, RawTestFields::empty(), true);
-        let mode = ExtendsMode::Unresolvable(base_refusal.unwrap_or_else(|| {
+        let mode = ExtendsMode::Unresolvable(base_refusal.clone().unwrap_or_else(|| {
             format!("mergeConfig base in {} cannot be resolved", path.display())
         }));
         let effective = resolve_effective(&fields, &mode, None, path);
@@ -2859,6 +2864,7 @@ fn resolve_standalone_config_inner(
             name: fields.name.clone(),
             effective,
             specified: fields,
+            refusal: base_refusal,
         });
     }
     if let Some(body) = &test_body {
@@ -2891,6 +2897,7 @@ fn resolve_standalone_config_inner(
         name: fields.name.clone(),
         effective,
         specified: fields,
+        refusal: None,
     })
 }
 
@@ -2949,17 +2956,28 @@ fn unresolved_project(
 
 /// Build a project from a config file, retaining unknown effective fields when static
 /// resolution fails.
-fn build_file_project(root: &Path, path: &Path, defined_in: &Path, declared_at: usize) -> Project {
+///
+/// A refused `mergeConfig` base is recorded in `refusal`, as for [`build_inline_project`].
+fn build_file_project(
+    root: &Path,
+    path: &Path,
+    defined_in: &Path,
+    declared_at: usize,
+    refusal: &mut Option<String>,
+) -> Project {
     let base_dir = path.parent().unwrap_or(root).to_path_buf();
     match resolve_standalone_config_within(root, path) {
-        Some((name, effective)) => Project::from_effective(
-            name,
-            base_dir,
-            Some(path.to_path_buf()),
-            defined_in,
-            effective,
-            declared_at,
-        ),
+        Some(fields) => {
+            *refusal = fields.refusal;
+            Project::from_effective(
+                fields.name,
+                base_dir,
+                Some(path.to_path_buf()),
+                defined_in,
+                fields.effective,
+                declared_at,
+            )
+        }
         None => {
             let reason = format!(
                 "{} could not be read as a standalone project configuration (unreadable, \
@@ -2979,8 +2997,8 @@ fn build_file_project(root: &Path, path: &Path, defined_in: &Path, declared_at: 
 
 /// Resolves the base an `extends: '<path>'` string points at, other than the common
 /// self-referencing case the caller already handles directly.
-fn resolve_extends_target(root: &Path, candidate: &Path) -> Option<EffectiveTestFields> {
-    resolve_standalone_config_within(root, candidate).map(|(_, effective)| effective)
+fn resolve_extends_target(root: &Path, candidate: &Path) -> Option<StandaloneConfigFields> {
+    resolve_standalone_config_within(root, candidate)
 }
 
 /// Return the canonical path when available, otherwise preserve the supplied path.
@@ -2990,6 +3008,13 @@ fn canonical_or_self(path: &Path) -> PathBuf {
 
 /// Builds one [`Project`] from an inline `test.projects`/workspace-array object entry
 /// (`{ extends?, test: { ... } }`).
+///
+/// A string `extends` that resolves outside the analysis root is recorded in `refusal`, besides
+/// reaching the fields it would have supplied: a project that sets every such field itself would
+/// otherwise hide that a configuration path was refused.
+// Every parameter is a distinct piece of context with no natural grouping, as for
+// `resolve_project_entry` below.
+#[allow(clippy::too_many_arguments)]
 fn build_inline_project(
     root: &Path,
     defining_config: &Path,
@@ -2998,6 +3023,7 @@ fn build_inline_project(
     object_interior: Range<usize>,
     default_base: &EffectiveTestFields,
     declared_at: usize,
+    refusal: &mut Option<String>,
 ) -> Project {
     let extends_pos =
         find_direct_key_value_starts_precise(masked, original, object_interior.clone(), "extends")
@@ -3018,17 +3044,19 @@ fn build_inline_project(
                         if candidate == canonical_or_self(defining_config) {
                             (ExtendsMode::Inherit, default_base.clone())
                         } else if matches!(confine(root, &candidate), Confinement::Outside) {
-                            (
-                                ExtendsMode::Unresolvable(format!(
-                                    "{} extends `{target}`, which resolves outside the analysis \
-                                     root and was not read",
-                                    display_path(defining_config, root)
-                                )),
-                                default_base.clone(),
-                            )
+                            let reason = format!(
+                                "{} extends `{target}`, which resolves outside the analysis \
+                                 root and was not read",
+                                display_path(defining_config, root)
+                            );
+                            *refusal = Some(reason.clone());
+                            (ExtendsMode::Unresolvable(reason), default_base.clone())
                         } else {
                             match resolve_extends_target(root, &candidate) {
-                                Some(effective) => (ExtendsMode::Inherit, effective),
+                                Some(fields) => {
+                                    *refusal = fields.refusal;
+                                    (ExtendsMode::Inherit, fields.effective)
+                                }
                                 None => (
                                     ExtendsMode::Unresolvable(format!(
                                         "{} extends `{target}`, which this scan could not load \
@@ -3170,6 +3198,7 @@ fn resolve_project_entry(
     if masked[i] == '{' || is_ident_char(masked[i]) {
         match locate_object_literal_or_call_argument(masked, i) {
             ConfigObject::Found(open, close) => {
+                let mut refusal = None;
                 projects.push(build_inline_project(
                     root,
                     defining_config,
@@ -3178,7 +3207,13 @@ fn resolve_project_entry(
                     open + 1..close,
                     base,
                     declared_at,
+                    &mut refusal,
                 ));
+                if let Some(reason) = refusal {
+                    diagnostics.push(reason);
+                    *has_unresolved = true;
+                    note_unresolved_position(max_unresolved_position, declared_at);
+                }
                 return;
             }
             ConfigObject::Malformed => {
@@ -3252,12 +3287,19 @@ fn resolve_project_entry(
                 note_unresolved_position(max_unresolved_position, declared_at);
                 return;
             }
+            let mut refusal = None;
             projects.push(build_file_project(
                 root,
                 &path,
                 defining_config,
                 declared_at,
+                &mut refusal,
             ));
+            if let Some(reason) = refusal {
+                diagnostics.push(reason);
+                *has_unresolved = true;
+                note_unresolved_position(max_unresolved_position, declared_at);
+            }
         }
         return;
     }
@@ -3440,6 +3482,7 @@ fn resolve_projects_array(
         ) {
             let expanded = expand_project_path(root, &pattern, budget);
             let outside = expanded.outside > 0;
+            let mut refused = false;
             if outside {
                 diagnostics.push(format!(
                     "{} sets `test.projects` to `glob.sync('{pattern}')`, which resolves \
@@ -3474,7 +3517,18 @@ fn resolve_projects_array(
                     set.config_found = true;
                     return set;
                 }
-                projects.push(build_file_project(root, &path, config_path, 0));
+                let mut refusal = None;
+                projects.push(build_file_project(
+                    root,
+                    &path,
+                    config_path,
+                    0,
+                    &mut refusal,
+                ));
+                if let Some(reason) = refusal {
+                    diagnostics.push(reason);
+                    refused = true;
+                }
             }
             // All matches originate at entry 0. An incomplete dynamic list can hide a later
             // matching project, so its unresolved position must out-rank every retained match.
@@ -3489,9 +3543,9 @@ fn resolve_projects_array(
                 root,
                 projects,
                 diagnostics,
-                exhausted || outside,
+                exhausted || outside || refused,
                 exhausted,
-                (exhausted || outside).then_some(1),
+                (exhausted || outside || refused).then_some(1),
             );
             set.config_found = true;
             return set;
