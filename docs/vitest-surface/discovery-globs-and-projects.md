@@ -31,7 +31,9 @@ benchmark globs do not replace test defaults, and the type-test defaults apply o
   - explicit config-file globs (`'packages/*/vitest.config.{e2e,unit}.ts'`),
   - inline objects (`{ test: { name, include, environment, ... } }`).
 - A referenced project config file must be named `vitest.config.*` / `vite.config.*` /
-  `vitest.<name>.config.*` / `vite.<name>.config.*`.
+  `vitest.<name>.config.*` / `vite.<name>.config.*`. The analyzer additionally requires it, and any
+  other path the configuration names, to lie inside the analyzed directory
+  ([configuration](../configuration.md#monorepos)).
 - Inline projects **inherit the root config by default** in v5 (`extends: true` implicit)
   `[v5 CHANGE, pre-v5 default was not to inherit]`; `extends: false` opts a project out entirely.
   Some options concatenate across the inheritance chain (e.g. `setupFiles`) rather than override;

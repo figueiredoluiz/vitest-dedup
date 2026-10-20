@@ -30,6 +30,7 @@ use oxc_semantic::{ScopeFlags, Scoping, Semantic, SemanticBuilder, SymbolId};
 use oxc_span::{GetSpan, SourceType, Span};
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
+use std::path::Path;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -53,12 +54,33 @@ pub(super) fn extract(source: &str, file: &SourceFile, globals: Globals) -> File
     extract_with_imports(source, file, globals, true)
 }
 
+/// Like [`extract`], refusing tsconfig-derived import resolutions that leave `root`.
+pub(super) fn extract_within(
+    source: &str,
+    file: &SourceFile,
+    globals: Globals,
+    root: &Path,
+) -> FileExtraction {
+    extract_confined(source, file, globals, true, Some(root))
+}
+
 /// Extracts owned declarations under an explicit current-tree or historical import policy.
 pub(super) fn extract_with_imports(
     source: &str,
     file: &SourceFile,
     globals: Globals,
     allow_imported: bool,
+) -> FileExtraction {
+    extract_confined(source, file, globals, allow_imported, None)
+}
+
+/// Shared body of the extraction entry points; `root` confines import resolution when given.
+fn extract_confined(
+    source: &str,
+    file: &SourceFile,
+    globals: Globals,
+    allow_imported: bool,
+    root: Option<&Path>,
 ) -> FileExtraction {
     if let Some(reason) = parse_refusal(source) {
         return refused_extraction(reason);
@@ -79,6 +101,7 @@ pub(super) fn extract_with_imports(
                 #[cfg(test)]
                 imported::EMISSION_LIMIT_OVERRIDE.with(|limit| limit.set(emission_limit));
                 super::registry::reset_cell_census_file_scope();
+                super::resolver::begin_file(root);
                 let extraction = run(source, file, globals, allow_imported);
                 #[cfg(test)]
                 let extraction = (extraction, super::registry::test_cell_census_snapshot());
@@ -443,6 +466,7 @@ fn run(source: &str, file: &SourceFile, globals: Globals, allow_imported: bool) 
     });
     diagnostics.extend(walker.diagnostics);
     diagnostics.extend(walker.expansion.borrow().budget_diagnostics());
+    diagnostics.extend(super::resolver::take_refusals());
 
     let incomplete = !diagnostics.is_empty();
     // See `Walker::proven_empty_tables`'s doc: only meaningful when nothing else in this file

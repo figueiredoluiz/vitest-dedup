@@ -99,6 +99,7 @@
 //!   for every extglob form Vitest accepts.
 
 use crate::config::compile_glob_set;
+use crate::confine::{confine, Confinement};
 use crate::discovery::{
     DEFAULT_BENCHMARK_EXCLUDE_GLOBS, DEFAULT_BENCHMARK_INCLUDE_GLOBS, DEFAULT_EXCLUDE_GLOBS,
     DEFAULT_INCLUDE_GLOBS, DEFAULT_TYPECHECK_INCLUDE_GLOBS,
@@ -751,7 +752,7 @@ pub fn resolve_projects(root: &Path) -> ProjectSet {
         merge_config_overrides_literal(&masked, &original, value_start).is_some()
     });
     let merged_fields = is_merge
-        .then(|| resolve_standalone_config(&config_path))
+        .then(|| resolve_standalone_config_within(root, &config_path))
         .flatten();
     if is_merge && merged_fields.is_none() {
         return unresolved_set(
@@ -1934,21 +1935,50 @@ fn looks_like_glob(segment: &str) -> bool {
     segment.contains(['*', '?', '[', '{'])
 }
 
+/// What one `test.projects` string entry expanded to.
+struct ExpandedProjectPaths {
+    /// Concrete project configuration files under the analysis root, sorted.
+    paths: Vec<PathBuf>,
+    /// Matches (or a glob's own start directory) that resolve outside the analysis root. None of
+    /// them was read or walked.
+    outside: usize,
+}
+
 /// Resolves one `test.projects` string entry (a directory glob, an explicit config-file glob, or a
 /// literal path) into concrete project configuration file paths, sorted for determinism regardless
 /// of filesystem traversal order.
-fn expand_project_path(root: &Path, pattern: &str, budget: &mut Budget) -> Vec<PathBuf> {
+///
+/// Every path is confined to `root` after canonicalization: a `..` segment, an absolute path or a
+/// symlink that leaves the tree is counted in [`ExpandedProjectPaths::outside`] and never read.
+fn expand_project_path(root: &Path, pattern: &str, budget: &mut Budget) -> ExpandedProjectPaths {
+    let mut expanded = ExpandedProjectPaths {
+        paths: Vec::new(),
+        outside: 0,
+    };
     let pattern = pattern.strip_prefix("./").unwrap_or(pattern);
 
     if !looks_like_glob(pattern) {
         let candidate = root.join(pattern);
-        if candidate.is_file() {
-            return vec![candidate];
+        if matches!(confine(root, &candidate), Confinement::Outside) {
+            expanded.outside += 1;
+            return expanded;
         }
-        if candidate.is_dir() {
-            return find_project_config(&candidate).into_iter().collect();
+        let config = if candidate.is_file() {
+            Some(candidate)
+        } else if candidate.is_dir() {
+            find_project_config(&candidate)
+        } else {
+            None
+        };
+        // A directory's config can itself be a symlink out of the tree.
+        match config {
+            Some(config) if matches!(confine(root, &config), Confinement::Outside) => {
+                expanded.outside += 1;
+            }
+            Some(config) => expanded.paths.push(config),
+            None => {}
         }
-        return Vec::new();
+        return expanded;
     }
 
     let Ok(matcher) = GlobBuilder::new(pattern)
@@ -1956,7 +1986,7 @@ fn expand_project_path(root: &Path, pattern: &str, budget: &mut Budget) -> Vec<P
         .build()
         .map(|glob| glob.compile_matcher())
     else {
-        return Vec::new();
+        return expanded;
     };
 
     let prefix_segments: Vec<&str> = pattern
@@ -1964,8 +1994,13 @@ fn expand_project_path(root: &Path, pattern: &str, budget: &mut Budget) -> Vec<P
         .take_while(|segment| !looks_like_glob(segment))
         .collect();
     let start_dir = root.join(prefix_segments.join("/"));
+    if matches!(confine(root, &start_dir), Confinement::Outside) {
+        // Not even listed: enumerating a directory outside the tree is itself a read.
+        expanded.outside += 1;
+        return expanded;
+    }
     if !start_dir.is_dir() {
-        return Vec::new();
+        return expanded;
     }
 
     let mut builder = WalkBuilder::new(&start_dir);
@@ -1996,19 +2031,23 @@ fn expand_project_path(root: &Path, pattern: &str, budget: &mut Budget) -> Vec<P
         if !matcher.is_match(&relative) {
             continue;
         }
-        match entry.file_type() {
-            Some(file_type) if file_type.is_file() => {
-                matches.insert(path.to_path_buf());
+        let config = match entry.file_type() {
+            Some(file_type) if file_type.is_file() => Some(path.to_path_buf()),
+            Some(file_type) if file_type.is_dir() => find_project_config(path),
+            _ => None,
+        };
+        match config {
+            Some(config) if matches!(confine(root, &config), Confinement::Outside) => {
+                expanded.outside += 1;
             }
-            Some(file_type) if file_type.is_dir() => {
-                if let Some(config) = find_project_config(path) {
-                    matches.insert(config);
-                }
+            Some(config) => {
+                matches.insert(config);
             }
-            _ => {}
+            None => {}
         }
     }
-    matches.into_iter().collect()
+    expanded.paths = matches.into_iter().collect();
+    expanded
 }
 
 /// Locates a standalone config without following nested `test.projects` or string `extends`.
@@ -2202,11 +2241,15 @@ fn imported_config_binding(clause: &str, local_name: &str) -> Option<Option<Stri
 
 /// Resolve the imported base of a verified mergeConfig export, retaining any selected named
 /// export.
+///
+/// With a `root`, a base file that resolves outside it is refused: `Some(Err(reason))`, never
+/// read. `None` keeps its meaning of "no statically resolvable base".
 fn merge_config_base_path(
+    root: Option<&Path>,
     masked: &[char],
     original: &[char],
     config_path: &Path,
-) -> Option<ImportedConfigBase> {
+) -> Option<Result<ImportedConfigBase, String>> {
     let value_start = find_export_default_value_start(masked)?;
     merge_config_overrides_literal(masked, original, value_start)?;
     let callee_start = skip_trivia(original, value_start, original.len());
@@ -2256,7 +2299,16 @@ fn merge_config_base_path(
     for candidate in candidates {
         let path = base_dir.join(&candidate);
         if path.is_file() {
-            return Some(ImportedConfigBase { path, named_export });
+            if let Some(root) =
+                root.filter(|root| matches!(confine(root, &path), Confinement::Outside))
+            {
+                return Some(Err(format!(
+                    "{}'s mergeConfig base `{literal}` resolves outside the analysis root and \
+                     was not read",
+                    display_path(config_path, root)
+                )));
+            }
+            return Some(Ok(ImportedConfigBase { path, named_export }));
         }
     }
     None
@@ -2513,10 +2565,28 @@ fn named_config_literal(masked: &[char], original: &[char], name: &str) -> Optio
 }
 
 /// Resolve a standalone config to its optional project name and effective fields, returning
-/// None when resolution fails.
+/// None when resolution fails. Every file the `mergeConfig` chain reads must lie under `root`.
+fn resolve_standalone_config_within(
+    root: &Path,
+    path: &Path,
+) -> Option<(Option<String>, EffectiveTestFields)> {
+    resolve_standalone_config_at(Some(root), path)
+}
+
+/// [`resolve_standalone_config_within`] without a root to confine the chain to.
+#[cfg(test)]
 fn resolve_standalone_config(path: &Path) -> Option<(Option<String>, EffectiveTestFields)> {
+    resolve_standalone_config_at(None, path)
+}
+
+/// Shared body of the two standalone-config entry points.
+fn resolve_standalone_config_at(
+    root: Option<&Path>,
+    path: &Path,
+) -> Option<(Option<String>, EffectiveTestFields)> {
     let mut refused = false;
-    let fields = resolve_standalone_config_bounded(path, None, &mut Vec::new(), &mut refused)?;
+    let fields =
+        resolve_standalone_config_bounded(root, path, None, &mut Vec::new(), &mut refused)?;
     Some((fields.name, fields.effective))
 }
 
@@ -2527,13 +2597,25 @@ fn resolve_standalone_config(path: &Path) -> Option<(Option<String>, EffectiveTe
 /// raw `test` object text participate in the identity. That deliberately over-separates
 /// formatting-only differences, but it cannot merge two configurations that differ in a field
 /// this analyzer does not otherwise model.
+///
+/// Every file the `mergeConfig` chain reads must lie under `root`; one that does not is an `Err`.
+pub(crate) fn resolved_config_test_scope_within(
+    root: &Path,
+    path: &Path,
+) -> Result<Option<String>, String> {
+    resolve_config_test_scope_bounded(Some(root), path, None, &mut Vec::new())
+}
+
+/// [`resolved_config_test_scope_within`] without a root to confine the chain to.
+#[cfg(test)]
 pub(crate) fn resolved_config_test_scope(path: &Path) -> Result<Option<String>, String> {
-    resolve_config_test_scope_bounded(path, None, &mut Vec::new())
+    resolve_config_test_scope_bounded(None, path, None, &mut Vec::new())
 }
 
 /// Resolve comparison scope while tracking canonical config paths; return an error for cycles,
 /// excess depth or unresolved paths.
 fn resolve_config_test_scope_bounded(
+    root: Option<&Path>,
     path: &Path,
     export: Option<&str>,
     active: &mut Vec<PathBuf>,
@@ -2548,7 +2630,7 @@ fn resolve_config_test_scope_bounded(
         ));
     }
     active.push(canonical);
-    let result = resolve_config_test_scope_inner(path, export, active);
+    let result = resolve_config_test_scope_inner(root, path, export, active);
     active.pop();
     result
 }
@@ -2556,6 +2638,7 @@ fn resolve_config_test_scope_bounded(
 /// Read a bounded config and derive its comparison scope, following supported mergeConfig bases
 /// and reporting unsupported forms.
 fn resolve_config_test_scope_inner(
+    root: Option<&Path>,
     path: &Path,
     export: Option<&str>,
     active: &mut Vec<PathBuf>,
@@ -2598,7 +2681,7 @@ fn resolve_config_test_scope_inner(
             }
         };
         let merge_base = is_merge
-            .then(|| merge_config_base_path(&masked, &original, path))
+            .then(|| merge_config_base_path(root, &masked, &original, path))
             .flatten();
         (object, is_merge, merge_base)
     };
@@ -2625,9 +2708,9 @@ fn resolve_config_test_scope_inner(
         return Ok(own_scope);
     }
     let base = merge_base
-        .ok_or_else(|| format!("{}'s mergeConfig base cannot be resolved", path.display()))?;
+        .ok_or_else(|| format!("{}'s mergeConfig base cannot be resolved", path.display()))??;
     let base_scope =
-        resolve_config_test_scope_bounded(&base.path, base.named_export.as_deref(), active)?;
+        resolve_config_test_scope_bounded(root, &base.path, base.named_export.as_deref(), active)?;
     if base_scope.is_none() && own_scope.is_none() {
         return Ok(None);
     }
@@ -2643,6 +2726,7 @@ fn resolve_config_test_scope_inner(
 /// Resolve config fields with canonical-path cycle/depth guards, marking the refusal flag when
 /// either guard is reached.
 fn resolve_standalone_config_bounded(
+    root: Option<&Path>,
     path: &Path,
     export: Option<&str>,
     active: &mut Vec<PathBuf>,
@@ -2654,7 +2738,7 @@ fn resolve_standalone_config_bounded(
         return None;
     }
     active.push(canonical);
-    let result = resolve_standalone_config_inner(path, export, active, refused);
+    let result = resolve_standalone_config_inner(root, path, export, active, refused);
     active.pop();
     result
 }
@@ -2662,6 +2746,7 @@ fn resolve_standalone_config_bounded(
 /// Read and resolve supported standalone config fields and inheritance without executing the
 /// config.
 fn resolve_standalone_config_inner(
+    root: Option<&Path>,
     path: &Path,
     export: Option<&str>,
     active: &mut Vec<PathBuf>,
@@ -2684,7 +2769,7 @@ fn resolve_standalone_config_inner(
         (
             config_object,
             merge_config_overrides_literal(&masked, &original, value_start).is_some(),
-            merge_config_base_path(&masked, &original, path),
+            merge_config_base_path(root, &masked, &original, path),
         )
     };
     let body = config_object.0 + 1..config_object.1;
@@ -2714,19 +2799,26 @@ fn resolve_standalone_config_inner(
         if let Some(body) = &test_body {
             normalize_merge_fields(&mut fields, &masked, &original, body.clone(), true);
         }
-        let resolved_base = if let Some(base) = merge_base {
-            let resolved = resolve_standalone_config_bounded(
-                &base.path,
-                base.named_export.as_deref(),
-                active,
-                refused,
-            );
-            if resolved.is_none() && (*refused || base.named_export.is_some()) {
-                return None;
+        let mut base_refusal = None;
+        let resolved_base = match merge_base {
+            Some(Ok(base)) => {
+                let resolved = resolve_standalone_config_bounded(
+                    root,
+                    &base.path,
+                    base.named_export.as_deref(),
+                    active,
+                    refused,
+                );
+                if resolved.is_none() && (*refused || base.named_export.is_some()) {
+                    return None;
+                }
+                resolved
             }
-            resolved
-        } else {
-            None
+            Some(Err(reason)) => {
+                base_refusal = Some(reason);
+                None
+            }
+            None => None,
         };
         if let Some(base) = resolved_base {
             let name = if name_present {
@@ -2744,10 +2836,9 @@ fn resolve_standalone_config_inner(
             });
         }
         merge_config_arrays(&mut fields, RawTestFields::empty(), true);
-        let mode = ExtendsMode::Unresolvable(format!(
-            "mergeConfig base in {} cannot be resolved",
-            path.display()
-        ));
+        let mode = ExtendsMode::Unresolvable(base_refusal.unwrap_or_else(|| {
+            format!("mergeConfig base in {} cannot be resolved", path.display())
+        }));
         let effective = resolve_effective(&fields, &mode, None, path);
         return Some(StandaloneConfigFields {
             name: fields.name.clone(),
@@ -2845,7 +2936,7 @@ fn unresolved_project(
 /// resolution fails.
 fn build_file_project(root: &Path, path: &Path, defined_in: &Path, declared_at: usize) -> Project {
     let base_dir = path.parent().unwrap_or(root).to_path_buf();
-    match resolve_standalone_config(path) {
+    match resolve_standalone_config_within(root, path) {
         Some((name, effective)) => Project::from_effective(
             name,
             base_dir,
@@ -2873,8 +2964,8 @@ fn build_file_project(root: &Path, path: &Path, defined_in: &Path, declared_at: 
 
 /// Resolves the base an `extends: '<path>'` string points at, other than the common
 /// self-referencing case the caller already handles directly.
-fn resolve_extends_target(candidate: &Path) -> Option<EffectiveTestFields> {
-    resolve_standalone_config(candidate).map(|(_, effective)| effective)
+fn resolve_extends_target(root: &Path, candidate: &Path) -> Option<EffectiveTestFields> {
+    resolve_standalone_config_within(root, candidate).map(|(_, effective)| effective)
 }
 
 /// Return the canonical path when available, otherwise preserve the supplied path.
@@ -2911,8 +3002,17 @@ fn build_inline_project(
                         let candidate = canonical_or_self(&defining_dir.join(&target));
                         if candidate == canonical_or_self(defining_config) {
                             (ExtendsMode::Inherit, default_base.clone())
+                        } else if matches!(confine(root, &candidate), Confinement::Outside) {
+                            (
+                                ExtendsMode::Unresolvable(format!(
+                                    "{} extends `{target}`, which resolves outside the analysis \
+                                     root and was not read",
+                                    display_path(defining_config, root)
+                                )),
+                                default_base.clone(),
+                            )
                         } else {
-                            match resolve_extends_target(&candidate) {
+                            match resolve_extends_target(root, &candidate) {
                                 Some(effective) => (ExtendsMode::Inherit, effective),
                                 None => (
                                     ExtendsMode::Unresolvable(format!(
@@ -2997,7 +3097,24 @@ fn build_inline_project(
     let base_dir = match own_fields.base.as_deref() {
         Some(declared) => {
             let joined = root.join(declared.strip_prefix("./").unwrap_or(declared));
-            std::fs::canonicalize(&joined).unwrap_or(joined)
+            match confine(root, &joined) {
+                Confinement::Inside(canonical) => canonical,
+                Confinement::Missing(_) => joined,
+                Confinement::Outside => {
+                    let reason = format!(
+                        "a `test.projects` entry in {} declares `root`/`dir` `{declared}`, which \
+                         resolves outside the analysis root",
+                        display_path(defining_config, root)
+                    );
+                    return unresolved_project(
+                        root.to_path_buf(),
+                        None,
+                        defining_config,
+                        declared_at,
+                        reason,
+                    );
+                }
+            }
         }
         None => root.to_path_buf(),
     };
@@ -3076,8 +3193,21 @@ fn resolve_project_entry(
             note_unresolved_position(max_unresolved_position, declared_at);
             return;
         }
-        let resolved = expand_project_path(root, &path_str, budget);
+        let expanded = expand_project_path(root, &path_str, budget);
+        if expanded.outside > 0 {
+            diagnostics.push(format!(
+                "a `test.projects` entry in {} (`{path_str}`) resolves outside the analysis \
+                 root and was not read",
+                display_path(defining_config, root)
+            ));
+            *has_unresolved = true;
+            note_unresolved_position(max_unresolved_position, declared_at);
+        }
+        let resolved = expanded.paths;
         if resolved.is_empty() {
+            if expanded.outside > 0 {
+                return;
+            }
             diagnostics.push(format!(
                 "a `test.projects` entry in {} (`{path_str}`) matched no project configuration \
                  file",
@@ -3293,13 +3423,24 @@ fn resolve_projects_array(
             original,
             value_extent(masked, value_start, test_body.end),
         ) {
-            let resolved = expand_project_path(root, &pattern, budget);
-            if resolved.is_empty() {
+            let expanded = expand_project_path(root, &pattern, budget);
+            let outside = expanded.outside > 0;
+            if outside {
                 diagnostics.push(format!(
-                    "{} sets `test.projects` to `glob.sync('{pattern}')`, which matched no \
-                     project configuration file",
+                    "{} sets `test.projects` to `glob.sync('{pattern}')`, which resolves \
+                     outside the analysis root and was not read",
                     display_path(config_path, root)
                 ));
+            }
+            let resolved = expanded.paths;
+            if resolved.is_empty() {
+                if !outside {
+                    diagnostics.push(format!(
+                        "{} sets `test.projects` to `glob.sync('{pattern}')`, which matched no \
+                         project configuration file",
+                        display_path(config_path, root)
+                    ));
+                }
                 let mut set = unresolved_set(root, diagnostics, true);
                 set.truncated = budget.exhausted();
                 return set;
@@ -3333,9 +3474,9 @@ fn resolve_projects_array(
                 root,
                 projects,
                 diagnostics,
+                exhausted || outside,
                 exhausted,
-                exhausted,
-                exhausted.then_some(1),
+                (exhausted || outside).then_some(1),
             );
             set.config_found = true;
             return set;

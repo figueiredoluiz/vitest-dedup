@@ -56,6 +56,14 @@ Differences from the set Vitest runs:
 A config declaring `test.projects`, or a `vitest.workspace.*` file, is resolved entry by entry,
 honouring `extends: false`.
 
+Every path a configuration names must resolve inside the analyzed directory, after symlinks and
+`..` segments are followed: project entries and globs, a project's string `extends`, a
+`mergeConfig` base import, a project's `root` or `dir`, and tsconfig `paths`. A path that leaves it
+is not read. The run reports which one and is incomplete: the entry is an unresolved project, or the
+tsconfig import is unresolved. Paths that stay inside are not refused, including `..` that folds
+back and symlinks that point within the tree. Relative imports in test files are not configuration
+and may still reach outside.
+
 ### Globals
 
 `globals: true` is detected from the resolved config. When the project list is built in a way no

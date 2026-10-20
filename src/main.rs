@@ -667,7 +667,7 @@ fn run_with_rss(args: ParsedArgs, mut resident: impl FnMut() -> Option<u64>) -> 
             diagnostic_files.insert(file.path.clone());
             causes.files_globals_undetermined += 1;
         }
-        let mut extraction = frontend::extract(&source, file, file_globals);
+        let mut extraction = frontend::extract_within(&source, file, file_globals, &config.root);
         if extraction.incomplete {
             causes.files_partially_read += 1;
         }

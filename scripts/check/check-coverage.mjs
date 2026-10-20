@@ -130,6 +130,10 @@ const RUST_MODULES = {
   'src/analysis/pairs.rs': 100,
   'src/cli.rs': 98,
   'src/config.rs': 98,
+  // Config-path confinement: measured at 94.40% (118/125 instrumented lines). Uncovered: the
+  // no-existing-ancestor fallback of `soft_canonicalize`, the `.` and root-`..` arms of lexical
+  // normalization, and the symlink-unavailable skip in the test helper.
+  'src/confine.rs': 94,
   // Extracted CLI rendering: measured at 98.72% (308/312 instrumented lines).
   'src/diagnostics.rs': 98,
   'src/discovery.rs': 94,

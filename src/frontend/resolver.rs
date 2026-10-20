@@ -49,6 +49,16 @@
 //!
 //! `fingerprint`'s own doc comment records the measured wall-clock cost of adding this on the
 //! external corpus.
+//!
+//! ## Confinement
+//!
+//! A tsconfig `paths` or `baseUrl` entry is configuration from the analyzed repository, and can
+//! name a file anywhere on disk. When the extraction names an analysis root ([`begin_file`]), a
+//! resolution that leaves it is accepted only if a resolver with no tsconfig reaches the same file
+//! from the same specifier: a relative import, or a symlinked workspace package, is not
+//! configuration-derived and keeps resolving. Anything else is refused as
+//! [`Resolved::Unresolved`], never opened, and recorded for [`take_refusals`] so the file's
+//! extraction says so.
 
 use oxc_resolver::{ResolveOptions, Resolver, TsconfigDiscovery};
 use oxc_span::VALID_EXTENSIONS;
@@ -63,7 +73,17 @@ thread_local! {
     /// `tsconfig.json` per package (two of the pinned corpora are), and equally correct for a single
     /// project with one config at the root. There is no CLI-level tsconfig override to plumb
     /// through here, so `Auto` is not a placeholder for a future flag -- it is the whole policy.
-    static RESOLVER: Resolver = build_resolver();
+    static RESOLVER: Resolver = build_resolver(Some(TsconfigDiscovery::Auto));
+
+    /// The same options with tsconfig handling off: the oracle for "would this specifier resolve
+    /// there without any tsconfig", consulted only for a resolution that leaves the analysis root.
+    static PLAIN_RESOLVER: Resolver = build_resolver(None);
+
+    /// The analysis root the current extraction confines tsconfig-derived resolutions to.
+    static ANALYSIS_ROOT: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
+
+    /// Resolutions refused by confinement during the current extraction.
+    static REFUSALS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
 
     /// Memoizes [`resolve`] for the lifetime of this thread. See the module doc's cost section for
     /// why this is the mechanism that keeps resolution from being paid for on every test body
@@ -71,10 +91,10 @@ thread_local! {
     static CACHE: RefCell<HashMap<(PathBuf, String), Resolved>> = RefCell::new(HashMap::new());
 }
 
-/// Builds the worker resolver with parser-supported extensions, `module`/`import` conditions,
-/// `module`/`main` entry fields and automatic tsconfig discovery. Other options retain their
+/// Builds a worker resolver with parser-supported extensions, `module`/`import` conditions,
+/// `module`/`main` entry fields and the given tsconfig handling. Other options retain their
 /// resolver defaults.
-fn build_resolver() -> Resolver {
+fn build_resolver(tsconfig: Option<TsconfigDiscovery>) -> Resolver {
     Resolver::new(ResolveOptions {
         // The base `oxc_resolver` defaults only try `.js`/`.json`/`.node` -- correct for plain
         // Node resolution, wrong for a TypeScript test corpus, where `./helpers` routinely names
@@ -91,7 +111,7 @@ fn build_resolver() -> Resolver {
         // CJS one when a package exports map offers both.
         condition_names: vec!["module".into(), "import".into()],
         main_fields: vec!["module".into(), "main".into()],
-        tsconfig: Some(TsconfigDiscovery::Auto),
+        tsconfig,
         ..ResolveOptions::default()
     })
 }
@@ -142,10 +162,56 @@ pub(super) fn resolve(importing_file: &Path, specifier: &str) -> Resolved {
                 Err(_) => Resolved::Unresolved,
             },
         );
+    let resolved = confine_resolution(importing_file, specifier, resolved);
     CACHE.with(|cache| {
         cache.borrow_mut().insert(key, resolved.clone());
     });
     resolved
+}
+
+/// Starts confining this thread's resolutions to `root` (`None`: no confinement) and forgets any
+/// earlier file's memoized results and refusals. Each extraction runs on its own worker thread,
+/// so in production there is nothing to forget; the reset keeps direct callers honest.
+pub(super) fn begin_file(root: Option<&Path>) {
+    ANALYSIS_ROOT.with(|slot| *slot.borrow_mut() = root.map(Path::to_path_buf));
+    REFUSALS.with(|refusals| refusals.borrow_mut().clear());
+    CACHE.with(|cache| cache.borrow_mut().clear());
+}
+
+/// Drains the diagnostics for resolutions refused since [`begin_file`].
+pub(super) fn take_refusals() -> Vec<String> {
+    REFUSALS.with(|refusals| std::mem::take(&mut *refusals.borrow_mut()))
+}
+
+/// Refuses a resolution that leaves the analysis root unless it is independent of tsconfig.
+fn confine_resolution(importing_file: &Path, specifier: &str, resolved: Resolved) -> Resolved {
+    let Resolved::Module(path) = &resolved else {
+        return resolved;
+    };
+    let Some(root) = ANALYSIS_ROOT.with(|slot| slot.borrow().clone()) else {
+        return resolved;
+    };
+    if crate::confine::contains(&root, path) {
+        return resolved;
+    }
+    let without_tsconfig = PLAIN_RESOLVER
+        .with(|resolver| resolver.resolve_file(importing_file, specifier))
+        .ok()
+        .map(oxc_resolver::Resolution::into_path_buf);
+    if without_tsconfig.as_deref() == Some(path.as_path()) {
+        return resolved;
+    }
+    let message = format!(
+        "import `{specifier}` resolves outside the analysis root through the tsconfig and was \
+         not read"
+    );
+    REFUSALS.with(|refusals| {
+        let mut refusals = refusals.borrow_mut();
+        if !refusals.contains(&message) {
+            refusals.push(message);
+        }
+    });
+    Resolved::Unresolved
 }
 
 #[cfg(test)]
@@ -271,5 +337,104 @@ mod tests {
         let first = resolve(&importer, "./target");
         let second = resolve(&importer, "./target");
         assert_eq!(first, second);
+    }
+
+    /// An analysis root with a sibling `outside` holding `target.ts`, and an importer whose
+    /// tsconfig `paths` maps `@out/*` there. Returns `(root, importer)`; the guard keeps both alive.
+    fn escaping_alias() -> (tempfile::TempDir, PathBuf, PathBuf) {
+        let guard = tempfile::tempdir().unwrap();
+        let root = guard.path().join("root");
+        fs::create_dir_all(&root).unwrap();
+        fs::create_dir_all(guard.path().join("outside")).unwrap();
+        fs::write(
+            guard.path().join("outside/target.ts"),
+            "export const x = 1;",
+        )
+        .unwrap();
+        fs::write(
+            root.join("tsconfig.json"),
+            r#"{ "compilerOptions": { "baseUrl": ".", "paths": { "@out/*": ["../outside/*"] } } }"#,
+        )
+        .unwrap();
+        let importer = root.join("importer.ts");
+        fs::write(&importer, "// importer").unwrap();
+        (guard, root, importer)
+    }
+
+    /// A tsconfig `paths` alias that leaves the analysis root resolves to nothing and is recorded,
+    /// while the same alias without a root (the library default) still resolves.
+    #[test]
+    fn tsconfig_alias_outside_the_root_is_refused_only_when_confined() {
+        let (_guard, root, importer) = escaping_alias();
+
+        begin_file(None);
+        assert!(matches!(
+            resolve(&importer, "@out/target"),
+            Resolved::Module(_)
+        ));
+        assert!(take_refusals().is_empty());
+
+        begin_file(Some(&root));
+        assert_eq!(resolve(&importer, "@out/target"), Resolved::Unresolved);
+        assert_eq!(resolve(&importer, "@out/target"), Resolved::Unresolved);
+        let refusals = take_refusals();
+        assert_eq!(refusals.len(), 1, "{refusals:?}");
+        assert!(refusals[0].contains("`@out/target`") && refusals[0].contains("outside"));
+        assert!(take_refusals().is_empty(), "taking drains the list");
+    }
+
+    /// A relative import that leaves the root is not tsconfig-derived and keeps resolving, as does
+    /// an alias that stays inside.
+    #[test]
+    fn relative_import_outside_and_alias_inside_the_root_still_resolve() {
+        let (guard, root, importer) = escaping_alias();
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::write(root.join("src/inner.ts"), "export const y = 1;").unwrap();
+        fs::write(
+            root.join("tsconfig.json"),
+            r#"{ "compilerOptions": { "baseUrl": ".", "paths": { "@in/*": ["src/*"], "@out/*": ["../outside/*"] } } }"#,
+        )
+        .unwrap();
+
+        begin_file(Some(&root));
+        assert!(matches!(
+            resolve(&importer, "../outside/target"),
+            Resolved::Module(_)
+        ));
+        assert!(matches!(
+            resolve(&importer, "@in/inner"),
+            Resolved::Module(_)
+        ));
+        assert!(take_refusals().is_empty());
+        drop(guard);
+    }
+
+    /// A symlinked workspace package that resolves outside the root without any tsconfig help is
+    /// kept; a tsconfig alias to the same file is not. Skipped where symlinks cannot be created.
+    #[test]
+    fn symlinked_package_outside_the_root_is_not_tsconfig_derived() {
+        let (guard, root, importer) = escaping_alias();
+        let package = guard.path().join("outside/pkg");
+        fs::create_dir_all(&package).unwrap();
+        fs::write(package.join("index.ts"), "export const z = 1;").unwrap();
+        fs::write(
+            package.join("package.json"),
+            r#"{ "name": "ws-pkg", "main": "index.ts" }"#,
+        )
+        .unwrap();
+        fs::create_dir_all(root.join("node_modules")).unwrap();
+        crate::confine::with_symlink(&package, &root.join("node_modules/ws-pkg"), || {
+            fs::write(
+                root.join("tsconfig.json"),
+                r#"{ "compilerOptions": { "baseUrl": ".", "paths": { "@pkg": ["../outside/pkg/index.ts"] } } }"#,
+            )
+            .unwrap();
+
+            begin_file(Some(&root));
+            assert!(matches!(resolve(&importer, "ws-pkg"), Resolved::Module(_)));
+            assert!(take_refusals().is_empty());
+            assert_eq!(resolve(&importer, "@pkg"), Resolved::Unresolved);
+            assert_eq!(take_refusals().len(), 1);
+        });
     }
 }

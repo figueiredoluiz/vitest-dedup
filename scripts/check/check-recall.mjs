@@ -202,7 +202,9 @@ function validateManifest(manifest, failures) {
           `defect the case waits on -- an unexplained pending case is an unasserted expectation`,
       )
     }
-    paths.add(testCase.path)
+    // A case may analyze a subdirectory (`<case>/root`) and keep a sibling (`<case>/outside`) for
+    // configuration that points out of the analyzed tree; the top-level directory is what it claims.
+    paths.add(String(testCase.path).split('/')[0])
 
     const groups = [
       ['expectedFindings', testCase.expectedFindings, true],

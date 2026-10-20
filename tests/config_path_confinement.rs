@@ -1,0 +1,354 @@
+//! Paths named by Vitest and TypeScript configuration stay inside the analysis root.
+//!
+//! Each scenario runs the binary over a root that has a sibling directory outside it. The
+//! configuration either points at the sibling (refused: the run is incomplete and says why) or at a
+//! directory inside the root (the control: complete, no refusal). The two differ in one path, so a
+//! fix that refused everything, or that stopped reading configuration, fails the control.
+
+use std::fs;
+use std::path::{Path, PathBuf};
+
+const TESTS: &str = "import { expect, test } from 'vitest'\n\
+test('adds two numbers', () => { expect(1 + 2).toBe(3) })\n\
+test('sums the same pair again', () => { expect(1 + 2).toBe(3) })\n";
+
+const REFUSAL: &str = "outside the analysis root";
+
+/// What the binary reported for one run.
+struct Outcome {
+    incomplete: bool,
+    tests: u64,
+    stderr: String,
+}
+
+/// A root with a sibling `outside` directory, both under one temporary directory.
+struct Layout {
+    _guard: tempfile::TempDir,
+    root: PathBuf,
+    outside: PathBuf,
+}
+
+/// Creates the layout with the duplicate-pair test file in the root.
+fn layout() -> Layout {
+    let guard = tempfile::tempdir().unwrap();
+    let root = guard.path().join("root");
+    let outside = guard.path().join("outside");
+    write(&root, "arith.test.ts", TESTS);
+    fs::create_dir_all(&outside).unwrap();
+    Layout {
+        _guard: guard,
+        root,
+        outside,
+    }
+}
+
+/// Moves the duplicate-pair test file from the root into `pkg/`, where a project scoped to `pkg`
+/// governs it.
+fn move_tests_into_pkg(layout: &Layout) {
+    fs::remove_file(layout.root.join("arith.test.ts")).unwrap();
+    write(&layout.root, "pkg/arith.test.ts", TESTS);
+}
+
+/// Writes `contents` to `name` under `directory`, creating parents.
+fn write(directory: &Path, name: &str, contents: &str) {
+    let path = directory.join(name);
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(path, contents).unwrap();
+}
+
+/// Runs the analyzer over `root` and reads the summary record.
+fn run(root: &Path) -> Outcome {
+    let output = assert_cmd::Command::cargo_bin("vitest-dedup")
+        .unwrap()
+        .arg(root)
+        .args(["--reporters", "jsonl", "--no-metrics"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let summary = stdout
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .find(|record| record["type"] == "summary")
+        .unwrap_or_else(|| panic!("no summary record: {stdout}"));
+    Outcome {
+        incomplete: summary["incomplete"].as_bool().unwrap(),
+        tests: summary["testsAnalyzed"].as_u64().unwrap(),
+        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+    }
+}
+
+/// The run refused a path: incomplete, the tests still extracted, and the reason on stderr.
+fn assert_refused(outcome: &Outcome, why: &str) {
+    assert!(
+        outcome.incomplete,
+        "{why}: expected an incomplete run\n{}",
+        outcome.stderr
+    );
+    assert_eq!(outcome.tests, 2, "{why}: {}", outcome.stderr);
+    assert!(
+        outcome.stderr.contains(REFUSAL),
+        "{why}: no refusal on stderr\n{}",
+        outcome.stderr
+    );
+}
+
+/// The run read its configuration: complete, no refusal anywhere.
+fn assert_kept(outcome: &Outcome, why: &str) {
+    assert!(
+        !outcome.incomplete,
+        "{why}: expected a complete run\n{}",
+        outcome.stderr
+    );
+    assert_eq!(outcome.tests, 2, "{why}: {}", outcome.stderr);
+    assert!(
+        !outcome.stderr.contains(REFUSAL),
+        "{why}: {}",
+        outcome.stderr
+    );
+}
+
+/// Creates a directory symlink or reports why not, so a caller can skip visibly.
+fn try_symlink(target: &Path, link: &Path) -> bool {
+    #[cfg(unix)]
+    let created = std::os::unix::fs::symlink(target, link);
+    #[cfg(windows)]
+    let created = std::os::windows::fs::symlink_dir(target, link);
+    match created {
+        Ok(()) => true,
+        Err(error) => {
+            eprintln!("skipped: cannot create a symlink here: {error}");
+            false
+        }
+    }
+}
+
+/// `path` spelled for a JavaScript string literal.
+fn js(path: &Path) -> String {
+    path.to_string_lossy().replace('\\', "/")
+}
+
+const PROJECT: &str = "export default { test: { name: 'pkg' } };\n";
+
+/// A `test.projects` entry is confined, whether written with `..`, absolutely, or as a glob.
+#[test]
+fn projects_entries_outside_the_root_are_refused() {
+    let layout = layout();
+    move_tests_into_pkg(&layout);
+    write(&layout.outside, "vitest.config.ts", PROJECT);
+    write(&layout.root, "pkg/vitest.config.ts", PROJECT);
+    let absolute = js(&layout.outside);
+    for entry in [
+        "../outside",
+        absolute.as_str(),
+        "../out*",
+        "../outside/vitest.config.ts",
+    ] {
+        write(
+            &layout.root,
+            "vitest.config.ts",
+            &format!("export default {{ test: {{ projects: ['{entry}'] }} }};\n"),
+        );
+        assert_refused(&run(&layout.root), entry);
+    }
+    for entry in ["pkg", "./pkg", "pk*"] {
+        write(
+            &layout.root,
+            "vitest.config.ts",
+            &format!("export default {{ test: {{ projects: ['{entry}'] }} }};\n"),
+        );
+        assert_kept(&run(&layout.root), entry);
+    }
+}
+
+/// A symlinked project directory is judged by where it points.
+#[test]
+fn projects_entries_through_symlinks_are_judged_by_their_target() {
+    let layout = layout();
+    move_tests_into_pkg(&layout);
+    write(&layout.outside, "vitest.config.ts", PROJECT);
+    write(&layout.root, "pkg/vitest.config.ts", PROJECT);
+    if !try_symlink(&layout.outside, &layout.root.join("escape")) {
+        return;
+    }
+    assert!(try_symlink(
+        &layout.root.join("pkg"),
+        &layout.root.join("alias")
+    ));
+    write(
+        &layout.root,
+        "vitest.config.ts",
+        "export default { test: { projects: ['escape'] } };\n",
+    );
+    assert_refused(&run(&layout.root), "symlink out");
+    write(
+        &layout.root,
+        "vitest.config.ts",
+        "export default { test: { projects: ['alias'] } };\n",
+    );
+    // Files are discovered under their real path `pkg/`, which a project spelled `alias/` does not
+    // claim, so the run may be incomplete; what must not happen is a refusal.
+    let outcome = run(&layout.root);
+    assert!(!outcome.stderr.contains(REFUSAL), "{}", outcome.stderr);
+}
+
+/// A root reached through a symlink resolves its inside entries.
+#[test]
+fn a_root_reached_through_a_symlink_keeps_its_inside_paths() {
+    let layout = layout();
+    move_tests_into_pkg(&layout);
+    write(&layout.root, "pkg/vitest.config.ts", PROJECT);
+    let alias = layout.root.parent().unwrap().join("alias-root");
+    if !try_symlink(&layout.root, &alias) {
+        return;
+    }
+    let mut entries = vec!["pkg".to_owned()];
+    // A canonical Windows path carries a `\\?\` prefix, whose `?` reads as a glob metacharacter.
+    #[cfg(not(windows))]
+    entries.push(js(&layout.root.canonicalize().unwrap().join("pkg")));
+    for entry in &entries {
+        write(
+            &layout.root,
+            "vitest.config.ts",
+            &format!("export default {{ test: {{ projects: ['{entry}'] }} }};\n"),
+        );
+        assert_kept(&run(&alias), entry);
+    }
+}
+
+/// An inline project's string `extends` is confined; one folding back inside is kept.
+#[test]
+fn extends_outside_the_root_is_refused() {
+    let layout = layout();
+    write(
+        &layout.outside,
+        "base.ts",
+        "export default { test: { globals: true } };\n",
+    );
+    write(
+        &layout.root,
+        "shared/base.ts",
+        "export default { test: { globals: true } };\n",
+    );
+    let absolute = js(&layout.outside.join("base.ts"));
+    for target in ["../outside/base.ts", absolute.as_str()] {
+        write(
+            &layout.root,
+            "vitest.config.ts",
+            &format!(
+                "export default {{ test: {{ projects: [{{ extends: '{target}', test: {{ name: 'x' }} }}] }} }};\n"
+            ),
+        );
+        assert_refused(&run(&layout.root), target);
+    }
+    for target in ["./shared/base.ts", "./shared/../shared/base.ts"] {
+        write(
+            &layout.root,
+            "vitest.config.ts",
+            &format!(
+                "export default {{ test: {{ projects: [{{ extends: '{target}', test: {{ name: 'x' }} }}] }} }};\n"
+            ),
+        );
+        assert_kept(&run(&layout.root), target);
+    }
+}
+
+/// A `mergeConfig` base import is confined; one folding back inside is kept.
+#[test]
+fn merge_config_imports_outside_the_root_are_refused() {
+    let layout = layout();
+    let base = "export default { test: { include: ['**/*.test.ts'] } };\n";
+    write(&layout.outside, "base.ts", base);
+    write(&layout.root, "shared/base.ts", base);
+    for specifier in ["../outside/base", "./shared/../../outside/base"] {
+        write(
+            &layout.root,
+            "vitest.config.ts",
+            &format!(
+                "import {{ mergeConfig }} from 'vitest/config';\nimport base from '{specifier}';\nexport default mergeConfig(base, {{ test: {{ name: 'merged' }} }});\n"
+            ),
+        );
+        assert_refused(&run(&layout.root), specifier);
+    }
+    for specifier in ["./shared/base", "./shared/../shared/base"] {
+        write(
+            &layout.root,
+            "vitest.config.ts",
+            &format!(
+                "import {{ mergeConfig }} from 'vitest/config';\nimport base from '{specifier}';\nexport default mergeConfig(base, {{ test: {{ name: 'merged' }} }});\n"
+            ),
+        );
+        assert_kept(&run(&layout.root), specifier);
+    }
+}
+
+/// An inline project's `root`/`dir` is confined; one folding back inside is kept.
+#[test]
+fn project_root_and_dir_outside_the_root_are_refused() {
+    let layout = layout();
+    move_tests_into_pkg(&layout);
+    write(&layout.outside, "keep.txt", "");
+    let absolute = js(&layout.outside);
+    for key in ["root", "dir"] {
+        for declared in ["../outside", absolute.as_str()] {
+            write(
+                &layout.root,
+                "vitest.config.ts",
+                &format!(
+                    "export default {{ test: {{ projects: [{{ test: {{ name: 'p', {key}: '{declared}' }} }}] }} }};\n"
+                ),
+            );
+            assert_refused(&run(&layout.root), declared);
+        }
+        for declared in ["./pkg", "./pkg/../pkg"] {
+            write(
+                &layout.root,
+                "vitest.config.ts",
+                &format!(
+                    "export default {{ test: {{ projects: [{{ test: {{ name: 'p', {key}: '{declared}' }} }}] }} }};\n"
+                ),
+            );
+            assert_kept(&run(&layout.root), declared);
+        }
+    }
+}
+
+/// A tsconfig `paths` alias is confined; one that stays inside resolves its helpers.
+#[test]
+fn tsconfig_paths_outside_the_root_are_refused() {
+    let layout = layout();
+    fs::remove_file(layout.root.join("arith.test.ts")).unwrap();
+    let helper = "import { expect } from 'vitest'\nexport function check(value: number) {\n  const doubled = value * 2\n  expect(doubled).toBe(6)\n}\n";
+    write(&layout.outside, "check.ts", helper);
+    write(&layout.root, "helpers/check.ts", helper);
+    let tests = "import { test } from 'vitest'\nimport { check } from '@h/check'\n\
+test('doubles three', () => { check(3) })\ntest('doubles three again', () => { check(3) })\n";
+    write(&layout.root, "doubles.test.ts", tests);
+    let config = |target: &str| {
+        format!(
+            "{{ \"compilerOptions\": {{ \"baseUrl\": \".\", \"paths\": {{ \"@h/*\": [\"{target}\"] }} }} }}\n"
+        )
+    };
+    write(&layout.root, "tsconfig.json", &config("../outside/*"));
+    assert_refused(&run(&layout.root), "tsconfig paths out");
+    write(&layout.root, "tsconfig.json", &config("helpers/*"));
+    assert_kept(&run(&layout.root), "tsconfig paths in");
+}
+
+/// A relative import that leaves the root is not configuration and keeps resolving.
+#[test]
+fn a_relative_import_outside_the_root_is_not_refused() {
+    let layout = layout();
+    fs::remove_file(layout.root.join("arith.test.ts")).unwrap();
+    write(
+        &layout.outside,
+        "check.ts",
+        "import { expect } from 'vitest'\nexport function check(value: number) {\n  expect(value * 2).toBe(6)\n}\n",
+    );
+    write(
+        &layout.root,
+        "doubles.test.ts",
+        "import { test } from 'vitest'\nimport { check } from '../outside/check'\n\
+test('doubles three', () => { check(3) })\ntest('doubles three again', () => { check(3) })\n",
+    );
+    assert_kept(&run(&layout.root), "relative import");
+}

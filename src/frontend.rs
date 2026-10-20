@@ -12,6 +12,7 @@ mod resolver;
 
 use crate::discovery::SourceFile;
 use crate::model::TestCase;
+use std::path::Path;
 
 pub use registry::{take_cell_census, Globals};
 
@@ -41,10 +42,24 @@ pub struct FileExtraction {
 
 /// Parses one source file and extracts its Vitest test cases.
 ///
+/// Import resolution is not confined to any root; the CLI uses [`extract_within`].
+///
 /// Never panics on malformed input: a file that fails to parse yields an empty extraction with
 /// `incomplete` set, matching the product rule that operational degradation stays visible.
 pub fn extract(source: &str, file: &SourceFile, globals: Globals) -> FileExtraction {
     extract::extract(source, file, globals)
+}
+
+/// Like [`extract()`], but a tsconfig `paths`/`baseUrl` resolution that leaves `root` is refused:
+/// the file it names is not opened, and the extraction records a diagnostic and is `incomplete`.
+/// Relative imports and package resolution, which no tsconfig decides, are unaffected.
+pub fn extract_within(
+    source: &str,
+    file: &SourceFile,
+    globals: Globals,
+    root: &Path,
+) -> FileExtraction {
+    extract::extract_within(source, file, globals, root)
 }
 
 /// Extracts a historical caller without reading present-day imported declarations.
