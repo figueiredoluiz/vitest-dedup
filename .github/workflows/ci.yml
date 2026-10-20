@@ -6,10 +6,12 @@ on:
   pull_request:
   workflow_dispatch:
 
-# A pushed branch and its pull request would otherwise run the same expensive matrix twice.
+# A new commit on a pull request cancels the superseded run. Every other run has its own group, so
+# a later merge never cancels an earlier merge's `rust-coverage`, which attributes a regression to
+# its commit. Branch pushes do not trigger this workflow, so no run duplicates a pull request's.
 concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -71,6 +73,8 @@ jobs:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          shared-key: release
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: 24
@@ -125,6 +129,8 @@ jobs:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          shared-key: release
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: 24
@@ -153,6 +159,8 @@ jobs:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          shared-key: release
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: 24
@@ -190,6 +198,9 @@ jobs:
           node-version: 24
       - run: node --test scripts/check/check-doc-accuracy.test.mjs
       - run: npm run check:docs
+      # Tracked-file sweep for attribution markers. It needs only node; the name list comes from
+      # an untracked local manifest, so here it runs the marker check and reports the rest skipped.
+      - run: npm run check:names
 
   # Two ratchets against the owner's bar: duplication below 1%, coverage above 98%. Each gate is
   # pinned to its last measured value and fails on a regression rather than on arrival; raising a
@@ -256,7 +267,8 @@ jobs:
   #
   # BOTH run per pull request, not on a schedule. Cost is about 50 seconds of analysis (0.4s at
   # 1k, 3.4s at 10k, 36s at 100k) plus 3s of generation, on top of a `cargo build --release` that
-  # shares `Swatinem/rust-cache` with the `corpus` and `recall` jobs above -- so unlike
+  # reuses the `release` cache that the `corpus`, `recall`, `titles`, `self-check` and
+  # install-simulation jobs share (`shared-key`; the default key is per job) -- so unlike
   # `rust-coverage` below, there is no second cold build to avoid. And attribution is the whole
   # point: a memory regression has to name the merge that caused it, which a weekly schedule
   # cannot do. The 100k scale peaks around 435 MB of RSS, comfortably inside a runner.
@@ -269,6 +281,8 @@ jobs:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          shared-key: release
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: 24
@@ -350,6 +364,8 @@ jobs:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          shared-key: release
       - run: cargo build --release --locked
       # Smoke test of the real binary end to end. The fixture tree contains intentional findings,
       # so a non-zero exit is expected; what is being checked is that the run completes, emits a
@@ -430,7 +446,7 @@ jobs:
         uses: ./
         continue-on-error: true # fixtures/duplicates holds intentional error findings (exit 1)
         with:
-          version: 0.2.1
+          version: 0.5.1
           path: fixtures/duplicates
       - name: Check the Action's outputs
         shell: bash
@@ -490,6 +506,8 @@ jobs:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          shared-key: release
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: 24

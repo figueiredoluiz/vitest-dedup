@@ -92,6 +92,19 @@ test('fast checks leave corpus source alone and skip Cargo for non-Rust staged c
   assert.throws(() => commands('unknown'), /Unknown/)
 })
 
+test('full checks run no command twice, and leave the gates in the check chain to it', () => {
+  const manifest = JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8'))
+  const chain = manifest.scripts.check.split(' && ')
+  const full = commands('full').map(step => step.join(' '))
+  assert.equal(new Set(full).size, full.length)
+  assert.ok(full.includes('npm run check'))
+  for (const gate of ['check:action-pins', 'check:release-workflow', 'check:versions', 'check:docs', 'check:names', 'skills:check']) {
+    assert.ok(chain.includes('npm run ' + gate), gate + ' is part of the check chain')
+    assert.equal(full.filter(step => step === 'npm run ' + gate).length, 0, gate + ' runs only inside npm run check')
+  }
+  assert.ok(commands('fast', false).some(step => step.join(' ') === 'npm run check:names'))
+})
+
 test('docstring pre-check uses staged bytes even when the working file has documentation', () => fixture(root => {
   writeFileSync(join(root, 'case.rs'), 'fn missing() {}\n')
   git(root, 'add', 'case.rs')

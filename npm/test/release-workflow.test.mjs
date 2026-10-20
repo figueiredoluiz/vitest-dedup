@@ -6,6 +6,8 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { readFile } from 'node:fs/promises'
 
+import { parseDocument } from 'yaml'
+
 import { TARGETS } from '../lib/targets.mjs'
 
 const release = await readFile(new URL('../../.github/workflows/release.yml', import.meta.url), 'utf8')
@@ -236,4 +238,35 @@ test('every npm script CI invokes exists in package.json', () => {
   for (const name of invoked) {
     assert.ok(rootManifest.scripts[name], `ci.yml runs "npm run ${name}", which is not defined`)
   }
+})
+
+const ciDocument = parseDocument(ci).toJS()
+
+test('only pull request runs cancel each other', () => {
+  const { group, 'cancel-in-progress': cancel } = ciDocument.concurrency
+  assert.equal(group, "ci-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}")
+  assert.equal(cancel, "${{ github.event_name == 'pull_request' }}")
+})
+
+test('every job that builds the release binary shares one cache', () => {
+  const builders = Object.entries(ciDocument.jobs).filter(([, job]) =>
+    job.steps.some((step) => /cargo build --release/.test(step.run ?? '')))
+  assert.ok(builders.length >= 6, `found ${builders.length} release-building jobs`)
+  for (const [name, job] of builders) {
+    const cache = job.steps.find((step) => step.uses?.startsWith('Swatinem/rust-cache@'))
+    assert.equal(cache?.with?.['shared-key'], 'release', `${name} does not use the shared release cache`)
+  }
+})
+
+test('the attribution sweep runs in CI', () => {
+  assert.ok(ciDocument.jobs['docs-accuracy'].steps.some((step) => step.run === 'npm run check:names'))
+})
+
+test('the hosted Action job pins a release no older than 0.5.1 and not yet unpublished', () => {
+  const step = ciDocument.jobs['action-hosted'].steps.find((s) => s.uses === './')
+  const parse = (v) => v.split('.').map(Number)
+  const order = (x, y) => x.reduce((d, n, i) => d || n - y[i], 0)
+  assert.match(step.with.version, /^\d+\.\d+\.\d+$/)
+  assert.ok(order(parse(step.with.version), [0, 5, 1]) >= 0, `pinned ${step.with.version}`)
+  assert.ok(order(parse(step.with.version), parse(rootManifest.version)) <= 0, `pinned ${step.with.version} is newer than ${rootManifest.version}`)
 })

@@ -88,15 +88,16 @@ export function rustChanged(paths) {
  */
 export function commands(profile, rust = true, docDiff) {
   if (!['fast', 'full'].includes(profile)) throw new Error(`Unknown verification profile: ${profile}`)
-  const steps = [
-    ['node', 'scripts/check/check-docstrings.mjs', ...(docDiff ? ['--diff-file', docDiff] : [])],
+  const steps = [['node', 'scripts/check/check-docstrings.mjs', ...(docDiff ? ['--diff-file', docDiff] : [])]]
+  // `npm run check` begins with these same commands, so the full profile leaves them to it.
+  if (profile === 'fast') steps.push(
     ['npm', 'run', 'check:action-pins'],
     ['npm', 'run', 'check:release-workflow'],
     ['npm', 'run', 'check:versions'],
     ['npm', 'run', 'check:docs'],
     ['npm', 'run', 'check:names'],
     ['npm', 'run', 'skills:check'],
-  ]
+  )
   if (rust || profile === 'full') steps.push(
     ['cargo', 'fmt', '--all', '--check'],
     ['cargo', 'clippy', '--all-targets', '--all-features', '--locked'],
