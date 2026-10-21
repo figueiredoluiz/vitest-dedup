@@ -167,6 +167,12 @@ pub(crate) mod test_support {
             files_over_memory_budget: 6,
             findings_truncated: 7,
             withheld_unchanged: 8,
+            missing_prerequisites: vec![crate::model::MissingPrerequisite {
+                kind: crate::model::PrerequisiteKind::NodeModules,
+                path: "node_modules".to_string(),
+                fix: "pnpm install".to_string(),
+                unresolved_imports: 9,
+            }],
         }
     }
 }

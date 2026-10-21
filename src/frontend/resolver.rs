@@ -63,8 +63,130 @@
 use oxc_resolver::{ResolveOptions, Resolver, TsconfigDiscovery};
 use oxc_span::VALID_EXTENSIONS;
 use std::cell::RefCell;
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+
+/// A tsconfig the resolver could not use, as the resolver itself reported it.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum TsconfigGap {
+    /// The file does not exist (an absolute path, or a package specifier as written).
+    Absent(PathBuf),
+    /// The file exists and could not be loaded.
+    Unreadable(PathBuf),
+}
+
+/// Resolutions that failed because something the run needs is absent, collected across workers
+/// and drained once per run. See [`take_resolution_gaps`].
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ResolutionGaps {
+    /// Failed resolutions per unusable tsconfig. A tsconfig that cannot be loaded fails every
+    /// resolution under it, relative specifiers included.
+    pub tsconfig: BTreeMap<TsconfigGap, usize>,
+    /// Package-style specifiers (not relative, absolute, `vitest` or `node:`) that were not found.
+    pub packages_not_found: usize,
+}
+
+static GAPS: Mutex<ResolutionGaps> = Mutex::new(ResolutionGaps {
+    tsconfig: BTreeMap::new(),
+    packages_not_found: 0,
+});
+
+/// Takes and clears the gaps recorded since the last call.
+pub fn take_resolution_gaps() -> ResolutionGaps {
+    std::mem::take(
+        &mut *GAPS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner),
+    )
+}
+
+/// Node core modules that are imported without the `node:` prefix and are never installed.
+const NODE_BUILTINS: &[&str] = &[
+    "assert",
+    "async_hooks",
+    "buffer",
+    "child_process",
+    "cluster",
+    "console",
+    "constants",
+    "crypto",
+    "dgram",
+    "diagnostics_channel",
+    "dns",
+    "domain",
+    "events",
+    "fs",
+    "http",
+    "http2",
+    "https",
+    "inspector",
+    "module",
+    "net",
+    "os",
+    "path",
+    "perf_hooks",
+    "process",
+    "punycode",
+    "querystring",
+    "readline",
+    "repl",
+    "stream",
+    "string_decoder",
+    "sys",
+    "timers",
+    "tls",
+    "trace_events",
+    "tty",
+    "url",
+    "util",
+    "v8",
+    "vm",
+    "wasi",
+    "worker_threads",
+    "zlib",
+    "sqlite",
+    "sea",
+    "test",
+];
+
+/// Whether `specifier` names an installable package the analyzer does not resolve by name.
+fn is_package_specifier(specifier: &str) -> bool {
+    !(specifier.starts_with('.')
+        || specifier.starts_with('/')
+        || specifier.starts_with('#')
+        || specifier.starts_with("node:")
+        || NODE_BUILTINS.contains(&specifier.split('/').next().unwrap_or(specifier))
+        || specifier == "vitest"
+        || specifier.starts_with("vitest/")
+        || specifier.starts_with("@vitest/"))
+}
+
+/// Records why a resolution failed when the cause is an absent prerequisite.
+fn record_failure(specifier: &str, error: &oxc_resolver::ResolveError) {
+    use oxc_resolver::ResolveError;
+    let gap = match error {
+        ResolveError::TsconfigNotFound(target) => Some(TsconfigGap::Absent(target.clone())),
+        ResolveError::TsconfigLoadFailed { path, .. } if !path.exists() => {
+            Some(TsconfigGap::Absent(path.clone()))
+        }
+        ResolveError::TsconfigLoadFailed { path, .. } => {
+            Some(TsconfigGap::Unreadable(path.clone()))
+        }
+        _ => None,
+    };
+    let mut gaps = GAPS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    match gap {
+        Some(gap) => *gaps.tsconfig.entry(gap).or_insert(0) += 1,
+        None if matches!(error, ResolveError::NotFound(_)) && is_package_specifier(specifier) => {
+            gaps.packages_not_found += 1;
+        }
+        None => {}
+    }
+}
 
 thread_local! {
     /// One resolver per worker, built lazily and reused until that extraction completes.
@@ -159,7 +281,10 @@ pub(super) fn resolve(importing_file: &Path, specifier: &str) -> Resolved {
         RESOLVER.with(
             |resolver| match resolver.resolve_file(importing_file, specifier) {
                 Ok(resolution) => Resolved::Module(resolution.into_path_buf()),
-                Err(_) => Resolved::Unresolved,
+                Err(error) => {
+                    record_failure(specifier, &error);
+                    Resolved::Unresolved
+                }
             },
         );
     let resolved = confine_resolution(importing_file, specifier, resolved);

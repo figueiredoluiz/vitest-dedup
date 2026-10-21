@@ -77,6 +77,10 @@ configuration and may still reach outside. The import resolver may read a `packa
 tsconfig-mapped directory outside the tree to decide which file inside it an import resolves to,
 and follows a tsconfig `references` entry wherever it points.
 
+A tsconfig `extends` target that does not exist (typically a generated file) or cannot be read, and a
+missing `node_modules` when imports of listed dependencies fail, make the run incomplete and are
+named with a fix; see [Missing prerequisites](incomplete-runs.md#missing-prerequisites).
+
 ### Globals
 
 `globals: true` is detected from the resolved config. When the project list is built in a way no

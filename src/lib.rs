@@ -18,6 +18,7 @@ pub mod frontend;
 pub mod memory;
 pub mod model;
 pub mod modes;
+pub mod prerequisites;
 pub mod reporters;
 pub mod vitest_config;
 pub mod vitest_projects;

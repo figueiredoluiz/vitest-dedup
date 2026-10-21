@@ -15,6 +15,7 @@ use crate::model::TestCase;
 use std::path::Path;
 
 pub use registry::{take_cell_census, Globals};
+pub use resolver::{take_resolution_gaps, ResolutionGaps, TsconfigGap};
 
 /// Everything one parsed file contributed.
 #[derive(Clone, Debug, Default)]

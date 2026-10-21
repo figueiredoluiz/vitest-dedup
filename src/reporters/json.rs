@@ -19,7 +19,8 @@
 //!     "hookScanExhausted": false,
 //!     "filesOverMemoryBudget": 0,
 //!     "findingsTruncated": 0,
-//!     "withheldUnchanged": 0
+//!     "withheldUnchanged": 0,
+//!     "missingPrerequisites": []
 //!   },
 //!   "unresolvedTests": 3,
 //!   "blindFiles": 1,

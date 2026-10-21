@@ -1758,6 +1758,76 @@ pub struct ModeSummary {
     pub suppressions_applied: usize,
 }
 
+/// What kind of file or directory a run needed and did not find.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PrerequisiteKind {
+    /// A tsconfig `extends` target that does not exist, typically a generated file.
+    TsconfigExtends,
+    /// A tsconfig that exists but could not be loaded (empty, unreadable or invalid).
+    TsconfigUnreadable,
+    /// `node_modules` is absent or empty although `package.json` lists dependencies.
+    NodeModules,
+}
+
+/// A file or directory the run needed to resolve imports and did not find, with how to get it.
+///
+/// Detected from the resolver's own failure, so it is only reported when something stayed
+/// unresolved because of it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MissingPrerequisite {
+    /// Which prerequisite this is.
+    pub kind: PrerequisiteKind,
+    /// The file or directory, relative to the analysis root where it lies inside it.
+    pub path: String,
+    /// The command that creates it, or `generate or restore this file`.
+    pub fix: String,
+    /// How many import resolutions failed because of it, counted per analyzed file.
+    pub unresolved_imports: usize,
+}
+
+impl MissingPrerequisite {
+    /// One sentence for the banner of every reporter.
+    fn sentence(&self) -> String {
+        let imports = self.unresolved_imports;
+        let advice = match self.fix.as_str() {
+            fix @ ("generate or restore this file" | "install the dependencies") => {
+                format!("{}.", capitalize_first(fix))
+            }
+            command => format!("Run `{command}`."),
+        };
+        match self.kind {
+            PrerequisiteKind::TsconfigExtends => format!(
+                "`{}` is missing: a tsconfig extends it for path aliases and compiler options, \
+                 and without it no import under that tsconfig resolves ({imports} import(s) \
+                 stayed unresolved). {advice}",
+                self.path
+            ),
+            PrerequisiteKind::TsconfigUnreadable => format!(
+                "`{}` exists but could not be read as a tsconfig (unreadable or invalid), \
+                 so no import under it resolves ({imports} import(s) stayed unresolved). \
+                 Repair or regenerate this file.",
+                self.path
+            ),
+            PrerequisiteKind::NodeModules => format!(
+                "`node_modules` is missing or empty although package.json lists dependencies: \
+                 imports of installed packages cannot be resolved ({imports} import(s) stayed \
+                 unresolved). {advice}"
+            ),
+        }
+    }
+}
+
+/// `text` with its first character upper-cased.
+fn capitalize_first(text: &str) -> String {
+    let mut chars = text.chars();
+    chars
+        .next()
+        .map(|first| first.to_uppercase().chain(chars).collect())
+        .unwrap_or_default()
+}
+
 /// Why a run could not compare every test, and how much each cause accounts for.
 ///
 /// `incomplete` used to be one `bool` aggregated from nine unrelated conditions, and the banner
@@ -1809,6 +1879,9 @@ pub struct IncompleteCauses {
     pub findings_truncated: usize,
     /// Findings withheld because no participant lay in a changed file.
     pub withheld_unchanged: usize,
+    /// Files or directories the run needed to resolve imports and did not find.
+    #[serde(default)]
+    pub missing_prerequisites: Vec<MissingPrerequisite>,
 }
 
 impl IncompleteCauses {
@@ -1833,10 +1906,12 @@ impl IncompleteCauses {
             files_over_memory_budget,
             findings_truncated,
             withheld_unchanged,
+            missing_prerequisites,
         } = self;
         *discovery_failed
             || *project_config_degraded
             || *nothing_read
+            || !missing_prerequisites.is_empty()
             || *pair_budget_exhausted
             || *hook_scan_exhausted
             || *files_too_large > 0
@@ -1881,10 +1956,12 @@ impl IncompleteCauses {
             files_over_memory_budget: _files_over_memory_budget,
             findings_truncated: _findings_truncated,
             withheld_unchanged: _withheld_unchanged,
+            missing_prerequisites,
         } = self;
         *discovery_failed
             || *project_config_degraded
             || *nothing_read
+            || !missing_prerequisites.is_empty()
             || *files_too_large > 0
             || *files_unreadable > 0
             || *files_partially_read > 0
@@ -1915,6 +1992,7 @@ impl IncompleteCauses {
             files_over_memory_budget,
             findings_truncated,
             withheld_unchanged: _withheld_unchanged,
+            missing_prerequisites: _missing_prerequisites,
         } = self;
         *pair_budget_exhausted
             || *hook_scan_exhausted
@@ -1951,6 +2029,11 @@ impl IncompleteCauses {
                     .to_string(),
             );
         }
+        reasons.extend(
+            self.missing_prerequisites
+                .iter()
+                .map(MissingPrerequisite::sentence),
+        );
         if self.pair_budget_exhausted {
             reasons.push(
                 "the pair-comparison budget ran out before every pair had been compared"
@@ -2794,7 +2877,7 @@ mod tests {
     /// the struct and handled in `any()` but forgotten here fails this test instead of passing it.
     #[test]
     fn every_incomplete_cause_on_its_own_makes_the_run_incomplete() {
-        let flips: [(&str, CauseSetter); 13] = [
+        let flips: [(&str, CauseSetter); 14] = [
             ("discoveryFailed", |causes| causes.discovery_failed = true),
             ("projectConfigDegraded", |causes| {
                 causes.project_config_degraded = true;
@@ -2822,6 +2905,14 @@ mod tests {
             }),
             ("findingsTruncated", |causes| causes.findings_truncated = 1),
             ("withheldUnchanged", |causes| causes.withheld_unchanged = 1),
+            ("missingPrerequisites", |causes| {
+                causes.missing_prerequisites = vec![MissingPrerequisite {
+                    kind: PrerequisiteKind::NodeModules,
+                    path: "node_modules".to_string(),
+                    fix: "npm ci".to_string(),
+                    unresolved_imports: 1,
+                }];
+            }),
         ];
 
         let serialized = serde_json::to_value(IncompleteCauses::default()).unwrap();
@@ -2996,6 +3087,12 @@ mod tests {
             files_over_memory_budget: 8,
             findings_truncated: 6,
             withheld_unchanged: 7,
+            missing_prerequisites: vec![MissingPrerequisite {
+                kind: PrerequisiteKind::NodeModules,
+                path: "node_modules".to_string(),
+                fix: "npm ci".to_string(),
+                unresolved_imports: 9,
+            }],
         };
         let reasons = causes.reasons();
         let leads: Vec<&str> = reasons
@@ -3009,22 +3106,23 @@ mod tests {
             .collect();
         assert_eq!(
             reasons.len(),
-            13,
-            "every cause fired, so all thirteen speak"
+            14,
+            "every cause fired, so all fourteen speak"
         );
         assert!(reasons[0].starts_with("every discovered file failed to read"));
         assert!(reasons[1].starts_with("directory traversal failed"));
         assert!(reasons[2].starts_with("a Vitest project's configuration"));
-        assert!(reasons[3].starts_with("the pair-comparison budget ran out"));
-        assert!(reasons[4].starts_with("the `redundant-hook` scan budget"));
-        assert!(leads[5].starts_with("file(s) were not analyzed because the memory budget"));
-        assert!(leads[6].starts_with("finding(s) were dropped by the display cap"));
-        assert!(leads[7].starts_with("test(s) were excluded from comparison"));
-        assert!(leads[8].starts_with("file(s) could not be read in full"));
-        assert!(leads[9].starts_with("file(s) were skipped because reading them failed"));
-        assert!(leads[10].starts_with("file(s) were skipped for exceeding the source-size limit"));
-        assert!(leads[11].starts_with("file(s) had an undetermined `globals` setting"));
-        assert!(leads[12].starts_with("finding(s) lying entirely within unchanged files"));
+        assert!(reasons[3].starts_with("`node_modules` is missing or empty"));
+        assert!(reasons[4].starts_with("the pair-comparison budget ran out"));
+        assert!(reasons[5].starts_with("the `redundant-hook` scan budget"));
+        assert!(leads[6].starts_with("file(s) were not analyzed because the memory budget"));
+        assert!(leads[7].starts_with("finding(s) were dropped by the display cap"));
+        assert!(leads[8].starts_with("test(s) were excluded from comparison"));
+        assert!(leads[9].starts_with("file(s) could not be read in full"));
+        assert!(leads[10].starts_with("file(s) were skipped because reading them failed"));
+        assert!(leads[11].starts_with("file(s) were skipped for exceeding the source-size limit"));
+        assert!(leads[12].starts_with("file(s) had an undetermined `globals` setting"));
+        assert!(leads[13].starts_with("finding(s) lying entirely within unchanged files"));
     }
 
     // --- context equivalence -----------------------------------------------------------------

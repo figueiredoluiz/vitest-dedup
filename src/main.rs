@@ -420,6 +420,11 @@ fn run_with_rss(args: ParsedArgs, mut resident: impl FnMut() -> Option<u64>) -> 
                 base_causes.files_over_memory_budget = unread;
                 write_roof_diagnostic(&mut stderr, "base revision", &args, base_files, unread)?;
             }
+            // Drains the resolver's failures too, so the main pass below starts from zero.
+            base_causes.missing_prerequisites = vitest_dedup::prerequisites::assess(
+                &config.root,
+                &vitest_dedup::frontend::take_resolution_gaps(),
+            );
             let base_result = analysis::analyze(base_tests, &config, base_files, base_causes)?;
             // A base run that could not see the whole tree (oversized, non-UTF-8, or skipped
             // files) produces a PARTIAL baseline: it accepts less than the base really had, so
@@ -787,6 +792,11 @@ fn run_with_rss(args: ParsedArgs, mut resident: impl FnMut() -> Option<u64>) -> 
     }
 
     drop(seen_helper_sources);
+
+    causes.missing_prerequisites = vitest_dedup::prerequisites::assess(
+        &config.root,
+        &vitest_dedup::frontend::take_resolution_gaps(),
+    );
 
     diagnostics::write_read_omissions(&mut stderr, read_errors)?;
 
