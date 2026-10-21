@@ -583,7 +583,7 @@ impl<'a> Walker<'a> {
             if !child.diagnostics.is_empty() {
                 // The nested refusal's own code, not a stand-in: the export resolved fine.
                 let nested = child
-                    .reasons
+                    .helper_refusal_reasons
                     .first()
                     .copied()
                     .unwrap_or(ExclusionReason::HelperExportUnreadable);

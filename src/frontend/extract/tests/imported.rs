@@ -737,6 +737,45 @@ fn repeated_refusals_scan_existing_declarations_once_and_keep_the_diagnostic() {
     assert!(walker.tests[300].context.unresolved);
 }
 
+/// The nested refusal's code and the "further refusals" bookkeeping come from the helper
+/// refusals alone: another reason the walker holds (here an unsupported statement recorded first)
+/// is neither mistaken for the helper's cause nor allowed to hide a later helper refusal that
+/// happens to share its code.
+#[test]
+fn helper_refusal_reasons_are_tracked_apart_from_other_walker_reasons() {
+    let source = "import { test } from 'vitest'; test('t', () => {});";
+    let case = RunnerCase::new("", "");
+    let allocator = Allocator::default();
+    let parsed = Parser::new(&allocator, source, SourceType::ts()).parse();
+    let semantic = SemanticBuilder::new()
+        .with_build_nodes(true)
+        .build(&parsed.program);
+    let mut walker = Walker::new(
+        source,
+        &case.file,
+        &parsed.program,
+        &semantic.semantic,
+        Globals::Disabled,
+    );
+    walker.reasons.push(ExclusionReason::UnsupportedStatement);
+    walker.refuse_helper_expansion(refusal(ExclusionReason::HelperLimit, "budget"));
+    assert_eq!(
+        walker.helper_refusal_reasons,
+        vec![ExclusionReason::HelperLimit]
+    );
+    walker.refuse_helper_expansion(refusal(ExclusionReason::UnsupportedStatement, "same code"));
+    walker.refuse_helper_expansion(refusal(ExclusionReason::UnsupportedStatement, "again"));
+    assert_eq!(
+        walker
+            .further_refusals
+            .iter()
+            .map(|(reason, _)| *reason)
+            .collect::<Vec<_>>(),
+        vec![ExclusionReason::UnsupportedStatement],
+        "a code already held for another reason still records its first helper refusal, once"
+    );
+}
+
 const GLOBAL_HOOK_RUNNER: &str = r#"import { beforeEach, test, expect } from 'vitest';
 let count = 0;
 beforeEach(() => { count += 1; });

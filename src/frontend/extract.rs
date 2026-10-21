@@ -1066,6 +1066,10 @@ struct Walker<'a> {
     /// is enough to mark the file `incomplete`; a hostile file that trips the budget thousands of
     /// times should not emit thousands of near-identical strings.
     helper_refusal_reported: bool,
+    /// Distinct reasons of the helper refusals recorded so far, in order: the first is the one that
+    /// became the file's diagnostic. Kept apart from [`Walker::reasons`], which also holds
+    /// reasons that are not helper refusals.
+    helper_refusal_reasons: Vec<ExclusionReason>,
     /// Distinct reasons refused after the first, with their sentences; see
     /// [`FileExtraction::further_refusals`].
     further_refusals: Vec<(ExclusionReason, String)>,
@@ -1124,6 +1128,7 @@ impl<'a> Walker<'a> {
             globals,
             registration_file: None,
             helper_refusal_reported: false,
+            helper_refusal_reasons: Vec::new(),
             further_refusals: Vec::new(),
             #[cfg(test)]
             helper_refusal_taint_visits: 0,
@@ -2112,17 +2117,14 @@ impl<'a> Walker<'a> {
             refusal.text
         );
         if self.helper_refusal_reported {
-            let known = self.reasons.contains(&refusal.reason)
-                || self
-                    .further_refusals
-                    .iter()
-                    .any(|(r, _)| *r == refusal.reason);
-            if !known {
+            if !self.helper_refusal_reasons.contains(&refusal.reason) {
+                self.helper_refusal_reasons.push(refusal.reason);
                 self.further_refusals.push((refusal.reason, sentence));
             }
             return;
         }
         self.helper_refusal_reported = true;
+        self.helper_refusal_reasons.push(refusal.reason);
         // No path in the text. `FileExtraction::diagnostics` reaches callers that prefix every
         // entry with the file's own relativized path (see this module's header), so embedding one
         // printed the file twice -- once relative, once ABSOLUTE, which is the S12 leak this
