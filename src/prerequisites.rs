@@ -97,12 +97,9 @@ fn display(path: &Path, root: &Path) -> String {
     } else {
         path.to_path_buf()
     };
-    relative
-        .to_string_lossy()
-        .replace('\\', "/")
-        .chars()
-        .map(|c| if c.is_control() { '?' } else { c })
-        .collect()
+    // The reports' own sanitizer: controls, bidi and other format characters and the line and
+    // paragraph separators are dropped, as for every other repository-controlled path.
+    crate::reporters::terminal_safe(&relative.to_string_lossy().replace('\\', "/"))
 }
 
 /// Whether the missing file sits in `.nuxt` and the project is recognizably a Nuxt one.
@@ -275,7 +272,17 @@ mod tests {
             ),
         );
         assert_eq!(missing[0].kind, PrerequisiteKind::TsconfigUnreadable);
-        assert_eq!(missing[0].path, "a?[2Jb.json");
+        assert_eq!(missing[0].path, "a[2Jb.json");
+    }
+
+    /// A name with bidi, line-separator and zero-width characters reaches no report unchanged.
+    #[test]
+    fn display_drops_format_and_separator_characters_from_a_path() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let hostile = root.join("x\u{202e}evil\u{2028}y\u{200b}z.json");
+        let missing = assess(root, &gaps(vec![(TsconfigGap::Absent(hostile), 1)], 0));
+        assert_eq!(missing[0].path, "xevilyz.json");
     }
 
     /// All three conditions are required for a `node_modules` entry.

@@ -149,12 +149,12 @@ const NODE_BUILTINS: &[&str] = &[
     "wasi",
     "worker_threads",
     "zlib",
-    "sqlite",
-    "sea",
-    "test",
 ];
 
 /// Whether `specifier` names an installable package the analyzer does not resolve by name.
+///
+/// Node's prefix-only modules (`node:sqlite`, `node:sea`, `node:test`) are not in the builtin list:
+/// without the prefix those names are ordinary packages, and `test` is a real one.
 fn is_package_specifier(specifier: &str) -> bool {
     !(specifier.starts_with('.')
         || specifier.starts_with('/')
@@ -411,6 +411,39 @@ mod tests {
         fs::write(&importer, "// importer").unwrap();
 
         assert_eq!(resolve(&importer, "./does-not-exist"), Resolved::Unresolved);
+    }
+
+    /// Only the modules Node accepts without a prefix are builtins; the prefix-only ones are
+    /// builtins solely with `node:`, and the bare names are packages that can be missing.
+    #[test]
+    fn prefix_only_node_modules_are_packages_without_the_prefix() {
+        for package in [
+            "test",
+            "sqlite",
+            "sea",
+            "test/reporters",
+            "left-pad",
+            "@scope/pkg",
+        ] {
+            assert!(is_package_specifier(package), "{package}");
+        }
+        for other in [
+            "node:test",
+            "node:sqlite",
+            "node:sea",
+            "fs",
+            "fs/promises",
+            "path",
+            ".",
+            "./x",
+            "/x",
+            "#alias",
+            "vitest",
+            "vitest/config",
+            "@vitest/ui",
+        ] {
+            assert!(!is_package_specifier(other), "{other}");
+        }
     }
 
     /// A tsconfig that fails to load is a gap whether the resolver reports the file as missing
