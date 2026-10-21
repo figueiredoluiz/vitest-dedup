@@ -900,7 +900,7 @@ pub fn apply_inline_suppressions(
 /// They outrank a child invocation's `-C`, so leaving them in place would point changed-file mode
 /// at whichever repository invoked the hook rather than at the analyzed root. Borrowed verbatim
 /// from CukeDedup's `modes.rs`, which found this the hard way.
-const INHERITED_GIT_VARIABLES: [&str; 8] = [
+pub(crate) const INHERITED_GIT_VARIABLES: [&str; 8] = [
     "GIT_DIR",
     "GIT_WORK_TREE",
     "GIT_INDEX_FILE",

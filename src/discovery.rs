@@ -411,10 +411,12 @@ pub struct DiscoveredFiles {
 }
 
 /// Whether `root` lies inside a repository: some ancestor (itself included) holds a `.git` entry,
-/// a directory or the file a worktree or submodule uses, or a `.jj` directory.
+/// a directory or the file a worktree or submodule uses, or an existing `.jj` entry.
 ///
 /// This is the question the walker's `require_git` option turns on, so it mirrors the walker's own
-/// test: an entry that exists once symbolic links are followed. With the option set, the walker
+/// test: an entry of any type that exists once symbolic links are followed, an error counting as
+/// absent. Both are deliberate: the walker treats a stray `.jj` file as a boundary too, and an
+/// error here that the walker would not raise would fail a run it handles. With the option set, the walker
 /// applies `.gitignore` and `.git/info/exclude` only inside a repository and stops reading them at
 /// the first repository root it meets going up, as git does, so a parent repository's rules do not
 /// reach a project that is its own nested repository. Without a repository there is no boundary to
@@ -1294,6 +1296,17 @@ mod tests {
         );
     }
 
+    /// A `git` command that cannot be redirected by the environment it runs in: when the suite
+    /// runs from a Git hook, `GIT_DIR` and friends outrank `-C` and the fixture repositories would
+    /// be created in, or queried from, the real one.
+    fn git_command() -> std::process::Command {
+        let mut command = std::process::Command::new("git");
+        for variable in crate::modes::INHERITED_GIT_VARIABLES {
+            command.env_remove(variable);
+        }
+        command
+    }
+
     /// A directory tree for repository-boundary tests: `files` are written under a fresh temporary
     /// directory, and every directory in `repositories` (`""` is the temporary directory itself)
     /// becomes a real repository (`git init`), just a `.git` file when it ends in `!`, or just a `.jj`
@@ -1322,7 +1335,7 @@ mod tests {
             } else if kind == 'f' {
                 fs::write(path.join(".git"), "gitdir: /nonexistent\n").unwrap();
             } else {
-                let status = std::process::Command::new("git")
+                let status = git_command()
                     .args(["init", "-q"])
                     .arg(&path)
                     .status()
@@ -1348,7 +1361,7 @@ mod tests {
     /// other whatever it holds; like every discovery test here, the literal expectations assume it
     /// does not exclude the fixture names (`api`, `lib`, `src`, ...).
     fn git_visible_tests(base: &Path, sub: &str) -> Vec<String> {
-        let output = std::process::Command::new("git")
+        let output = git_command()
             .arg("-C")
             .arg(base.join(sub))
             .args(["ls-files", "--others", "--exclude-standard"])
@@ -1434,7 +1447,7 @@ mod tests {
 
     /// The boundary does not need a parent repository: a `.gitignore` in a plain directory above
     /// a project that is its own repository (a `.git` directory, the `.git` file of a worktree
-    /// or submodule, or a `.jj` directory) is not applied either.
+    /// or submodule, or a `.jj` entry) is not applied either.
     #[test]
     fn a_plain_directorys_ignore_file_does_not_reach_into_a_repository_below_it() {
         for repository in ["front", "front!", "front~"] {
@@ -1452,6 +1465,45 @@ mod tests {
                 "{repository}"
             );
         }
+    }
+
+    /// A `.jj` entry of any type marks the boundary, because that is what the walker itself does:
+    /// the detection mirrors it rather than second-guessing it.
+    #[test]
+    fn a_jj_file_is_a_repository_marker_like_the_walkers() {
+        let (_keep, base) = repository_tree(
+            &[
+                (".gitignore", "api\n"),
+                ("front/api/x.test.ts", ""),
+                ("front/lib/x.test.ts", ""),
+            ],
+            &[],
+        );
+        fs::write(base.join("front/.jj"), "").unwrap();
+        assert_eq!(
+            sorted(discovered_in(&base, "front")),
+            vec!["api/x.test.ts", "lib/x.test.ts"]
+        );
+    }
+
+    /// A marker the platform cannot resolve (a link pointing at itself) is read as absent, as the
+    /// walker reads it, so a valid marker further along is still found.
+    #[cfg(unix)]
+    #[test]
+    fn an_unresolvable_marker_does_not_hide_a_valid_one() {
+        let (_keep, base) = repository_tree(
+            &[
+                (".gitignore", "api\n"),
+                ("front/api/x.test.ts", ""),
+                ("front/lib/x.test.ts", ""),
+            ],
+            &["front~"],
+        );
+        std::os::unix::fs::symlink(".git", base.join("front/.git")).unwrap();
+        assert_eq!(
+            sorted(discovered_in(&base, "front")),
+            vec!["api/x.test.ts", "lib/x.test.ts"]
+        );
     }
 
     /// A `.git` that points nowhere is not a repository: the walker does not see one either, so the

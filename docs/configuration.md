@@ -24,8 +24,8 @@ Every key is optional, and an unknown key is an error.
 
 Files matched by `.gitignore` or by a `.vitest-dedupignore` file in the same syntax are skipped as
 well. Ignore rules follow git. Inside a repository (the nearest directory at or above the analyzed
-one holding `.git`, as a directory or as the file a worktree or submodule uses, or a `.jj`
-directory), the `.gitignore` files from that repository's root down to the analyzed directory apply,
+one holding `.git`, as a directory or as the file a worktree or submodule uses, or an existing `.jj`
+entry), the `.gitignore` files from that repository's root down to the analyzed directory apply,
 a deeper file overriding a shallower one, and so does the `.git/info/exclude` of a repository whose
 `.git` is a directory. A `.gitignore` above the repository root does not, so a project nested in a
 larger repository is not affected by that repository's rules. `.vitest-dedupignore` and `.ignore`
