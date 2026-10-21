@@ -410,6 +410,35 @@ mod tests {
         assert_eq!(resolve(&importer, "./does-not-exist"), Resolved::Unresolved);
     }
 
+    /// A tsconfig that fails to load is a gap whether the resolver reports the file as missing
+    /// (`TsconfigNotFound`) or wraps a load failure for a path that is not there: both are
+    /// "absent". A load failure for a file that exists is "unreadable". Other errors record
+    /// nothing. Matched on unique paths because the accumulator is shared by the whole process.
+    #[test]
+    fn tsconfig_failures_are_classified_as_absent_or_unreadable() {
+        use oxc_resolver::ResolveError;
+        let dir = tempfile::tempdir().unwrap();
+        let missing_a = dir.path().join("unique-classification-a/tsconfig.json");
+        let missing_b = dir.path().join("unique-classification-b/tsconfig.json");
+        let present = dir.path().join("unique-classification-c.json");
+        fs::write(&present, "{").unwrap();
+        let load_failed = |path: &Path| ResolveError::TsconfigLoadFailed {
+            path: path.to_path_buf(),
+            source: Box::new(ResolveError::TsconfigNotFound(path.to_path_buf())),
+        };
+        record_failure("./x", &ResolveError::TsconfigNotFound(missing_a.clone()));
+        record_failure("./x", &load_failed(&missing_b));
+        record_failure("./x", &load_failed(&present));
+        record_failure("./x", &ResolveError::Ignored(missing_a.clone()));
+        let gaps = take_resolution_gaps();
+        assert_eq!(gaps.tsconfig.get(&TsconfigGap::Absent(missing_a)), Some(&1));
+        assert_eq!(gaps.tsconfig.get(&TsconfigGap::Absent(missing_b)), Some(&1));
+        assert_eq!(
+            gaps.tsconfig.get(&TsconfigGap::Unreadable(present)),
+            Some(&1)
+        );
+    }
+
     /// A `tsconfig.json` `paths` alias and the equivalent relative import must resolve to the same
     /// file -- the case lexical anchoring could never handle, since it never looked at
     /// `tsconfig.json` at all.

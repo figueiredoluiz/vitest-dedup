@@ -221,6 +221,7 @@ const RUST_MODULES = {
   // through arithmetic that never calls `.heap_bytes()` on the count itself).
   'src/memory.rs': 98,
   'src/model.rs': 99,
+  'src/prerequisites.rs': 99,
   'src/modes.rs': 97,
   // `src/reporters.rs` is the module root: the `Reporter` trait, the dispatch table, and the shared
   // test-support constructors. It was in the coverage report with no floor here, which this gate
