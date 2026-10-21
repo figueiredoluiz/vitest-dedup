@@ -76,6 +76,27 @@ through that strict invocation. Run `cargo fmt --all` to repair formatting befor
 check. JavaScript and TypeScript corpus files are allowed to contain invalid or awkward source;
 these checks do not lint or reformat them.
 
+### Output equivalence
+
+Refactors and performance changes must not change what the analyzer reports. `npm run
+check:equivalence` builds the newest `v*` tag reachable from `HEAD` (or `--ref REF`) and caches it
+under `target/equivalence`. It then runs the corpus, recall and fixture-isolation gates and every
+Rust test executable with a shim in place of the binary. For each invocation the shim runs both
+binaries and compares exit status, stdout, stderr and each file the run writes: the report of every
+file reporter and, under `--update-baseline`, the baseline file.
+
+- Only three values are normalized, each in the output it occurs in: the terminal detection time
+  and `--debug-memory` `peakRssBytes` on stdout, and the candidate's version string on stdout (the
+  banner and `--version` line) and in a SARIF file. Any other difference fails the check.
+- A suite that made no invocation fails, and a gate or test that fails against the candidate is
+  reported apart from equivalence. `--suites corpus,recall,isolation,rust` selects suites.
+- Build the release binary first (`npm run check:equivalence` does). macOS and Linux only; a cold
+  baseline build takes minutes.
+- A test that resolves the binary at compile time with `env!("CARGO_BIN_EXE_vitest-dedup")` bypasses
+  the shim; `assert_cmd`'s `cargo_bin` reads the variable at run time and does not.
+- It compares bytes, not expectations. `npm run evaluate:corpus` with `--baseline-binary` answers
+  the different question of which labelled expectations a change gained or lost.
+
 ## Git hooks
 
 - The pre-commit hook checks a temporary snapshot of the staged index, so unstaged edits and local

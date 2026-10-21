@@ -333,6 +333,11 @@ const JS_MODULES = {
   'scripts/check/lib/corpus-evaluation.mjs': 98,
   'scripts/check/lib/corpus-comparison.mjs': 98,
   'scripts/check/evaluate-corpus.mjs': 98,
+  'scripts/check/lib/output-equivalence.mjs': 98,
+  'scripts/check/lib/equivalence-shim.mjs': 100,
+  // The driver's `main` builds a baseline with Cargo and runs the Rust test executables, which no
+  // unit test does; argument parsing and tag selection are the covered part.
+  'scripts/check/check-output-equivalence.mjs': 43,
   'scripts/check/lib/manifest-schema.mjs': 100,
   // Reached only as a dependency of `memory-record.mjs`, which imports it for the exit-code
   // contract. Its own callers all spawn a release binary, so the covered lines are the parsing
@@ -393,6 +398,7 @@ const JS_TEST_FILES = [
   ...globSync('npm/test/*.test.mjs', { cwd: ROOT }).sort(),
   ...globSync('scripts/check/lib/*.test.mjs', { cwd: ROOT }).sort(),
   'scripts/check/evaluate-corpus.test.mjs',
+  'scripts/check/check-output-equivalence.test.mjs',
   'scripts/check/check-doc-accuracy.test.mjs',
   'scripts/check/check-mutation-score.test.mjs',
   'scripts/check/check-name-leak.test.mjs',
