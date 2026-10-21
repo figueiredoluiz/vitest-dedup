@@ -13,6 +13,7 @@ pub mod cli;
 pub mod config;
 pub(crate) mod confine;
 pub mod discovery;
+pub mod exclusions;
 pub mod frontend;
 pub mod memory;
 pub mod model;

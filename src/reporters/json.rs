@@ -5,7 +5,7 @@
 //!   "schemaVersion": "0.1",
 //!   "testsAnalyzed": 42,
 //!   "filesAnalyzed": 5,
-//!   "incomplete": false,
+//!   "incomplete": true,
 //!   "incompleteCauses": {
 //!     "discoveryFailed": false,
 //!     "projectConfigDegraded": false,
@@ -14,15 +14,18 @@
 //!     "filesUnreadable": 0,
 //!     "filesPartiallyRead": 0,
 //!     "filesGlobalsUndetermined": 0,
-//!     "unresolvedContexts": 0,
+//!     "unresolvedContexts": 3,
 //!     "pairBudgetExhausted": false,
 //!     "hookScanExhausted": false,
 //!     "filesOverMemoryBudget": 0,
 //!     "findingsTruncated": 0,
 //!     "withheldUnchanged": 0
 //!   },
-//!   "unresolvedTests": 0,
-//!   "blindFiles": 0,
+//!   "unresolvedTests": 3,
+//!   "blindFiles": 1,
+//!   "exclusions": { "files": 1, "tests": 3, "omitted": 0, "reasons": [
+//!     { "reason": "helper-setup-effects", "files": 1, "tests": 3 }
+//!   ] },
 //!   "modes": {
 //!     "baselineApplied": false,
 //!     "baselined": 0,
@@ -30,6 +33,17 @@
 //!     "changedScope": false,
 //!     "withheldUnchanged": 0
 //!   },
+//!   "excludedFiles": [
+//!     {
+//!       "path": "src/cart.test.ts",
+//!       "reason": "helper-setup-effects",
+//!       "otherReasons": [],
+//!       "detail": "a called helper's body was not analyzed (the imported runner has unproved setup or fixture effects); any test/describe declarations inside it were not counted",
+//!       "testsExcluded": 3,
+//!       "testsTotal": 3,
+//!       "everyTestExcluded": true
+//!     }
+//!   ],
 //!   "findings": [
 //!     {
 //!       "rule": "duplicate-test",
@@ -57,6 +71,17 @@
 //! consumer can tell which side of a duplicate is dead code without parsing prose out of
 //! `message`.
 //!
+//! `excludedFiles` lists every file excluded from comparison in whole or in part, sorted by path:
+//! files with excluded tests, files read only in part, and files never read. `reason` is the first
+//! reason recorded for the file, a closed [`crate::model::ExclusionReason`] code; `otherReasons`
+//! holds the rest in code order; `detail` is the sentence the terminal prints. `testsTotal` is `0`
+//! for a file that was not parsed (its count is unknown), and `everyTestExcluded` matches
+//! membership in the `blindFiles` count. The list is capped at
+//! [`crate::exclusions::MAX_EXCLUDED_FILES`], keeping the files with the most excluded tests;
+//! `exclusions` counts every file, so `exclusions.files - len(excludedFiles)` equals
+//! `exclusions.omitted`. The list is empty on a run that excluded nothing. HTML and SARIF carry
+//! `incompleteCauses` only.
+//!
 //! `verdict` is [`crate::model::Rule::verdict`]'s output (`redundant` / `consolidatable` /
 //! `similar-uncertain` / `name-collision`): what the finding claims, and therefore what remedy is
 //! correct, without a consumer having to hardcode a rule-to-remedy table of its own. It is not run
@@ -82,7 +107,9 @@
 //! `findings`: it counts findings this report does *not* contain, and it is why `incomplete` may
 //! be true on a changed-files run that otherwise looks clean.
 
-use super::shared::{report_registration_files, report_safe, JsonLocation, SummaryCounters};
+use super::shared::{
+    report_registration_files, report_safe, JsonExcludedFile, JsonLocation, SummaryCounters,
+};
 use super::Reporter;
 use crate::model::{AnalysisResult, Finding, Rule, Severity, Verdict};
 use anyhow::Result;
@@ -140,6 +167,7 @@ struct JsonReport {
     schema_version: &'static str,
     #[serde(flatten)]
     summary: SummaryCounters,
+    excluded_files: Vec<JsonExcludedFile>,
     findings: Vec<JsonFinding>,
 }
 
@@ -149,6 +177,11 @@ impl From<&AnalysisResult> for JsonReport {
         Self {
             schema_version: JSON_SCHEMA_VERSION,
             summary: SummaryCounters::from_result(result),
+            excluded_files: result
+                .excluded_files
+                .iter()
+                .map(JsonExcludedFile::from)
+                .collect(),
             findings: result.findings.iter().map(JsonFinding::from).collect(),
         }
     }
@@ -296,6 +329,8 @@ mod tests {
             keys,
             vec![
                 "blindFiles",
+                "excludedFiles",
+                "exclusions",
                 "filesAnalyzed",
                 "findings",
                 "incomplete",

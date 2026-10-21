@@ -121,6 +121,53 @@ pub struct RunDiagnostics<'a> {
     pub census: &'a [(String, u64)],
 }
 
+/// Most reason kinds the terminal names before folding the rest into "and N more kind(s)".
+const MAX_REASON_KINDS: usize = 5;
+
+/// Summarizes every excluded file by primary reason and says where the full list is.
+///
+/// The counts are exact whatever the terminal lists elsewhere; only the `json` and `jsonl` reports
+/// carry the files. Reason codes are a closed set, so they need no sanitizing.
+fn write_exclusion_histogram(writer: &mut dyn Write, result: &AnalysisResult) -> io::Result<()> {
+    let summary = &result.exclusions;
+    if summary.files == 0 {
+        return Ok(());
+    }
+    writeln!(
+        writer,
+        "\nvitest-dedup: {} file(s) were excluded from comparison in whole or in part ({} \
+         test(s) excluded), by primary reason:",
+        summary.files, summary.tests
+    )?;
+    for tally in summary.reasons.iter().take(MAX_REASON_KINDS) {
+        writeln!(
+            writer,
+            "  {:<28} {:>6} file(s) {:>7} test(s)",
+            tally.reason.code(),
+            tally.files,
+            tally.tests
+        )?;
+    }
+    if let Some(more) = summary.reasons.len().checked_sub(MAX_REASON_KINDS) {
+        if more > 0 {
+            writeln!(writer, "  ... and {more} more kind(s)")?;
+        }
+    }
+    writeln!(
+        writer,
+        "  Every file and its reason is in the `json` or `jsonl` report (--reporters json, or \
+         --reporters jsonl){}.",
+        if summary.omitted > 0 {
+            format!(
+                "; {} file(s) past the list cap are counted above but not listed",
+                summary.omitted
+            )
+        } else {
+            String::new()
+        }
+    )
+}
+
 /// Renders existing qualifications in order, preserving each list's bound and omission count.
 pub fn write_run(writer: &mut dyn Write, context: &RunDiagnostics<'_>) -> io::Result<()> {
     let RunDiagnostics {
@@ -185,6 +232,8 @@ pub fn write_run(writer: &mut dyn Write, context: &RunDiagnostics<'_>) -> io::Re
             }
         }
     }
+
+    write_exclusion_histogram(writer, result)?;
 
     if let Some((revision, changed)) = changed {
         // `revision` is argv, which is caller-controlled text; sanitized like every other value
@@ -304,6 +353,57 @@ mod tests {
                 "budget {budget}"
             );
         }
+    }
+
+    /// The histogram names the top kinds, folds the rest, points at the full list, and says when
+    /// the list was capped; it is silent when nothing was excluded.
+    #[test]
+    fn the_exclusion_histogram_is_bounded_and_points_at_the_full_list() {
+        use vitest_dedup::model::{ExclusionReason, ExclusionSummary, ExclusionTally};
+        let render = |result: &AnalysisResult| {
+            let mut bytes = Vec::new();
+            write_exclusion_histogram(&mut bytes, result).unwrap();
+            String::from_utf8(bytes).unwrap()
+        };
+        assert_eq!(render(&AnalysisResult::default()), "");
+        let mut result = AnalysisResult {
+            exclusions: ExclusionSummary {
+                files: 40,
+                tests: 90,
+                omitted: 0,
+                reasons: ExclusionReason::ALL[..MAX_REASON_KINDS + 2]
+                    .iter()
+                    .enumerate()
+                    .map(|(index, reason)| ExclusionTally {
+                        reason: *reason,
+                        files: 10 - index,
+                        tests: index,
+                    })
+                    .collect(),
+            },
+            ..AnalysisResult::default()
+        };
+        let text = render(&result);
+        assert!(
+            text.contains("40 file(s) were excluded from comparison"),
+            "{text}"
+        );
+        assert!(text.contains("(90 test(s) excluded)"), "{text}");
+        assert!(text.contains("helper-export-unreadable"), "{text}");
+        assert!(text.contains("10 file(s)"), "{text}");
+        assert!(
+            !text.contains(ExclusionReason::ALL[MAX_REASON_KINDS].code()),
+            "{text}"
+        );
+        assert!(text.contains("... and 2 more kind(s)"), "{text}");
+        assert!(
+            text.contains("--reporters json") && text.contains("--reporters jsonl"),
+            "{text}"
+        );
+        assert!(!text.contains("past the list cap"), "{text}");
+        result.exclusions.omitted = 7;
+        assert!(render(&result).contains("7 file(s) past the list cap"));
+        assert_writer_failures(|writer| write_exclusion_histogram(writer, &result));
     }
 
     /// Check terminal diagnostics: qualifications preserve counts bounds conditions and safety.

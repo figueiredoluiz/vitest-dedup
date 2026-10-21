@@ -28,6 +28,11 @@ pub struct FileExtraction {
     pub incomplete: bool,
     /// Human-readable reasons the extraction was incomplete.
     pub diagnostics: Vec<String>,
+    /// The closed reason code of each entry of `diagnostics`, index-parallel.
+    pub reasons: Vec<crate::model::ExclusionReason>,
+    /// Refusals of a kind `diagnostics` already carries one sentence for: the diagnostic cap keeps
+    /// the list short, but each further distinct reason is kept here.
+    pub further_refusals: Vec<(crate::model::ExclusionReason, String)>,
     /// Set when this file contributed zero tests, extraction found nothing wrong with it
     /// (`diagnostics` is empty), and every `test`/`describe` declaration this extractor did find
     /// was a statically known-empty `.each`/`.for` table (`test.each([])`, `describe.each([])`).

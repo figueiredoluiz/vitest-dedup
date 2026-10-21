@@ -1052,6 +1052,7 @@ mod tests {
         assert!(output.contains("suite > c test (third)"));
     }
 
+    /// An incomplete run is reported before the findings.
     #[test]
     fn incomplete_flag_is_reported_prominently_before_findings() {
         let result = AnalysisResult {
@@ -1074,6 +1075,7 @@ mod tests {
                 ..IncompleteCauses::default()
             },
             modes: ModeSummary::default(),
+            ..Default::default()
         };
         let output = render(&result);
         assert!(output.contains("INCOMPLETE"));
@@ -1105,6 +1107,7 @@ mod tests {
         );
     }
 
+    /// Newlines and ANSI escapes in titles cannot forge report lines.
     #[test]
     fn sanitizes_newlines_and_ansi_escapes_in_titles_without_forging_lines() {
         let clean = AnalysisResult {
@@ -1121,6 +1124,7 @@ mod tests {
             files_analyzed: 1,
             incomplete_causes: IncompleteCauses::default(),
             modes: ModeSummary::default(),
+            ..Default::default()
         };
         let dirty = AnalysisResult {
             had_error_finding: false,
@@ -1136,6 +1140,7 @@ mod tests {
             files_analyzed: 1,
             incomplete_causes: IncompleteCauses::default(),
             modes: ModeSummary::default(),
+            ..Default::default()
         };
         let clean_output = render(&clean);
         let dirty_output = render(&dirty);

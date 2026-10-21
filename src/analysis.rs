@@ -852,6 +852,8 @@ fn analyze_with_budgets(
         error_finding_locations,
         unresolved_tests,
         blind_files,
+        excluded_files: Vec::new(),
+        exclusions: Default::default(),
         findings,
         tests_analyzed: executable_tests_analyzed,
         files_analyzed,

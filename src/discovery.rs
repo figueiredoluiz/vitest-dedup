@@ -369,6 +369,9 @@ pub struct SkippedFile {
     pub path: PathBuf,
     /// Why it was skipped.
     pub reason: SkipReason,
+    /// Whether the skip stands on project configuration that could not be read, so the file may
+    /// well belong to a project. A deliberate classification is `false`.
+    pub degraded: bool,
 }
 
 /// Deterministically ordered files discovered for one analysis run.
@@ -597,6 +600,7 @@ pub fn discover(config: &Config, project_set: Option<&ProjectSet>) -> Result<Dis
                                 result.skipped.push(SkippedFile {
                                     path: path.clone(),
                                     reason: SkipReason::NotInVitestProject { reason },
+                                    degraded: incomplete,
                                 });
                                 if incomplete {
                                     result.incomplete = true;
@@ -639,6 +643,7 @@ pub fn discover(config: &Config, project_set: Option<&ProjectSet>) -> Result<Dis
                 reason: SkipReason::TooLarge {
                     size_bytes: metadata.len(),
                 },
+                degraded: false,
             });
             result.incomplete = true;
             continue;
@@ -665,6 +670,7 @@ pub fn discover(config: &Config, project_set: Option<&ProjectSet>) -> Result<Dis
             None => result.skipped.push(SkippedFile {
                 path,
                 reason: SkipReason::UnsupportedLanguage,
+                degraded: false,
             }),
         }
     }

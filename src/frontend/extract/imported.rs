@@ -112,45 +112,60 @@ impl ExpansionState {
     }
 
     /// One diagnostic per emission budget this file ran out of.
-    pub(super) fn budget_diagnostics(&self) -> Vec<String> {
+    pub(super) fn budget_diagnostics(&self) -> Vec<(ExclusionReason, String)> {
         let mut diagnostics = Vec::new();
         if self.declarations_refused {
-            diagnostics.push(format!(
-                "the file declares more than {MAX_DECLARATIONS_PER_FILE} tests and suites; \
+            diagnostics.push((
+                ExclusionReason::WalkLimit,
+                format!(
+                    "the file declares more than {MAX_DECLARATIONS_PER_FILE} tests and suites; \
                  declarations past the limit were not counted"
+                ),
             ));
         }
         if self.iterations_refused {
-            diagnostics.push(format!(
-                "the file unrolls more than {MAX_UNROLLED_ITERATIONS} loop iterations; \
+            diagnostics.push((
+                ExclusionReason::WalkLimit,
+                format!(
+                    "the file unrolls more than {MAX_UNROLLED_ITERATIONS} loop iterations; \
                  declarations past the limit were not counted"
+                ),
             ));
         }
         diagnostics
     }
 
     /// Spends an admission and guards a local helper against recursion and excessive depth.
-    pub(super) fn begin(&mut self, identity: (PathBuf, u32)) -> Result<(), &'static str> {
+    pub(super) fn begin(&mut self, identity: (PathBuf, u32)) -> Result<(), Refusal> {
         self.spend()?;
         self.enter(identity)
     }
 
     /// Consumes an admission across both registration passes, refusing an exhausted budget.
-    fn spend(&mut self) -> Result<(), &'static str> {
+    fn spend(&mut self) -> Result<(), Refusal> {
         if self.left == 0 {
-            return Err("this file's helper-expansion budget is spent");
+            return Err(refusal(
+                ExclusionReason::HelperLimit,
+                "this file's helper-expansion budget is spent",
+            ));
         }
         self.left -= 1;
         Ok(())
     }
 
     /// Pushes a unique active declaration identity within the shared nesting limit.
-    fn enter(&mut self, identity: (PathBuf, u32)) -> Result<(), &'static str> {
+    fn enter(&mut self, identity: (PathBuf, u32)) -> Result<(), Refusal> {
         if self.active.contains(&identity) {
-            return Err("it calls itself, directly or through another helper");
+            return Err(refusal(
+                ExclusionReason::HelperLimit,
+                "it calls itself, directly or through another helper",
+            ));
         }
         if self.active.len() >= MAX_HELPER_EXPANSION_DEPTH {
-            return Err("helper calls are nested deeper than this extractor expands");
+            return Err(refusal(
+                ExclusionReason::HelperLimit,
+                "helper calls are nested deeper than this extractor expands",
+            ));
         }
         self.active.push(identity);
         Ok(())
@@ -258,7 +273,10 @@ impl<'a> Walker<'a> {
             return;
         };
         if origin.erased {
-            self.refuse_helper_expansion("a type-only import has no runtime runner binding");
+            self.refuse_helper_expansion(refusal(
+                ExclusionReason::HelperExportUnreadable,
+                "a type-only import has no runtime runner binding",
+            ));
             return;
         }
         // A declaration imported from a competing runner is not an opaque Vitest helper. Its
@@ -273,7 +291,10 @@ impl<'a> Walker<'a> {
             return;
         }
         if !self.allow_imported {
-            self.refuse_helper_expansion("historical helper sources are unavailable; present-day helper bodies cannot populate a revision baseline");
+            self.refuse_helper_expansion(refusal(
+                ExclusionReason::HelperSourcesUnavailable,
+                "historical helper sources are unavailable; present-day helper bodies cannot populate a revision baseline",
+            ));
             return;
         }
         let result = self.read_imported_runner(&origin.origin, call, prepare);
@@ -292,15 +313,15 @@ impl<'a> Walker<'a> {
         origin: &ImportOrigin,
         call: &CallExpression<'a>,
         prepare: bool,
-    ) -> Result<Vec<TestCase>, &'static str> {
+    ) -> Result<Vec<TestCase>, Refusal> {
         let admission = self.expansion.borrow_mut().spend();
         admission?;
-        let start = origin
-            .resolved
-            .as_ref()
-            .ok_or("a called named import could not be resolved")?;
+        let start = origin.resolved.as_ref().ok_or(refusal(
+            ExclusionReason::HelperExportUnreadable,
+            "a called named import could not be resolved",
+        ))?;
         let chain = resolve_export_chain(start, &origin.exported)
-            .map_err(|_| "a called named import's first-party export could not be read within the resolution/parser bounds")?;
+            .map_err(|_| refusal(ExclusionReason::HelperExportUnreadable, "a called named import's first-party export could not be read within the resolution/parser bounds"))?;
         let terminal = &chain.terminal;
         if self.mocks_unresolved
             || self.mocked_modules.iter().any(|mock| {
@@ -314,7 +335,10 @@ impl<'a> Walker<'a> {
                     })
             })
         {
-            return Err("the runner or its re-export chain is mocked or mocking is unresolved");
+            return Err(refusal(
+                ExclusionReason::RunnerMocked,
+                "the runner or its re-export chain is mocked or mocking is unresolved",
+            ));
         }
 
         for path in &chain.modules {
@@ -331,19 +355,26 @@ impl<'a> Walker<'a> {
                 for case in &mut self.tests {
                     case.context.unresolved = true;
                 }
-                return Err(
+                return Err(refusal(
+                    ExclusionReason::HelperSetupEffects,
                     "a module in the runner's re-export chain has unsupported setup effects",
-                );
+                ));
             }
         }
         helpers::with_parsed_file(&terminal.path, |program, source| {
             let semantic_return = SemanticBuilder::new().with_build_nodes(true).build(program);
             if !semantic_return.diagnostics.is_empty() {
-                return Some(Err("the helper's lexical bindings could not be resolved"));
+                return Some(Err(refusal(
+                    ExclusionReason::HelperExportUnreadable,
+                    "the helper's lexical bindings could not be resolved",
+                )));
             }
             let Some(Export::Local(callable)) = helpers::find_export(program, &terminal.export)
             else {
-                return Some(Err("the helper's export changed during extraction"));
+                return Some(Err(refusal(
+                    ExclusionReason::HelperExportUnreadable,
+                    "the helper's export changed during extraction",
+                )));
             };
             let (language, module_flavor) = crate::discovery::classify_source_file(&terminal.path)?;
             let file =
@@ -355,7 +386,10 @@ impl<'a> Walker<'a> {
                 for case in &mut self.tests {
                     case.context.unresolved = true;
                 }
-                return Some(Err("the helper has unresolved mocking effects"));
+                return Some(Err(refusal(
+                    ExclusionReason::RunnerMocked,
+                    "the helper has unresolved mocking effects",
+                )));
             }
             let mut registry = Registry::new(program, self.globals);
             // Defaults, rest and destructuring evaluate or bind more than a positional value, and
@@ -371,9 +405,10 @@ impl<'a> Walker<'a> {
                         || !matches!(parameter.pattern, BindingPattern::BindingIdentifier(_))
                 })
             {
-                return Some(Err(
+                return Some(Err(refusal(
+                    ExclusionReason::UnsupportedExpression,
                     "the imported runner has defaulted, rest or destructured parameters",
-                ));
+                )));
             }
             // The pre-scan does not unroll loops, so a loop variable cannot fold there. It still
             // scans the runner for hooks, which apply to the caller's scope whatever the titles
@@ -384,14 +419,16 @@ impl<'a> Walker<'a> {
                 })
             });
             if unproved_arguments && !prepare {
-                return Some(Err(
+                return Some(Err(refusal(
+                    ExclusionReason::HelperEffectsUnproved,
                     "the imported call has spread or unproved argument evaluation effects",
-                ));
+                )));
             }
             if matches!(&callable, Callable::Function(function) if function.body.is_none()) {
-                return Some(Err(
+                return Some(Err(refusal(
+                    ExclusionReason::HelperExportUnreadable,
                     "the exported helper is a bodyless or overload signature",
-                ));
+                )));
             }
             // A written parameter no longer holds the call-site value, so it is refused.
             // The caller folds the arguments; the helper's own symbols receive the text.
@@ -401,7 +438,10 @@ impl<'a> Walker<'a> {
                     semantic.scoping().symbol_is_mutated(symbol)
                 }))
             }) {
-                return Some(Err("the imported runner writes to a parameter"));
+                return Some(Err(refusal(
+                    ExclusionReason::HelperEffectsUnproved,
+                    "the imported runner writes to a parameter",
+                )));
             }
             child
                 .param_bindings
@@ -442,7 +482,10 @@ impl<'a> Walker<'a> {
                 child.imported_statements_shape(statements, &registry)
             };
             if !matches!(&call.callee, Expression::Identifier(_)) {
-                return Some(Err("imported runners require a direct named call"));
+                return Some(Err(refusal(
+                    ExclusionReason::HelperExportUnreadable,
+                    "imported runners require a direct named call",
+                )));
             }
             match shape {
                 Ok(false) => return Some(Ok(Vec::new())),
@@ -458,17 +501,26 @@ impl<'a> Walker<'a> {
                 Callable::Arrow(arrow) => (arrow.span.start, arrow.r#async, None),
             };
             if asynchronous {
-                return Some(Err("this imported runner is async or a generator"));
+                return Some(Err(refusal(
+                    ExclusionReason::UnsupportedExpression,
+                    "this imported runner is async or a generator",
+                )));
             }
             // A `const` initializer cannot be reassigned. A function declaration's binding can,
             // unless it is an anonymous default export that no local name reaches.
             if let Some(id) = declaration {
                 match id.as_ref().and_then(|id| id.symbol_id.get()) {
                     Some(symbol) if semantic.scoping().symbol_is_mutated(symbol) => {
-                        return Some(Err("the exported runner can be reassigned"));
+                        return Some(Err(refusal(
+                            ExclusionReason::HelperExportUnreadable,
+                            "the exported runner can be reassigned",
+                        )));
                     }
                     None if id.is_some() || terminal.export != "default" => {
-                        return Some(Err("the exported runner can be reassigned"));
+                        return Some(Err(refusal(
+                            ExclusionReason::HelperExportUnreadable,
+                            "the exported runner can be reassigned",
+                        )));
                     }
                     _ => {}
                 }
@@ -529,7 +581,16 @@ impl<'a> Walker<'a> {
             }
             self.expansion.borrow_mut().active.pop();
             if !child.diagnostics.is_empty() {
-                return Some(Err("an imported runner could not be fully extracted"));
+                // The nested refusal's own code, not a stand-in: the export resolved fine.
+                let nested = child
+                    .reasons
+                    .first()
+                    .copied()
+                    .unwrap_or(ExclusionReason::HelperExportUnreadable);
+                return Some(Err(refusal(
+                    nested,
+                    "an imported runner could not be fully extracted",
+                )));
             }
             let registers_hooks = prepare && hook_count(child.hook_scopes.last()) > hooks_before;
             if registers_hooks {
@@ -548,9 +609,10 @@ impl<'a> Walker<'a> {
                         + source.len() as u64
                         > crate::discovery::MAX_SOURCE_FILE_BYTES
                 {
-                    return Some(Err(
+                    return Some(Err(refusal(
+                        ExclusionReason::HelperLimit,
                         "this file's retained helper sources exceed the source byte budget",
-                    ));
+                    )));
                 }
                 self.helper_sources
                     .entry(terminal.path.clone())
@@ -563,15 +625,19 @@ impl<'a> Walker<'a> {
                         + text.len() as u64
                         > crate::discovery::MAX_SOURCE_FILE_BYTES
                 {
-                    return Some(Err(
+                    return Some(Err(refusal(
+                        ExclusionReason::HelperLimit,
                         "this file's retained helper sources exceed the source byte budget",
-                    ));
+                    )));
                 }
                 self.helper_sources.entry(path).or_insert(text);
             }
             Some(Ok(child.tests))
         })
-        .ok_or("the helper could not be parsed within the source size/nesting bounds")?
+        .ok_or(refusal(
+            ExclusionReason::HelperExportUnreadable,
+            "the helper could not be parsed within the source size/nesting bounds",
+        ))?
     }
 
     /// Pre-scans a runner body for hooks and fixture bindings: a statement list or the single
@@ -594,7 +660,7 @@ impl<'a> Walker<'a> {
         &self,
         statements: &[Statement<'a>],
         registry: &Registry,
-    ) -> Result<bool, &'static str> {
+    ) -> Result<bool, Refusal> {
         let mut registers = false;
         let mut opaque = false;
         for (index, statement) in statements.iter().enumerate() {
@@ -612,7 +678,10 @@ impl<'a> Walker<'a> {
                                 && !self.is_fixture_binding(declaration, registry)
                         })
                     }) {
-                        return Err("the imported runner has unproved setup or fixture effects");
+                        return Err(refusal(
+                            ExclusionReason::HelperSetupEffects,
+                            "the imported runner has unproved setup or fixture effects",
+                        ));
                     }
                 }
                 Statement::FunctionDeclaration(_)
@@ -624,14 +693,18 @@ impl<'a> Walker<'a> {
                         && index + 1 == statements.len()
                         && statement.argument.as_ref().is_none_or(inert_expression) => {}
                 _ => {
-                    return Err(
+                    return Err(refusal(
+                        ExclusionReason::HelperEffectsUnproved,
                         "the imported runner has unsupported control flow or registration effects",
-                    )
+                    ))
                 }
             }
         }
         if registers && opaque {
-            return Err("the imported runner has unproved setup or fixture effects");
+            return Err(refusal(
+                ExclusionReason::HelperSetupEffects,
+                "the imported runner has unproved setup or fixture effects",
+            ));
         }
         Ok(registers)
     }
@@ -704,9 +777,12 @@ impl<'a> Walker<'a> {
         &self,
         expression: &Expression<'a>,
         registry: &Registry,
-    ) -> Result<Shape, &'static str> {
+    ) -> Result<Shape, Refusal> {
         let Expression::CallExpression(call) = expression else {
-            return Err("the imported runner has an unsupported registration expression");
+            return Err(refusal(
+                ExclusionReason::UnsupportedExpression,
+                "the imported runner has an unsupported registration expression",
+            ));
         };
         let Some(resolved) = self.resolve_call_callee(&call.callee, registry) else {
             // A nested call is expanded by the same walk under the shared budget and active-call
@@ -722,15 +798,19 @@ impl<'a> Walker<'a> {
                     && (canonicalize_export_name(identifier.name.as_str()).is_some()
                         || hook_kind(identifier.name.as_str()).is_some())
                 {
-                    return Err(
+                    return Err(refusal(
+                        ExclusionReason::UnsupportedExpression,
                         "an ambient framework call is unresolved in the caller's globals mode",
-                    );
+                    ));
                 }
             }
             if self.proved_inert_call(&call.callee) {
                 return Ok(Shape::Inert);
             }
-            return Err("a call inside the imported runner has unproved registration effects");
+            return Err(refusal(
+                ExclusionReason::HelperEffectsUnproved,
+                "a call inside the imported runner has unproved registration effects",
+            ));
         };
         let hook = match resolved.steps.as_slice() {
             [] => hook_kind(resolved.root).is_some(),
@@ -744,7 +824,10 @@ impl<'a> Walker<'a> {
                 .get(1)
                 .is_none_or(|argument| argument.as_expression().is_some_and(inert_expression));
             if !inline || !options_inert || call.arguments.len() > 2 {
-                return Err("an imported hook needs an inline callback and an inert timeout");
+                return Err(refusal(
+                    ExclusionReason::UnsupportedExpression,
+                    "an imported hook needs an inline callback and an inert timeout",
+                ));
             }
             return Ok(Shape::Hook);
         }
@@ -752,18 +835,25 @@ impl<'a> Walker<'a> {
             || !resolved.steps.is_empty()
             || resolved.fixtures_unresolved
         {
-            return Err(
+            return Err(refusal(
+                ExclusionReason::UnsupportedExpression,
                 "imported modified registrations and unresolved fixtures are not supported yet",
-            );
+            ));
         }
         let (title, _, callback) = split_declaration_args(&call.arguments);
         if call.arguments.len() != 2 {
-            return Err("imported registration options and extra arguments are not supported yet");
+            return Err(refusal(
+                ExclusionReason::UnsupportedExpression,
+                "imported registration options and extra arguments are not supported yet",
+            ));
         }
         if !matches!(self.extract_title(title), Title::Static(_))
             || callback.and_then(as_function_like).is_none()
         {
-            return Err("the imported runner needs a static title and an inline callback");
+            return Err(refusal(
+                ExclusionReason::UnsupportedExpression,
+                "the imported runner needs a static title and an inline callback",
+            ));
         }
         if resolved.root == "describe" {
             let function = callback
@@ -777,7 +867,10 @@ impl<'a> Walker<'a> {
                 || !function.params().items.is_empty()
                 || function.params().rest.is_some()
             {
-                return Err("imported suite callbacks must be synchronous and have no parameters");
+                return Err(refusal(
+                    ExclusionReason::UnsupportedExpression,
+                    "imported suite callbacks must be synchronous and have no parameters",
+                ));
             }
             match describe_body(callback) {
                 Some(DescribeBody::Block(statements)) => {
@@ -786,7 +879,12 @@ impl<'a> Walker<'a> {
                 Some(DescribeBody::Concise(expression)) => {
                     self.imported_expression_shape(expression, registry)?;
                 }
-                None => return Err("the imported suite callback could not be read"),
+                None => {
+                    return Err(refusal(
+                        ExclusionReason::UnsupportedExpression,
+                        "the imported suite callback could not be read",
+                    ))
+                }
             }
         }
         Ok(Shape::Declares)

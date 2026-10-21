@@ -2031,6 +2031,170 @@ pub struct BlindFile {
     pub tests: usize,
 }
 
+/// Why a file was excluded from comparison, in whole or in part.
+///
+/// A closed set with one code per refusal site, created where the refusal happens (the frontend, or
+/// `main.rs` for files that were never parsed) so no consumer ever parses a sentence to learn the
+/// cause. The kebab-case spelling is the machine contract in the `json` and `jsonl` reports;
+/// variant order is the tie-break when a file has several reasons.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ExclusionReason {
+    /// An imported runner's export could not be resolved, read, or proved to be the same function.
+    HelperExportUnreadable,
+    /// An imported runner has module, setup or fixture effects that could not be proved inert.
+    HelperSetupEffects,
+    /// A call, argument or parameter write inside an imported runner has unproved effects.
+    HelperEffectsUnproved,
+    /// A helper-expansion budget, recursion or depth limit was reached.
+    HelperLimit,
+    /// Helper bodies are unavailable in a historical revision baseline.
+    HelperSourcesUnavailable,
+    /// The runner, or a module on its re-export chain, is mocked or mocking is unresolved.
+    RunnerMocked,
+    /// A title, callback, option or registration expression is outside the supported shapes.
+    UnsupportedExpression,
+    /// A `vi.mock` factory could not be read.
+    MockFactoryUnreadable,
+    /// A `test.extend` fixture value could not be read.
+    FixtureUnreadable,
+    /// Some other ambient fact of the test (dynamic title, unreadable `.each` table, unreadable
+    /// nested config) could not be resolved.
+    UnresolvedContext,
+    /// A statement form the walker does not enter (`with`) may hide declarations.
+    UnsupportedStatement,
+    /// The parser reported errors; the file was read as far as it parsed.
+    ParseError,
+    /// The source type is unsupported.
+    UnsupportedSource,
+    /// A lexical nesting or syntax-unit limit refused the file.
+    SourceLimit,
+    /// Extraction could not run or panicked and was recovered.
+    ExtractionFailed,
+    /// A per-file declaration or loop-unrolling budget was reached.
+    WalkLimit,
+    /// An import resolved outside the analysis root and was not read.
+    ImportOutsideRoot,
+    /// The governing project's `globals` setting could not be determined.
+    GlobalsUndetermined,
+    /// The file exceeds the source-size limit and was not read.
+    FileTooLarge,
+    /// Project configuration could not be read, so no project could be matched to the file and it
+    /// was skipped.
+    ProjectConfigUnreadable,
+    /// The file could not be read.
+    Unreadable,
+    /// The memory budget was reached before the file was analyzed.
+    MemoryBudget,
+}
+
+impl ExclusionReason {
+    /// Every code, in the order that breaks ties between a file's reasons.
+    pub const ALL: [Self; 22] = [
+        Self::HelperExportUnreadable,
+        Self::HelperSetupEffects,
+        Self::HelperEffectsUnproved,
+        Self::HelperLimit,
+        Self::HelperSourcesUnavailable,
+        Self::RunnerMocked,
+        Self::UnsupportedExpression,
+        Self::MockFactoryUnreadable,
+        Self::FixtureUnreadable,
+        Self::UnresolvedContext,
+        Self::UnsupportedStatement,
+        Self::ParseError,
+        Self::UnsupportedSource,
+        Self::SourceLimit,
+        Self::ExtractionFailed,
+        Self::WalkLimit,
+        Self::ImportOutsideRoot,
+        Self::GlobalsUndetermined,
+        Self::FileTooLarge,
+        Self::ProjectConfigUnreadable,
+        Self::Unreadable,
+        Self::MemoryBudget,
+    ];
+
+    /// The stable kebab-case spelling used in the reports.
+    pub fn code(self) -> &'static str {
+        match self {
+            Self::HelperExportUnreadable => "helper-export-unreadable",
+            Self::HelperSetupEffects => "helper-setup-effects",
+            Self::HelperEffectsUnproved => "helper-effects-unproved",
+            Self::HelperLimit => "helper-limit",
+            Self::HelperSourcesUnavailable => "helper-sources-unavailable",
+            Self::RunnerMocked => "runner-mocked",
+            Self::UnsupportedExpression => "unsupported-expression",
+            Self::MockFactoryUnreadable => "mock-factory-unreadable",
+            Self::FixtureUnreadable => "fixture-unreadable",
+            Self::UnresolvedContext => "unresolved-context",
+            Self::UnsupportedStatement => "unsupported-statement",
+            Self::ParseError => "parse-error",
+            Self::UnsupportedSource => "unsupported-source",
+            Self::SourceLimit => "source-limit",
+            Self::ExtractionFailed => "extraction-failed",
+            Self::WalkLimit => "walk-limit",
+            Self::ImportOutsideRoot => "import-outside-root",
+            Self::GlobalsUndetermined => "globals-undetermined",
+            Self::FileTooLarge => "file-too-large",
+            Self::ProjectConfigUnreadable => "project-config-unreadable",
+            Self::Unreadable => "unreadable",
+            Self::MemoryBudget => "memory-budget",
+        }
+    }
+}
+
+/// One file excluded from comparison in whole or in part, for the machine reports.
+///
+/// Files that were never parsed (`file-too-large`, `unreadable`, ...) carry `tests_total == 0`: their
+/// test count is unknown, not zero.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExcludedFile {
+    /// Path relative to the analysis root.
+    pub path: PathBuf,
+    /// The first reason recorded for the file.
+    pub reason: ExclusionReason,
+    /// Every other distinct reason, in [`ExclusionReason`] order.
+    pub other_reasons: Vec<ExclusionReason>,
+    /// A sentence naming the cause of `reason`; for a refused helper, the one the terminal prints.
+    pub detail: String,
+    /// Executable tests of the file excluded from comparison.
+    pub tests_excluded: usize,
+    /// Executable tests the file declared; `0` when the file was not parsed.
+    pub tests_total: usize,
+}
+
+impl ExcludedFile {
+    /// Whether every executable test of the file was excluded (membership in `blind_files`).
+    pub fn every_test_excluded(&self) -> bool {
+        self.tests_total > 0 && self.tests_excluded == self.tests_total
+    }
+}
+
+/// Files and tests attributed to one primary [`ExclusionReason`].
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExclusionTally {
+    /// The primary reason.
+    pub reason: ExclusionReason,
+    /// Files whose primary reason it is.
+    pub files: usize,
+    /// Excluded tests in those files.
+    pub tests: usize,
+}
+
+/// Run-level totals over every excluded file, counted before any list cap.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExclusionSummary {
+    /// Files excluded in whole or in part.
+    pub files: usize,
+    /// Excluded tests in them.
+    pub tests: usize,
+    /// Files counted above but left out of [`AnalysisResult::excluded_files`] by its cap.
+    pub omitted: usize,
+    /// Primary reasons, most files first, then most tests, then code order.
+    pub reasons: Vec<ExclusionTally>,
+}
+
 /// The outcome of one analysis run.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct AnalysisResult {
@@ -2066,6 +2230,13 @@ pub struct AnalysisResult {
     /// count alone cannot surface it: 620 excluded tests read as a small fraction of 24,147 right
     /// up until one notices they are all of the tests in 35 particular files.
     pub blind_files: Vec<BlindFile>,
+    /// Every file excluded from comparison in whole or in part, sorted by path and capped at
+    /// `exclusions::MAX_EXCLUDED_FILES`; [`AnalysisResult::exclusions`] counts past the cap.
+    #[serde(default)]
+    pub excluded_files: Vec<ExcludedFile>,
+    /// Totals and the per-reason histogram behind [`AnalysisResult::excluded_files`].
+    #[serde(default)]
+    pub exclusions: ExclusionSummary,
     /// Unique test locations in at least one error-severity finding, **before** truncation.
     ///
     /// `threshold_passed`'s numerator must not depend on which findings survived a display cap.

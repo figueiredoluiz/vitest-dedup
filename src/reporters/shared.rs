@@ -7,7 +7,10 @@
 //! passes through one of the sanitizers below first, so a malicious title can misinform a reader
 //! but cannot forge extra report lines or hide text in an invisible/reordering character.
 
-use crate::model::{AnalysisResult, Finding, IncompleteCauses, Location, ModeSummary, Severity};
+use crate::model::{
+    AnalysisResult, ExcludedFile, ExclusionReason, ExclusionSummary, Finding, IncompleteCauses,
+    Location, ModeSummary, Severity,
+};
 use serde::Serialize;
 use std::path::Path;
 
@@ -211,6 +214,10 @@ pub(super) struct SummaryCounters {
     /// from "twelve files failed to read", which call for opposite responses. See
     /// [`IncompleteCauses`].
     incomplete_causes: IncompleteCauses,
+    /// Totals and the per-reason histogram of every file excluded from comparison, counted
+    /// before the list cap. The files themselves are `excludedFiles` (json) or `excluded-file`
+    /// records (jsonl). A closed, tool-owned struct: no analyzed-repository text.
+    exclusions: ExclusionSummary,
     /// What `--baseline` and `--changed-since` did to this run. Serialized from
     /// [`ModeSummary`] directly: it is a closed, tool-owned struct of counters and booleans, with
     /// no analyzed-repository text in it, so it needs no sanitization.
@@ -228,7 +235,39 @@ impl SummaryCounters {
             blind_files: result.blind_files.len(),
             incomplete: result.incomplete(),
             incomplete_causes: result.incomplete_causes.clone(),
+            exclusions: result.exclusions.clone(),
             modes: result.modes,
+        }
+    }
+}
+
+/// One excluded file in a JSON-carrying report, shared by the JSON document's `excludedFiles` and
+/// the `jsonl` `"excluded-file"` record so the two formats never disagree.
+///
+/// `path` and `detail` are analyzed-repository text and are sanitized; the codes are a closed set.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct JsonExcludedFile {
+    path: String,
+    reason: ExclusionReason,
+    other_reasons: Vec<ExclusionReason>,
+    detail: String,
+    tests_excluded: usize,
+    tests_total: usize,
+    every_test_excluded: bool,
+}
+
+impl From<&ExcludedFile> for JsonExcludedFile {
+    /// Sanitize the path and detail; copy the codes and counts.
+    fn from(file: &ExcludedFile) -> Self {
+        Self {
+            path: report_safe_path(&file.path),
+            reason: file.reason,
+            other_reasons: file.other_reasons.clone(),
+            detail: report_safe(&file.detail),
+            tests_excluded: file.tests_excluded,
+            tests_total: file.tests_total,
+            every_test_excluded: file.every_test_excluded(),
         }
     }
 }

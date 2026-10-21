@@ -13,8 +13,8 @@
 
 use crate::discovery::{ModuleFlavor, SourceFile};
 use crate::model::{
-    Context, DeclarationKind, EachRows, EachTable, Fingerprints, FixtureBinding, Hook, HookKind,
-    Location, MockFactory, MockedModule, Modifier, Position, TestCase, Title,
+    Context, DeclarationKind, EachRows, EachTable, ExclusionReason, Fingerprints, FixtureBinding,
+    Hook, HookKind, Location, MockFactory, MockedModule, Modifier, Position, TestCase, Title,
 };
 use oxc_allocator::Allocator;
 use oxc_ast::ast::{
@@ -44,6 +44,18 @@ use super::registry::{
     OVER_LIMIT_TABLE,
 };
 use super::FileExtraction;
+
+/// A helper-expansion refusal: the closed reason code beside the sentence the terminal prints.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Refusal {
+    reason: ExclusionReason,
+    text: &'static str,
+}
+
+/// Builds a [`Refusal`]; every refusal site names its own code.
+const fn refusal(reason: ExclusionReason, text: &'static str) -> Refusal {
+    Refusal { reason, text }
+}
 
 /// Parses `source` and extracts every Vitest declaration it can prove statically.
 ///
@@ -83,7 +95,7 @@ fn extract_confined(
     root: Option<&Path>,
 ) -> FileExtraction {
     if let Some(reason) = parse_refusal(source) {
-        return refused_extraction(reason);
+        return refused_extraction(ExclusionReason::SourceLimit, reason);
     }
     // A finite input budget and an explicit stack work together: stack size alone only moves
     // the crash threshold, while a lexical bracket count alone misses regexes and operator chains.
@@ -119,16 +131,23 @@ fn extract_confined(
         };
         Ok(extraction)
     });
-    result.unwrap_or_else(refused_extraction)
+    result.unwrap_or_else(recovered_extraction)
+}
+
+/// The extraction for a worker that could not start or whose panic was recovered.
+fn recovered_extraction(reason: String) -> FileExtraction {
+    refused_extraction(ExclusionReason::ExtractionFailed, reason)
 }
 
 /// Visible refusal shared by preflight, thread creation failure and recovered worker panics.
-fn refused_extraction(reason: String) -> FileExtraction {
+fn refused_extraction(code: ExclusionReason, reason: String) -> FileExtraction {
     FileExtraction {
         helper_sources: Default::default(),
         tests: Vec::new(),
         incomplete: true,
         diagnostics: vec![reason],
+        reasons: vec![code],
+        further_refusals: Vec::new(),
         proven_empty: false,
     }
 }
@@ -414,6 +433,8 @@ fn run(source: &str, file: &SourceFile, globals: Globals, allow_imported: bool) 
             tests: Vec::new(),
             incomplete: true,
             diagnostics: vec!["unsupported source type".to_owned()],
+            reasons: vec![ExclusionReason::UnsupportedSource],
+            further_refusals: Vec::new(),
             proven_empty: false,
         };
     };
@@ -426,11 +447,16 @@ fn run(source: &str, file: &SourceFile, globals: Globals, allow_imported: bool) 
             tests: Vec::new(),
             incomplete: true,
             diagnostics: vec!["fatal parse error".to_owned()],
+            reasons: vec![ExclusionReason::ParseError],
+            further_refusals: Vec::new(),
             proven_empty: false,
         };
     }
     let mut diagnostics = Vec::new();
+    // Index-parallel to `diagnostics`: one closed code per sentence.
+    let mut reasons = Vec::new();
     if !parser_return.diagnostics.is_empty() {
+        reasons.push(ExclusionReason::ParseError);
         diagnostics.push(format!(
             "{} parse diagnostic(s)",
             parser_return.diagnostics.len()
@@ -449,6 +475,7 @@ fn run(source: &str, file: &SourceFile, globals: Globals, allow_imported: bool) 
     // retained across the corpus.
     let semantic_return = SemanticBuilder::new().with_build_nodes(true).build(program);
     if !semantic_return.diagnostics.is_empty() {
+        reasons.push(ExclusionReason::ParseError);
         diagnostics.push(format!(
             "{} semantic diagnostic(s)",
             semantic_return.diagnostics.len()
@@ -464,9 +491,17 @@ fn run(source: &str, file: &SourceFile, globals: Globals, allow_imported: bool) 
         walker.walk_statements(&program.body, &mut registry);
         walker
     });
+    reasons.extend(walker.reasons);
     diagnostics.extend(walker.diagnostics);
-    diagnostics.extend(walker.expansion.borrow().budget_diagnostics());
-    diagnostics.extend(super::resolver::take_refusals());
+    for (reason, text) in walker.expansion.borrow().budget_diagnostics() {
+        reasons.push(reason);
+        diagnostics.push(text);
+    }
+    for text in super::resolver::take_refusals() {
+        reasons.push(ExclusionReason::ImportOutsideRoot);
+        diagnostics.push(text);
+    }
+    debug_assert_eq!(reasons.len(), diagnostics.len());
 
     let incomplete = !diagnostics.is_empty();
     // See `Walker::proven_empty_tables`'s doc: only meaningful when nothing else in this file
@@ -481,6 +516,8 @@ fn run(source: &str, file: &SourceFile, globals: Globals, allow_imported: bool) 
         helper_sources: walker.helper_sources,
         incomplete,
         diagnostics,
+        reasons,
+        further_refusals: walker.further_refusals,
         proven_empty,
     }
 }
@@ -969,6 +1006,8 @@ struct Walker<'a> {
     /// arm): silently skipping a construct that can hide a test/describe declaration is never an
     /// acceptable outcome, so anything not recursed into must say so here.
     diagnostics: Vec<String>,
+    /// Closed code for each entry of `diagnostics`, index-parallel.
+    reasons: Vec<ExclusionReason>,
     /// Number of enclosing `describe` scopes currently pushed whose own title is unresolved
     /// ([`Title::Dynamic`] or, per F5, [`Title::Parameterized`] -- see [`title_is_unresolved`]).
     /// Such a title's runtime identity is not known, so two different runtime suite instances can
@@ -1027,6 +1066,9 @@ struct Walker<'a> {
     /// is enough to mark the file `incomplete`; a hostile file that trips the budget thousands of
     /// times should not emit thousands of near-identical strings.
     helper_refusal_reported: bool,
+    /// Distinct reasons refused after the first, with their sentences; see
+    /// [`FileExtraction::further_refusals`].
+    further_refusals: Vec<(ExclusionReason, String)>,
     /// Test-only count of existing declarations visited while tainting refused scopes.
     #[cfg(test)]
     helper_refusal_taint_visits: usize,
@@ -1071,6 +1113,7 @@ impl<'a> Walker<'a> {
             helper_sources: Default::default(),
             allow_imported: true,
             diagnostics: Vec::new(),
+            reasons: Vec::new(),
             unresolved_suite_depth: 0,
             suite_modifiers: Vec::new(),
             loop_bindings: Vec::new(),
@@ -1081,6 +1124,7 @@ impl<'a> Walker<'a> {
             globals,
             registration_file: None,
             helper_refusal_reported: false,
+            further_refusals: Vec::new(),
             #[cfg(test)]
             helper_refusal_taint_visits: 0,
             proven_empty_tables: 0,
@@ -1346,6 +1390,7 @@ impl<'a> Walker<'a> {
             // than repeat the exact defect this fix closes by staying silent, any declaration
             // that might be hiding inside one is reported as incomplete instead.
             Statement::WithStatement(_) => {
+                self.reasons.push(ExclusionReason::UnsupportedStatement);
                 self.diagnostics.push(
                     "a `with` statement body was not analyzed; any test/describe declarations \
                      inside it were not counted"
@@ -2035,7 +2080,7 @@ impl<'a> Walker<'a> {
     /// At most one such diagnostic per file (see [`Walker::helper_refusal_reported`]): the flag
     /// this sets is what makes the run visibly degraded, and repeating it per call site would
     /// bury every other diagnostic under a machine-generated file's thousands of copies.
-    fn refuse_helper_expansion(&mut self, reason: &str) {
+    fn refuse_helper_expansion(&mut self, refusal: Refusal) {
         let already_tainted = self
             .hook_scopes
             .last()
@@ -2061,7 +2106,20 @@ impl<'a> Walker<'a> {
                 }
             }
         }
+        let sentence = format!(
+            "a called helper's body was not analyzed ({}); any test/describe \
+             declarations inside it were not counted",
+            refusal.text
+        );
         if self.helper_refusal_reported {
+            let known = self.reasons.contains(&refusal.reason)
+                || self
+                    .further_refusals
+                    .iter()
+                    .any(|(r, _)| *r == refusal.reason);
+            if !known {
+                self.further_refusals.push((refusal.reason, sentence));
+            }
             return;
         }
         self.helper_refusal_reported = true;
@@ -2071,10 +2129,8 @@ impl<'a> Walker<'a> {
         // branch fixed everywhere else. Found in review: `no_stderr_line_contains_the_analysis_
         // root_prefix` could not catch it because its fixture never built a helper deep enough,
         // recursive enough or expensive enough to be refused. That fixture now does.
-        self.diagnostics.push(format!(
-            "a called helper's body was not analyzed ({reason}); any test/describe \
-             declarations inside it were not counted"
-        ));
+        self.reasons.push(refusal.reason);
+        self.diagnostics.push(sentence);
     }
 
     /// The callee of `expr`, when it names a `function` declaration in *this* file.
@@ -7272,6 +7328,7 @@ mod tests {
             extraction.diagnostics
         );
         assert!(!extraction.proven_empty);
+        assert_eq!(extraction.reasons, vec![ExclusionReason::UnsupportedSource]);
     }
 
     /// Check declaration extraction: recoverable parse and semantic diagnostics are counted and

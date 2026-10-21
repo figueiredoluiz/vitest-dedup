@@ -136,6 +136,7 @@ const RUST_MODULES = {
   'src/confine.rs': 94,
   // Extracted CLI rendering: measured at 98.72% (308/312 instrumented lines).
   'src/diagnostics.rs': 98,
+  'src/exclusions.rs': 100,
   'src/discovery.rs': 94,
   'src/frontend.rs': 100,
   'src/frontend/extract.rs': 98,

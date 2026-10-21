@@ -35,6 +35,7 @@ const RULES: &str = include_str!("../docs/rules.md");
 /// and left this stale, which is the sibling-site defect the sweep itself was about.
 const AGENT_SKILL: &str = include_str!("../skills/vitest-dedup/SKILL.md");
 const REPORTS_DOC: &str = include_str!("../docs/reports.md");
+const INCOMPLETE_RUNS_DOC: &str = include_str!("../docs/incomplete-runs.md");
 const JSON_REPORTER_SOURCE: &str = include_str!("../src/reporters/json.rs");
 const VITEST_SURFACE_HAZARDS: &str = include_str!("../docs/vitest-surface/hazards.md");
 
@@ -643,6 +644,25 @@ fn rule_table() -> Vec<(String, String, String)> {
         .collect()
 }
 
+/// The reason codes documented in docs/incomplete-runs.md are exactly the codes the binary emits,
+/// in the order the code lists them (the order `otherReasons` is sorted in).
+#[test]
+fn documented_exclusion_reason_codes_are_exactly_the_emitted_set() {
+    let documented: Vec<String> = parse_table(
+        INCOMPLETE_RUNS_DOC,
+        &["Code", "Meaning"],
+        "docs/incomplete-runs.md",
+    )
+    .into_iter()
+    .map(|row| row[0].clone())
+    .collect();
+    let emitted: Vec<String> = vitest_dedup::model::ExclusionReason::ALL
+        .iter()
+        .map(|reason| reason.code().to_owned())
+        .collect();
+    assert_eq!(documented, emitted);
+}
+
 /// Every rule id documented in docs/rules.md parses in the config API and the `--rule` flag.
 #[test]
 fn every_documented_rule_id_is_accepted_by_the_rule_flag() {
@@ -987,6 +1007,8 @@ fn sample_analysis_result() -> AnalysisResult {
         error_finding_locations: 0,
         unresolved_tests: 0,
         blind_files: Vec::new(),
+        excluded_files: Vec::new(),
+        exclusions: Default::default(),
         modes: ModeSummary::default(),
     }
 }

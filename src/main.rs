@@ -12,8 +12,9 @@ use std::process::ExitCode as ProcessExitCode;
 use std::time::Instant;
 use vitest_dedup::cli::{ExitCode, ParsedArgs, ReporterKind};
 use vitest_dedup::config::Config;
+use vitest_dedup::exclusions::{self, ExclusionCollector};
 use vitest_dedup::frontend::{self, Globals};
-use vitest_dedup::model::{AnalysisResult, IncompleteCauses};
+use vitest_dedup::model::{AnalysisResult, ExclusionReason, IncompleteCauses};
 use vitest_dedup::modes;
 use vitest_dedup::reporters::{
     terminal_safe, DetectionTiming, HtmlReporter, JsonReporter, JsonlReporter, Reporter,
@@ -465,6 +466,7 @@ fn run_with_rss(args: ParsedArgs, mut resident: impl FnMut() -> Option<u64>) -> 
         ..IncompleteCauses::default()
     };
     let mut tests = Vec::new();
+    let mut excluded = ExclusionCollector::default();
     let mut diagnostics: Vec<Sanitized> = Vec::new();
     // Distinct from `diagnostics.len()`: one file can push several diagnostics (one per
     // extraction-time issue), so the diagnostic count and the affected-file count disagree in
@@ -498,6 +500,23 @@ fn run_with_rss(args: ParsedArgs, mut resident: impl FnMut() -> Option<u64>) -> 
             skipped.reason
         )));
         diagnostic_files.insert(skipped.path.clone());
+        // A file no project governs, or in an unsupported language, is a deliberate
+        // classification that stays a diagnostic (documented as not incomplete); it is listed
+        // only when the skip stands on project configuration that could not be read.
+        let reason = match skipped.reason {
+            discovery::SkipReason::TooLarge { .. } => Some(ExclusionReason::FileTooLarge),
+            discovery::SkipReason::NotInVitestProject { .. } if skipped.degraded => {
+                Some(ExclusionReason::ProjectConfigUnreadable)
+            }
+            _ => None,
+        };
+        if let Some(reason) = reason {
+            excluded.record(exclusions::unparsed_file(
+                relativize_test_path(&skipped.path, &config.root),
+                reason,
+                &skipped.reason.to_string(),
+            ));
+        }
     }
     // Non-fatal filesystem traversal errors (a directory that could not be listed, metadata that
     // could not be read) were previously dropped entirely -- discovery already flips `incomplete`
@@ -555,6 +574,11 @@ fn run_with_rss(args: ParsedArgs, mut resident: impl FnMut() -> Option<u64>) -> 
                     ),
                 )?;
                 causes.files_too_large += 1;
+                excluded.record(exclusions::unparsed_file(
+                    relativize_test_path(&file.path, &config.root),
+                    ExclusionReason::FileTooLarge,
+                    "the file exceeds the source-size limit and was not read",
+                ));
                 continue;
             }
             Err(error) => {
@@ -567,6 +591,11 @@ fn run_with_rss(args: ParsedArgs, mut resident: impl FnMut() -> Option<u64>) -> 
                     ),
                 )?;
                 causes.files_unreadable += 1;
+                excluded.record(exclusions::unparsed_file(
+                    relativize_test_path(&file.path, &config.root),
+                    ExclusionReason::Unreadable,
+                    &format!("the file could not be read: {error}"),
+                ));
                 continue;
             }
         };
@@ -693,6 +722,21 @@ fn run_with_rss(args: ParsedArgs, mut resident: impl FnMut() -> Option<u64>) -> 
         // The frontend explains *why* it could not fully read a file. Computing that and
         // discarding it left users with a bare "INCOMPLETE" and no way to tell one odd file from
         // half the corpus -- which makes the degradation visible in name only.
+        let mut file_reasons: Vec<(ExclusionReason, String)> = extraction
+            .reasons
+            .iter()
+            .copied()
+            .zip(extraction.diagnostics.iter().cloned())
+            .collect();
+        file_reasons.append(&mut extraction.further_refusals);
+        if let Some(reason) = unresolved_globals {
+            file_reasons.push((ExclusionReason::GlobalsUndetermined, reason.to_owned()));
+        }
+        excluded.extend(exclusions::parsed_file(
+            relativize_test_path(&file.path, &config.root),
+            &extraction.tests,
+            file_reasons,
+        ));
         for diagnostic in extraction.diagnostics.drain(..) {
             // Both the filename and the frontend-produced diagnostic text can carry
             // repository-controlled content; sanitize the whole line.
@@ -730,6 +774,13 @@ fn run_with_rss(args: ParsedArgs, mut resident: impl FnMut() -> Option<u64>) -> 
         let remaining = discovered.files.len() - index - 1;
         if remaining > 0 && roof.exceeded_with_rss(&tests, &mut resident) {
             causes.files_over_memory_budget = remaining;
+            for skipped in &discovered.files[index + 1..] {
+                excluded.record(exclusions::unparsed_file(
+                    relativize_test_path(&skipped.path, &config.root),
+                    ExclusionReason::MemoryBudget,
+                    "the memory budget was reached before this file was analyzed",
+                ));
+            }
             write_roof_diagnostic(&mut stderr, "analysis", &args, files_read, remaining)?;
             break;
         }
@@ -894,6 +945,8 @@ fn run_with_rss(args: ParsedArgs, mut resident: impl FnMut() -> Option<u64>) -> 
             suppressions: &inline_suppressions,
         },
     )?;
+
+    (result.excluded_files, result.exclusions) = excluded.finish();
 
     let timing = discovery_time.zip(parsing_time).zip(analysis_started).map(
         |((discovery, parsing), started)| {

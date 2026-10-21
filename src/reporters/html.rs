@@ -763,6 +763,7 @@ mod tests {
                 files_analyzed: 1,
                 incomplete_causes: IncompleteCauses::default(),
                 modes: ModeSummary::default(),
+                ..Default::default()
             };
             let output = render_str(&result);
             let heading = heading_html(&output);
@@ -1016,6 +1017,7 @@ mod tests {
         assert!(!output.contains(r#"role="alert""#));
     }
 
+    /// An incomplete run renders a prominent alert.
     #[test]
     fn incomplete_flag_renders_a_prominent_alert() {
         let result = AnalysisResult {
@@ -1035,6 +1037,7 @@ mod tests {
                 ..IncompleteCauses::default()
             },
             modes: ModeSummary::default(),
+            ..Default::default()
         };
         let output = render_str(&result);
         assert!(output.contains(r#"role="alert""#));

@@ -83,7 +83,9 @@ or setup effects, and helper mocking effects, mark the entire calling file unres
 ### What a refusal does
 
 A refusal marks the file incomplete and the affected calling scope unresolved, including earlier
-tests and its suite record. Those records are excluded from comparison.
+tests and its suite record. Those records are excluded from comparison. The `json` and `jsonl`
+reports list the file with a reason code naming the refusal; see
+[Excluded files](incomplete-runs.md#excluded-files).
 
 ## Budgets
 
