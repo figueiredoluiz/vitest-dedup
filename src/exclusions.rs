@@ -17,7 +17,8 @@ use std::path::PathBuf;
 /// and `exclusions.omitted` says how many.
 pub const MAX_EXCLUDED_FILES: usize = 10_000;
 
-/// Longest `detail` kept per file, in characters; the full sentence stays on the terminal.
+/// Longest `detail` kept per file, in characters, applied when an entry is recorded and after the
+/// analysis root is removed; the full sentence stays on the terminal.
 const MAX_DETAIL_CHARS: usize = 500;
 
 /// Whether `reason` is recorded by a helper refusal, which taints every test in its scope and so
@@ -144,6 +145,7 @@ pub fn without_root(text: &str, root: &std::path::Path) -> String {
 
 /// [`without_root`] over the spellings of one root: as given and, for a Windows verbatim root
 /// (`\\?\C:\work`, `\\?\UNC\host\share`), the ordinary form the same location is also printed in.
+/// A root with nothing to strip (`/`, `C:\`) strips nothing.
 fn strip_root_spellings(text: &str, root: &str, separator: char) -> String {
     let mut spellings = vec![root.to_owned()];
     if let Some(rest) = root.strip_prefix(r"\\?\UNC\") {
@@ -152,12 +154,47 @@ fn strip_root_spellings(text: &str, root: &str, separator: char) -> String {
         spellings.push(rest.to_owned());
     }
     let mut stripped = text.to_owned();
-    for spelling in spellings.iter().filter(|spelling| !spelling.is_empty()) {
-        stripped = stripped
-            .replace(&format!("{spelling}{separator}"), "")
-            .replace(spelling.as_str(), ".");
+    for spelling in &spellings {
+        let bare = spelling.trim_end_matches(['/', '\\']);
+        let drive_only = bare.len() == 2 && bare.ends_with(':');
+        if bare.is_empty() || drive_only {
+            continue;
+        }
+        stripped = strip_at_boundaries(&stripped, bare, separator);
     }
     stripped
+}
+
+/// Whether `c` can be part of a path component, for deciding that a match is a whole path prefix.
+fn is_path_char(c: char) -> bool {
+    c.is_alphanumeric() || matches!(c, '_' | '-' | '.' | '~')
+}
+
+/// `text` with each whole-component occurrence of `root` removed (`root/x` reads `x`, a bare
+/// `root` reads `.`). An occurrence inside a longer name (`/work/project-two` for `/work/proj`)
+/// is another path and is left alone.
+fn strip_at_boundaries(text: &str, root: &str, separator: char) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut copied = 0;
+    for (start, found) in text.match_indices(root) {
+        let end = start + found.len();
+        let before = text[..start].chars().next_back();
+        let after = text[end..].chars().next();
+        let boundary_before = before.is_none_or(|c| !is_path_char(c));
+        let boundary_after = after.is_none_or(|c| c == separator || !is_path_char(c));
+        if start < copied || !(boundary_before && boundary_after) {
+            continue;
+        }
+        out.push_str(&text[copied..start]);
+        if after == Some(separator) {
+            copied = end + separator.len_utf8();
+        } else {
+            out.push('.');
+            copied = end;
+        }
+    }
+    out.push_str(&text[copied..]);
+    out
 }
 
 /// An entry for a file that was never parsed (or only partly considered), with no test counts.
@@ -183,7 +220,7 @@ fn file_from_reasons(
         path,
         reason,
         other_reasons,
-        detail: detail.chars().take(MAX_DETAIL_CHARS).collect(),
+        detail,
         tests_excluded: 0,
         tests_total: 0,
     })
@@ -218,7 +255,11 @@ impl ExclusionCollector {
 
     /// Counts `file` and keeps it for the list.
     pub fn record(&mut self, mut file: ExcludedFile) {
-        file.detail = without_root(&file.detail, &self.root);
+        // Redact first, then cut: a cut through the middle of a root would leave a prefix of it.
+        file.detail = without_root(&file.detail, &self.root)
+            .chars()
+            .take(MAX_DETAIL_CHARS)
+            .collect();
         let entry = self.tally.entry(file.reason).or_default();
         entry.0 += 1;
         entry.1 += file.tests_excluded;
@@ -319,6 +360,57 @@ mod tests {
             strip_root_spellings(r"\\host\share\proj\x.ts", unc, '\\'),
             "x.ts"
         );
+    }
+
+    /// Only whole path components are stripped, and a root with nothing to strip strips nothing.
+    #[test]
+    fn root_stripping_respects_component_boundaries() {
+        let sep = '/';
+        let strip = |text: &str, root: &str| strip_root_spellings(text, root, sep);
+        assert_eq!(
+            strip("/work/proj/a.ts and /work/project-two/a.ts", "/work/proj"),
+            "a.ts and /work/project-two/a.ts"
+        );
+        assert_eq!(
+            strip("under x/work/proj/a.ts", "/work/proj"),
+            "under x/work/proj/a.ts"
+        );
+        assert_eq!(
+            strip("`/work/proj`, (/work/proj/b)", "/work/proj"),
+            "`.`, (b)"
+        );
+        assert_eq!(strip("size/nesting limit", "/"), "size/nesting limit");
+        assert_eq!(strip("a/b", ""), "a/b");
+        let win = |text: &str, root: &str| strip_root_spellings(text, root, '\\');
+        assert_eq!(
+            win(
+                r"C:\work\project-two\a.ts and C:\work\proj\a.ts",
+                r"\\?\C:\work\proj"
+            ),
+            r"C:\work\project-two\a.ts and a.ts"
+        );
+        assert_eq!(win(r"C:\work\a.ts", r"C:\"), r"C:\work\a.ts");
+        assert_eq!(win(r"C:\work\a.ts", r"\\?\C:\"), r"C:\work\a.ts");
+    }
+
+    /// The cap on a detail applies after the root is removed, so a cut cannot leave a prefix of it.
+    #[test]
+    fn a_cut_detail_never_shows_part_of_the_root() {
+        let root = std::path::Path::new("/Users/someone/proj");
+        let mut collector = ExclusionCollector::new(root);
+        let detail = format!(
+            "{}{}/f.ts",
+            "a ".repeat(MAX_DETAIL_CHARS / 2 - 4),
+            root.display()
+        );
+        collector.record(unparsed_file(
+            PathBuf::from("x.test.ts"),
+            ExclusionReason::Unreadable,
+            &detail,
+        ));
+        let (list, _) = collector.finish();
+        assert!(!list[0].detail.contains("/Users"), "{}", list[0].detail);
+        assert!(list[0].detail.chars().count() <= MAX_DETAIL_CHARS);
     }
 
     /// The code spelling is the serde spelling, for every variant.
@@ -439,7 +531,13 @@ mod tests {
     #[test]
     fn detail_is_bounded() {
         let long = "x".repeat(MAX_DETAIL_CHARS * 3);
-        let file = unparsed_file(PathBuf::from("a"), ExclusionReason::Unreadable, &long);
-        assert_eq!(file.detail.chars().count(), MAX_DETAIL_CHARS);
+        let mut collector = ExclusionCollector::default();
+        collector.record(unparsed_file(
+            PathBuf::from("a"),
+            ExclusionReason::Unreadable,
+            &long,
+        ));
+        let (list, _) = collector.finish();
+        assert_eq!(list[0].detail.chars().count(), MAX_DETAIL_CHARS);
     }
 }
