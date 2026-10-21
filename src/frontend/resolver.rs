@@ -88,6 +88,9 @@ pub struct ResolutionGaps {
     pub packages_not_found: usize,
 }
 
+/// Process-wide on purpose: extraction runs on worker threads and the run drains the total once.
+/// One analysis per process, as the binary is; an embedder running several concurrently would see
+/// their gaps mixed.
 static GAPS: Mutex<ResolutionGaps> = Mutex::new(ResolutionGaps {
     tsconfig: BTreeMap::new(),
     packages_not_found: 0,

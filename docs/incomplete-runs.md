@@ -49,6 +49,13 @@ file and specifier. The `package.json` consulted is the nearest one at or above 
 listed dependencies, or only relative imports produce nothing. Only resolution failures are
 reported, so a tsconfig that is merely unusual is silent.
 
+Limits: detection relies on what the resolver reports. A target that cannot be read because of an
+I/O error (invalid UTF-8, no read permission) is swallowed by the resolver during discovery and is not
+reported. On Windows a tsconfig is not found from a canonical importer path at all, so the two
+`tsconfig-*` kinds are not detected there (the same gap that keeps `paths` aliases from applying); the
+`node-modules` kind does not depend on tsconfig discovery. The failures are collected process-wide and
+drained once per run, so the reports describe one analysis per process.
+
 ### Blind spots
 
 A file in which every test was excluded produced no findings. It is named in the `json` and `jsonl` excluded-file list, but nowhere among the findings.
