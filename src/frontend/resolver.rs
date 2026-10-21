@@ -180,19 +180,48 @@ const NODE_BUILTINS: &[&str] = &[
     "zlib",
 ];
 
+/// Whether `specifier` is spelled like a request for an installed package rather than as something
+/// that is plainly not one: a relative, absolute or `#`-internal path, a `~`, `~~`, `@@` or `@/` alias, a URI
+/// scheme or drive path (a colon in the first segment, `npm:` and `jsr:` included), a backslash
+/// path, a package name with whitespace, or a scope with no name. Only the package part is judged: a
+/// subpath or a `?query` suffix may contain anything, and legacy names are accepted, because
+/// refusing a real package would hide a missing install. An alias written like a package
+/// (`@app/missing`) cannot be told apart by its spelling.
+fn has_package_syntax(specifier: &str) -> bool {
+    let head = specifier.split(['?', '#']).next().unwrap_or_default();
+    if head.is_empty()
+        || head.starts_with(['.', '/'])
+        || ["~", "~~", "@@"].contains(&head)
+        || ["~/", "~~/", "@@/"]
+            .iter()
+            .any(|alias| head.starts_with(alias))
+        || head.contains('\\')
+    {
+        return false;
+    }
+    let mut parts = head.split('/');
+    let first = parts.next().unwrap_or_default();
+    let plain = |segment: &str| !segment.contains(':') && !segment.contains(char::is_whitespace);
+    match first.strip_prefix('@') {
+        Some(scope) => {
+            let name = parts.next().unwrap_or_default();
+            !scope.is_empty() && !name.is_empty() && plain(scope) && plain(name)
+        }
+        None => plain(first),
+    }
+}
+
 /// Whether `specifier` names an installable package the analyzer does not resolve by name.
 ///
 /// Node's prefix-only modules (`node:sqlite`, `node:sea`, `node:test`) are not in the builtin list:
 /// without the prefix those names are ordinary packages, and `test` is a real one.
 fn is_package_specifier(specifier: &str) -> bool {
-    !(specifier.starts_with('.')
-        || specifier.starts_with('/')
-        || specifier.starts_with('#')
-        || specifier.starts_with("node:")
-        || NODE_BUILTINS.contains(&specifier)
-        || specifier == "vitest"
-        || specifier.starts_with("vitest/")
-        || specifier.starts_with("@vitest/"))
+    has_package_syntax(specifier)
+        && !(specifier.starts_with("node:")
+            || NODE_BUILTINS.contains(&specifier)
+            || specifier == "vitest"
+            || specifier.starts_with("vitest/")
+            || specifier.starts_with("@vitest/"))
 }
 
 /// Records why a resolution failed when the cause is an absent prerequisite.
@@ -440,6 +469,64 @@ mod tests {
         fs::write(&importer, "// importer").unwrap();
 
         assert_eq!(resolve(&importer, "./does-not-exist"), Resolved::Unresolved);
+    }
+
+    /// Only the modules Node accepts without a prefix are builtins; the prefix-only ones are
+    /// builtins solely with `node:`, and the bare names are packages that can be missing.
+    #[test]
+    fn only_package_shaped_specifiers_are_counted_as_packages() {
+        for package in [
+            "left-pad",
+            "lodash/fp",
+            "@scope/pkg",
+            "@scope/pkg/sub/path",
+            "test",
+            "a.b",
+            "pkg_x",
+            "@scope/_private",
+            "@_scope/pkg",
+            "old!pkg",
+            "pkg?query",
+            "@scope/pkg?x",
+            "pkg#fragment",
+            "Pkg-Upper",
+            "pkg/sub:file",
+            "pkg?a=b:c",
+            "@scope/pkg?x=a:b",
+            "pkg/sub file",
+            "pkg?x=a b",
+            "~pkg",
+        ] {
+            assert!(is_package_specifier(package), "{package}");
+        }
+        for other in [
+            "~/x",
+            "~",
+            "~~/x",
+            "@@/y",
+            "@@",
+            "@/y",
+            "@scope",
+            "@scope/",
+            "https://example.com/z.js",
+            "data:text/javascript,1",
+            "file:///x",
+            "C:/w/v",
+            "C:\\w\\v",
+            "\\\\host\\share",
+            "./x",
+            "../x",
+            "/x",
+            "#internal",
+            "",
+            ".hidden",
+            " ",
+            "a b",
+            "npm:left-pad",
+            "jsr:@std/path",
+        ] {
+            assert!(!is_package_specifier(other), "{other:?}");
+        }
     }
 
     /// Only the modules Node accepts without a prefix are builtins; the prefix-only ones are

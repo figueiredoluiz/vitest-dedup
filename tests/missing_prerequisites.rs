@@ -369,6 +369,54 @@ fn missing_node_modules_without_a_lockfile_names_no_manager() {
     );
 }
 
+/// Failed imports that are not package requests (a tilde or `@/` alias, a URL, a drive path) are not
+/// counted as missing packages: only the real package import is.
+#[test]
+fn only_package_requests_are_counted_for_node_modules() {
+    let directory = package_project(None, None);
+    write(
+        directory.path(),
+        "aliases.test.ts",
+        "import { test, expect } from 'vitest'
+import a from '~/x'
+import b from '@/y'
+         import c from 'https://example.com/z.js'
+import d from 'C:/w/v'
+         test('aliases', () => { expect(a && b && c && d).toBeTruthy() })\n",
+    );
+    let report = run(directory.path(), &[]);
+
+    let entries = prerequisites(&report);
+    assert_eq!(entries.len(), 1, "{:?}", report.json);
+    assert_eq!(entries[0]["kind"], "node-modules");
+    assert_eq!(entries[0]["unresolvedImports"], 1, "{:?}", entries[0]);
+}
+
+/// With nothing but non-package failures there is nothing to report about `node_modules`.
+#[test]
+fn non_package_failures_alone_never_report_node_modules() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    write(
+        root,
+        "package.json",
+        r#"{ "devDependencies": { "vue": "3" } }"#,
+    );
+    write(
+        root,
+        "aliases.test.ts",
+        "import { test, expect } from 'vitest'
+import a from '~/x'
+import b from '@/y'
+         test('aliases', () => { expect(a && b).toBeTruthy() })\n",
+    );
+    let report = run(root, &[]);
+
+    // The file was analyzed, so the silence is about the imports and not about nothing being read.
+    assert_eq!(report.json["filesAnalyzed"], 1, "{:?}", report.json);
+    assert!(prerequisites(&report).is_empty(), "{:?}", report.json);
+}
+
 /// An empty `node_modules` directory is treated as missing.
 #[test]
 fn empty_node_modules_counts_as_missing() {
