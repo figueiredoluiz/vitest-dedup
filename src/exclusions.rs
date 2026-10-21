@@ -43,25 +43,33 @@ fn context_reasons(tests: &[TestCase]) -> Vec<ExclusionReason> {
         .iter()
         .filter(|test| is_executable_declaration(test.kind) && !test.context.is_comparable())
     {
-        let reason = if test
+        let mock = test
             .context
             .mocked_modules
             .iter()
-            .any(|mock| mock.factory == MockFactory::Unresolved)
-        {
-            ExclusionReason::MockFactoryUnreadable
-        } else if test
+            .any(|mock| mock.factory == MockFactory::Unresolved);
+        let fixture = test
             .context
             .fixtures
             .iter()
-            .any(|fixture| fixture.body == FixtureValue::Unresolved)
-        {
-            ExclusionReason::FixtureUnreadable
-        } else {
-            ExclusionReason::UnresolvedContext
-        };
-        if !reasons.contains(&reason) {
-            reasons.push(reason);
+            .any(|fixture| fixture.body == FixtureValue::Unresolved);
+        // The explicit causes are independent: a test can have both. The fallback stands for
+        // "something else in the context", and only when neither explicit cause applies.
+        let own = [
+            (mock, ExclusionReason::MockFactoryUnreadable),
+            (fixture, ExclusionReason::FixtureUnreadable),
+        ];
+        let mut found: Vec<ExclusionReason> = own
+            .into_iter()
+            .filter_map(|(applies, reason)| applies.then_some(reason))
+            .collect();
+        if found.is_empty() {
+            found.push(ExclusionReason::UnresolvedContext);
+        }
+        for reason in found {
+            if !reasons.contains(&reason) {
+                reasons.push(reason);
+            }
         }
     }
     reasons
@@ -95,8 +103,15 @@ pub fn parsed_file(
     // An import refused for leaving the analysis root is the cause of the helper refusal that
     // follows it, so it leads. Stable: every other order is the order recorded.
     reasons.sort_by_key(|(reason, _)| *reason != ExclusionReason::ImportOutsideRoot);
-    if tests_excluded > 0 && !reasons.iter().any(|(r, _)| explains_excluded_tests(*r)) {
+    if tests_excluded > 0 {
+        // A helper refusal taints every test in its scope, which shows as the generic fallback;
+        // the explicit causes (an unreadable mock factory or fixture) are the tests' own and are
+        // listed regardless.
+        let explained = reasons.iter().any(|(r, _)| explains_excluded_tests(*r));
         for reason in context_reasons(tests) {
+            if explained && reason == ExclusionReason::UnresolvedContext {
+                continue;
+            }
             reasons.push((reason, derived_detail(reason).to_owned()));
         }
     }
@@ -124,12 +139,25 @@ fn derived_detail(reason: ExclusionReason) -> &'static str {
 /// For text built outside the frontend (a skip explanation, an I/O error, a config reason), which
 /// can quote a path where the frontend's own sentences never do.
 pub fn without_root(text: &str, root: &std::path::Path) -> String {
-    let root = root.to_string_lossy();
-    if root.is_empty() {
-        return text.to_owned();
+    strip_root_spellings(text, &root.to_string_lossy(), std::path::MAIN_SEPARATOR)
+}
+
+/// [`without_root`] over the spellings of one root: as given and, for a Windows verbatim root
+/// (`\\?\C:\work`, `\\?\UNC\host\share`), the ordinary form the same location is also printed in.
+fn strip_root_spellings(text: &str, root: &str, separator: char) -> String {
+    let mut spellings = vec![root.to_owned()];
+    if let Some(rest) = root.strip_prefix(r"\\?\UNC\") {
+        spellings.push(format!(r"\\{rest}"));
+    } else if let Some(rest) = root.strip_prefix(r"\\?\") {
+        spellings.push(rest.to_owned());
     }
-    let prefix = format!("{root}{}", std::path::MAIN_SEPARATOR);
-    text.replace(&prefix, "").replace(root.as_ref(), ".")
+    let mut stripped = text.to_owned();
+    for spelling in spellings.iter().filter(|spelling| !spelling.is_empty()) {
+        stripped = stripped
+            .replace(&format!("{spelling}{separator}"), "")
+            .replace(spelling.as_str(), ".");
+    }
+    stripped
 }
 
 /// An entry for a file that was never parsed (or only partly considered), with no test counts.
@@ -164,6 +192,8 @@ fn file_from_reasons(
 /// Accumulates entries with bounded memory: the histogram is exact, the list is capped.
 #[derive(Debug, Default)]
 pub struct ExclusionCollector {
+    /// The analysis root removed from every detail as it is recorded; empty strips nothing.
+    root: PathBuf,
     entries: Vec<ExcludedFile>,
     tally: BTreeMap<ExclusionReason, (usize, usize)>,
     files: usize,
@@ -171,6 +201,14 @@ pub struct ExclusionCollector {
 }
 
 impl ExclusionCollector {
+    /// A collector for a run over `root`: no recorded detail quotes where the project lives.
+    pub fn new(root: &std::path::Path) -> Self {
+        Self {
+            root: root.to_path_buf(),
+            ..Self::default()
+        }
+    }
+
     /// Records `file` when there is one; the form `parsed_file` returns.
     pub fn extend(&mut self, file: Option<ExcludedFile>) {
         if let Some(file) = file {
@@ -179,7 +217,8 @@ impl ExclusionCollector {
     }
 
     /// Counts `file` and keeps it for the list.
-    pub fn record(&mut self, file: ExcludedFile) {
+    pub fn record(&mut self, mut file: ExcludedFile) {
+        file.detail = without_root(&file.detail, &self.root);
         let entry = self.tally.entry(file.reason).or_default();
         entry.0 += 1;
         entry.1 += file.tests_excluded;
@@ -263,6 +302,22 @@ mod tests {
         assert_eq!(
             without_root("no paths", std::path::Path::new("")),
             "no paths"
+        );
+    }
+
+    /// A Windows verbatim root is stripped in both spellings it is printed in.
+    #[test]
+    fn a_verbatim_root_is_stripped_in_its_ordinary_spelling_too() {
+        let root = r"\\?\C:\work\proj";
+        let text = r"C:\work\proj\vitest.config.ts and \\?\C:\work\proj\a.ts and C:\work\proj";
+        assert_eq!(
+            strip_root_spellings(text, root, '\\'),
+            "vitest.config.ts and a.ts and ."
+        );
+        let unc = r"\\?\UNC\host\share\proj";
+        assert_eq!(
+            strip_root_spellings(r"\\host\share\proj\x.ts", unc, '\\'),
+            "x.ts"
         );
     }
 

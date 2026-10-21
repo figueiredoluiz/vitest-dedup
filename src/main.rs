@@ -466,7 +466,7 @@ fn run_with_rss(args: ParsedArgs, mut resident: impl FnMut() -> Option<u64>) -> 
         ..IncompleteCauses::default()
     };
     let mut tests = Vec::new();
-    let mut excluded = ExclusionCollector::default();
+    let mut excluded = ExclusionCollector::new(&config.root);
     let mut diagnostics: Vec<Sanitized> = Vec::new();
     // Distinct from `diagnostics.len()`: one file can push several diagnostics (one per
     // extraction-time issue), so the diagnostic count and the affected-file count disagree in
@@ -514,7 +514,7 @@ fn run_with_rss(args: ParsedArgs, mut resident: impl FnMut() -> Option<u64>) -> 
             excluded.record(exclusions::unparsed_file(
                 relativize_test_path(&skipped.path, &config.root),
                 reason,
-                &exclusions::without_root(&skipped.reason.to_string(), &config.root),
+                &skipped.reason.to_string(),
             ));
         }
     }
@@ -594,10 +594,7 @@ fn run_with_rss(args: ParsedArgs, mut resident: impl FnMut() -> Option<u64>) -> 
                 excluded.record(exclusions::unparsed_file(
                     relativize_test_path(&file.path, &config.root),
                     ExclusionReason::Unreadable,
-                    &exclusions::without_root(
-                        &format!("the file could not be read: {error}"),
-                        &config.root,
-                    ),
+                    &format!("the file could not be read: {error}"),
                 ));
                 continue;
             }
@@ -733,10 +730,7 @@ fn run_with_rss(args: ParsedArgs, mut resident: impl FnMut() -> Option<u64>) -> 
             .collect();
         file_reasons.append(&mut extraction.further_refusals);
         if let Some(reason) = unresolved_globals {
-            file_reasons.push((
-                ExclusionReason::GlobalsUndetermined,
-                exclusions::without_root(reason, &config.root),
-            ));
+            file_reasons.push((ExclusionReason::GlobalsUndetermined, reason.to_owned()));
         }
         excluded.extend(exclusions::parsed_file(
             relativize_test_path(&file.path, &config.root),

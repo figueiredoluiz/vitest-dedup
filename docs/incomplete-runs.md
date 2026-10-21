@@ -51,8 +51,9 @@ alone. Past the cap the files with the fewest excluded tests are left out of the
   `testsExcluded`, `testsTotal` and `everyTestExcluded`. `reason` is the first reason recorded for
   the file; `otherReasons` holds the rest in the order of the table below. An import that left the
   analysis root is listed ahead of the helper refusal it causes.
-  The reasons read from a test's own context (`mock-factory-unreadable`, `fixture-unreadable`,
-  `unresolved-context`) are added only when no helper refusal already accounts for the excluded tests.
+  The reasons read from a test's own context are added to the file's list: `mock-factory-unreadable`
+  and `fixture-unreadable` whenever a test has one (a test can have both), and `unresolved-context`
+  (any other unresolved fact) only when no helper refusal already accounts for the excluded tests.
   The list covers the whole analyzed corpus, whatever `--changed-since` scopes the findings to.
 - `testsTotal` is `0` for a file that was never parsed, and for a file whose tests all come from a
   refused helper: those tests are not counted anywhere. `everyTestExcluded` matches the files

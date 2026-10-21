@@ -92,10 +92,13 @@ fn assert_listed(run: &Run, expected: &[Expect]) {
     for (entry, want) in listed.iter().zip(expected) {
         // No entry quotes where the project lives: the report must not depend on the checkout.
         for root in &run.roots {
-            assert!(
-                !entry.to_string().contains(root.as_str()),
-                "{root} leaked into {entry}"
-            );
+            // The decoded text, not its JSON spelling, where a Windows backslash is doubled.
+            for field in ["path", "detail"] {
+                assert!(
+                    !entry[field].as_str().unwrap().contains(root.as_str()),
+                    "{root} leaked into {entry}"
+                );
+            }
         }
         assert_eq!(entry["path"], want.path, "{entry}");
         assert_eq!(entry["reason"], want.reason, "{entry}");
@@ -439,6 +442,39 @@ fn a_nested_runner_keeps_every_distinct_refusal_it_hit() {
             excluded: 0,
             total: 0,
         }],
+    );
+}
+
+/// A test can have an unreadable mock factory and an unreadable fixture at once: both are listed.
+#[test]
+fn independent_context_reasons_are_both_listed() {
+    scenario(
+        &[
+            ("helpers/factory.ts", "export const factory = () => ({});\nexport const makeDb = () => 1;\n"),
+            (
+                "both.test.ts",
+                "import { test as base, expect, vi } from 'vitest';\nimport { factory, makeDb } from './helpers/factory';\nvi.mock('./helpers/dep', factory);\nconst test = base.extend({ db: makeDb() });\ntest('a', ({ db }) => { expect(db).toBe(1); });\n",
+            ),
+        ],
+        &[],
+        &[Expect { path: "both.test.ts", reason: "mock-factory-unreadable", others: &["fixture-unreadable"], excluded: 1, total: 1 }],
+    );
+}
+
+/// A helper refusal explains the generic fallback, but not a test's own unreadable mock factory.
+#[test]
+fn an_unreadable_mock_factory_is_listed_beside_a_helper_refusal() {
+    scenario(
+        &[
+            ("helpers/factory.ts", "export const factory = () => ({});\n"),
+            ("helpers/rec.ts", "import { test, expect } from 'vitest';\nexport function run() { run(); test('x', () => { expect(1).toBe(1); }); }\n"),
+            (
+                "mixed.test.ts",
+                "import { test, expect, vi } from 'vitest';\nimport { factory } from './helpers/factory';\nimport { run } from './helpers/rec';\nvi.mock('./helpers/dep', factory);\nrun();\ntest('a', () => { expect(1).toBe(1); });\n",
+            ),
+        ],
+        &[],
+        &[Expect { path: "mixed.test.ts", reason: "runner-mocked", others: &["mock-factory-unreadable"], excluded: 1, total: 1 }],
     );
 }
 
