@@ -145,8 +145,9 @@ are local safeguards; CI remains authoritative and Git can bypass them.
   snapshot to the next checkout run, or to another clone sharing the cache. Every snapshot of a
   repository is exported to the same private directory under `XDG_RUNTIME_DIR`, or the system
   temporary directory without one, so a reused artifact always points at the current export; the
-  export stays outside the checkout because Cargo and the discovery walker read configuration and
-  ignore files from every ancestor directory. On a host whose temporary directory is shared,
+  export stays outside the checkout because Cargo reads configuration files, and the discovery
+  walker ignore files, from every ancestor directory (the walker's `.gitignore` lookup stops at a
+  repository root when there is one; other ignore files do not). On a host whose temporary directory is shared,
   another user could hold that name; the run then fails naming the directory, and `TMPDIR` or
   `XDG_RUNTIME_DIR` selects a private one. The first hook run after a fresh clone builds the
   dependency tree into that cache once; a temporary target link lets the corpus gates reuse it on

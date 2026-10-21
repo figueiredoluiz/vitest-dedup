@@ -410,6 +410,20 @@ pub struct DiscoveredFiles {
     pub project_config_degraded: bool,
 }
 
+/// Whether `root` lies inside a repository: some ancestor (itself included) holds a `.git` entry,
+/// a directory or the file a worktree or submodule uses, or a `.jj` directory.
+///
+/// This is the question the walker's `require_git` option turns on, so it mirrors the walker's own
+/// test: an entry that exists once symbolic links are followed. With the option set, the walker
+/// applies `.gitignore` and `.git/info/exclude` only inside a repository and stops reading them at
+/// the first repository root it meets going up, as git does, so a parent repository's rules do not
+/// reach a project that is its own nested repository. Without a repository there is no boundary to
+/// stop at and the files are still read, as they always were.
+fn inside_repository(root: &Path) -> bool {
+    root.ancestors()
+        .any(|directory| directory.join(".git").exists() || directory.join(".jj").exists())
+}
+
 /// Walks `config.root`, applying include/exclude globs and ignore-file rules, and classifies
 /// every matched file for the frontend.
 ///
@@ -454,7 +468,7 @@ pub fn discover(config: &Config, project_set: Option<&ProjectSet>) -> Result<Dis
     builder
         .standard_filters(true)
         .add_custom_ignore_filename(VITEST_DEDUP_IGNORE_FILENAME)
-        .require_git(false)
+        .require_git(inside_repository(&config.root))
         // Symlinks are classified as their own file type rather than followed, so a symlink loop
         // is inert by construction -- there is no recursive descent to loop through.
         .follow_links(false)
@@ -1278,6 +1292,340 @@ mod tests {
             ),
             vec!["src/a.test.ts", "src/b.spec.tsx"]
         );
+    }
+
+    /// A directory tree for repository-boundary tests: `files` are written under a fresh temporary
+    /// directory, and every directory in `repositories` (`""` is the temporary directory itself)
+    /// becomes a real repository (`git init`), just a `.git` file when it ends in `!`, or just a `.jj`
+    /// directory when it ends in `~`.
+    fn repository_tree(
+        files: &[(&str, &str)],
+        repositories: &[&str],
+    ) -> (tempfile::TempDir, std::path::PathBuf) {
+        let directory = tempfile::tempdir().unwrap();
+        let base = fs::canonicalize(directory.path()).unwrap();
+        for (path, contents) in files {
+            let full = base.join(path);
+            fs::create_dir_all(full.parent().unwrap()).unwrap();
+            fs::write(&full, contents).unwrap();
+        }
+        for repository in repositories {
+            let (name, kind) = match (repository.strip_suffix('!'), repository.strip_suffix('~')) {
+                (Some(name), _) => (name, 'f'),
+                (_, Some(name)) => (name, 'j'),
+                _ => (*repository, 'd'),
+            };
+            let path = base.join(name);
+            fs::create_dir_all(&path).unwrap();
+            if kind == 'j' {
+                fs::create_dir(path.join(".jj")).unwrap();
+            } else if kind == 'f' {
+                fs::write(path.join(".git"), "gitdir: /nonexistent\n").unwrap();
+            } else {
+                let status = std::process::Command::new("git")
+                    .args(["init", "-q"])
+                    .arg(&path)
+                    .status()
+                    .unwrap();
+                assert!(status.success(), "git init failed");
+            }
+        }
+        (directory, base)
+    }
+
+    /// Root-relative test files the analyzer discovers when run inside `base/sub`.
+    fn discovered_in(base: &Path, sub: &str) -> Vec<String> {
+        let root = base.join(sub);
+        let config = load(&root);
+        let found = discover(&config, None).unwrap();
+        relative_paths(&found.files, &config.root)
+    }
+
+    /// Root-relative test files git itself lists as untracked and not ignored below `base/sub`:
+    /// the oracle for ignore behaviour, since it is git's own rule evaluation.
+    ///
+    /// Git and the walker both read the host's global git configuration, so they agree with each
+    /// other whatever it holds; like every discovery test here, the literal expectations assume it
+    /// does not exclude the fixture names (`api`, `lib`, `src`, ...).
+    fn git_visible_tests(base: &Path, sub: &str) -> Vec<String> {
+        let output = std::process::Command::new("git")
+            .arg("-C")
+            .arg(base.join(sub))
+            .args(["ls-files", "--others", "--exclude-standard"])
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "git ls-files failed");
+        let mut tests: Vec<String> = String::from_utf8(output.stdout)
+            .unwrap()
+            .lines()
+            .filter(|line| line.ends_with(".test.ts"))
+            .map(str::to_owned)
+            .collect();
+        tests.sort();
+        tests
+    }
+
+    /// `paths` in sorted order, for comparisons that do not depend on discovery order.
+    fn sorted(mut paths: Vec<String>) -> Vec<String> {
+        paths.sort();
+        paths
+    }
+
+    /// A nested repository is its own boundary: an unanchored directory name in the PARENT
+    /// repository's `.gitignore` must not remove the nested repository's directory of that name,
+    /// which git itself keeps. This silently dropped a whole test directory.
+    #[test]
+    fn a_parent_repositorys_ignore_file_does_not_reach_into_a_nested_repository() {
+        let (_keep, base) = repository_tree(
+            &[
+                (".gitignore", "api\n"),
+                ("front/api/x.test.ts", ""),
+                ("front/lib/x.test.ts", ""),
+            ],
+            &["", "front"],
+        );
+        assert_eq!(
+            sorted(discovered_in(&base, "front")),
+            vec!["api/x.test.ts", "lib/x.test.ts"]
+        );
+        assert_eq!(
+            sorted(discovered_in(&base, "front")),
+            git_visible_tests(&base, "front"),
+            "git is the oracle"
+        );
+    }
+
+    /// The control: with no nested repository the parent repository owns the directory, so its
+    /// rule applies, exactly as git applies it. A fix that merely stopped reading parent ignore
+    /// files would fail here.
+    #[test]
+    fn a_parent_repositorys_ignore_file_still_applies_when_it_owns_the_project() {
+        let (_keep, base) = repository_tree(
+            &[
+                (".gitignore", "api\n"),
+                ("front/api/x.test.ts", ""),
+                ("front/lib/x.test.ts", ""),
+            ],
+            &[""],
+        );
+        assert_eq!(discovered_in(&base, "front"), vec!["lib/x.test.ts"]);
+        assert_eq!(
+            discovered_in(&base, "front"),
+            git_visible_tests(&base, "front")
+        );
+    }
+
+    /// A worktree or submodule marks its root with a `.git` FILE; that is a boundary too.
+    #[test]
+    fn a_git_file_marks_a_repository_boundary() {
+        let (_keep, base) = repository_tree(
+            &[
+                (".gitignore", "api\n"),
+                ("front/api/x.test.ts", ""),
+                ("front/lib/x.test.ts", ""),
+            ],
+            &["", "front!"],
+        );
+        assert_eq!(
+            sorted(discovered_in(&base, "front")),
+            vec!["api/x.test.ts", "lib/x.test.ts"]
+        );
+    }
+
+    /// The boundary does not need a parent repository: a `.gitignore` in a plain directory above
+    /// a project that is its own repository (a `.git` directory, the `.git` file of a worktree
+    /// or submodule, or a `.jj` directory) is not applied either.
+    #[test]
+    fn a_plain_directorys_ignore_file_does_not_reach_into_a_repository_below_it() {
+        for repository in ["front", "front!", "front~"] {
+            let (_keep, base) = repository_tree(
+                &[
+                    (".gitignore", "api\n"),
+                    ("front/api/x.test.ts", ""),
+                    ("front/lib/x.test.ts", ""),
+                ],
+                &[repository],
+            );
+            assert_eq!(
+                sorted(discovered_in(&base, "front")),
+                vec!["api/x.test.ts", "lib/x.test.ts"],
+                "{repository}"
+            );
+        }
+    }
+
+    /// A `.git` that points nowhere is not a repository: the walker does not see one either, so the
+    /// project keeps the rules it always had instead of losing git ignore handling altogether.
+    #[cfg(unix)]
+    #[test]
+    fn a_dangling_git_link_is_not_a_repository() {
+        let (_keep, base) = repository_tree(
+            &[
+                (".gitignore", "generated/\n!.specs/\n"),
+                ("generated/a.test.ts", ""),
+                (".specs/b.test.ts", ""),
+                ("src/c.test.ts", ""),
+            ],
+            &[],
+        );
+        std::os::unix::fs::symlink("/nonexistent", base.join(".git")).unwrap();
+        assert_eq!(
+            sorted(discovered_in(&base, "")),
+            vec![".specs/b.test.ts", "src/c.test.ts"]
+        );
+    }
+
+    /// The nested repository's own rules still apply.
+    #[test]
+    fn a_nested_repositorys_own_ignore_file_applies() {
+        let (_keep, base) = repository_tree(
+            &[
+                (".gitignore", "lib\n"),
+                ("front/.gitignore", "api\n"),
+                ("front/api/x.test.ts", ""),
+                ("front/lib/x.test.ts", ""),
+            ],
+            &["", "front"],
+        );
+        assert_eq!(discovered_in(&base, "front"), vec!["lib/x.test.ts"]);
+        assert_eq!(
+            discovered_in(&base, "front"),
+            git_visible_tests(&base, "front")
+        );
+    }
+
+    /// Without any repository there is no boundary: a parent's `.gitignore` keeps applying, as it
+    /// always has for a project that is not in git.
+    #[test]
+    fn without_a_repository_a_parent_ignore_file_applies_as_before() {
+        let (_keep, base) = repository_tree(
+            &[
+                (".gitignore", "api\n"),
+                ("front/api/x.test.ts", ""),
+                ("front/lib/x.test.ts", ""),
+            ],
+            &[],
+        );
+        assert_eq!(discovered_in(&base, "front"), vec!["lib/x.test.ts"]);
+    }
+
+    /// Analyzing a subdirectory of a repository: every ignore file from the repository root down
+    /// applies, a deeper whitelist beats a shallower ignore, and `.git/info/exclude` is the
+    /// weakest layer. Files beside the analyzed directory are never discovered.
+    #[test]
+    fn a_subdirectory_of_a_repository_is_governed_by_every_ignore_file_down_to_it() {
+        let (_keep, base) = repository_tree(
+            &[
+                (".gitignore", "generated\nkept\n"),
+                ("mid/.gitignore", "!kept\nlocal\n"),
+                ("mid/app/generated/a.test.ts", ""),
+                ("mid/app/kept/b.test.ts", ""),
+                ("mid/app/local/c.test.ts", ""),
+                ("mid/app/private/d.test.ts", ""),
+                ("mid/app/src/e.test.ts", ""),
+                ("mid/sibling/f.test.ts", ""),
+                ("other/g.test.ts", ""),
+            ],
+            &[""],
+        );
+        fs::write(base.join(".git/info/exclude"), "private\n").unwrap();
+        let found = discovered_in(&base, "mid/app");
+        assert_eq!(found, vec!["kept/b.test.ts", "src/e.test.ts"]);
+        assert_eq!(found, git_visible_tests(&base, "mid/app"));
+    }
+
+    /// The repository's own `.git/info/exclude` applies when it is the analyzed directory too.
+    #[test]
+    fn the_repository_exclude_file_applies_at_the_repository_root() {
+        let (_keep, base) =
+            repository_tree(&[("private/a.test.ts", ""), ("src/b.test.ts", "")], &[""]);
+        fs::write(base.join(".git/info/exclude"), "private\n").unwrap();
+        assert_eq!(discovered_in(&base, ""), vec!["src/b.test.ts"]);
+        assert_eq!(discovered_in(&base, ""), git_visible_tests(&base, ""));
+    }
+
+    /// Only git's own ignore files stop at the repository boundary. `.vitest-dedupignore` and
+    /// `.ignore` are the tool's and ripgrep's files, not git's, and keep applying from every
+    /// ancestor directory, so a file placed above a repository is still honoured.
+    #[test]
+    fn the_tools_own_ignore_files_are_read_from_every_ancestor() {
+        let (_keep, base) = repository_tree(
+            &[
+                (".vitest-dedupignore", "outer\n"),
+                (".ignore", "plain\n"),
+                ("repo/.vitest-dedupignore", "inner\n"),
+                ("repo/app/outer/a.test.ts", ""),
+                ("repo/app/inner/b.test.ts", ""),
+                ("repo/app/plain/d.test.ts", ""),
+                ("repo/app/src/c.test.ts", ""),
+            ],
+            &["repo"],
+        );
+        assert_eq!(discovered_in(&base, "repo/app"), vec!["src/c.test.ts"]);
+    }
+
+    /// A whitelist in a deeper ignore file beats an ignore in a shallower one, including the
+    /// analyzed directory's own file against the repository root's.
+    #[test]
+    fn the_analyzed_directorys_own_whitelist_beats_a_repository_root_ignore() {
+        let (_keep, base) = repository_tree(
+            &[
+                (".gitignore", "api/\n"),
+                ("app/.gitignore", "!api/\n"),
+                ("app/api/x.test.ts", ""),
+                ("app/src/y.test.ts", ""),
+            ],
+            &[""],
+        );
+        let found = discovered_in(&base, "app");
+        assert_eq!(found, vec!["api/x.test.ts", "src/y.test.ts"]);
+        assert_eq!(found, git_visible_tests(&base, "app"));
+    }
+
+    /// A whitelist in an ancestor's ignore file un-hides a hidden directory below the analyzed
+    /// one, as it does when the whitelist is in the analyzed directory's own file.
+    #[test]
+    fn an_ancestor_whitelist_reveals_a_hidden_directory() {
+        let (_keep, base) = repository_tree(
+            &[
+                (".gitignore", "!.specs/\n"),
+                ("app/.specs/x.test.ts", ""),
+                ("app/.other/y.test.ts", ""),
+                ("app/src/z.test.ts", ""),
+            ],
+            &[""],
+        );
+        // Hidden entries are skipped unless an ignore file whitelists them; git itself has no such
+        // rule, so it is not the oracle here.
+        assert_eq!(
+            discovered_in(&base, "app"),
+            vec![".specs/x.test.ts", "src/z.test.ts"]
+        );
+    }
+
+    /// `.ignore` files inside the repository, above the analyzed directory, keep applying.
+    #[test]
+    fn an_ignore_file_inside_the_repository_above_the_analyzed_directory_applies() {
+        let (_keep, base) = repository_tree(
+            &[
+                (".ignore", "api/\n"),
+                ("app/api/x.test.ts", ""),
+                ("app/src/y.test.ts", ""),
+            ],
+            &[""],
+        );
+        assert_eq!(discovered_in(&base, "app"), vec!["src/y.test.ts"]);
+    }
+
+    /// The analyzed directory is exempt from rules that name it: git would ignore it, but the user
+    /// asked for it by name.
+    #[test]
+    fn a_rule_naming_the_analyzed_directory_itself_does_not_remove_it() {
+        let (_keep, base) = repository_tree(
+            &[(".gitignore", "front\n"), ("front/src/a.test.ts", "")],
+            &[""],
+        );
+        assert_eq!(discovered_in(&base, "front"), vec!["src/a.test.ts"]);
     }
 
     /// Check file discovery: discovers default vitest bench and benchmark files.
