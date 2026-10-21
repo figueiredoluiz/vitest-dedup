@@ -13,6 +13,8 @@ const CLEAN: &str =
 
 /// One run of the binary: the JSON document, the JSONL records and stderr.
 struct Run {
+    /// The analyzed directory as given and as canonicalized: neither may appear in a report.
+    roots: Vec<String>,
     json: Value,
     json_text: String,
     jsonl: Vec<Value>,
@@ -48,7 +50,15 @@ fn run(root: &Path, flags: &[&str]) -> Run {
         .output()
         .unwrap();
     let jsonl_text = String::from_utf8(jsonl_run.stdout).unwrap();
+    let mut roots = vec![root.to_string_lossy().into_owned()];
+    roots.push(
+        std::fs::canonicalize(root)
+            .unwrap()
+            .to_string_lossy()
+            .into_owned(),
+    );
     Run {
+        roots,
         json: serde_json::from_str(&json_text).unwrap(),
         json_text,
         jsonl: jsonl_text
@@ -80,6 +90,13 @@ fn assert_listed(run: &Run, expected: &[Expect]) {
         run.json["excludedFiles"]
     );
     for (entry, want) in listed.iter().zip(expected) {
+        // No entry quotes where the project lives: the report must not depend on the checkout.
+        for root in &run.roots {
+            assert!(
+                !entry.to_string().contains(root.as_str()),
+                "{root} leaked into {entry}"
+            );
+        }
         assert_eq!(entry["path"], want.path, "{entry}");
         assert_eq!(entry["reason"], want.reason, "{entry}");
         assert_eq!(
@@ -400,6 +417,28 @@ fn a_nested_runner_refusal_keeps_its_own_code() {
     assert!(
         detail.contains("could not be fully extracted:") && detail.contains("calls itself"),
         "{detail}"
+    );
+}
+
+/// A wrapper runner that calls two refused helpers keeps both reasons: the first leads, the other
+/// is listed beside it.
+#[test]
+fn a_nested_runner_keeps_every_distinct_refusal_it_hit() {
+    scenario(
+        &[
+            ("helpers/a.ts", "import { test } from 'vitest';\nexport async function a() { test('a', () => {}); }\n"),
+            ("helpers/b.ts", "import { test } from 'vitest';\nexport function b(x) { x = 1; test('b', () => {}); }\n"),
+            ("helpers/wrap.ts", "import { a } from './a';\nimport { b } from './b';\nexport function run() { a(); b(0); }\n"),
+            ("wrap.test.ts", "import { run } from './helpers/wrap';\nrun();\n"),
+        ],
+        &[],
+        &[Expect {
+            path: "wrap.test.ts",
+            reason: "unsupported-expression",
+            others: &["helper-effects-unproved"],
+            excluded: 0,
+            total: 0,
+        }],
     );
 }
 

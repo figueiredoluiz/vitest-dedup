@@ -58,10 +58,10 @@
 //!
 //! `blindFiles` counts files in which *every* executable test was excluded. It is separate from
 //! `unresolvedTests` because the two describe different failures: a partially excluded file still
-//! emits findings that carry the qualification with them, while a wholly excluded one emits
-//! nothing and so never appears in this stream at all — indistinguishable, to a consumer, from a
-//! file that was compared and came back clean. The names are on stderr, sanitized, for a human;
-//! this is the number a gate acts on.
+//! emits findings that carry the qualification with them, while a wholly excluded one emits no
+//! finding at all — among the findings it is indistinguishable, to a consumer, from a file that was
+//! compared and came back clean, which is what the `"excluded-file"` records below are for. The
+//! names are also on stderr, sanitized, for a human; this is the number a gate acts on.
 //! `withheldUnchanged` counts findings this stream deliberately does **not** contain, and is the
 //! only way a consumer can tell "there is nothing wrong in the files you changed" from "there is
 //! nothing wrong". Both are closed, tool-owned counters, never analyzed-repository text.

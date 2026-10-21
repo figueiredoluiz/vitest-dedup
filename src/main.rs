@@ -514,7 +514,7 @@ fn run_with_rss(args: ParsedArgs, mut resident: impl FnMut() -> Option<u64>) -> 
             excluded.record(exclusions::unparsed_file(
                 relativize_test_path(&skipped.path, &config.root),
                 reason,
-                &skipped.reason.to_string(),
+                &exclusions::without_root(&skipped.reason.to_string(), &config.root),
             ));
         }
     }
@@ -594,7 +594,10 @@ fn run_with_rss(args: ParsedArgs, mut resident: impl FnMut() -> Option<u64>) -> 
                 excluded.record(exclusions::unparsed_file(
                     relativize_test_path(&file.path, &config.root),
                     ExclusionReason::Unreadable,
-                    &format!("the file could not be read: {error}"),
+                    &exclusions::without_root(
+                        &format!("the file could not be read: {error}"),
+                        &config.root,
+                    ),
                 ));
                 continue;
             }
@@ -730,7 +733,10 @@ fn run_with_rss(args: ParsedArgs, mut resident: impl FnMut() -> Option<u64>) -> 
             .collect();
         file_reasons.append(&mut extraction.further_refusals);
         if let Some(reason) = unresolved_globals {
-            file_reasons.push((ExclusionReason::GlobalsUndetermined, reason.to_owned()));
+            file_reasons.push((
+                ExclusionReason::GlobalsUndetermined,
+                exclusions::without_root(reason, &config.root),
+            ));
         }
         excluded.extend(exclusions::parsed_file(
             relativize_test_path(&file.path, &config.root),

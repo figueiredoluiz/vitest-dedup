@@ -119,6 +119,19 @@ fn derived_detail(reason: ExclusionReason) -> &'static str {
     }
 }
 
+/// `text` with the analysis root removed from every path it mentions, so a detail sentence never
+/// carries the checkout's absolute location: `<root>/a/b` reads `a/b`, a bare `<root>` reads `.`.
+/// For text built outside the frontend (a skip explanation, an I/O error, a config reason), which
+/// can quote a path where the frontend's own sentences never do.
+pub fn without_root(text: &str, root: &std::path::Path) -> String {
+    let root = root.to_string_lossy();
+    if root.is_empty() {
+        return text.to_owned();
+    }
+    let prefix = format!("{root}{}", std::path::MAIN_SEPARATOR);
+    text.replace(&prefix, "").replace(root.as_ref(), ".")
+}
+
 /// An entry for a file that was never parsed (or only partly considered), with no test counts.
 pub fn unparsed_file(path: PathBuf, reason: ExclusionReason, detail: &str) -> ExcludedFile {
     file_from_reasons(path, vec![(reason, detail.to_owned())])
@@ -230,6 +243,27 @@ mod tests {
         file.tests_excluded = tests;
         file.tests_total = tests;
         file
+    }
+
+    /// A detail sentence never carries the analysis root: a path under it loses the prefix, the root
+    /// alone reads as `.`, and a path elsewhere is untouched.
+    #[test]
+    fn without_root_removes_the_checkout_location_from_text() {
+        let root = std::path::Path::new("/work/proj");
+        let sep = std::path::MAIN_SEPARATOR;
+        let inside = format!("a matches /work/proj{sep}vitest.config.ts and /work/proj");
+        assert_eq!(
+            without_root(&inside, root),
+            "a matches vitest.config.ts and ."
+        );
+        assert_eq!(
+            without_root("see /elsewhere/x.ts", root),
+            "see /elsewhere/x.ts"
+        );
+        assert_eq!(
+            without_root("no paths", std::path::Path::new("")),
+            "no paths"
+        );
     }
 
     /// The code spelling is the serde spelling, for every variant.

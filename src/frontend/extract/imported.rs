@@ -598,6 +598,17 @@ impl<'a> Walker<'a> {
                         "an imported runner could not be fully extracted",
                     ),
                 };
+                // The child may have refused for more than one reason; the caller records the first
+                // as its own refusal, so the rest are carried along for the file's other reasons.
+                for (reason, sentence) in std::mem::take(&mut child.further_refusals) {
+                    if !self
+                        .further_refusals
+                        .iter()
+                        .any(|(held, _)| *held == reason)
+                    {
+                        self.further_refusals.push((reason, sentence));
+                    }
+                }
                 return Some(Err(Refusal {
                     reason: nested,
                     text,
