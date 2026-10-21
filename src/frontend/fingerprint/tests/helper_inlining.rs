@@ -74,6 +74,91 @@ fn a_helper_called_near_the_depth_budget_degrades_instead_of_double_spending_it(
     }
 }
 
+/// `export default name` is inlined like the named forms: two default-identifier helpers in two
+/// modules, spelled differently but alpha-equivalent, give the same `alpha`; a helper whose body
+/// differs does not; and the call renders as an inlined helper, not as an opaque import. Names
+/// that are not a readable helper (`let`, a class, an imported binding, a reassigned function, a
+/// `const` declared after the export) stay opaque.
+#[test]
+fn a_default_identifier_helper_is_inlined_like_a_named_one() {
+    let dir = tempfile::tempdir().unwrap();
+    write_helper(
+        dir.path(),
+        "one.ts",
+        "function check(label) { return label.length > 0; }\nexport default check;",
+    );
+    write_helper(
+        dir.path(),
+        "two.ts",
+        "export default other;\nfunction other(value) { return value.length > 0; }",
+    );
+    write_helper(
+        dir.path(),
+        "three.ts",
+        "export const check = (label) => label.length > 5;\nexport default check;",
+    );
+    write_helper(
+        dir.path(),
+        "four.ts",
+        "const check = (label) => label.length > 0;\nexport default check;",
+    );
+    write_helper(
+        dir.path(),
+        "reassigned.ts",
+        "function check(label) { return label.length > 0; }\nfunction swap() { check = (label) => label.length > 5; }\nexport default check;",
+    );
+    write_helper(
+        dir.path(),
+        "forward.ts",
+        "export default check;\nconst check = (label) => label.length > 0;",
+    );
+    write_helper(
+        dir.path(),
+        "mutable.ts",
+        "let check = (label) => label.length > 0;\nexport default check;",
+    );
+    write_helper(
+        dir.path(),
+        "klass.ts",
+        "class Check { run() {} }\nexport default Check;",
+    );
+    write_helper(
+        dir.path(),
+        "forwarded.ts",
+        "import inner from './one';\nexport default inner;",
+    );
+    let alpha = |specifier: &str| {
+        let source = format!(
+            "import callme from '{specifier}';\ntest('x', () => {{ callme('dashboard'); }});"
+        );
+        let prints = fingerprint_all_at(&source, &dir.path().join("a.test.ts"));
+        assert_eq!(prints.len(), 1, "{source:?}");
+        prints[0].alpha.clone()
+    };
+
+    let one = alpha("./one");
+    assert!(one.contains("helper-inline"), "inlined, got {one}");
+    assert_eq!(one, alpha("./two"), "alpha-equivalent bodies match");
+    // Same shape (arrow, const), one literal apart: only the body can explain the gap.
+    let four = alpha("./four");
+    assert!(four.contains("helper-inline"), "inlined, got {four}");
+    let three = alpha("./three");
+    assert!(three.contains("helper-inline"), "inlined, got {three}");
+    assert_ne!(four, three, "a different body does not match");
+    for opaque in [
+        "./mutable",
+        "./klass",
+        "./forwarded",
+        "./reassigned",
+        "./forward",
+    ] {
+        assert!(
+            !alpha(opaque).contains("helper-inline"),
+            "{opaque} must stay an opaque import"
+        );
+    }
+}
+
 /// The core claim: two helpers, in two different modules, spelled with entirely different
 /// names, whose bodies are alpha-equivalent -- two tests calling them with the same argument
 /// must produce the same `alpha`. Before inlining, the call sites rendered as two different

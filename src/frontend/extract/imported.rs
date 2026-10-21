@@ -991,13 +991,18 @@ fn module_is_inert(
         | Statement::TSInterfaceDeclaration(_)
         | Statement::ExportNamedDeclaration(_)
         | Statement::EmptyStatement(_) => true,
-        Statement::ExportDefaultDeclaration(export) => matches!(
-            &export.declaration,
-            ExportDefaultDeclarationKind::FunctionDeclaration(_)
-                | ExportDefaultDeclarationKind::ArrowFunctionExpression(_)
-                | ExportDefaultDeclarationKind::FunctionExpression(_)
-                | ExportDefaultDeclarationKind::TSInterfaceDeclaration(_)
-        ),
+        Statement::ExportDefaultDeclaration(export) => {
+            matches!(
+                &export.declaration,
+                ExportDefaultDeclarationKind::FunctionDeclaration(_)
+                    | ExportDefaultDeclarationKind::ArrowFunctionExpression(_)
+                    | ExportDefaultDeclarationKind::FunctionExpression(_)
+                    | ExportDefaultDeclarationKind::TSInterfaceDeclaration(_)
+            ) || (matches!(&export.declaration, ExportDefaultDeclarationKind::Identifier(_))
+            // Naming a binding runs nothing only when it names a declared same-file callable:
+            // an undeclared name, a later `const` or a global getter can throw or run code.
+            && helpers::find_export(program, "default").is_some())
+        }
         Statement::ExportDeclaration(export) => match &export.declaration {
             Declaration::FunctionDeclaration(_)
             | Declaration::TSTypeAliasDeclaration(_)

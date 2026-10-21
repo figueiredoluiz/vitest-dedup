@@ -503,6 +503,100 @@ fn inert_barrels_are_required_and_concise_imported_suites_keep_static_titles() {
     assert!(refused.incomplete);
 }
 
+/// A default export of a name is read like `export { name as default }`: same-file function
+/// declarations (before or after the export statement) and `const` callables declared before it,
+/// exported or not.
+#[test]
+fn a_default_export_of_a_name_is_read_like_an_alias() {
+    let helpers = [
+        "const run = () => { test('inside', () => {}); }; export default run;",
+        "export default run; function run() { test('inside', () => {}); }",
+        "export const run = () => { test('inside', () => {}); }; export default run;",
+        "export function run() { test('inside', () => {}); } export default run;",
+        "const other = function () { test('inside', () => {}); }; export default other;",
+    ];
+    for helper in helpers {
+        let case = RunnerCase::new(
+            &format!("import {{ test }} from 'vitest'; {helper}"),
+            "run();",
+        );
+        let source = case.source.replace("import { run }", "import run");
+        let extraction = extract(&source, &case.file, Globals::Disabled);
+        assert_eq!(
+            extraction.tests.len(),
+            1,
+            "{helper}: {:?}",
+            extraction.diagnostics
+        );
+        assert_eq!(extraction.tests[0].full_title(), "inside", "{helper}");
+        assert!(
+            !extraction.incomplete,
+            "{helper}: {:?}",
+            extraction.diagnostics
+        );
+    }
+}
+
+/// A default-exported name that is not a readable runner stays refused, with the file set aside.
+#[test]
+fn a_default_export_of_an_unreadable_name_is_refused() {
+    let helpers = [
+        "let run = () => { test('inside', () => {}); }; export default run;",
+        "var run = () => { test('inside', () => {}); }; export default run;",
+        "function run() { test('inside', () => {}); } run = () => {}; export default run;",
+        "function run() { test('inside', () => {}); } function swap() { run = () => {}; } export default run;",
+        "export default run; const run = () => { test('inside', () => {}); };",
+        "class run { static go() { test('inside', () => {}); } } export default run;",
+        "import inner from './inner'; export default inner;",
+        "const run = { go() { test('inside', () => {}); } }; export default run;",
+        "const run = makeRunner(); export default run;",
+        "const run = async () => { test('inside', () => {}); }; export default run;",
+        "export default undeclared;",
+    ];
+    for helper in helpers {
+        let case = RunnerCase::new(
+            &format!("import {{ test }} from 'vitest'; {helper}"),
+            "run();",
+        );
+        std::fs::write(
+            case.directory.path().join("inner.ts"),
+            "import { test } from 'vitest'; export default function inner() { test('inside', () => {}); }",
+        )
+        .unwrap();
+        let source = case.source.replace("import { run }", "import run");
+        let extraction = extract(&source, &case.file, Globals::Disabled);
+        assert_eq!(extraction.tests.len(), 0, "{helper}");
+        assert!(extraction.incomplete, "{helper}");
+    }
+}
+
+/// A default export that evaluates a name which is no readable callable can throw or run code at
+/// module load, so a named runner in the same module is refused with it.
+#[test]
+fn a_named_runner_beside_an_unreadable_default_export_is_refused() {
+    let tail = [
+        "export default undeclared;",
+        "export default later; const later = () => {};",
+        "export default Math;",
+        "declare function absent(): void; export default absent;",
+    ];
+    for tail in tail {
+        let case = RunnerCase::new(
+            &format!("import {{ test }} from 'vitest'; export function run() {{ test('inside', () => {{}}); }} {tail}"),
+            "run();",
+        );
+        let extraction = extract(&case.source, &case.file, Globals::Disabled);
+        assert_eq!(extraction.tests.len(), 0, "{tail}");
+        assert!(extraction.incomplete, "{tail}");
+    }
+    let readable = RunnerCase::new(
+        "import { test } from 'vitest'; export function run() { test('inside', () => {}); } function other() {} export default other;",
+        "run();",
+    );
+    let extraction = extract(&readable.source, &readable.file, Globals::Disabled);
+    assert_eq!(extraction.tests.len(), 1, "{:?}", extraction.diagnostics);
+}
+
 #[test]
 /// Exercises unsupported callable, namespace, invocation and nested-call forms.
 fn default_namespace_spread_and_opaque_nested_callables_are_explicitly_refused() {

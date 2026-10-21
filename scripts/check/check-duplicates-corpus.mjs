@@ -515,8 +515,6 @@ const DELIBERATE_BLIND_FILES = new Set([
   'recall/framework-package-mock-call/users.test.ts',
   'recall/framework-package-mock-factory-differs-negative/evening.test.ts',
   'recall/framework-package-mock-factory-differs-negative/morning.test.ts',
-  'recall/framework-runner-default-const-negative/slugs.test.ts',
-  'recall/framework-runner-default-const/slugs.test.ts',
   'recall/framework-setup-helper-shapes/branch.test.ts',
   'recall/framework-setup-helper-shapes/foreach.test.ts',
   'recall/framework-setup-helper-shapes/globalcall.test.ts',
@@ -524,6 +522,11 @@ const DELIBERATE_BLIND_FILES = new Set([
   'recall/framework-setup-helper-shapes/memberassign.test.ts',
   'recall/framework-setup-helper-shapes/objectkeys.test.ts',
   'recall/framework-setup-helper-shapes/spy.test.ts',
+  // Default exports a runner must keep refusing (a `let`, a reassigned declaration, an imported
+  // binding): blind on purpose, permanently, as the controls for the default-identifier support.
+  'recall/framework-runner-default-imported-negative/slugs.test.ts',
+  'recall/framework-runner-default-let-negative/slugs.test.ts',
+  'recall/framework-runner-default-reassigned-negative/slugs.test.ts',
 ])
 
 /**
