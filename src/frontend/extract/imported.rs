@@ -590,21 +590,21 @@ impl<'a> Walker<'a> {
                 // The nested cause travels with the code: the child's own first refusal names what
                 // could not be read, so the outer sentence says that instead of only that
                 // something failed.
-                let text = match &child.first_helper_refusal_text {
-                    Some(inner) => std::borrow::Cow::Owned(format!(
-                        "an imported runner could not be fully extracted: {inner}"
-                    )),
-                    None => std::borrow::Cow::Borrowed(
-                        "an imported runner could not be fully extracted",
-                    ),
-                };
+                let text = child.first_helper_refusal_text.as_deref().map_or(
+                    std::borrow::Cow::Borrowed("an imported runner could not be fully extracted"),
+                    |inner| {
+                        std::borrow::Cow::Owned(format!(
+                            "an imported runner could not be fully extracted: {inner}"
+                        ))
+                    },
+                );
                 // The child may have refused for more than one reason; the caller records the first
                 // as its own refusal, so the rest are carried along for the file's other reasons.
                 for (reason, sentence) in std::mem::take(&mut child.further_refusals) {
-                    if !self
+                    if self
                         .further_refusals
                         .iter()
-                        .any(|(held, _)| *held == reason)
+                        .all(|(held, _)| *held != reason)
                     {
                         self.further_refusals.push((reason, sentence));
                     }
