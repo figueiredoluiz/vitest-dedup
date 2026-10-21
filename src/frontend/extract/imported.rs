@@ -587,10 +587,21 @@ impl<'a> Walker<'a> {
                     .first()
                     .copied()
                     .unwrap_or(ExclusionReason::HelperExportUnreadable);
-                return Some(Err(refusal(
-                    nested,
-                    "an imported runner could not be fully extracted",
-                )));
+                // The nested cause travels with the code: the child's own first refusal names what
+                // could not be read, so the outer sentence says that instead of only that
+                // something failed.
+                let text = match &child.first_helper_refusal_text {
+                    Some(inner) => std::borrow::Cow::Owned(format!(
+                        "an imported runner could not be fully extracted: {inner}"
+                    )),
+                    None => std::borrow::Cow::Borrowed(
+                        "an imported runner could not be fully extracted",
+                    ),
+                };
+                return Some(Err(Refusal {
+                    reason: nested,
+                    text,
+                }));
             }
             let registers_hooks = prepare && hook_count(child.hook_scopes.last()) > hooks_before;
             if registers_hooks {

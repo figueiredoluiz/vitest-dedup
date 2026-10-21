@@ -376,13 +376,30 @@ fn a_second_distinct_helper_refusal_is_kept_beside_the_first() {
 /// A runner refused inside another runner keeps the inner refusal code.
 #[test]
 fn a_nested_runner_refusal_keeps_its_own_code() {
-    scenario(
-        &[
-            ("helpers/rec.ts", "import { test, expect } from 'vitest';\nexport function run() { run(); test('x', () => { expect(1).toBe(1); }); }\n"),
-            ("rec.test.ts", "import { run } from './helpers/rec';\nrun();\n"),
-        ],
-        &[],
-        &[Expect { path: "rec.test.ts", reason: "helper-limit", others: &[], excluded: 0, total: 0 }],
+    let directory = tempfile::tempdir().unwrap();
+    write(directory.path(), "clean.test.ts", CLEAN);
+    write(directory.path(), "helpers/rec.ts", "import { test, expect } from 'vitest';\nexport function run() { run(); test('x', () => { expect(1).toBe(1); }); }\n");
+    write(
+        directory.path(),
+        "rec.test.ts",
+        "import { run } from './helpers/rec';\nrun();\n",
+    );
+    let run = run(directory.path(), &[]);
+    assert_listed(
+        &run,
+        &[Expect {
+            path: "rec.test.ts",
+            reason: "helper-limit",
+            others: &[],
+            excluded: 0,
+            total: 0,
+        }],
+    );
+    // The outer sentence carries the nested cause, not only the fact that extraction failed.
+    let detail = run.json["excludedFiles"][0]["detail"].as_str().unwrap();
+    assert!(
+        detail.contains("could not be fully extracted:") && detail.contains("calls itself"),
+        "{detail}"
     );
 }
 

@@ -46,15 +46,18 @@ use super::registry::{
 use super::FileExtraction;
 
 /// A helper-expansion refusal: the closed reason code beside the sentence the terminal prints.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct Refusal {
     reason: ExclusionReason,
-    text: &'static str,
+    text: std::borrow::Cow<'static, str>,
 }
 
 /// Builds a [`Refusal`]; every refusal site names its own code.
 const fn refusal(reason: ExclusionReason, text: &'static str) -> Refusal {
-    Refusal { reason, text }
+    Refusal {
+        reason,
+        text: std::borrow::Cow::Borrowed(text),
+    }
 }
 
 /// Parses `source` and extracts every Vitest declaration it can prove statically.
@@ -1070,6 +1073,8 @@ struct Walker<'a> {
     /// became the file's diagnostic. Kept apart from [`Walker::reasons`], which also holds
     /// reasons that are not helper refusals.
     helper_refusal_reasons: Vec<ExclusionReason>,
+    /// The text of the first helper refusal, for a caller that nests this walker's refusal in its own.
+    first_helper_refusal_text: Option<String>,
     /// Distinct reasons refused after the first, with their sentences; see
     /// [`FileExtraction::further_refusals`].
     further_refusals: Vec<(ExclusionReason, String)>,
@@ -1129,6 +1134,7 @@ impl<'a> Walker<'a> {
             registration_file: None,
             helper_refusal_reported: false,
             helper_refusal_reasons: Vec::new(),
+            first_helper_refusal_text: None,
             further_refusals: Vec::new(),
             #[cfg(test)]
             helper_refusal_taint_visits: 0,
@@ -2125,6 +2131,7 @@ impl<'a> Walker<'a> {
         }
         self.helper_refusal_reported = true;
         self.helper_refusal_reasons.push(refusal.reason);
+        self.first_helper_refusal_text = Some(refusal.text.to_string());
         // No path in the text. `FileExtraction::diagnostics` reaches callers that prefix every
         // entry with the file's own relativized path (see this module's header), so embedding one
         // printed the file twice -- once relative, once ABSOLUTE, which is the S12 leak this
