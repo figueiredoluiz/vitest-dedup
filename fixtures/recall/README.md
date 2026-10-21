@@ -146,12 +146,58 @@ participants, never on the same pair:
 The exclusivity facts above are asserted by each covering case's `expectedAbsent` entries, not
 just recorded in this table.
 
+## Framework application shapes
+
+Projects built on a framework with generated files and auto-imports reach the analyzer through
+shapes that plain Vitest projects do not. Each case below holds a duplicate pair that is wanted once
+the shape is understood, and a control that fails if the shape is handled by marking every helper
+inert or by disabling detection. Names are invented, apart from a generated `.nuxt` directory where the shape depends on it. "Today" is what the shipped analyzer does;
+a known miss records the wanted finding and the extraction counts it will change.
+
+| Shape | Cases | Wanted | Today |
+| --- | --- | --- | --- |
+| Runner exported as `const f = ...; export default f` | `framework-runner-default-const` (+ `-negative`) | the runner's test is extracted and pairs with the hand-written one; a pair that differs stays silent | the file is not compared (1 of 2 tests extracted) |
+| Runner exported as `export { f as default }`, or by name | `framework-runner-default-alias-control`, `framework-runner-named-control` | unchanged: found | found |
+| Setup helper whose body calls an auto-imported global, branches, loops with `forEach` or `Object.keys(...).forEach`, assigns a member, spies, or declares a local constant | `framework-setup-helper-shapes` (one file per trait) | a helper that registers nothing and cannot change what a test computes does not exclude the file; identical tests are reported | every file is not compared |
+| Same, empty helper | `framework-setup-helper-empty-control` | found | found |
+| Helper that registers a per-test spy through hooks, called in one suite only | `framework-setup-helper-spy-context-negative` | the hooks are part of the context: the suites never pair | as wanted: compared and distinct. A control for any change that treats helpers as inert |
+| Top-level call of an installed package's mocking API (`mockImport(name, factory)`, `registerEndpoint(url, handler)`) | `framework-package-mock-call` | static name plus inline factory read as mock declarations; identical pair reported | not compared |
+| Same calls, package not installed | `framework-package-mock-call-uninstalled` | stays not compared, and the run names the missing package | not compared |
+| Same calls, different factories in two files | `framework-package-mock-factory-differs-negative` | the factory is part of the context: never paired | not compared |
+| Call into a mock module that runs `vi.hoisted`/`vi.mock` at module level | `framework-mock-module-effects` | module effects are context: each file's pair is reported, the two files never pair | not compared |
+| Same module imported for its effects only | `framework-mock-module-import-control` | each file's pair found; files with different mock modules never pair | pairs found; the two files are paired wrongly (known false positive) |
+| Helper that registers `beforeAll`/`afterAll` over module state (server setup) | `framework-hook-helper-server` | hooks are context shared by both tests; pair reported | not compared |
+| Same hooks with inline callbacks, no module state | `framework-hook-helper-inline-control` | found | found |
+| Hook-registering helper called in one suite only | `framework-hook-helper-context-negative` | the hook is part of the context: never paired | compared, distinct |
+| `extends` of a generated tsconfig whose `paths` map `~` and `~/*` to the parent directory | `framework-tsconfig-extends-generated` | alias followed: pair reported | found |
+| Generated parent absent | `framework-tsconfig-extends-missing` | silent, and the run says which file is missing and what creates it | as wanted: silent, incomplete, the missing file named |
+| Analysis root below the generated parent's directory | `framework-tsconfig-extends-outside-root` | silent, and the run names the alias target outside the root | silent; the run reports incomplete, and the excluded-file list names `import-outside-root` |
+| Auto-imported name called at the top level of a test file | `framework-auto-import-top-level` | resolved to its export; pair reported | found (an undeclared name is ignored) |
+| Auto-imported name called inside a setup helper | `framework-auto-import-in-helper` | resolved to its export; pair reported. A name declared nowhere stays not compared | not compared |
+| Parent ignore file with an unanchored directory name | `framework-nested-repository-ignore-control` | see below | `api/` ignored, as git does |
+
+A nested repository cannot be a fixture: git refuses to track a `.git` entry. The control case is the
+same tree without one, where the parent's `api` rule rightly removes `project/api/`. To reproduce the
+nested case, copy the case directory to a scratch location, run `git init` in the copy's outer
+directory and again in `project/`, and analyze the outer directory: both `project/api/` and
+`project/web/` must be analyzed (four tests, two in-file pairs and one cross-file pair), because the parent's rule stops at
+the inner repository's root. Rust tests in `src/discovery.rs` build that layout at run time.
+
+The cases assert today's counts (`expectedTests`, `expectedIncomplete`, `expectedUnresolved`), so a
+fix that changes eligibility fails the case until its labels move. Under real Vitest (a scratch
+config defining the auto-imported globals, and a `~` alias for the tsconfig case) every case passes
+except the three that depend on something missing by design: the uninstalled package, the absent
+generated parent and the analysis root below it.
+
 ## The floor
 
 `minimumRecall` is the measured value rounded down, not the target: a gate that is red on arrival
 gets routed around, after which the number it guards is worse than unmeasured. `recallDestination`
-records the destination. The corpus currently detects every one of its 123 desired findings, so
-both measured recall and the enforced floor are 100%, with `knownMissBaseline: 0`.
+records the destination. The corpus currently detects 145 of its 158 desired findings (91.8%), so
+`minimumRecall` is 0.917; the 13 missing are the known misses of the framework cases above, so
+`knownMissBaseline` is 13. Each change that finds one of them moves its entry from `knownMisses` to
+`expectedFindings`, lowers the baseline and raises `minimumRecall` to the new measured value in the
+same commit.
 
 ## Evaluating a binary
 
