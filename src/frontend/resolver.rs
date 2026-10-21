@@ -105,9 +105,27 @@ pub fn take_resolution_gaps() -> ResolutionGaps {
     )
 }
 
-/// Node core modules that are imported without the `node:` prefix and are never installed.
+/// Node core module specifiers that are imported without the `node:` prefix and are never installed:
+/// `module.builtinModules` of Node 26 without its prefixed entries, plus the `_stream_*` names that
+/// earlier versions still list. Matched exactly, subpaths included, so `fs/promises` is a builtin
+/// and `fs/not-real` is a package lookup.
 const NODE_BUILTINS: &[&str] = &[
+    "_http_agent",
+    "_http_client",
+    "_http_common",
+    "_http_incoming",
+    "_http_outgoing",
+    "_http_server",
+    "_tls_common",
+    "_stream_duplex",
+    "_stream_passthrough",
+    "_stream_readable",
+    "_stream_transform",
+    "_stream_wrap",
+    "_stream_writable",
+    "_tls_wrap",
     "assert",
+    "assert/strict",
     "async_hooks",
     "buffer",
     "child_process",
@@ -118,32 +136,43 @@ const NODE_BUILTINS: &[&str] = &[
     "dgram",
     "diagnostics_channel",
     "dns",
+    "dns/promises",
     "domain",
     "events",
     "fs",
+    "fs/promises",
     "http",
     "http2",
     "https",
     "inspector",
+    "inspector/promises",
     "module",
     "net",
     "os",
     "path",
+    "path/posix",
+    "path/win32",
     "perf_hooks",
     "process",
     "punycode",
     "querystring",
     "readline",
+    "readline/promises",
     "repl",
     "stream",
+    "stream/consumers",
+    "stream/promises",
+    "stream/web",
     "string_decoder",
     "sys",
     "timers",
+    "timers/promises",
     "tls",
     "trace_events",
     "tty",
     "url",
     "util",
+    "util/types",
     "v8",
     "vm",
     "wasi",
@@ -160,7 +189,7 @@ fn is_package_specifier(specifier: &str) -> bool {
         || specifier.starts_with('/')
         || specifier.starts_with('#')
         || specifier.starts_with("node:")
-        || NODE_BUILTINS.contains(&specifier.split('/').next().unwrap_or(specifier))
+        || NODE_BUILTINS.contains(&specifier)
         || specifier == "vitest"
         || specifier.starts_with("vitest/")
         || specifier.starts_with("@vitest/"))
@@ -424,6 +453,8 @@ mod tests {
             "test/reporters",
             "left-pad",
             "@scope/pkg",
+            "fs/not-real",
+            "path/nope",
         ] {
             assert!(is_package_specifier(package), "{package}");
         }
@@ -434,6 +465,12 @@ mod tests {
             "fs",
             "fs/promises",
             "path",
+            "path/posix",
+            "assert/strict",
+            "stream/consumers",
+            "_http_agent",
+            "_tls_wrap",
+            "_stream_readable",
             ".",
             "./x",
             "/x",

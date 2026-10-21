@@ -46,10 +46,11 @@ pub fn assess(root: &Path, gaps: &ResolutionGaps) -> Vec<MissingPrerequisite> {
                 TsconfigGap::Absent(target) => (PrerequisiteKind::TsconfigExtends, target),
                 TsconfigGap::Unreadable(target) => (PrerequisiteKind::TsconfigUnreadable, target),
             };
-            let path = display(target, root);
+            let raw = displayed(target, root);
+            let path = crate::reporters::terminal_safe(&raw);
             let fix = match kind {
                 PrerequisiteKind::TsconfigExtends if !target.is_absolute() => install_fix(root),
-                PrerequisiteKind::TsconfigExtends if generated_by_nuxt(&path, root, &manifest) => {
+                PrerequisiteKind::TsconfigExtends if generated_by_nuxt(&raw, root, &manifest) => {
                     "nuxt prepare".to_string()
                 }
                 _ => GENERIC_FIX.to_string(),
@@ -75,10 +76,11 @@ pub fn assess(root: &Path, gaps: &ResolutionGaps) -> Vec<MissingPrerequisite> {
     missing
 }
 
-/// A path as the reports show it: relative to the root with forward slashes (`..` segments when
-/// it lies outside, so no machine-specific prefix is printed), control characters replaced, since
-/// it is repository-controlled text that reaches the terminal.
-fn display(path: &Path, root: &Path) -> String {
+/// A path as the reports show it, before sanitizing: relative to the root with forward slashes
+/// (`..` segments when it lies outside, so no machine-specific prefix is printed). Callers that
+/// need the path's real components (the Nuxt check) use this; what is printed goes through
+/// `terminal_safe` first, since it is repository-controlled text.
+fn displayed(path: &Path, root: &Path) -> String {
     let relative = if path.is_absolute() {
         let shared = path
             .components()
@@ -97,9 +99,7 @@ fn display(path: &Path, root: &Path) -> String {
     } else {
         path.to_path_buf()
     };
-    // The reports' own sanitizer: controls, bidi and other format characters and the line and
-    // paragraph separators are dropped, as for every other repository-controlled path.
-    crate::reporters::terminal_safe(&relative.to_string_lossy().replace('\\', "/"))
+    relative.to_string_lossy().replace('\\', "/")
 }
 
 /// Whether the missing file sits in `.nuxt` and the project is recognizably a Nuxt one.
@@ -273,6 +273,31 @@ mod tests {
         );
         assert_eq!(missing[0].kind, PrerequisiteKind::TsconfigUnreadable);
         assert_eq!(missing[0].path, "a[2Jb.json");
+    }
+
+    /// The generator is chosen from the real path, not the sanitized one: a zero-width character
+    /// inside `.nuxt` makes it a different directory, which `nuxt prepare` would not create.
+    #[test]
+    fn a_sanitized_name_does_not_turn_into_a_nuxt_path() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        fs::write(
+            root.join("package.json"),
+            r#"{"devDependencies":{"nuxt":"3"}}"#,
+        )
+        .unwrap();
+        let missing = assess(
+            root,
+            &gaps(
+                vec![(
+                    TsconfigGap::Absent(root.join(".nu\u{200b}xt/tsconfig.json")),
+                    1,
+                )],
+                0,
+            ),
+        );
+        assert_eq!(missing[0].path, ".nuxt/tsconfig.json");
+        assert_eq!(missing[0].fix, GENERIC_FIX);
     }
 
     /// A name with bidi, line-separator and zero-width characters reaches no report unchanged.
