@@ -1811,9 +1811,10 @@ impl MissingPrerequisite {
                 self.path
             ),
             PrerequisiteKind::NodeModules => format!(
-                "`node_modules` is missing or empty although package.json lists dependencies: \
+                "`{}` is missing or empty although package.json lists dependencies: \
                  imports of installed packages cannot be resolved ({imports} import(s) stayed \
-                 unresolved). {advice}"
+                 unresolved). {advice}",
+                self.path
             ),
         }
     }

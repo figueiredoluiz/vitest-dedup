@@ -84,8 +84,10 @@ pub struct ResolutionGaps {
     /// Failed resolutions per unusable tsconfig. A tsconfig that cannot be loaded fails every
     /// resolution under it, relative specifiers included.
     pub tsconfig: BTreeMap<TsconfigGap, usize>,
-    /// Package-style specifiers (not relative, absolute, `vitest` or `node:`) that were not found.
-    pub packages_not_found: usize,
+    /// Package-style specifiers (not relative, absolute, `vitest` or `node:`) that were not found,
+    /// per directory of the importing file: the manifest that governs a file is its directory's
+    /// business, so the count is kept where it can be attributed.
+    pub packages_not_found: BTreeMap<PathBuf, usize>,
 }
 
 /// Process-wide on purpose: extraction runs on worker threads and the run drains the total once.
@@ -93,7 +95,7 @@ pub struct ResolutionGaps {
 /// their gaps mixed.
 static GAPS: Mutex<ResolutionGaps> = Mutex::new(ResolutionGaps {
     tsconfig: BTreeMap::new(),
-    packages_not_found: 0,
+    packages_not_found: BTreeMap::new(),
 });
 
 /// Takes and clears the gaps recorded since the last call.
@@ -225,7 +227,7 @@ fn is_package_specifier(specifier: &str) -> bool {
 }
 
 /// Records why a resolution failed when the cause is an absent prerequisite.
-fn record_failure(specifier: &str, error: &oxc_resolver::ResolveError) {
+fn record_failure(importing_file: &Path, specifier: &str, error: &oxc_resolver::ResolveError) {
     use oxc_resolver::ResolveError;
     let gap = match error {
         ResolveError::TsconfigNotFound(target) => Some(TsconfigGap::Absent(target.clone())),
@@ -243,7 +245,11 @@ fn record_failure(specifier: &str, error: &oxc_resolver::ResolveError) {
     match gap {
         Some(gap) => *gaps.tsconfig.entry(gap).or_insert(0) += 1,
         None if matches!(error, ResolveError::NotFound(_)) && is_package_specifier(specifier) => {
-            gaps.packages_not_found += 1;
+            let directory = importing_file.parent().unwrap_or(importing_file);
+            *gaps
+                .packages_not_found
+                .entry(directory.to_path_buf())
+                .or_insert(0) += 1;
         }
         None => {}
     }
@@ -343,7 +349,7 @@ pub(super) fn resolve(importing_file: &Path, specifier: &str) -> Resolved {
             |resolver| match resolver.resolve_file(importing_file, specifier) {
                 Ok(resolution) => Resolved::Module(resolution.into_path_buf()),
                 Err(error) => {
-                    record_failure(specifier, &error);
+                    record_failure(importing_file, specifier, &error);
                     Resolved::Unresolved
                 }
             },
@@ -586,10 +592,18 @@ mod tests {
             path: path.to_path_buf(),
             source: Box::new(ResolveError::TsconfigNotFound(path.to_path_buf())),
         };
-        record_failure("./x", &ResolveError::TsconfigNotFound(missing_a.clone()));
-        record_failure("./x", &load_failed(&missing_b));
-        record_failure("./x", &load_failed(&present));
-        record_failure("./x", &ResolveError::Ignored(missing_a.clone()));
+        record_failure(
+            Path::new("/p/a.test.ts"),
+            "./x",
+            &ResolveError::TsconfigNotFound(missing_a.clone()),
+        );
+        record_failure(Path::new("/p/a.test.ts"), "./x", &load_failed(&missing_b));
+        record_failure(Path::new("/p/a.test.ts"), "./x", &load_failed(&present));
+        record_failure(
+            Path::new("/p/a.test.ts"),
+            "./x",
+            &ResolveError::Ignored(missing_a.clone()),
+        );
         let gaps = take_resolution_gaps();
         assert_eq!(gaps.tsconfig.get(&TsconfigGap::Absent(missing_a)), Some(&1));
         assert_eq!(gaps.tsconfig.get(&TsconfigGap::Absent(missing_b)), Some(&1));

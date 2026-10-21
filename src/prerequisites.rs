@@ -8,6 +8,7 @@
 
 use crate::frontend::{ResolutionGaps, TsconfigGap};
 use crate::model::{MissingPrerequisite, PrerequisiteKind};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 /// The lockfiles that imply an install command, in priority order.
@@ -64,16 +65,41 @@ pub fn assess(root: &Path, gaps: &ResolutionGaps) -> Vec<MissingPrerequisite> {
         })
         .collect();
     missing.sort_by(|a, b| a.path.cmp(&b.path));
-    if gaps.packages_not_found > 0 && lists_dependencies(&manifest) && !has_installed_packages(root)
-    {
-        missing.push(MissingPrerequisite {
-            kind: PrerequisiteKind::NodeModules,
-            path: "node_modules".to_string(),
-            fix: install_fix(root),
-            unresolved_imports: gaps.packages_not_found,
-        });
-    }
+    missing.extend(missing_installs(root, gaps));
     missing
+}
+
+/// One `node_modules` entry per project directory that lists dependencies and had a package import
+/// fail in a file with no install on its upward walk, ordered by path.
+fn missing_installs(root: &Path, gaps: &ResolutionGaps) -> Vec<MissingPrerequisite> {
+    // A file belongs to the nearest manifest that lists dependencies: a member that lists none
+    // relies on what an ancestor installs, as Node's upward `node_modules` lookup does.
+    let mut by_project: BTreeMap<&Path, usize> = BTreeMap::new();
+    for (directory, count) in &gaps.packages_not_found {
+        // Node resolves upward from the importing file, so an install anywhere on that walk,
+        // below the manifest included, means the project was installed.
+        if has_installed_packages(directory) {
+            continue;
+        }
+        let governing = directory.ancestors().find(|candidate| {
+            std::fs::read_to_string(candidate.join("package.json"))
+                .is_ok_and(|manifest| lists_dependencies(&manifest))
+        });
+        if let Some(governing) = governing {
+            *by_project.entry(governing).or_insert(0) += *count;
+        }
+    }
+    let mut entries: Vec<MissingPrerequisite> = by_project
+        .into_iter()
+        .map(|(project, count)| MissingPrerequisite {
+            kind: PrerequisiteKind::NodeModules,
+            path: crate::reporters::terminal_safe(&displayed(&project.join("node_modules"), root)),
+            fix: install_fix(project),
+            unresolved_imports: count,
+        })
+        .collect();
+    entries.sort_by(|a, b| a.path.cmp(&b.path));
+    entries
 }
 
 /// A path as the reports show it, before sanitizing: relative to the root with forward slashes
@@ -157,11 +183,27 @@ mod tests {
     use crate::model::IncompleteCauses;
     use std::fs;
 
-    /// Builds the gaps the resolver would have recorded.
+    /// Builds the tsconfig gaps the resolver would have recorded.
     fn gaps(tsconfig: Vec<(TsconfigGap, usize)>, packages: usize) -> ResolutionGaps {
+        assert_eq!(
+            packages, 0,
+            "package failures need a directory: use gaps_at"
+        );
         ResolutionGaps {
             tsconfig: tsconfig.into_iter().collect(),
-            packages_not_found: packages,
+            packages_not_found: BTreeMap::new(),
+        }
+    }
+
+    /// `count` failed package imports under `directory`.
+    fn gaps_at(directory: &Path, count: usize) -> ResolutionGaps {
+        ResolutionGaps {
+            tsconfig: BTreeMap::new(),
+            packages_not_found: if count == 0 {
+                BTreeMap::new()
+            } else {
+                BTreeMap::from([(directory.to_path_buf(), count)])
+            },
         }
     }
 
@@ -184,7 +226,7 @@ mod tests {
         let root = directory.path();
         fs::write(root.join("package.json"), r#"{"dependencies":{"a":"1"}}"#).unwrap();
         fs::write(root.join("bun.lockb"), "").unwrap();
-        let missing = assess(root, &gaps(vec![], 3));
+        let missing = assess(root, &gaps_at(root, 3));
         assert_eq!(missing[0].fix, "bun install");
         assert_eq!(missing[0].unresolved_imports, 3);
     }
@@ -197,7 +239,7 @@ mod tests {
         fs::write(root.join("package.json"), r#"{"dependencies":{"a":"1"}}"#).unwrap();
         fs::write(root.join("package-lock.json"), "").unwrap();
         fs::write(root.join("pnpm-lock.yaml"), "").unwrap();
-        assert_eq!(assess(root, &gaps(vec![], 1))[0].fix, "pnpm install");
+        assert_eq!(assess(root, &gaps_at(root, 1))[0].fix, "pnpm install");
     }
 
     /// A lockfile above the repository root is not this project's.
@@ -209,7 +251,7 @@ mod tests {
         let root = outer.join("inner");
         fs::create_dir_all(root.join(".git")).unwrap();
         fs::write(root.join("package.json"), r#"{"dependencies":{"a":"1"}}"#).unwrap();
-        assert_eq!(assess(&root, &gaps(vec![], 1))[0].fix, NO_MANAGER_FIX);
+        assert_eq!(assess(&root, &gaps_at(&root, 1))[0].fix, NO_MANAGER_FIX);
     }
 
     /// `nuxt prepare` needs a `.nuxt` path component and Nuxt evidence in the project.
@@ -317,17 +359,17 @@ mod tests {
         let root = directory.path();
         fs::write(root.join("package.json"), r#"{"name":"lib"}"#).unwrap();
         assert!(
-            assess(root, &gaps(vec![], 5)).is_empty(),
+            assess(root, &gaps_at(root, 5)).is_empty(),
             "no dependencies listed"
         );
         fs::write(root.join("package.json"), r#"{"dependencies":{"a":"1"}}"#).unwrap();
         assert!(
-            assess(root, &gaps(vec![], 0)).is_empty(),
+            assess(root, &gaps_at(root, 0)).is_empty(),
             "no package import failed"
         );
-        assert_eq!(assess(root, &gaps(vec![], 1)).len(), 1);
+        assert_eq!(assess(root, &gaps_at(root, 1)).len(), 1);
         fs::create_dir_all(root.join("node_modules/a")).unwrap();
-        assert!(assess(root, &gaps(vec![], 1)).is_empty(), "installed");
+        assert!(assess(root, &gaps_at(root, 1)).is_empty(), "installed");
     }
 
     /// A prerequisite makes the run incomplete as a `reads` cause, not a `limits` one.
