@@ -337,7 +337,7 @@ const JS_MODULES = {
   'scripts/check/lib/equivalence-shim.mjs': 100,
   // The driver's `main` builds a baseline with Cargo and runs the Rust test executables, which no
   // unit test does; argument parsing and tag selection are the covered part.
-  'scripts/check/check-output-equivalence.mjs': 43,
+  'scripts/check/check-output-equivalence.mjs': 46,
   'scripts/check/lib/manifest-schema.mjs': 100,
   // Reached only as a dependency of `memory-record.mjs`, which imports it for the exit-code
   // contract. Its own callers all spawn a release binary, so the covered lines are the parsing

@@ -46,8 +46,17 @@ test('every scripted suite names a gate that exists and receives the shim', () =
   }
 })
 
-test('the newest listed tag is chosen and an empty list is refused', { skip: POSIX_ONLY }, () => {
+test('the newest stable release tag is chosen and an empty list is refused', () => {
   assert.equal(newestReleaseTag('v0.6.0\nv0.5.1\nv0.5.0\n'), 'v0.6.0')
+  // Numeric order, whatever order Git listed them in.
+  assert.equal(newestReleaseTag('v0.9.0\nv0.10.0\nv0.2.11\n'), 'v0.10.0')
+  assert.equal(newestReleaseTag('v1.0.0\nv0.99.99\n'), 'v1.0.0')
+  assert.equal(newestReleaseTag('  v0.6.0  \n'), 'v0.6.0')
+  // A prerelease is never a baseline, even listed first or newer than every release.
+  assert.equal(newestReleaseTag('v0.7.0-rc.1\nv0.6.0\n'), 'v0.6.0')
+  assert.equal(newestReleaseTag('v0.11.0-rc.1\nv0.10.0-rc.1\nv0.10.0\nv0.9.0\n'), 'v0.10.0')
+  assert.equal(newestReleaseTag('v0.7.0-rc.1\nv0.6.0+build.5\nv0.6.0\nv0.5.0\nv0.5.0-beta\n'), 'v0.6.0')
+  assert.throws(() => newestReleaseTag('v0.7.0-rc.1\n'), /no release tag is reachable/)
   assert.throws(() => newestReleaseTag(''), /no release tag is reachable/)
   assert.throws(() => newestReleaseTag('\n'), /no release tag is reachable/)
 })

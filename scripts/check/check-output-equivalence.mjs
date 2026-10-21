@@ -76,17 +76,29 @@ function run(command, args, options = {}) {
 }
 
 /**
- * The newest release tag reachable from HEAD: the behavior every change is held to, so it follows
- * each release instead of going stale like a pinned one. `git describe` would pick the nearest tag,
- * not the highest version.
+ * The newest release tag among `listed` (one per line, as `git tag --list` prints them): the
+ * behavior every change is held to, so it follows each release instead of going stale like a pinned
+ * one. Only `vMAJOR.MINOR.PATCH` is a release; a prerelease such as `v0.7.0-rc.1` is never a
+ * baseline, and the order is numeric here rather than whatever Git's version sort is configured to.
  */
 export function newestReleaseTag(listed) {
-  const tag = listed.split('\n')[0].trim()
+  const releases = listed
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => /^v\d+\.\d+\.\d+$/.test(line))
+  const numbers = (tag) => tag.slice(1).split('.').map(Number)
+  /** Orders two release tags by major, then minor, then patch. */
+  const byVersion = (a, b) => {
+    const [left, right] = [numbers(a), numbers(b)]
+    const differing = left.findIndex((part, index) => part !== right[index])
+    return differing === -1 ? 0 : right[differing] - left[differing]
+  }
+  releases.sort(byVersion)
   assert.ok(
-    tag,
+    releases.length > 0,
     'no release tag is reachable from HEAD; pass --ref REF, or fetch tags with `git fetch --tags --unshallow`',
   )
-  return tag
+  return releases[0]
 }
 
 /** Release binary built from `revision`, cached under `target/equivalence` by commit. */
