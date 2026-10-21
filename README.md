@@ -162,8 +162,8 @@ itself as described under [Install](#install).
 Some tests cannot be compared: an unreadable config, a dynamic title, a table the analyzer cannot
 resolve statically. The run is then marked incomplete and says why, because the absence of a
 finding is no longer evidence of its absence. `--fail-on-incomplete` turns that into a gate, and
-`=reads` or `=limits` narrows which causes count. The `json` and `jsonl` reports list every excluded
-file with a reason code. See
+`=reads` or `=limits` narrows which causes count. The `json` and `jsonl` reports list the excluded
+files, up to 10,000, with a reason code. See
 [docs/incomplete-runs.md](docs/incomplete-runs.md).
 
 ## Limitations

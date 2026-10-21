@@ -12,7 +12,7 @@ How each reporter says so:
 | --- | --- |
 | `terminal` | A banner before the findings. |
 | `html` | A banner before the findings, plus `incompleteCauses` in the page's JSON island. |
-| `json`, `jsonl` | The `incomplete` flag, plus `incompleteCauses`, which enumerates the reasons, counted. Every excluded file is listed; see [Excluded files](#excluded-files). |
+| `json`, `jsonl` | The `incomplete` flag, plus `incompleteCauses`, which enumerates the reasons, counted. Excluded files are listed, up to 10,000; see [Excluded files](#excluded-files). |
 | `sarif` | `runs[0].invocations[0].properties.incomplete` and `incompleteCauses`, keyed as in the `json` report. |
 
 `--fail-on-incomplete` turns the flag into a non-zero exit. A file in which every test was excluded
@@ -32,7 +32,7 @@ The value needs the `=`; with a space, `reads` would be read as the path.
 
 ### Blind spots
 
-A file in which every test was excluded produced no findings, so it appears nowhere in the report.
+A file in which every test was excluded produced no findings. It is named in the `json` and `jsonl` excluded-file list, but nowhere among the findings.
 Blind spots are named on stderr, worst first, counted in the `blindFiles` field of the `json` and
 `jsonl` summaries, and gated by `--fail-on-incomplete=reads`, since a wholly excluded file is the
 extreme form of an unresolved-context cause.
@@ -40,8 +40,10 @@ extreme form of an unresolved-context cause.
 ### Excluded files
 
 The terminal names at most ten wholly excluded files and twenty diagnostics. The `json` and `jsonl`
-reports list every file that was excluded from comparison in whole or in part, each with a reason
-code, so a run that excluded half a project can be triaged from the report alone.
+reports list the files that were excluded from comparison in whole or in part, up to 10,000 of
+them, each with a reason code, so a run that excluded half a project can be triaged from the report
+alone. Past the cap the files with the fewest excluded tests are left out of the list and counted in
+`exclusions.omitted`; the summary totals always count every file.
 
 - `json`: `excludedFiles`, sorted by path. `jsonl`: one `excluded-file` record per file, after the
   findings and before the summary; a run that excluded nothing writes none.

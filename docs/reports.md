@@ -58,8 +58,8 @@ baseline and changed-file qualifications, and the opt-in cell census. Disabled g
 configuration remain silent. Globals detection markers retain their existing wording for corpus
 tooling. Diagnostic text is plain and sanitized; writer failures are operational errors.
 
-The terminal caps its file lists, but the `json` and `jsonl` reports list every excluded file with a
-reason code; see [Excluded files](incomplete-runs.md#excluded-files).
+The terminal caps its file lists, but the `json` and `jsonl` reports list the excluded files, up to 10,000 (the rest are counted in
+`exclusions.omitted`), with a reason code; see [Excluded files](incomplete-runs.md#excluded-files).
 
 Lists are bounded with explicit omission counts:
 
