@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
-  "minimumCases": 142,
-  "knownMissBaseline": 13,
-  "minimumRecall": 0.917,
+  "minimumCases": 147,
+  "knownMissBaseline": 12,
+  "minimumRecall": 0.925,
   "recallDestination": 1,
   "cases": [
     {
@@ -3876,15 +3876,11 @@
       "origin": "synthetic",
       "verdict": "generated",
       "classifiedAt": "2026-10-21",
-      "expectedTests": 1,
-      "expectedIncomplete": true,
-      "expectedUnresolved": 1,
-      "expectedFindings": [],
-      "expectedAbsent": [],
-      "knownMisses": [
+      "expectedTests": 2,
+      "expectedIncomplete": false,
+      "expectedUnresolved": 0,
+      "expectedFindings": [
         {
-          "id": "runner-default-identifier",
-          "reason": "`export default <identifier>` of a const arrow is refused as unreadable; once read the runner contributes a second test (2 extracted, complete) and pairs with the hand-written one",
           "rule": "duplicate-test",
           "severity": "error",
           "titles": [
@@ -3892,7 +3888,8 @@
             "page slug is lowercase"
           ]
         }
-      ]
+      ],
+      "expectedAbsent": []
     },
     {
       "name": "framework-runner-default-const-negative",
@@ -3902,9 +3899,9 @@
       "origin": "synthetic",
       "verdict": "generated",
       "classifiedAt": "2026-10-21",
-      "expectedTests": 1,
-      "expectedIncomplete": true,
-      "expectedUnresolved": 1,
+      "expectedTests": 2,
+      "expectedIncomplete": false,
+      "expectedUnresolved": 0,
       "expectedFindings": [],
       "expectedAbsent": [
         {
@@ -4472,6 +4469,118 @@
           "titles": [
             "orders: first check",
             "orders: second check"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "framework-runner-default-function-declared-after",
+      "path": "framework-runner-default-function-declared-after",
+      "rule": "duplicate-test",
+      "role": "positive",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-10-22",
+      "expectedTests": 2,
+      "expectedIncomplete": false,
+      "expectedUnresolved": 0,
+      "expectedFindings": [
+        {
+          "rule": "duplicate-test",
+          "severity": "error",
+          "titles": [
+            "page lowercases",
+            "page slug is lowercase"
+          ]
+        }
+      ],
+      "expectedAbsent": []
+    },
+    {
+      "name": "framework-runner-named-and-default",
+      "path": "framework-runner-named-and-default",
+      "rule": "duplicate-test",
+      "role": "positive",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-10-22",
+      "expectedTests": 2,
+      "expectedIncomplete": false,
+      "expectedUnresolved": 0,
+      "expectedFindings": [
+        {
+          "rule": "duplicate-test",
+          "severity": "error",
+          "titles": [
+            "page lowercases",
+            "page slug is lowercase"
+          ]
+        }
+      ],
+      "expectedAbsent": []
+    },
+    {
+      "name": "framework-runner-default-let-negative",
+      "path": "framework-runner-default-let-negative",
+      "rule": "duplicate-test",
+      "role": "negative",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-10-22",
+      "expectedTests": 1,
+      "expectedIncomplete": true,
+      "expectedUnresolved": 1,
+      "expectedFindings": [],
+      "expectedAbsent": [
+        {
+          "rule": "duplicate-test",
+          "titles": [
+            "page lowercases",
+            "page slug is lowercase"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "framework-runner-default-reassigned-negative",
+      "path": "framework-runner-default-reassigned-negative",
+      "rule": "duplicate-test",
+      "role": "negative",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-10-22",
+      "expectedTests": 1,
+      "expectedIncomplete": true,
+      "expectedUnresolved": 1,
+      "expectedFindings": [],
+      "expectedAbsent": [
+        {
+          "rule": "duplicate-test",
+          "titles": [
+            "page lowercases",
+            "page slug is lowercase"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "framework-runner-default-imported-negative",
+      "path": "framework-runner-default-imported-negative",
+      "rule": "duplicate-test",
+      "role": "negative",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-10-22",
+      "expectedTests": 1,
+      "expectedIncomplete": true,
+      "expectedUnresolved": 1,
+      "expectedFindings": [],
+      "expectedAbsent": [
+        {
+          "rule": "duplicate-test",
+          "titles": [
+            "page lowercases",
+            "page slug is lowercase"
           ]
         }
       ]

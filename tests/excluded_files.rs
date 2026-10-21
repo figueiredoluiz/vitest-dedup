@@ -282,7 +282,7 @@ fn each_reason_reachable_from_the_cli_is_listed_with_its_counts() {
         ),
         case(
             "helper-export-unreadable",
-            runner("defexp", "const run = () => { test('inside', () => { expect(1).toBe(1); }); };\nexport default run;\n", "import run from './helpers/defexp';\nrun();\n"),
+            runner("defexp", "let run = () => { test('inside', () => { expect(1).toBe(1); }); };\nexport default run;\n", "import run from './helpers/defexp';\nrun();\n"),
             "defexp.test.ts",
             (0, 0),
         ),

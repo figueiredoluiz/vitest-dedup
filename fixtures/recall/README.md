@@ -156,7 +156,9 @@ a known miss records the wanted finding and the extraction counts it will change
 
 | Shape | Cases | Wanted | Today |
 | --- | --- | --- | --- |
-| Runner exported as `const f = ...; export default f` | `framework-runner-default-const` (+ `-negative`) | the runner's test is extracted and pairs with the hand-written one; a pair that differs stays silent | the file is not compared (1 of 2 tests extracted) |
+| Runner exported as `const f = ...; export default f`, or `export default f` before a hoisted `function f` | `framework-runner-default-const` (+ `-negative`), `framework-runner-default-function-declared-after` | the runner's test is extracted and pairs with the hand-written one; a pair that differs stays silent | as wanted: found, and silent when the bodies differ |
+| Runner that is both `export const f` and `export default f` | `framework-runner-named-and-default` | found | as wanted: found |
+| Default export that must stay refused: a `let` binding, a reassigned function declaration, an imported binding | `framework-runner-default-let-negative`, `framework-runner-default-reassigned-negative`, `framework-runner-default-imported-negative` | not compared, silent: the runner cannot be proven to be the declaration | as wanted: not compared. Controls for any change that accepts every default identifier |
 | Runner exported as `export { f as default }`, or by name | `framework-runner-default-alias-control`, `framework-runner-named-control` | unchanged: found | found |
 | Setup helper whose body calls an auto-imported global, branches, loops with `forEach` or `Object.keys(...).forEach`, assigns a member, spies, or declares a local constant | `framework-setup-helper-shapes` (one file per trait) | a helper that registers nothing and cannot change what a test computes does not exclude the file; identical tests are reported | every file is not compared |
 | Same, empty helper | `framework-setup-helper-empty-control` | found | found |
@@ -193,9 +195,9 @@ generated parent and the analysis root below it.
 
 `minimumRecall` is the measured value rounded down, not the target: a gate that is red on arrival
 gets routed around, after which the number it guards is worse than unmeasured. `recallDestination`
-records the destination. The corpus currently detects 145 of its 158 desired findings (91.8%), so
-`minimumRecall` is 0.917; the 13 missing are the known misses of the framework cases above, so
-`knownMissBaseline` is 13. Each change that finds one of them moves its entry from `knownMisses` to
+records the destination. The corpus currently detects 148 of its 160 desired findings (92.5%), so
+`minimumRecall` is 0.925; the 12 missing are the known misses of the framework cases above, so
+`knownMissBaseline` is 12. Each change that finds one of them moves its entry from `knownMisses` to
 `expectedFindings`, lowers the baseline and raises `minimumRecall` to the new measured value in the
 same commit.
 

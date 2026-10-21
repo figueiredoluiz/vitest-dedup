@@ -52,7 +52,7 @@
 //!   terms, for the same reason.
 //! - **Declaration shapes: `export function`, `export const name = <arrow or function
 //!   expression>`, `export { local as name }` to one of those in the same file, named re-export
-//!   chains, and `export default <function | arrow>`.** A `let`/`var` export can be reassigned
+//!   chains, `export default <function | arrow>` and `export default <name>`.** A `let`/`var` export can be reassigned
 //!   by the helper module between calls, so its initializer at declaration time proves nothing
 //!   about the call. Anything else (a class, an object, a call result, `export *`, CommonJS
 //!   `module.exports`) is not a body this module can name.
@@ -433,6 +433,18 @@ fn render_from(
                     return None;
                 }
                 let semantic = semantic_return.semantic;
+                // A reassigned `function f` is not the body this walk read: `f = x => x > 5`
+                // replaces it before any call.
+                if let Callable::Function(function) = &callable {
+                    let reassigned = function
+                        .id
+                        .as_ref()
+                        .and_then(|id| id.symbol_id.get())
+                        .is_some_and(|symbol| semantic.scoping().symbol_is_mutated(symbol));
+                    if reassigned {
+                        return None;
+                    }
+                }
                 // Substituting a read with the call-site argument is sound only while the
                 // parameter still *holds* that argument. A written parameter -- `x = 5`,
                 // `x += 1`, `x++`, a destructuring write -- does not: the write renders as a
@@ -772,6 +784,23 @@ pub(super) fn find_export<'p>(program: &'p Program<'p>, export: &str) -> Option<
                     ExportDefaultDeclarationKind::FunctionExpression(function) => {
                         Some(Export::Local(Callable::Function(function)))
                     }
+                    // `export default name`: the same targets `export { name as default }` admits.
+                    // The statement evaluates the name where it stands, so a `const` declared
+                    // later is still in its temporal dead zone; only a hoisted `function`
+                    // declaration may follow it.
+                    ExportDefaultDeclarationKind::Identifier(identifier) => {
+                        module_level_callable(program, identifier.name.as_str())
+                            .filter(|callable| match callable {
+                                // A bodyless `declare function` is erased: nothing exists to name.
+                                Callable::Function(function) if function.body.is_none() => false,
+                                Callable::Function(function) => {
+                                    function.r#type == FunctionType::FunctionDeclaration
+                                        || function.span.end <= it.span.start
+                                }
+                                Callable::Arrow(arrow) => arrow.span.end <= it.span.start,
+                            })
+                            .map(Export::Local)
+                    }
                     _ => None,
                 };
             }
@@ -805,12 +834,30 @@ fn exported_const_callable<'p>(
     }
 }
 
-/// A module-level `function name(...)` or `const name = <function or arrow>` declaration, for
-/// `export { name as exported }`: the alias's target must be one of the admitted shapes in this
-/// same file.
+/// A module-level `function name(...)` or `const name = <function or arrow>` declaration (exported
+/// or not), for `export { name as exported }` and `export default name`: the target must be one of
+/// the admitted shapes in this same file.
 fn module_level_callable<'p>(program: &'p Program<'p>, name: &str) -> Option<Callable<'p>> {
     for statement in &program.body {
         match statement {
+            // The declaration may itself be exported (`export const name = ...`), the usual shape
+            // when the same function is also the default export.
+            Statement::ExportDeclaration(it) => match &it.declaration {
+                Declaration::FunctionDeclaration(function)
+                    if function
+                        .id
+                        .as_ref()
+                        .is_some_and(|id| id.name.as_str() == name) =>
+                {
+                    return Some(Callable::Function(function));
+                }
+                Declaration::VariableDeclaration(variables) => {
+                    if let Some(callable) = exported_const_callable(variables, name) {
+                        return Some(callable);
+                    }
+                }
+                _ => {}
+            },
             Statement::FunctionDeclaration(function) => {
                 if function
                     .id
