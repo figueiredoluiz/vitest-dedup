@@ -706,12 +706,33 @@ enum Followed {
 /// JSX forms as well as Node's three.
 const SCRIPT_EXTENSIONS: [&str; 8] = ["js", "mjs", "cjs", "ts", "mts", "cts", "tsx", "jsx"];
 
-/// Files that are data, a native addon or a binary asset. Any other extension is run as
-/// JavaScript by Node's `require`, so it is read as a script.
+/// Extensions of data and binary assets that run nothing. Native code (`.node`, `.wasm`) is
+/// separate; any other extension is run as JavaScript by Node's `require`, so it is read as a
+/// script.
 const NOT_SCRIPTS: &[&str] = &[
-    "json", "node", "css", "scss", "sass", "less", "svg", "png", "jpg", "jpeg", "gif", "webp",
-    "ico", "woff", "woff2", "ttf", "otf", "wasm",
+    "json", "css", "scss", "sass", "less", "svg", "png", "jpg", "jpeg", "gif", "webp", "ico",
+    "woff", "woff2", "ttf", "otf",
 ];
+
+/// What a reached file is, by extension.
+#[derive(Debug, PartialEq, Eq)]
+enum Kind {
+    Script,
+    /// Parsed as data or served as an asset: runs nothing and loads nothing.
+    Data,
+    /// Native code (`.node`, `.wasm`): a WebAssembly module can import and run JavaScript.
+    Binary,
+}
+
+/// Classifies `path` by its extension, case-sensitively as Node's extension dispatch is: `.JSON`
+/// is run as a script.
+fn kind_of(path: &Path) -> Kind {
+    match path.extension().and_then(|extension| extension.to_str()) {
+        Some("node" | "wasm") => Kind::Binary,
+        Some(extension) if NOT_SCRIPTS.contains(&extension) => Kind::Data,
+        _ => Kind::Script,
+    }
+}
 
 /// Follows the relative `specifier` written in `from`: every file it can name, then a directory
 /// through its manifest's `main` and its index. All in real paths: `from` and `real_root` are
@@ -755,13 +776,8 @@ fn add_script(file: &Path, real_root: &Path, found: &mut Found) -> bool {
     if !real.starts_with(real_root) {
         return false;
     }
-    // Case-sensitive, as Node's extension dispatch is: `.JSON` is run as a script.
-    let data = real
-        .extension()
-        .and_then(|extension| extension.to_str())
-        .is_some_and(|extension| NOT_SCRIPTS.contains(&extension));
     found.existed = true;
-    if !data && !found.scripts.contains(&real) {
+    if kind_of(&real) == Kind::Script && !found.scripts.contains(&real) {
         found.scripts.push(real);
     }
     true
@@ -907,8 +923,23 @@ fn reached_files_register(entry: &Path, globals: bool) -> bool {
             return true;
         };
         let text = String::from_utf8_lossy(&raw);
-        if text.contains("vitest") || (globals && calls_registration_global(&text)) {
+        if text.contains("vitest") {
             return true;
+        }
+        let kind = kind_of(&file);
+        // Native code cannot be read.
+        if kind == Kind::Binary {
+            return true;
+        }
+        // Text that calls a registration global is refused whatever its extension: Node runs an
+        // unknown extension as JavaScript.
+        if globals && calls_registration_global(&text) {
+            return true;
+        }
+        // Data and assets are inert to the bundler that serves them (Vite), so they are not parsed
+        // or followed; Node's `require` would run an unknown extension as JavaScript.
+        if kind == Kind::Data {
+            continue;
         }
         for load in loads(&file, &text, own.as_deref()) {
             match load {
@@ -1266,6 +1297,39 @@ mod tests {
             ("class A { test\n(a) { return a } }", false),
         ] {
             assert_eq!(calls_registration_global(code), calls, "{code:?}");
+        }
+    }
+
+    /// A package imported as a data file (a locale table, a stylesheet) is judged by its manifest
+    /// and by the word `vitest`, not parsed as JavaScript; a native addon is still refused.
+    #[test]
+    fn data_files_reached_directly_run_nothing() {
+        let directory = tempfile::tempdir().unwrap();
+        let package = install(directory.path(), "locale", r#"{"name":"locale"}"#);
+        for (name, text, refused) in [
+            ("ja.json", r#"{"messages":{"required":"x"}}"#, false),
+            ("theme.css", "a { color: red }", false),
+            ("logo.svg", "<svg/>", false),
+            ("ja.json", r#"{"note":"see vitest"}"#, true),
+            ("addon.node", "\u{7f}ELF\u{0}\u{1}", true),
+            ("addon.node", "exports.go = 1", true),
+            ("boot.wasm", "\u{0}asm\u{1}", true),
+            (
+                "entry.png",
+                "describe('x', () => { test('y', () => {}) })",
+                true,
+            ),
+            ("entry.json", "describe('x', () => {})", true),
+            ("entry.json", r#"{"describe": "x", "test": ["y"]}"#, false),
+        ] {
+            write_file(&package, name, text);
+            forget_reached();
+            VERDICTS.with(|verdicts| verdicts.borrow_mut().clear());
+            assert_eq!(
+                cannot_register_tests(&package.join(name), true),
+                !refused,
+                "{name}: {text}"
+            );
         }
     }
 
