@@ -10,6 +10,13 @@
 //! Only registration is ruled out. Import-time side effects of a package (patching globals,
 //! polyfills) are not modelled, exactly as they are not for a package the test file imports.
 
+use oxc_allocator::Allocator;
+use oxc_ast::ast::{
+    Argument, CallExpression, Expression, IdentifierReference, StaticMemberExpression,
+};
+use oxc_ast_visit::{walk, Visit};
+use oxc_parser::Parser;
+use oxc_span::SourceType;
 use serde_json::Value;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -372,14 +379,18 @@ const MAX_LOCAL_FILES: usize = 1024;
 const MAX_LOCAL_BYTES: u64 = 32 * 1024 * 1024;
 
 /// Verdicts of the text rule over what an entry reaches, per entry and globals mode, shared by
-/// every worker: a package is read once per run, not once per test file that imports it.
+/// every worker: a package is read once per run, not once per test file that imports it. A run is
+/// bounded by [`forget_reached`], which the end of every run calls; extraction is reachable only
+/// through a run, so installed files are taken as fixed for its duration.
 fn reached_verdicts() -> &'static Mutex<HashMap<(PathBuf, bool), bool>> {
     static VERDICTS: OnceLock<Mutex<HashMap<(PathBuf, bool), bool>>> = OnceLock::new();
     VERDICTS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
 /// Forgets every verdict of the text rule: at the end of a run, so the next one reads the files as
-/// they are then, and in tests that rewrite a file and ask again.
+/// they are then, and in tests that rewrite a file and ask again. Verdicts are process-wide, so a
+/// caller that analyses more than one project in a process must call
+/// `resolver::take_resolution_gaps` (which calls this) between runs.
 pub(crate) fn forget_reached() {
     reached_verdicts()
         .lock()
@@ -387,73 +398,140 @@ pub(crate) fn forget_reached() {
         .clear();
 }
 
-/// One module load found in a script's text.
+/// One module load found in a script.
 #[derive(Debug, PartialEq, Eq)]
 enum Load {
     /// A relative specifier, to be followed inside the package.
     Relative(String),
-    /// A load whose target the text does not state (a computed or escaped specifier, a template).
+    /// A load whose target the script does not state (a computed specifier, a use of `require`
+    /// other than a call with a string), or a script that cannot be parsed.
     Unknown,
 }
 
-/// The module loads a script makes, as far as its text states them: `from './x'`,
-/// `require('./x')`, `import('./x')` and `import './x'`. A bare specifier names another package,
-/// which the manifest closure covers, and is left out. A `require(` or `import(` whose argument is
-/// not a plain quoted string, or whose string is escaped or computed, is an [`Load::Unknown`]. Read
-/// from the raw text, so a specifier inside a comment is a false lead, which at worst names a file
-/// that does not exist.
-fn loads(text: &str) -> Vec<Load> {
-    let bytes = text.as_bytes();
-    let is_name = |byte: u8| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'$';
-    let skip_space = |mut at: usize| {
-        while bytes.get(at).is_some_and(u8::is_ascii_whitespace) {
-            at += 1;
-        }
-        at
-    };
-    let mut found = Vec::new();
-    for keyword in ["from", "require", "import"] {
-        for (start, _) in text.match_indices(keyword) {
-            if start > 0 && (is_name(bytes[start - 1]) || bytes[start - 1] == b'.') {
-                continue;
-            }
-            let end = start + keyword.len();
-            if bytes.get(end).is_some_and(|byte| is_name(*byte)) {
-                continue;
-            }
-            let mut at = skip_space(end);
-            let call = keyword != "from" && bytes.get(at) == Some(&b'(');
-            if call {
-                at = skip_space(at + 1);
-            } else if keyword == "require" {
-                continue;
-            }
-            let Some(&quote) = bytes.get(at).filter(|b| matches!(**b, b'\'' | b'"')) else {
-                if call {
-                    found.push(Load::Unknown);
-                }
-                continue;
-            };
-            let rest = &text[at + 1..];
-            let Some(close) = rest.find(quote as char) else {
-                found.push(Load::Unknown);
-                continue;
-            };
-            let specifier = &rest[..close];
-            let after = skip_space(at + 1 + close + 1);
-            let plain = !specifier.contains(['\\', '\n'])
-                && (!call || matches!(bytes.get(after), Some(b')' | b',')));
-            if !plain {
-                found.push(Load::Unknown);
-            } else if matches!(specifier, "." | "..")
+/// Reads the module loads of a script from its syntax tree: `import` and `export ... from`
+/// declarations, `import()`, and calls of `require` (also `module.require`, `require?.()` and
+/// `(require)()`). A bare specifier names another package, which the manifest closure covers, and
+/// is left out; so is a Node builtin. A specifier that is neither relative nor a package name
+/// (`#internal`, absolute, `file:`), carries a `?`, `#` or `%`, or is not a plain string, is an
+/// [`Load::Unknown`], as is any other use of the name `require` (an alias, `(0, require)(x)`).
+fn loads(path: &Path, text: &str) -> Vec<Load> {
+    struct Scan {
+        found: Vec<Load>,
+        /// Callee identifiers already read as a call, by span start.
+        handled: HashSet<u32>,
+    }
+    impl Scan {
+        /// Records one written specifier: relative to follow, a package or builtin to skip, else unknown.
+        fn specifier(&mut self, specifier: &str) {
+            let relative = matches!(specifier, "." | "..")
                 || specifier.starts_with("./")
-                || specifier.starts_with("../")
+                || specifier.starts_with("../");
+            let package_or_builtin = specifier.starts_with("node:")
+                || specifier
+                    .chars()
+                    .next()
+                    .is_some_and(|first| first.is_ascii_alphanumeric() || first == '@')
+                    && !specifier.contains(':');
+            if specifier.contains(['?', '#', '%', '\\', '\n']) || !(relative || package_or_builtin)
             {
-                found.push(Load::Relative(specifier.to_owned()));
+                self.found.push(Load::Unknown);
+            } else if relative {
+                self.found.push(Load::Relative(specifier.to_owned()));
+            }
+        }
+
+        /// The first argument of a load: a string, or a template with no substitution.
+        fn argument(&mut self, expression: Option<&Expression<'_>>) {
+            match expression {
+                Some(Expression::StringLiteral(literal)) => self.specifier(literal.value.as_str()),
+                Some(Expression::TemplateLiteral(template)) if template.expressions.is_empty() => {
+                    match template.quasis.first() {
+                        Some(quasi) => self.specifier(quasi.value.raw.as_str()),
+                        None => self.found.push(Load::Unknown),
+                    }
+                }
+                _ => self.found.push(Load::Unknown),
             }
         }
     }
-    found
+    impl<'a> Visit<'a> for Scan {
+        /// `import ... from 'x'`.
+        fn visit_import_declaration(&mut self, it: &oxc_ast::ast::ImportDeclaration<'a>) {
+            self.specifier(it.source.value.as_str());
+        }
+        /// `export { a } from 'x'`.
+        fn visit_export_from_declaration(&mut self, it: &oxc_ast::ast::ExportFromDeclaration<'a>) {
+            self.specifier(it.source.value.as_str());
+        }
+        /// `export * from 'x'`.
+        fn visit_export_all_declaration(&mut self, it: &oxc_ast::ast::ExportAllDeclaration<'a>) {
+            self.specifier(it.source.value.as_str());
+        }
+        /// `import('x')`.
+        fn visit_import_expression(&mut self, it: &oxc_ast::ast::ImportExpression<'a>) {
+            self.argument(Some(&it.source));
+            walk::walk_import_expression(self, it);
+        }
+        /// `require('x')` and `module.require('x')`, however the callee is wrapped.
+        fn visit_call_expression(&mut self, it: &CallExpression<'a>) {
+            let callee = crate::frontend::registry::unwrap_transparent(&it.callee);
+            let loads = match callee {
+                Expression::Identifier(identifier) if identifier.name == "require" => {
+                    self.handled.insert(identifier.span.start);
+                    true
+                }
+                Expression::StaticMemberExpression(member) => member.property.name == "require",
+                Expression::ComputedMemberExpression(member) => matches!(
+                    &member.expression,
+                    Expression::StringLiteral(literal) if literal.value == "require"
+                ),
+                _ => false,
+            };
+            if loads {
+                self.argument(it.arguments.first().and_then(Argument::as_expression));
+            }
+            walk::walk_call_expression(self, it);
+        }
+        /// Skips `typeof require`, which only asks whether it exists.
+        fn visit_unary_expression(&mut self, it: &oxc_ast::ast::UnaryExpression<'a>) {
+            // `typeof require` only asks whether it exists.
+            if it.operator == oxc_ast::ast::UnaryOperator::Typeof
+                && matches!(&it.argument, Expression::Identifier(identifier) if identifier.name == "require")
+            {
+                return;
+            }
+            walk::walk_unary_expression(self, it);
+        }
+        /// Skips `require.resolve` and the like, which do not load.
+        fn visit_static_member_expression(&mut self, it: &StaticMemberExpression<'a>) {
+            // `require.resolve`, `require.cache` and the like do not load.
+            if matches!(&it.object, Expression::Identifier(identifier) if identifier.name == "require")
+            {
+                return;
+            }
+            walk::walk_static_member_expression(self, it);
+        }
+        /// Any other mention of `require` is a use the walk cannot follow.
+        fn visit_identifier_reference(&mut self, it: &IdentifierReference<'a>) {
+            if it.name == "require" && !self.handled.contains(&it.span.start) {
+                self.found.push(Load::Unknown);
+            }
+        }
+    }
+    let allocator = Allocator::default();
+    let source_type = SourceType::from_path(path)
+        .unwrap_or_default()
+        .with_unambiguous(true);
+    let parsed = Parser::new(&allocator, text, source_type).parse();
+    if parsed.fatal_error || !parsed.diagnostics.is_empty() {
+        return vec![Load::Unknown];
+    }
+    let mut scan = Scan {
+        found: Vec::new(),
+        handled: HashSet::new(),
+    };
+    scan.visit_program(&parsed.program);
+    scan.found
 }
 
 /// `path` with `.` and `..` folded away, without touching the file system.
@@ -474,29 +552,25 @@ fn normalized(path: &Path) -> PathBuf {
 /// What following one relative load came to.
 #[derive(Debug, PartialEq, Eq)]
 enum Followed {
-    /// A script of the package, by its real path.
-    Script(PathBuf),
-    /// Nothing to read: the file does not exist, or is data or an asset.
-    Nothing,
+    /// The scripts a load may name, by real path: every candidate that exists, since the loader
+    /// that runs the package (Node, or the bundler that inlines it) is not known.
+    Scripts(Vec<PathBuf>),
     /// A target that cannot be read as part of the package (it leaves the root, or a manifest
     /// that steers the load cannot be read): the answer is "cannot tell".
     Unfollowable,
 }
 
-/// Extensions tried, in order, for a load written without one (Vite resolves the TypeScript and JSX
-/// forms as well as Node's three).
+/// Extensions tried, in order, for a load written without one. Vite resolves the TypeScript and
+/// JSX forms as well as Node's three.
 const SCRIPT_EXTENSIONS: [&str; 8] = ["js", "mjs", "cjs", "ts", "mts", "cts", "tsx", "jsx"];
 
-/// Files that carry data, styling or binaries and cannot register a test.
-const NOT_SCRIPTS: &[&str] = &[
-    "json", "node", "css", "scss", "svg", "png", "jpg", "jpeg", "gif", "webp", "ico", "woff",
-    "woff2", "ttf", "otf", "map", "wasm", "txt", "md",
-];
+/// Files Node does not run as JavaScript: parsed as data, or a native addon.
+const NOT_SCRIPTS: &[&str] = &["json", "node"];
 
-/// Follows the relative `specifier` written in `from` the way Node does: the file as written, then
-/// with a script extension, then a directory through its manifest's `main` or its index. All in
-/// real paths: `from` and `real_root` are canonical, and a target whose real path leaves the root
-/// is unfollowable, so a link cannot take the walk out of the package.
+/// Follows the relative `specifier` written in `from`: every file it can name, then a directory
+/// through its manifest's `main` and its index. All in real paths: `from` and `real_root` are
+/// canonical, and a target whose real path leaves the root is unfollowable, so a link cannot take
+/// the walk out of the package.
 fn follow(from: &Path, real_root: &Path, specifier: &str) -> Followed {
     let Some(directory) = from.parent() else {
         return Followed::Unfollowable;
@@ -505,65 +579,101 @@ fn follow(from: &Path, real_root: &Path, specifier: &str) -> Followed {
     if !base.starts_with(real_root) {
         return Followed::Unfollowable;
     }
-    resolve_target(&base, real_root, 0)
+    // A trailing slash, `.` or `..` can only name a directory.
+    let directory_only = specifier.ends_with('/')
+        || specifier.ends_with("/.")
+        || specifier.ends_with("/..")
+        || matches!(specifier, "." | "..");
+    let mut found = Vec::new();
+    match resolve_target(&base, real_root, directory_only, true, &mut found) {
+        true => Followed::Scripts(found),
+        false => Followed::Unfollowable,
+    }
 }
 
-fn resolve_target(base: &Path, real_root: &Path, depth: usize) -> Followed {
-    let mut candidates = vec![base.to_path_buf()];
-    for extension in SCRIPT_EXTENSIONS {
-        let mut named = base.to_path_buf().into_os_string();
-        named.push(format!(".{extension}"));
-        candidates.push(PathBuf::from(named));
+/// Adds the scripts `file` names to `found`, by real path. False when it leaves the package.
+fn add_script(file: &Path, real_root: &Path, found: &mut Vec<PathBuf>) -> bool {
+    let Ok(real) = file.canonicalize() else {
+        return false;
+    };
+    if !real.starts_with(real_root) {
+        return false;
     }
-    if let Some(file) = candidates.into_iter().find(|candidate| candidate.is_file()) {
-        let Ok(real) = file.canonicalize() else {
-            return Followed::Unfollowable;
-        };
-        if !real.starts_with(real_root) {
-            return Followed::Unfollowable;
+    // Case-sensitive, as Node's extension dispatch is: `.JSON` is run as a script.
+    let data = real
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| NOT_SCRIPTS.contains(&extension));
+    if !data && !found.contains(&real) {
+        found.push(real);
+    }
+    true
+}
+
+/// Collects every script `base` may name: files as written or with a script extension (a `.js`
+/// also names its TypeScript twin, as Vite resolves it), and, if `base` is a directory, its
+/// manifest's `main` (when `use_manifest`) and its index. A `main` target is resolved without a
+/// manifest of its own, as Node does. False when a candidate leaves the package or a manifest
+/// cannot be read.
+fn resolve_target(
+    base: &Path,
+    real_root: &Path,
+    directory_only: bool,
+    use_manifest: bool,
+    found: &mut Vec<PathBuf>,
+) -> bool {
+    if !directory_only {
+        let mut candidates = vec![base.to_path_buf()];
+        for extension in SCRIPT_EXTENSIONS {
+            let mut named = base.to_path_buf().into_os_string();
+            named.push(format!(".{extension}"));
+            candidates.push(PathBuf::from(named));
         }
-        let ignored = real
-            .extension()
-            .and_then(|extension| extension.to_str())
-            .is_some_and(|extension| {
-                NOT_SCRIPTS.contains(&extension.to_ascii_lowercase().as_str())
-            });
-        return if ignored {
-            Followed::Nothing
-        } else {
-            Followed::Script(real)
-        };
+        if let Some(stem) = base.to_str().and_then(|text| {
+            ["js", "mjs", "cjs", "jsx"]
+                .iter()
+                .find_map(|extension| text.strip_suffix(&format!(".{extension}")))
+        }) {
+            for extension in ["ts", "mts", "cts", "tsx"] {
+                candidates.push(PathBuf::from(format!("{stem}.{extension}")));
+            }
+        }
+        for candidate in candidates
+            .into_iter()
+            .filter(|candidate| candidate.is_file())
+        {
+            if !add_script(&candidate, real_root, found) {
+                return false;
+            }
+        }
     }
     if !base.is_dir() {
-        return Followed::Nothing;
+        return true;
     }
     let manifest = base.join("package.json");
-    if manifest.is_file() {
+    if use_manifest && manifest.is_file() {
         let Some(value) = std::fs::read_to_string(&manifest)
             .ok()
             .and_then(|text| serde_json::from_str::<Value>(&text).ok())
         else {
-            return Followed::Unfollowable;
+            return false;
         };
         if let Some(main) = value.get("main").and_then(Value::as_str) {
             let target = normalized(&base.join(main));
-            if depth < 2 && target.starts_with(real_root) {
-                match resolve_target(&target, real_root, depth + 1) {
-                    Followed::Nothing => {}
-                    found => return found,
-                }
-            } else if !target.starts_with(real_root) {
-                return Followed::Unfollowable;
+            if !target.starts_with(real_root)
+                || !resolve_target(&target, real_root, false, false, found)
+            {
+                return false;
             }
         }
     }
     for extension in SCRIPT_EXTENSIONS {
         let index = base.join(format!("index.{extension}"));
-        if index.is_file() {
-            return resolve_target(&index, real_root, depth + 1);
+        if index.is_file() && !add_script(&index, real_root, found) {
+            return false;
         }
     }
-    Followed::Nothing
+    true
 }
 
 /// Whether the entry file, or a script of the same package it loads by a relative path, names
@@ -589,6 +699,7 @@ fn entry_registers(file: &Path, globals: bool) -> bool {
     registers
 }
 
+/// Whether any script reachable from `entry` registers tests, or the walk cannot tell.
 fn reached_files_register(entry: &Path, globals: bool) -> bool {
     // Everything below is in real paths, so a link inside the package neither hides a file nor
     // changes which directory a later relative load resolves from.
@@ -623,12 +734,11 @@ fn reached_files_register(entry: &Path, globals: bool) -> bool {
         if text.contains("vitest") || (globals && calls_registration_global(&text)) {
             return true;
         }
-        for load in loads(&text) {
+        for load in loads(&file, &text) {
             match load {
                 Load::Unknown => return true,
                 Load::Relative(specifier) => match follow(&file, &real_root, &specifier) {
-                    Followed::Script(next) => pending.push(next),
-                    Followed::Nothing => {}
+                    Followed::Scripts(next) => pending.extend(next),
                     Followed::Unfollowable => return true,
                 },
             }
@@ -667,6 +777,26 @@ mod tests {
         directory
     }
 
+    /// Writes `text` at `name` inside `package`, creating directories.
+    fn write_file(package: &Path, name: &str, text: &str) {
+        let path = package.join(name);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, text).unwrap();
+    }
+
+    /// Makes `entry` the package's `index.js` and asserts whether the package registers tests.
+    fn assert_entry(package: &Path, entry: &str, globals: bool, registers: bool) {
+        write_file(package, "index.js", entry);
+        forget_reached();
+        VERDICTS.with(|verdicts| verdicts.borrow_mut().clear());
+        assert_eq!(
+            cannot_register_tests(&package.join("index.js"), globals),
+            !registers,
+            "{entry} (globals {globals})"
+        );
+    }
+
+    /// The package's verdict with every cache cleared.
     fn verdict(package: &Path) -> bool {
         VERDICTS.with(|verdicts| verdicts.borrow_mut().clear());
         forget_reached();
@@ -848,11 +978,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path();
         let package = install(root, "split", r#"{"name":"split"}"#);
-        let write = |name: &str, text: &str| {
-            let path = package.join(name);
-            fs::create_dir_all(path.parent().unwrap()).unwrap();
-            fs::write(path, text).unwrap();
-        };
+        let write = |name: &str, text: &str| write_file(&package, name, text);
         write(
             "registrar.js",
             "const { test } = require('vitest'); exports.go = () => test('a', () => {})",
@@ -876,16 +1002,15 @@ mod tests {
             ("exports.go = require('../outside').go", true, true),
             ("exports.go = require('./absent').go", true, false),
             ("exports.go = require('lodash').go", true, false),
-            ("// require('./registrar')\nexports.go = 1", false, true),
+            ("// require('./registrar')\nexports.go = 1", false, false),
+            ("exports.go = require /*c*/ ('./registrar')", false, true),
+            ("exports.go = require\n('./registrar')", false, true),
+            ("exports.go = require?.('./registrar')", false, true),
+            ("exports.go = (0, require)('./registrar')", false, true),
+            ("exports.go = typeof require", false, false),
+            ("exports.go = require.resolve('./registrar')", false, false),
         ] {
-            fs::write(package.join("index.js"), entry).unwrap();
-            forget_reached();
-            VERDICTS.with(|verdicts| verdicts.borrow_mut().clear());
-            assert_eq!(
-                cannot_register_tests(&package.join("index.js"), globals),
-                !registers,
-                "{entry} (globals {globals})"
-            );
+            assert_entry(&package, entry, globals, registers);
         }
     }
 
@@ -919,11 +1044,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path();
         let package = install(root, "odd", r#"{"name":"odd"}"#);
-        let write = |name: &str, text: &str| {
-            let path = package.join(name);
-            fs::create_dir_all(path.parent().unwrap()).unwrap();
-            fs::write(path, text).unwrap();
-        };
+        let write = |name: &str, text: &str| write_file(&package, name, text);
         let registers = "exports.go = () => test('a', () => {})";
         write("registrar.js", registers);
         write("registrar.JS", registers);
@@ -962,14 +1083,60 @@ mod tests {
         #[cfg(unix)]
         cases.push(("exports.go = require('./alias').go", true));
         for (entry, registers) in cases {
-            fs::write(package.join("index.js"), entry).unwrap();
-            forget_reached();
-            VERDICTS.with(|verdicts| verdicts.borrow_mut().clear());
-            assert_eq!(
-                cannot_register_tests(&package.join("index.js"), true),
-                !registers,
-                "{entry}"
-            );
+            assert_entry(&package, entry, true, registers);
+        }
+    }
+
+    /// Loads spelled with comments, Unicode space, `module.require`, URL suffixes, package-internal
+    /// or absolute specifiers cannot be read as plain relative paths and refuse; Node's precedence
+    /// between files and directories, and between `main` and a nested manifest, is followed.
+    #[test]
+    fn spellings_and_precedence_follow_node() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let package = install(root, "node", r#"{"name":"node"}"#);
+        let write = |name: &str, text: &str| write_file(&package, name, text);
+        let registers = "exports.go = () => test('a', () => {})";
+        let clean = "exports.go = () => 1";
+        write("registrar.cjs", registers);
+        write("registrar.txt", registers);
+        write("registrar.JSON", registers);
+        write("data.json", "{}");
+        write("branch.js", clean);
+        write("branch/index.js", registers);
+        write("solo.js", clean);
+        write("solo/index.js", clean);
+        write("sub/package.json", r#"{"main":"nested"}"#);
+        write("sub/nested/package.json", r#"{"main":"clean.js"}"#);
+        write("sub/nested/clean.js", clean);
+        write("sub/nested/index.js", registers);
+        write("twin.js", clean);
+        write("twin.ts", registers);
+        write("both.js", clean);
+        write("both.mjs", registers);
+        for (entry, registers) in [
+            ("exports.go = require('./twin.js').go", true),
+            ("exports.go = require('./both').go", true),
+            ("exports.go = require /* c */ ('./registrar.cjs').go", true),
+            ("exports.go = require\u{a0}('./registrar.cjs').go", true),
+            ("exports.go = module.require('./registrar.cjs').go", true),
+            ("exports.go = require('#registrar').go", true),
+            ("exports.go = require('/abs/registrar').go", true),
+            ("exports.go = require('file:///abs/registrar').go", true),
+            ("exports.go = import('./registrar.cjs?init')", true),
+            ("exports.go = import('./registrar.cjs#frag')", true),
+            ("exports.go = import('./registrar%2Ecjs')", true),
+            ("exports.go = require('./registrar.txt').go", true),
+            ("exports.go = require('./registrar.JSON').go", true),
+            ("exports.go = require('./data.json')", false),
+            ("exports.go = require('./branch').go", true),
+            ("exports.go = require('./branch/').go", true),
+            ("exports.go = require('./solo/').go", false),
+            ("exports.go = require('./sub').go", true),
+            ("exports.go = require('node:fs').go", false),
+            ("exports.go = require('lodash/fp').go", false),
+        ] {
+            assert_entry(&package, entry, true, registers);
         }
     }
 
