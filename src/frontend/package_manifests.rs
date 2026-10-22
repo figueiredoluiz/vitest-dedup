@@ -527,9 +527,16 @@ fn loads(path: &Path, text: &str, own: Option<&str>) -> Vec<Load> {
             {
                 self.found.push(Load::Unknown);
             }
-            // `require.resolve`, `require.cache` and the like do not load.
+            // `require.resolve`, `require.cache` and the like do not load; `require.call(...)`
+            // and `require.apply(...)` do.
             if matches!(&it.object, Expression::Identifier(identifier) if identifier.name == "require")
             {
+                if !matches!(
+                    it.property.name.as_str(),
+                    "resolve" | "cache" | "main" | "extensions"
+                ) {
+                    self.found.push(Load::Unknown);
+                }
                 return;
             }
             walk::walk_static_member_expression(self, it);
@@ -611,15 +618,25 @@ fn follow(from: &Path, real_root: &Path, specifier: &str) -> Followed {
         || specifier.ends_with("/.")
         || specifier.ends_with("/..")
         || matches!(specifier, "." | "..");
-    let mut found = Vec::new();
+    let mut found = Found::default();
+    // A load that names nothing on disk cannot be judged: the loader that runs it may find it.
     match resolve_target(&base, real_root, directory_only, true, &mut found) {
-        true => Followed::Scripts(found),
-        false => Followed::Unfollowable,
+        true if found.existed => Followed::Scripts(found.scripts),
+        _ => Followed::Unfollowable,
     }
 }
 
+/// What following one load found.
+#[derive(Default)]
+struct Found {
+    /// Scripts, by real path.
+    scripts: Vec<PathBuf>,
+    /// Whether any file or directory the load names exists, data files included.
+    existed: bool,
+}
+
 /// Adds the scripts `file` names to `found`, by real path. False when it leaves the package.
-fn add_script(file: &Path, real_root: &Path, found: &mut Vec<PathBuf>) -> bool {
+fn add_script(file: &Path, real_root: &Path, found: &mut Found) -> bool {
     let Ok(real) = file.canonicalize() else {
         return false;
     };
@@ -631,8 +648,9 @@ fn add_script(file: &Path, real_root: &Path, found: &mut Vec<PathBuf>) -> bool {
         .extension()
         .and_then(|extension| extension.to_str())
         .is_some_and(|extension| NOT_SCRIPTS.contains(&extension));
-    if !data && !found.contains(&real) {
-        found.push(real);
+    found.existed = true;
+    if !data && !found.scripts.contains(&real) {
+        found.scripts.push(real);
     }
     true
 }
@@ -647,7 +665,7 @@ fn resolve_target(
     real_root: &Path,
     directory_only: bool,
     use_manifest: bool,
-    found: &mut Vec<PathBuf>,
+    found: &mut Found,
 ) -> bool {
     if !directory_only {
         let mut candidates = vec![base.to_path_buf()];
@@ -677,6 +695,7 @@ fn resolve_target(
     if !base.is_dir() {
         return true;
     }
+    found.existed = true;
     let manifest = base.join("package.json");
     if use_manifest && manifest.is_file() {
         let Some(value) = std::fs::read_to_string(&manifest)
@@ -685,13 +704,19 @@ fn resolve_target(
         else {
             return false;
         };
+        // Fields that route a load elsewhere than `main` and the index are not followed.
+        if value.get("exports").is_some() || value.get("browser").is_some() {
+            return false;
+        }
         // A bundler that inlines the package may take `module` over `main`.
         for field in ["main", "module"] {
             let Some(main) = value.get(field).and_then(Value::as_str) else {
                 continue;
             };
             let target = normalized(&base.join(main));
+            // A directory target with a manifest of its own would be routed by it.
             if !target.starts_with(real_root)
+                || target.join("package.json").is_file()
                 || !resolve_target(&target, real_root, false, false, found)
             {
                 return false;
@@ -1035,7 +1060,7 @@ mod tests {
             ("exports.go = require('./lib').go", true, true),
             ("exports.go = require('./clean').go", true, false),
             ("exports.go = require('../outside').go", true, true),
-            ("exports.go = require('./absent').go", true, false),
+            ("exports.go = require('./absent').go", true, true),
             ("exports.go = require('lodash').go", true, false),
             ("// require('./registrar')\nexports.go = 1", false, false),
             ("exports.go = require /*c*/ ('./registrar')", false, true),
@@ -1180,6 +1205,16 @@ mod tests {
         );
         write("modular/clean.js", clean);
         write("modular/reg.js", registers);
+        write(
+            "routed/package.json",
+            r#"{"main":"clean.js","exports":"./reg.js"}"#,
+        );
+        write("routed/clean.js", clean);
+        write("routed/reg.js", registers);
+        write("nested/package.json", r#"{"main":"./inner"}"#);
+        write("nested/inner/package.json", r#"{"main":"reg.js"}"#);
+        write("nested/inner/reg.js", registers);
+        write("nested/inner/index.js", clean);
         write("twin.js", clean);
         write("twin.ts", registers);
         write("both.js", clean);
@@ -1193,6 +1228,14 @@ mod tests {
             ("exports.go = require('node/sub').go", true),
             ("exports.go = require('nodes').go", false),
             ("exports.go = require('./modular').go", true),
+            ("exports.go = require.call(null, './registrar.cjs')", true),
+            (
+                "exports.go = require.apply(null, ['./registrar.cjs'])",
+                true,
+            ),
+            ("exports.go = require('./routed').go", true),
+            ("exports.go = require('./nested').go", true),
+            ("exports.go = require('./data.json')", false),
             ("exports.go = require('./twin.js').go", true),
             ("exports.go = require('./both').go", true),
             ("exports.go = require /* c */ ('./registrar.cjs').go", true),
