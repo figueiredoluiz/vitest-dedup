@@ -1222,6 +1222,7 @@ mod tests {
         write("view.tsx", registers);
         #[cfg(unix)]
         std::os::unix::fs::symlink(package.join("lib/load.js"), package.join("alias.js")).unwrap();
+        #[cfg_attr(not(unix), allow(unused_mut))]
         let mut cases = vec![
             ("exports.go = require(`./registrar`).go", true),
             ("exports.go = require('./' + 'registrar').go", true),
