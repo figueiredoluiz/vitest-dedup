@@ -582,6 +582,7 @@ fn an_installed_package_is_judged_by_its_manifest_and_entry() {
 #[test]
 fn components_assets_and_virtual_modules() {
     let directory = project(&[
+        ("ref.ts", "export const ref = (value: number) => value"),
         (
             "setup.vue",
             "<template><div/></template>\n<script setup lang=\"ts\">\nconst count = ref(0)\nconsole.info(count)\n</script>\n",
@@ -615,10 +616,12 @@ fn components_assets_and_virtual_modules() {
     std::fs::create_dir_all(directory.path().join(".nuxt")).unwrap();
     std::fs::write(
         directory.path().join(".nuxt/imports.d.ts"),
-        "export { ref } from 'vue';\n",
+        "export { ref } from '../ref';\n",
     )
     .unwrap();
     super::registration_free::forget();
+    assert!(imports(&directory, "setup.vue"));
+    assert!(calls(&directory, "imports-component.ts", "run"));
     assert!(!imports(&directory, "plain.vue"));
     assert!(!imports(&directory, "external.vue"));
     assert!(!imports(&directory, "registering.vue"));

@@ -691,6 +691,9 @@ impl<'a> Walker<'a> {
             // A setup call in the runner runs as often as the call to the runner does.
             child.conditional_helper_depth =
                 self.conditional_helper_depth + usize::from(self.setup_is_conditional(call));
+            // Framework setup is counted in the caller's file: every start of 0 precedes every call
+            // in the child frame, so the child reports the count at the runner's call site.
+            child.module_setup_starts = vec![0; self.framework_setup_before(call)];
             child.suite_modifiers = self.suite_modifiers.clone();
             child.hook_scopes = self.hook_scopes.clone();
             child.unresolved_suite_depth = self.unresolved_suite_depth;

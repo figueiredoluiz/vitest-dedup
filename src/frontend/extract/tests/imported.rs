@@ -1862,6 +1862,15 @@ fn mock_nuxt_import_is_a_hoisted_mock_keyed_by_name() {
         "mockNuxtImport('useRoute', () => () => 1); mockNuxtImport('useState', () => () => 2);",
     );
     assert_eq!(extraction.tests[0].context.mocked_modules.len(), 2);
+    let twice = extract_with(
+        "mockNuxtImport('useRoute', () => () => 1); mockNuxtImport('useRoute', () => () => 2);",
+    );
+    let last_only = extract_with("mockNuxtImport('useRoute', () => () => 2);");
+    assert_eq!(twice.tests[0].context.mocked_modules.len(), 1);
+    assert_eq!(
+        twice.tests[0].context.mocked_modules,
+        last_only.tests[0].context.mocked_modules
+    );
     for unreadable in [
         "mockNuxtImport('useRoute', factory);",
         "mockNuxtImport(name, () => () => 1);",
@@ -2190,4 +2199,27 @@ fn setup_inside_a_conditionally_called_runner_is_not_recorded() {
     let unconditional = run("run();");
     assert!(!unconditional.incomplete, "{:?}", unconditional.diagnostics);
     assert!(run("if (process.env.CI) run();").incomplete);
+}
+
+/// Framework setup counted in the caller reaches setup calls inside an imported runner.
+#[test]
+fn a_runner_setup_call_keeps_the_callers_place_among_framework_setup() {
+    let site = Site::new(&[
+        ("setup.ts", "export function setup() { return 1 }"),
+        (
+            "runner.ts",
+            "import { test, expect } from 'vitest'; import { setup } from './setup'; export function run() { setup(); test('inside', () => { expect(1).toBe(1) }); }",
+        ),
+    ]);
+    let setup_of = |body: &str| {
+        let extraction = site.extract(&format!(
+            "import {{ test, expect, vi }} from 'vitest'; import {{ run }} from './runner'; {body} {TWO_TESTS}"
+        ));
+        assert!(!extraction.incomplete, "{:?}", extraction.diagnostics);
+        extraction.tests[0].context.module_setup.clone()
+    };
+    assert_ne!(
+        setup_of("vi.stubGlobal('mode', 'changed'); run();"),
+        setup_of("run(); vi.stubGlobal('mode', 'changed');")
+    );
 }

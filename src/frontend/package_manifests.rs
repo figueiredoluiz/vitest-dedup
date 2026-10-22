@@ -54,6 +54,17 @@ fn package_root(file: &Path) -> Option<PathBuf> {
 /// The root of installed package `name`, searched from `from` the way Node does: a sibling in the
 /// enclosing `node_modules`, then `node_modules` of every ancestor directory.
 fn find_package(from: &Path, name: &str) -> Option<PathBuf> {
+    // A manifest key is repository-controlled text: only `name` or `@scope/name` may reach a path.
+    let segment =
+        |text: &str| !text.is_empty() && text != "." && text != ".." && !text.contains(['\\', ':']);
+    let shaped = match name.split('/').collect::<Vec<_>>().as_slice() {
+        [package] => segment(package),
+        [scope, package] => scope.starts_with('@') && segment(scope) && segment(package),
+        _ => false,
+    };
+    if !shaped {
+        return None;
+    }
     from.ancestors().find_map(|directory| {
         let candidate = if directory.file_name().is_some_and(|n| n == "node_modules") {
             directory.join(name)
@@ -537,6 +548,37 @@ mod tests {
                 "{source}"
             );
         }
+    }
+
+    /// A dependency key is text from the repository: one that is not a package name never reaches
+    /// the file system, and counts as a dependency that is not installed.
+    #[test]
+    fn dependency_names_that_are_paths_are_not_followed() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        install(root, "elsewhere", r#"{"name":"elsewhere"}"#);
+        // A clean manifest outside `node_modules`, which only a traversing key would reach.
+        fs::create_dir_all(root.join("outside")).unwrap();
+        fs::write(root.join("outside/package.json"), r#"{"name":"outside"}"#).unwrap();
+        for key in [
+            "../outside",
+            "../elsewhere",
+            "/etc/passwd",
+            "a/b/c",
+            "@scope",
+            "..",
+            "C:\\x",
+            "a\\b",
+        ] {
+            let package = install(
+                root,
+                "holder",
+                &format!(r#"{{"dependencies":{{"{key}":"1"}}}}"#),
+            );
+            assert!(!verdict(&package), "{key}");
+        }
+        let package = install(root, "good", r#"{"dependencies":{"elsewhere":"1"}}"#);
+        assert!(verdict(&package));
     }
 
     /// A closure past the cap is refused instead of read without bound.

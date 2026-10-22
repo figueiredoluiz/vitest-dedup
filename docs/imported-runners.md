@@ -136,9 +136,11 @@ and a helper that registers anything are refused as before.
 
 ### Module dependencies
 
-Module dependencies must be Vitest, the validated named re-export chain, or first-party modules that
-are themselves free of setup effects: importing a module runs it, called or not. Unknown dependency
-or setup effects, and helper mocking effects, mark the entire calling file unresolved.
+Importing a module runs it, called or not. Module dependencies must be Vitest, the validated named
+re-export chain, or first-party modules that are inert or that provably register nothing (see
+[Setup helpers](#setup-helpers)); effects other than registration at import time are accepted and
+are attributed through the runner's identity. Unknown dependency or setup effects, and helper
+mocking effects, mark the entire calling file unresolved.
 
 ### What a refusal does
 
