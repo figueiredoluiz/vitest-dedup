@@ -646,6 +646,159 @@ fn behavior_walk_depth_guard_records_up_to_max_depth_and_no_further() {
     );
 }
 
+/// The flag half of the behavior depth guards: dropping events past the cap is only safe if the
+/// drop is *reported*, because a truncated trace compares equal to a different body's
+/// equally-truncated trace (two 260-deep constructors calling `trace.push(1)` versus
+/// `trace.unshift(2)` collided into one false `near-duplicate-test` exactly this way). Every
+/// event-dropping guard must therefore set `behavior_truncated`, and no body that stays inside
+/// the cap may carry the flag.
+///
+/// The two guards that degrade *safely* -- `call_path`'s raw-source fallback and
+/// `property_chain_event`'s outright decline -- are deliberately not on this list: their
+/// under-matching keeps body-specific text (or declines a canonicalization) and cannot
+/// manufacture equality between two different bodies.
+///
+/// Nesting arithmetic (see the test above): `n` blocks put the statement at `walk_stmt` depth
+/// `n`, its expression at `n + 1`, a call at `walk_call` `n + 2`, a `new` at `walk_new` `n + 2`
+/// with the callee descent (`walk_under_members`) starting at `n + 3` and advancing one level
+/// per member link.
+#[test]
+fn behavior_truncation_flag_marks_every_event_dropping_guard_and_nothing_else() {
+    let nest = |levels: usize, inner: &str, asynchronous: bool| {
+        let asyncness = if asynchronous { "async " } else { "" };
+        format!(
+            "test('t', {asyncness}() => {{ {}{inner}{} }});",
+            "{".repeat(levels),
+            "}".repeat(levels)
+        )
+    };
+    let run = |source: String| {
+        let mut prints = fingerprint_all(&source);
+        assert_eq!(prints.len(), 1, "expected one test body");
+        let print = prints.swap_remove(0);
+        (print.behavior, print.behavior_truncated)
+    };
+    let cap = MAX_DEPTH as usize;
+
+    // `walk_stmt` drops `if` past the cap. Its clear side cannot sit at the cap exactly: the
+    // `if`'s own test expression is walked one level deeper (`walk_expr` at `n + 1`), so the
+    // deepest statement whose whole subtree stays inside is two levels short of the cap.
+    let (events, truncated) = run(nest(cap - 2, "if(1);", false));
+    assert_eq!(events, vec!["if".to_owned()]);
+    assert!(!truncated, "inside the cap, nothing was dropped");
+    let (events, truncated) = run(nest(cap + 1, "if(1);", false));
+    assert!(events.is_empty());
+    assert!(truncated, "`walk_stmt`'s drop must set the flag");
+
+    // `walk_expr` drops `await` one level below the statement. A literal argument keeps the
+    // subtree two levels deep, so the clear side is two levels short; a call argument would cost
+    // two more and conflate this guard with `walk_call`'s.
+    let (events, truncated) = run(nest(cap - 2, "await 1;", true));
+    assert_eq!(events.len(), 1);
+    assert!(!truncated);
+    let source = format!(
+        "test('t', async () => {{ {}await 1;{} }});",
+        "{".repeat(cap),
+        "}".repeat(cap)
+    );
+    let (_, truncated) = run(source);
+    assert!(truncated, "`walk_expr`'s drop must set the flag");
+
+    // `walk_call` drops the whole call event two levels below the statement; its callee descent
+    // starts one deeper still, so the clear side is three levels short.
+    let (events, truncated) = run(nest(cap - 3, "f();", false));
+    assert_eq!(events.len(), 1);
+    assert!(!truncated);
+    let (events, truncated) = run(nest(cap - 1, "f();", false));
+    assert!(events.is_empty());
+    assert!(truncated, "`walk_call`'s drop must set the flag");
+
+    // `walk_new` drops the `new:` event two levels below the statement. Its own boundary cannot
+    // be reached with the flag clear -- the callee descent it always performs starts one level
+    // deeper -- so the clear side sits three levels in, where `new:` is still recorded.
+    let (events, truncated) = run(nest(cap - 3, "new F();", false));
+    assert_eq!(events.len(), 1, "expected the new: event: {events:?}");
+    assert!(!truncated);
+    let (events, truncated) = run(nest(cap - 1, "new F();", false));
+    assert!(events.is_empty());
+    assert!(truncated, "`walk_new`'s drop must set the flag");
+
+    // `walk_under_members` can drop with the call event already pushed: `o.b.f()` records its
+    // `call:` from `walk_call` and then descends the two member links, so a nesting that leaves
+    // the call inside the cap but the descent outside sets the flag while the event survives.
+    // The descent re-checks depth once per loop iteration -- two links plus the base identifier
+    // make three checks -- so the clear side needs the whole chain five levels inside.
+    let (events, truncated) = run(nest(cap - 5, "o.b.f();", false));
+    assert_eq!(events.len(), 1, "expected the call: event: {events:?}");
+    assert!(!truncated);
+    let (events, truncated) = run(nest(cap - 2, "o.b.f();", false));
+    assert_eq!(
+        events.len(),
+        1,
+        "the call itself is inside the cap: {events:?}"
+    );
+    assert!(
+        truncated,
+        "`walk_under_members`' abandoned descent must set the flag"
+    );
+
+    // `call_path`'s raw-source fallback is NOT separately observable from the flag: a member
+    // callee chain deep enough to degrade the rendered path is walked link-for-link by
+    // `walk_under_members` too, whose guard fires on the same link and sets the flag. That
+    // co-occurrence is the conservative direction -- a trace whose callee text degraded is
+    // under-matched, and marking its body unresolved only loses comparisons on input no human
+    // writes -- so the case is recorded here rather than contorted around.
+}
+
+/// The defect itself, at the unit boundary: what the collector could not tell apart deep,
+/// it must flag as incomparable rather than report as equal.
+///
+/// `trace.push(1)` versus `trace.unshift(2)` inside a constructor is discriminating behavior at
+/// shallow depth -- the two `call:` events differ -- and indistinguishable at 260 levels of
+/// unbraced `if`, where the depth cap eats the region on both sides and leaves two equal traces
+/// of `if` tokens. The equality is an artifact; the flag is what says so.
+#[test]
+fn behavior_truncation_flags_the_equal_traces_the_depth_cap_manufactures() {
+    let sink_probe = |depth: usize, effect: &str| {
+        format!(
+            "test('t', () => {{ const trace: number[] = []; if (true) {}{{ \
+               class Sink {{ constructor() {{ trace.{effect}; }} }} \
+               new Sink(); expect(trace).toEqual([1]); }} }});",
+            "if (true) ".repeat(depth - 1)
+        )
+    };
+    let run = |source: String| {
+        let mut prints = fingerprint_all(&source);
+        assert_eq!(prints.len(), 1);
+        let print = prints.swap_remove(0);
+        (print.behavior, print.behavior_truncated)
+    };
+
+    // Shallow: the constructor effects are collected and the traces differ.
+    let (push_events, push_truncated) = run(sink_probe(2, "push(1)"));
+    let (unshift_events, unshift_truncated) = run(sink_probe(2, "unshift(2)"));
+    assert!(!push_truncated && !unshift_truncated);
+    assert_ne!(
+        push_events, unshift_events,
+        "at shallow depth the collector must tell push from unshift"
+    );
+
+    // Deep: both traces truncate to the same `if` tokens and would compare equal -- the flag is
+    // the only honest thing left on the run.
+    let (push_events, push_truncated) = run(sink_probe(260, "push(1)"));
+    let (unshift_events, unshift_truncated) = run(sink_probe(260, "unshift(2)"));
+    assert!(push_truncated && unshift_truncated);
+    assert_eq!(
+        push_events, unshift_events,
+        "the truncated traces are equal -- that equality is the depth-cap artifact, and the flag is \
+         what keeps any rule from reading it as similarity"
+    );
+    assert!(
+        push_events.iter().all(|event| event == "if"),
+        "nothing past the cap may survive: {push_events:?}"
+    );
+}
+
 // -----------------------------------------------------------------------------------------
 
 // Every remaining guarded recursion, landed on exactly

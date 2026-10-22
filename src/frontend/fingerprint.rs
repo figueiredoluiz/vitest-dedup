@@ -564,7 +564,12 @@ pub(super) fn fingerprint(
     let (alpha, this_dependent) = alpha_pass.run_observing_this(&body);
     let inlined_imports = alpha_pass.ctx.fully_inlined_imports();
     let structural = Serializer::new(context.fresh_for_pass(), Mode::Structural).run(&body);
-    let behavior = BehaviorCollector::new(context.fresh_for_pass_with(&dataflow)).run(&body);
+    let behavior_run = BehaviorCollector::new(context.fresh_for_pass_with(&dataflow)).run(&body);
+    // `behavior_truncated` is the run's other half (see `BehaviorRun`): a trace the depth cap
+    // cut short compares equal to a different body's equally-cut trace, so it must never reach
+    // a rule as evidence. Like `class_unresolved` below, it is consumed by extract.rs and
+    // deliberately absent from `digest()`.
+    let behavior = behavior_run.events;
     // `this_dependent` comes from the alpha pass, which already decided it -- computing the same
     // thing twice is how two views of one body drift apart.
     let callback_form = if this_dependent {
@@ -583,6 +588,7 @@ pub(super) fn fingerprint(
         callback_form,
         inlined_imports,
         class_unresolved: context.class_uncertain.get(),
+        behavior_truncated: behavior_run.truncated,
     }
 }
 
@@ -772,6 +778,15 @@ pub(super) struct BodyFingerprint {
     pub inlined_imports: Vec<String>,
     /// Whether an owned class dependency cannot be compared safely.
     pub class_unresolved: bool,
+    /// Whether the behavior trace was cut short by [`MAX_DEPTH`] -- the collector's
+    /// event-dropping guards fired (see `behavior::BehaviorRun::truncated`). A truncated trace is
+    /// missing everything past the cap, so two bodies differing only there collected *equal*
+    /// events; `extract.rs` folds this into `Context::unresolved` for tests and hook scopes,
+    /// which is what keeps that equality from being read as similarity by any behavior-keyed
+    /// rule. Deliberately absent from [`BodyFingerprint::digest`], exactly like
+    /// `class_unresolved`: it is a fact about whether the view may be *used*, not a view the IR
+    /// compares.
+    pub behavior_truncated: bool,
 }
 
 impl BodyFingerprint {

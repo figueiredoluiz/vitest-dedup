@@ -28,6 +28,7 @@ impl<'a, 'b, 's, 'm> BehaviorCollector<'a, 'b, 's, 'm> {
         depth: u32,
     ) {
         if depth > MAX_DEPTH {
+            self.truncated = true;
             return;
         }
         let shape = self.shape(expression, Mode::Alpha, depth + 1);
@@ -40,6 +41,7 @@ impl<'a, 'b, 's, 'm> BehaviorCollector<'a, 'b, 's, 'm> {
     /// deferred execution.
     pub(super) fn walk_call(&mut self, call: &CallExpression<'a>, deferred: bool, depth: u32) {
         if depth > MAX_DEPTH {
+            self.truncated = true;
             return;
         }
         if let Some(event) = self.assertion_event(call, depth) {

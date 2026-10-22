@@ -103,7 +103,7 @@ alone. Past the cap the files with the fewest excluded tests are left out of the
 | `unsupported-expression` | A title, callback, option or registration expression is outside the supported shapes. |
 | `mock-factory-unreadable` | A `vi.mock` factory could not be read. |
 | `fixture-unreadable` | A `test.extend` fixture value could not be read. |
-| `unresolved-context` | Another ambient fact of a test could not be resolved: a dynamic title, an unreadable `.each` table or nested config. |
+| `unresolved-context` | Another ambient fact of a test could not be resolved: a dynamic title, an unreadable `.each` table or nested config, or a body deeper than the analyzer's recursion cap (whose behavior trace was cut short and must not be compared). |
 | `unsupported-statement` | A statement form the walker does not enter, such as `with`, may hide declarations. |
 | `parse-error` | The parser reported errors. |
 | `unsupported-source` | The source type is unsupported. |

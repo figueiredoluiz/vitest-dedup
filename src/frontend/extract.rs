@@ -1739,7 +1739,13 @@ impl<'a> Walker<'a> {
             &self.file.path,
             None,
         );
-        let class_unresolved = body.class_unresolved;
+        // Both flags say "this body's views are not safe to compare": `class_unresolved` for a
+        // class dependency the serializer could not prove, `behavior_truncated` for a behavior
+        // trace the depth cap cut short. The scope's own context text is alpha and stays
+        // raw-fallback sound, but the hook's digest -- behavior included -- is what
+        // `redundant-hook` and the behavior-keyed claims consume, so an incomplete trace fails
+        // closed here exactly as a test body's does.
+        let body_unresolved = body.class_unresolved || body.behavior_truncated;
         let hook = Hook {
             kind,
             location: self.location(call.span),
@@ -1753,7 +1759,7 @@ impl<'a> Walker<'a> {
             .hook_scopes
             .last_mut()
             .expect("root hook scope always present");
-        scope.unresolved |= class_unresolved;
+        scope.unresolved |= body_unresolved;
         match kind {
             HookKind::BeforeAll => scope.before_all.push(hook),
             HookKind::BeforeEach => scope.before_each.push(hook),
@@ -2447,13 +2453,19 @@ impl<'a> Walker<'a> {
         //   arrow/function expression, or a `describe` callback that is neither a block nor a
         //   concise-arrow expression). The body is opaque, not absent -- unlike a genuine
         //   `.todo`/bodyless declaration, where `body_arg` is `None` and this stays `false`.
+        // - `behavior_truncated`: the behavior collector's depth cap dropped part of this
+        //   body, so its trace compares equal to a different body's equally-truncated trace. The
+        //   equality is an artifact of the cap, not a similarity claim, and every behavior-keyed
+        //   rule (`near-duplicate-test`, `subsumed-test`) would otherwise read it as one.
         let opaque_body = body_arg.is_some() && !has_body;
         let is_unresolved_title = title_is_unresolved(&title);
         // Defect 3 / F5: nested inside a `describe` whose own title is dynamic or parameterized,
         // this case's identity is exactly as unknown as that suite's, even when its own title and
         // everything else about it is fully static -- see the doc on
         // `Walker::unresolved_suite_depth`.
-        let unresolved = body_fingerprint.as_ref().is_some_and(|body| body.class_unresolved)
+        let unresolved = body_fingerprint
+            .as_ref()
+            .is_some_and(|body| body.class_unresolved || body.behavior_truncated)
             || fixtures_unresolved
             || self.mocks_unresolved
             || is_unresolved_title

@@ -131,7 +131,10 @@ fn derived_detail(reason: ExclusionReason) -> &'static str {
         ExclusionReason::FixtureUnreadable => {
             "a `test.extend` fixture value could not be read, so the tests it governs were excluded"
         }
-        _ => "an ambient fact of the tests (title, `.each` table or config) could not be resolved",
+        _ => {
+            "an ambient fact of the tests (title, `.each` table, config, or a body too deep \
+               for the analyzer's recursion cap) could not be resolved"
+        }
     }
 }
 

@@ -11,6 +11,34 @@ pub(super) struct BehaviorCollector<'a, 'b, 's, 'm> {
     /// see [`FingerprintContext`].
     pub(super) ctx: FingerprintContext<'a, 'b, 's, 'm>,
     pub(super) events: Vec<String>,
+    /// Whether any walk stopped early on [`MAX_DEPTH`] -- see [`BehaviorRun::truncated`].
+    pub(super) truncated: bool,
+}
+
+/// The output of [`BehaviorCollector::run`]: the collected events, plus whether collection was
+/// cut short by the [`MAX_DEPTH`] cap.
+///
+/// The serializer halves of this frontend degrade past the cap by copying the node's **raw
+/// source text** into the fingerprint, so two subtrees deeper than the cap can only fail to
+/// match -- never collide. The behavior half has no such fallback: its guards **drop** whatever
+/// sits past the cap, and a dropped region is invisible in the events, so two bodies that differ
+/// only past the cap collected *equal* traces (two 260-deep constructors calling
+/// `trace.push(1)` versus `trace.unshift(2)` hashed to one `near-duplicate-test` finding while
+/// Vitest ran the probe 3-pass/1-fail). `truncated` carries that fact out of the collector so
+/// `extract` can refuse to compare the body at all -- a trace with a hole in it is not evidence
+/// of similarity in either direction.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct BehaviorRun {
+    /// The ordered behavior events, exactly as [`BehaviorCollector::events`] held them.
+    pub events: Vec<String>,
+    /// Whether any guarded walk returned early because `depth > MAX_DEPTH`. Only the
+    /// event-dropping guards set this ([`BehaviorCollector::walk_stmt`],
+    /// [`BehaviorCollector::walk_expr`], [`BehaviorCollector::walk_under_members`],
+    /// [`BehaviorCollector::walk_call`], [`BehaviorCollector::walk_new`]): the guards that
+    /// degrade safely -- `call_path`'s raw-source fallback, `property_chain_event`'s outright
+    /// decline -- leave it alone, because their under-matching cannot manufacture equality
+    /// between two different bodies.
+    pub truncated: bool,
 }
 
 impl<'a, 'b, 's, 'm> BehaviorCollector<'a, 'b, 's, 'm> {
@@ -19,11 +47,12 @@ impl<'a, 'b, 's, 'm> BehaviorCollector<'a, 'b, 's, 'm> {
         Self {
             ctx,
             events: Vec::new(),
+            truncated: false,
         }
     }
 
     /// Collect ordered behavior events from a callable body or concise arrow expression.
-    pub(super) fn run(mut self, body: &FunctionLike<'a, '_>) -> Vec<String> {
+    pub(super) fn run(mut self, body: &FunctionLike<'a, '_>) -> BehaviorRun {
         match body {
             FunctionLike::Arrow(arrow) => match &arrow.body {
                 ArrowFunctionBody::FunctionBody(function_body) => {
@@ -43,7 +72,7 @@ impl<'a, 'b, 's, 'm> BehaviorCollector<'a, 'b, 's, 'm> {
                                 for statement in continuation {
                                     self.walk_stmt(statement, false, 1);
                                 }
-                                return self.events;
+                                return self.finish();
                             }
                         }
                         self.walk_expr(expression, false, 0);
@@ -57,8 +86,16 @@ impl<'a, 'b, 's, 'm> BehaviorCollector<'a, 'b, 's, 'm> {
                     }
                 }
             }
+        };
+        self.finish()
+    }
+
+    /// Consumes the collector into its [`BehaviorRun`].
+    fn finish(self) -> BehaviorRun {
+        BehaviorRun {
+            events: self.events,
+            truncated: self.truncated,
         }
-        self.events
     }
 
     /// Whether a `const` declarator's own binding is fully absorbed by
@@ -152,6 +189,7 @@ impl<'a, 'b, 's, 'm> BehaviorCollector<'a, 'b, 's, 'm> {
     /// into nested expressions.
     fn walk_stmt(&mut self, statement: &Statement<'a>, deferred: bool, depth: u32) {
         if depth > MAX_DEPTH {
+            self.truncated = true;
             return;
         }
         match statement {
@@ -307,6 +345,7 @@ impl<'a, 'b, 's, 'm> BehaviorCollector<'a, 'b, 's, 'm> {
     /// nested callables.
     pub(super) fn walk_expr(&mut self, expr: &Expression<'a>, deferred: bool, depth: u32) {
         if depth > MAX_DEPTH {
+            self.truncated = true;
             return;
         }
         match expr {
@@ -516,6 +555,7 @@ impl<'a, 'b, 's, 'm> BehaviorCollector<'a, 'b, 's, 'm> {
         let mut depth = depth;
         loop {
             if depth > MAX_DEPTH {
+                self.truncated = true;
                 return;
             }
             current = match current {

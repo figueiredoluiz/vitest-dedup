@@ -55,7 +55,9 @@
 //!   this rule (that pair is `duplicate-test`'s claim). Known gap, not yet bridged: two bodies
 //!   whose only difference is in statements that record *no* behavior event at all (for example
 //!   two differently-valued, never-read local declarations) would have equal multisets despite
-//!   differing `alpha`; no fixture in this corpus exercises that shape yet.
+//!   differing `alpha`;
+//!   `fixtures/duplicates/behavior-depth-truncation.test.ts`'s shallow retention pair exercises
+//!   exactly that shape, deliberately, as the positive control beside the truncated pair.
 //!
 //!   **Clustering and non-transitive similarity.** Similarity in general is not transitive (A can
 //!   resemble B and B resemble C while A and C have incompatible assertions), so a rule that
