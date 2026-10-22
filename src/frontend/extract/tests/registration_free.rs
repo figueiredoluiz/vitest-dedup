@@ -80,6 +80,47 @@ fn a_function_is_proved_by_what_it_can_reach() {
     assert!(calls(&directory, "typeonly.ts", "run"));
 }
 
+/// The first-party proof reads the syntax tree, so how a registration global is separated from its
+/// arguments does not matter.
+#[test]
+fn registration_globals_are_refused_however_the_call_is_spelled() {
+    let spellings = [
+        "describe('a', () => {})",
+        "describe\n('a', () => {})",
+        "describe /* c */ ('a', () => {})",
+        "describe?.('a', () => {})",
+        "describe`a`",
+        "describe\n.each([1])('a', () => {})",
+        "describe?.each([1])('a', () => {})",
+    ];
+    let mut files: Vec<(String, String)> = spellings
+        .iter()
+        .enumerate()
+        .map(|(index, call)| {
+            (
+                format!("spelled{index}.ts"),
+                format!("export function run() {{ {call} }}"),
+            )
+        })
+        .collect();
+    files.push((
+        "near.ts".to_owned(),
+        "export function run(describe: number[]) { return describe.map((x) => x) }".to_owned(),
+    ));
+    let borrowed: Vec<(&str, &str)> = files
+        .iter()
+        .map(|(name, text)| (name.as_str(), text.as_str()))
+        .collect();
+    let directory = project(&borrowed);
+    for (index, spelling) in spellings.iter().enumerate() {
+        assert!(
+            !calls(&directory, &format!("spelled{index}.ts"), "run"),
+            "{spelling}"
+        );
+    }
+    assert!(calls(&directory, "near.ts", "run"));
+}
+
 /// Only code that runs is judged: a module that also holds a hook-registering function is harmless
 /// to import and to call through its other exports, and refused when the registering one runs.
 #[test]

@@ -111,7 +111,8 @@ what the code reads:
   `playwright`, `playwright-core`, `@playwright/*`), and whose imported file and the scripts it loads
   by relative path (`require('./x')`, `from './x'`, `import('./x')`, up to 1,024 files and 32 MiB)
   do not mention `vitest`, cannot register a test. When the project enables Vitest globals those
-  files must also not call a registration global as a free name. The loads are read from each
+  files must also not call a registration global as a free name (read across whitespace, newlines and
+  comments, and as `name?.(...)`, `name.each(...)`, a tagged template or `globalThis.name(...)`). The loads are read from each
   script's syntax tree. A name that could be several files (`./x` as `x.js`, `x.mjs` or `x.ts`, or
   a directory) is checked against every one of them, and directories are followed through their
   `package.json` `main`, `module` and index. A package is refused when it is past those bounds, when a script

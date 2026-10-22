@@ -170,6 +170,11 @@ const GLOBAL_REGISTRATION: &[&str] = &[
     "aroundAll",
 ];
 
+/// Whether `c` ends a line in JavaScript.
+fn is_line_terminator(c: char) -> bool {
+    matches!(c, '\n' | '\r' | '\u{2028}' | '\u{2029}')
+}
+
 /// `text` with comments, string literals and regular-expression literals blanked, so prose ("don't
 /// change it."), messages and quotes inside a pattern are not mistaken for code. A `/` starts a
 /// regular expression where an operand is expected (after an operator, a bracket, `,`, `;`, or
@@ -208,7 +213,7 @@ fn without_comments_and_strings(text: &str) -> String {
         match c {
             '/' if chars.peek() == Some(&'/') => {
                 for next in chars.by_ref() {
-                    if next == '\n' {
+                    if is_line_terminator(next) {
                         out.push('\n');
                         break;
                     }
@@ -217,13 +222,16 @@ fn without_comments_and_strings(text: &str) -> String {
             '/' if chars.peek() == Some(&'*') => {
                 chars.next();
                 let mut last = ' ';
+                let mut lines = false;
                 for next in chars.by_ref() {
                     if last == '*' && next == '/' {
                         break;
                     }
+                    lines |= is_line_terminator(next);
                     last = next;
                 }
-                out.push(' ');
+                // A comment that spans lines still ends the line it started on.
+                out.push(if lines { '\n' } else { ' ' });
             }
             '/' if operand_expected => {
                 let mut in_class = false;
@@ -235,7 +243,7 @@ fn without_comments_and_strings(text: &str) -> String {
                         '[' => in_class = true,
                         ']' => in_class = false,
                         '/' if !in_class => break,
-                        '\n' => break,
+                        c if is_line_terminator(c) => break,
                         _ => {}
                     }
                 }
@@ -244,7 +252,9 @@ fn without_comments_and_strings(text: &str) -> String {
                 word.clear();
             }
             '`' => {
-                // Template text is blanked, but an interpolation is code.
+                // Template text is blanked, but an interpolation is code. The opening is kept as
+                // a marker, so a template right after a name reads as a tagged call.
+                out.push('`');
                 let mut interpolation = 0usize;
                 while let Some(next) = chars.next() {
                     if interpolation == 0 {
@@ -263,13 +273,14 @@ fn without_comments_and_strings(text: &str) -> String {
                             '}' => {
                                 interpolation -= 1;
                                 if interpolation == 0 {
-                                    out.push(' ');
+                                    out.push(';');
                                     continue;
                                 }
                             }
                             _ => {}
                         }
-                        out.push(next);
+                        // A nested template's backticks are not tag markers.
+                        out.push(if next == '`' { ' ' } else { next });
                     }
                 }
                 out.push(' ');
@@ -327,11 +338,81 @@ fn defines_function(code: &str, open: usize) -> bool {
 }
 
 /// Whether `text` calls (or chains from) a registration global as a free name: the name stands
-/// alone, not part of a longer identifier and not a property (`pattern.test(...)`), and is
-/// followed by `(`, or by `.` and a Vitest modifier (`describe.each(...)`). Textual and deliberately
-/// generous: a local function that happens to be called `test` is a false alarm, which only costs
-/// the proof.
+/// alone, not part of a longer identifier and not a property (`pattern.test(...)`; a property of
+/// the global object, `globalThis.test(...)`, is the global), and is followed, across any
+/// whitespace (a newline included; comments are already blanked), by `(`, `?.(`, a template
+/// literal (a tagged call), or `.`/`?.` and a Vitest modifier (`describe.each(...)`). Textual and
+/// deliberately generous: a local function that happens to be called `test` is a false alarm,
+/// which only costs the proof.
 fn calls_registration_global(text: &str) -> bool {
+    let code = without_comments_and_strings(text);
+    let bytes = code.as_bytes();
+    GLOBAL_REGISTRATION.iter().any(|name| {
+        code.match_indices(name).any(|(start, _)| {
+            let before = start.checked_sub(1).map(|index| bytes[index]);
+            if before.is_some_and(is_identifier_byte) {
+                return false;
+            }
+            let prior =
+                code[..start].trim_end_matches(|c: char| c.is_whitespace() || c == '\u{feff}');
+            // A property access is the global only on the global object; `...` is a spread.
+            if !prior.ends_with("...")
+                && prior
+                    .strip_suffix('.')
+                    .is_some_and(|receiver| !receiver_is_global_object(receiver))
+            {
+                return false;
+            }
+            let end = start + name.len();
+            let mut at = skip_space(&code, end);
+            // `?.` reaches the same call or modifier as `.`.
+            let optional = code[at..].starts_with("?.");
+            if optional {
+                at = skip_space(&code, at + 2);
+            }
+            match bytes.get(at) {
+                Some(b'(') => !defines_function(&code, at),
+                Some(b'`') => true,
+                Some(b'.') if !optional => names_modifier(&code[skip_space(&code, at + 1)..]),
+                _ => optional && names_modifier(&code[at..]),
+            }
+        })
+    })
+}
+
+/// Whether `byte` can be part of an identifier name.
+fn is_identifier_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'$'
+}
+
+/// The offset of the first character at or after `from` that JavaScript does not count as
+/// whitespace (which includes U+FEFF).
+fn skip_space(code: &str, from: usize) -> usize {
+    code.len()
+        - code[from..]
+            .trim_start_matches(|c: char| c.is_whitespace() || c == '\u{feff}')
+            .len()
+}
+
+/// Whether the text before a `.` ends in the global object (`globalThis`, `global`, `window`;
+/// not `self`, which is often an alias of `this`), so `globalThis.test(...)` reads as the global call it is.
+fn receiver_is_global_object(before_dot: &str) -> bool {
+    let head = before_dot.trim_end_matches(|c: char| c.is_whitespace() || c == '\u{feff}');
+    let head = head.strip_suffix('?').unwrap_or(head);
+    let head = head.trim_end_matches(|c: char| c.is_whitespace() || c == '\u{feff}');
+    let start = head
+        .bytes()
+        .rposition(|byte| !is_identifier_byte(byte))
+        .map_or(0, |index| index + 1);
+    // A longer chain (`a.window.test(...)`) is a property of something else.
+    let chained = head[..start]
+        .trim_end_matches(|c: char| c.is_whitespace() || c == '\u{feff}')
+        .ends_with('.');
+    !chained && matches!(&head[start..], "globalThis" | "global" | "window")
+}
+
+/// Whether `rest` starts with a Vitest modifier as a whole word.
+fn names_modifier(rest: &str) -> bool {
     const MODIFIERS: &[&str] = &[
         "each",
         "skip",
@@ -346,30 +427,9 @@ fn calls_registration_global(text: &str) -> bool {
         "for",
         "shuffle",
     ];
-    let code = without_comments_and_strings(text);
-    let bytes = code.as_bytes();
-    let is_name = |byte: u8| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'$';
-    GLOBAL_REGISTRATION.iter().any(|name| {
-        code.match_indices(name).any(|(start, _)| {
-            let end = start + name.len();
-            let before = start.checked_sub(1).map(|index| bytes[index]);
-            if !before.is_none_or(|byte| !is_name(byte) && byte != b'.') {
-                return false;
-            }
-            let after = code[end..].trim_start_matches([' ', '\t']);
-            let end = code.len() - after.len();
-            match bytes.get(end) {
-                Some(b'(') => !defines_function(&code, end),
-                Some(b'.') => MODIFIERS.iter().any(|modifier| {
-                    code[end + 1..].starts_with(modifier)
-                        && !code
-                            .as_bytes()
-                            .get(end + 1 + modifier.len())
-                            .is_some_and(|b| is_name(*b))
-                }),
-                _ => false,
-            }
-        })
+    MODIFIERS.iter().any(|modifier| {
+        rest.strip_prefix(modifier)
+            .is_some_and(|after| !after.bytes().next().is_some_and(is_identifier_byte))
     })
 }
 
@@ -1144,6 +1204,69 @@ mod tests {
         .unwrap();
         forget_reached();
         assert!(!cannot_register_tests(&package.join("index.js"), false));
+    }
+
+    /// A registration global is a call however the name is separated from its parenthesis, and a
+    /// near miss one edit away is not.
+    #[test]
+    fn registration_calls_are_found_across_whitespace_comments_and_optional_calls() {
+        for (code, calls) in [
+            ("test('a', () => {})", true),
+            ("test\n('a', () => {})", true),
+            ("test\r\n\t('a', () => {})", true),
+            ("test /* c */ ('a', () => {})", true),
+            ("test // c\n('a', () => {})", true),
+            ("test?.('a', () => {})", true),
+            ("test ?. ('a', () => {})", true),
+            ("test`a`", true),
+            ("test\n`a`", true),
+            ("describe\n.each([1])('a', () => {})", true),
+            ("describe.\neach([1])('a', () => {})", true),
+            ("test?.each([1])('a', () => {})", true),
+            ("test?.\nskip('a', () => {})", true),
+            ("beforeEach\n(() => {})", true),
+            ("test", false),
+            ("test;\n('a')", false),
+            ("test = 1\n", false),
+            ("globalThis.test('a', () => {})", true),
+            ("globalThis?.describe.each([1])('a', () => {})", true),
+            ("window\n.it('a', () => {})", true),
+            ("window.test`a`", true),
+            ("self.test('a')", false),
+            ("test\u{feff}('a', () => {})", true),
+            ("a.window.test('a')", false),
+            ("a. window.test('a')", false),
+            ("patterns. test?.('a')", false),
+            ("patterns.\ntest`a`", false),
+            ("patterns./* c */test('a')", false),
+            ("[...test('a')]", true),
+            ("const s = `${test}${`hello`}`;", false),
+            ("const s = `${`test`}`;", false),
+            ("const s = `${test}`\n`x`;", false),
+            ("test // c\r('a')", true),
+            ("x = /a\r test('a')", true),
+            ("test // c\u{2028}('a')", true),
+            ("test('a', () => {}) /*\u{2028}*/ {}", true),
+            ("a./* c */window.test('a')", false),
+            ("test`a${1}`", true),
+            ("globalThis.test`a${1}`", true),
+            ("const s = `${test}`;", false),
+            ("test('a', () => {}) /*\n*/ {}", true),
+            ("myglobalThis.test('a')", false),
+            ("localThis.test('a')", false),
+            ("pattern.test('a')", false),
+            ("pattern\n.test('a')", false),
+            ("pattern?.test('a')", false),
+            ("mytest\n('a')", false),
+            ("test?.other('a')", false),
+            ("test.eachx('a')", false),
+            ("test\n.other('a')", false),
+            ("// test\n('a')", false),
+            ("x = 'test'\n('a')", false),
+            ("class A { test\n(a) { return a } }", false),
+        ] {
+            assert_eq!(calls_registration_global(code), calls, "{code:?}");
+        }
     }
 
     /// TypeScript's `import x = require(...)` is a load, and a script too deep to parse safely
