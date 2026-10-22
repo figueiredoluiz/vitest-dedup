@@ -694,7 +694,7 @@ fn normalized(path: &Path) -> PathBuf {
 /// What following one relative load came to.
 #[derive(Debug, PartialEq, Eq)]
 enum Followed {
-    /// The scripts a load may name, by real path: every candidate that exists, since the loader
+    /// The files a load may name, by real path: every candidate that exists, since the loader
     /// that runs the package (Node, or the bundler that inlines it) is not known.
     Scripts(Vec<PathBuf>),
     /// A target that cannot be read as part of the package (it leaves the root, or a manifest
@@ -777,7 +777,7 @@ fn add_script(file: &Path, real_root: &Path, found: &mut Found) -> bool {
         return false;
     }
     found.existed = true;
-    if kind_of(&real) == Kind::Script && !found.scripts.contains(&real) {
+    if !found.scripts.contains(&real) {
         found.scripts.push(real);
     }
     true
@@ -1475,6 +1475,9 @@ mod tests {
         write("nested/inner/reg.js", registers);
         write("nested/inner/index.js", clean);
         write("style.css", "a { color: red }");
+        write("addon.node", "\u{7f}ELF\u{0}");
+        write("boot.wasm", "\u{0}asm");
+        write("noted.json", r#"{"note":"vitest"}"#);
         write("twin.js", clean);
         write("twin.ts", registers);
         write("both.js", clean);
@@ -1495,6 +1498,9 @@ mod tests {
             ),
             ("exports.go = module.createRequire(__filename)('./x')", true),
             ("import './style.css'", false),
+            ("exports.go = require('./addon.node')", true),
+            ("exports.go = import('./boot.wasm')", true),
+            ("exports.go = require('./noted.json')", true),
             ("exports.go = require('module')['createRequire'](__filename)('./x')", true),
             ("exports.go = require('./data').go", false),
             ("exports.go = require.main.require('./solo/').go", true),

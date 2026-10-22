@@ -114,7 +114,8 @@ what the code reads:
   files must also not call a registration global as a free name (read across whitespace, newlines and
   comments, and as `name?.(...)`, `name.each(...)`, a tagged template or `globalThis.name(...)`). A package imported as a data file or asset (`.json`, a stylesheet, an image)
   is judged by its manifest, by the word `vitest` and, under globals, by calls to a registration global,
-  and is not parsed or followed, as the bundler treats it; a native addon or a WebAssembly module is refused. The loads are read from each
+  and is not parsed or followed, as the bundler treats it, including when a script loads it by a relative
+  path; a native addon or a WebAssembly module is refused. The loads are read from each
   script's syntax tree. A name that could be several files (`./x` as `x.js`, `x.mjs` or `x.ts`, or
   a directory) is checked against every one of them, and directories are followed through their
   `package.json` `main`, `module` and index. A package is refused when it is past those bounds, when a script
