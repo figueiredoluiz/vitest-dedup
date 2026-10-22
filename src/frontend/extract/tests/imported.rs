@@ -1905,6 +1905,10 @@ fn bindings_written_after_their_declaration_are_not_placed() {
         "const subject = { mode: 1 }; subject['mode']++;",
         "const subject = { mode: 1 }; delete subject.mode;",
         "const subject = [1]; (subject as number[])[0] = 2;",
+        "const subject = { mode: 1 }; ({ mode: subject.mode } = { mode: 2 });",
+        "const subject = { mode: 1 }; [subject.mode] = [2];",
+        "const subject = { mode: 1 }; ({ ...subject.rest } = { a: 1 });",
+        "const subject = { mode: 1 }; for (subject.mode of [2]) {}",
     ] {
         let extraction = run(written);
         assert!(

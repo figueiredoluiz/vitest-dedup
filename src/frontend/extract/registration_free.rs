@@ -653,17 +653,16 @@ pub(super) fn written_bindings(
         }
     }
     impl<'a> Visit<'a> for Writes<'_, 'a> {
-        fn visit_assignment_expression(&mut self, it: &oxc_ast::ast::AssignmentExpression<'a>) {
-            if let Some(member) = it.left.as_member_expression() {
+        /// Every simple target reaches here: `a.b = 1`, `a.b++`, a member inside a destructuring
+        /// pattern (`({ mode: a.b } = x)`, `[a.b] = x`) and the head of `for (a.b of xs)`.
+        fn visit_simple_assignment_target(
+            &mut self,
+            it: &oxc_ast::ast::SimpleAssignmentTarget<'a>,
+        ) {
+            if let Some(member) = it.as_member_expression() {
                 self.mark_root(member);
             }
-            walk::walk_assignment_expression(self, it);
-        }
-        fn visit_update_expression(&mut self, it: &oxc_ast::ast::UpdateExpression<'a>) {
-            if let Some(member) = it.argument.as_member_expression() {
-                self.mark_root(member);
-            }
-            walk::walk_update_expression(self, it);
+            walk::walk_simple_assignment_target(self, it);
         }
         fn visit_unary_expression(&mut self, it: &oxc_ast::ast::UnaryExpression<'a>) {
             if it.operator == oxc_ast::ast::UnaryOperator::Delete {
