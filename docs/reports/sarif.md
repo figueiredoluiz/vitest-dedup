@@ -12,6 +12,12 @@ SARIF 2.1.0. The log names the published schema in `$schema`.
   `enabled: false`, and a rule turned off for the run still shows its built-in default. A rule that
   is off for the run is not computed, so it never backs a result.
 - `verdict` travels in a result property, since SARIF has no field for it.
+- Artifact locations are URI references: after the shared path sanitization, UTF-8 bytes outside
+  letters, digits, `-._~` and `/` are percent-encoded. For example,
+  `src/[id]/a b#c%41.test.ts` becomes `src/%5Bid%5D/a%20b%23c%2541.test.ts`.
+  Decode once to recover the sanitized path; JSON, JSONL and HTML keep plain path strings.
+  Regions and fingerprints are unchanged. See [Output safety](safety.md#output-safety) for the
+  shared sanitization limits.
 - An incomplete run sets `runs[0].invocations[0].properties.incomplete`.
   `runs[0].invocations[0].properties.incompleteCauses` counts the causes, keyed and valued as in the
   `json` report, and is present with false/zero values on a complete run.

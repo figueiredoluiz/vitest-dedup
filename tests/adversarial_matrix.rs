@@ -65,6 +65,9 @@ use std::path::Path;
 use tempfile::TempDir;
 use vitest_dedup::cli::ReporterKind;
 
+#[path = "support/sarif_uri.rs"]
+mod sarif_uri;
+
 // =================================================================================================
 // The matrix's three typed dimensions.
 // =================================================================================================
@@ -531,7 +534,8 @@ fn extract_field_flat(record: &serde_json::Value, site: Site) -> String {
 /// `locations` -- `src/reporters/sarif.rs` instead attaches each participant's title as that
 /// location's own `message.text` (see that module's "Per-participant title and inert flag" doc
 /// section), so the title-site extraction reads the primary location's message rather than a
-/// sibling array.
+/// sibling array. Filename checks decode the URI once before checking the sanitizer contract,
+/// so percent-encoding cannot conceal a character that should have been stripped.
 fn extract_field_sarif(report: &serde_json::Value, site: Site) -> String {
     let result = &report["runs"][0]["results"][0];
     let field = if site == Site::Filename {
@@ -539,10 +543,14 @@ fn extract_field_sarif(report: &serde_json::Value, site: Site) -> String {
     } else {
         &result["locations"][0]["message"]["text"]
     };
-    field
+    let text = field
         .as_str()
-        .unwrap_or_else(|| panic!("expected a string field in sarif result: {result}"))
-        .to_owned()
+        .unwrap_or_else(|| panic!("expected a string field in sarif result: {result}"));
+    if site == Site::Filename {
+        sarif_uri::decode_path(text)
+    } else {
+        text.to_owned()
+    }
 }
 
 /// Parses `jsonl_stdout` as exactly one finding line followed by exactly one summary line --

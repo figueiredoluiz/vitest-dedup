@@ -113,7 +113,11 @@
 //!
 //! Every interpolated string -- `message.text`, a location's `message.text`, and
 //! `artifactLocation.uri` -- goes through [`report_safe`]/[`report_safe_path`], identically to the
-//! `json` reporter (`docs/reports/safety.md`'s output-safety contract, applied "by every reporter").
+//! `json` reporter (`docs/reports/safety.md`'s output-safety contract, applied "by every reporter"),
+//! and `artifactLocation.uri` is then encoded as an RFC 3986 URI reference ([`uri_reference`]):
+//! SARIF requires that form, a consumer resolves it by percent-decoding, and the sanitized path
+//! verbatim would let a `#` in a filename truncate the URI into a fragment while a literal `%41`
+//! decodes to `A` -- the resolved URI naming a different file than the finding points at.
 //! `verdict` and `partialFingerprints` are not, for the same reason `json` does not sanitize them:
 //! both are closed, tool-defined values, never text copied out of the analyzed repository.
 //! `serde_json` is built with the `preserve_order` feature crate-wide (`Cargo.toml`), so the
@@ -293,16 +297,50 @@ fn sarif_result(finding: &Finding) -> Value {
     result
 }
 
+/// The hex digits percent-encoding spells its bytes with. Upper-case, as RFC 3986 §2.1 permits
+/// and every consumer decodes case-insensitively.
+const HEX: &[u8; 16] = b"0123456789ABCDEF";
+
+/// A path as an RFC 3986 URI reference, which is what SARIF 2.1.0 requires of
+/// `artifactLocation.uri` and what consumers (GitHub code scanning among them) resolve by
+/// percent-decoding.
+///
+/// Every UTF-8 byte that is neither unreserved (`A-Z a-z 0-9 - . _ ~`) nor the `/` separator is
+/// percent-encoded, so `#` cannot become a fragment (`%23`), `[`/`]`/space become legal
+/// (`%5B`/`%5D`/`%20`), non-ASCII travels as its UTF-8 triples, and a literal `%` in a filename
+/// re-encodes as `%25` -- a file genuinely named `a%41.test.ts` emits `a%2541.test.ts`, which
+/// decodes back to `a%41.test.ts` instead of collapsing to `aA.test.ts`. Sub-delims (`+ & = ; ,
+/// $`) are legal path characters and are encoded anyway: unreserved-plus-separator is the
+/// simplest rule that is valid for every consumer. Ordinary clean paths are unchanged, so the
+/// other reporters' plain-string path contract and this URI form stay byte-identical wherever
+/// the path never needed encoding.
+fn uri_reference(path: &str) -> String {
+    let mut out = String::with_capacity(path.len());
+    for &byte in path.as_bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' | b'/' => {
+                out.push(byte as char);
+            }
+            _ => {
+                out.push('%');
+                out.push(HEX[(byte >> 4) as usize] as char);
+                out.push(HEX[(byte & 0x0f) as usize] as char);
+            }
+        }
+    }
+    out
+}
+
 /// One participant location, with its title and inert flag attached the way the module doc's
 /// "Per-participant title and inert flag" section describes.
 fn sarif_location(location: &Location, title: &str, inert: bool) -> Value {
     json!({
         "physicalLocation": {
-            // Not percent-encoded: this is the same forward-slash, sanitized, analysis-root-
-            // relative path every other reporter emits as a plain string (`json.rs`'s
-            // `JsonLocation::path`), kept identical across reporters rather than re-encoded into
-            // a stricter URI form only here.
-            "artifactLocation": { "uri": report_safe_path(&location.path) },
+            // The sanitized, forward-slash, analysis-root-relative path every other reporter
+            // emits as a plain string (`json.rs`'s `JsonLocation::path`) -- encoded into the
+            // URI-reference form only SARIF requires here, because a consumer that resolves
+            // `uri` decodes it, and the other reporters' consumers read it as a plain string.
+            "artifactLocation": { "uri": uri_reference(&report_safe_path(&location.path)) },
             "region": {
                 "startLine": location.span.start.line,
                 "startColumn": location.span.start.column,
@@ -578,6 +616,103 @@ mod tests {
         );
     }
 
+    /// Percent-decode a URI reference the way a consumer resolves it, so the tests can assert
+    /// the round trip `uri_reference` exists to preserve.
+    fn decode_uri_reference(uri: &str) -> String {
+        let bytes = uri.as_bytes();
+        let mut out = Vec::with_capacity(bytes.len());
+        let mut index = 0;
+        while index < bytes.len() {
+            if bytes[index] == b'%' && index + 2 < bytes.len() {
+                let high = (bytes[index + 1] as char).to_digit(16);
+                let low = (bytes[index + 2] as char).to_digit(16);
+                if let (Some(high), Some(low)) = (high, low) {
+                    out.push((high * 16 + low) as u8);
+                    index += 3;
+                    continue;
+                }
+            }
+            out.push(bytes[index]);
+            index += 1;
+        }
+        String::from_utf8(out).expect("uri_reference only emits valid UTF-8")
+    }
+
+    /// `artifactLocation.uri` is a URI reference: separators survive, reserved and non-ASCII
+    /// bytes percent-encode, an existing percent sequence in a FILENAME is data (re-encoded,
+    /// never decoded), and percent-decoding the result yields the input path exactly.
+    #[test]
+    fn uri_percent_encodes_reserved_bytes_and_preserves_separators() {
+        let cases = [
+            // Ordinary paths are byte-identical to the plain-string form every other reporter
+            // emits.
+            ("src/a.test.ts", "src/a.test.ts"),
+            ("a/b-c_d.e~f.ts", "a/b-c_d.e~f.ts"),
+            // The URI-hostile shape: brackets illegal in URIs, a space, a fragment delimiter,
+            // and a filename that already spells a percent sequence.
+            (
+                "src/[id]/a b#c%41.test.ts",
+                "src/%5Bid%5D/a%20b%23c%2541.test.ts",
+            ),
+            // Non-ASCII travels as UTF-8 percent triples.
+            (
+                "héllo/ünïcode.test.ts",
+                "h%C3%A9llo/%C3%BCn%C3%AFcode.test.ts",
+            ),
+            (
+                " casos/日本語.test.ts",
+                "%20casos/%E6%97%A5%E6%9C%AC%E8%AA%9E.test.ts",
+            ),
+            // Sub-delims are legal path characters and encode anyway (the contract's rule).
+            ("a+b&c=d.test.ts", "a%2Bb%26c%3Dd.test.ts"),
+            ("m,n;o$g.test.ts", "m%2Cn%3Bo%24g.test.ts"),
+            // A first-segment colon must not introduce a scheme; query syntax is path data.
+            ("scheme:name?.test.ts", "scheme%3Aname%3F.test.ts"),
+        ];
+        for (path, expected) in cases {
+            assert_eq!(uri_reference(path), expected, "encoding {path:?}");
+            assert_eq!(
+                decode_uri_reference(expected),
+                path,
+                "decoding must return the path exactly: {expected:?}"
+            );
+        }
+    }
+
+    /// A finding whose path carries the URI-hostile shape: the emitted uri encodes it, and the
+    /// region and fingerprint beside it are untouched by the encoding.
+    #[test]
+    fn hostile_path_encodes_in_uri_and_leaves_region_and_fingerprint_alone() {
+        let mut result = sample_result();
+        result.findings[0].locations[0].path = PathBuf::from("src/[id]/a b#c%41.test.ts");
+        result.findings[0].locations[1].path = PathBuf::from("src/日本語.test.ts");
+        let value = render_value(&result);
+        assert_eq!(
+            value["runs"][0]["results"][0]["relatedLocations"][0]["physicalLocation"]
+                ["artifactLocation"]["uri"],
+            "src/%E6%97%A5%E6%9C%AC%E8%AA%9E.test.ts"
+        );
+        let physical = &value["runs"][0]["results"][0]["locations"][0]["physicalLocation"];
+        assert_eq!(
+            physical["artifactLocation"]["uri"],
+            "src/%5Bid%5D/a%20b%23c%2541.test.ts"
+        );
+        // The fixture's first participant stands at line 10, column 3, five columns wide;
+        // asserting the exact numbers proves the encoding did not touch the region.
+        let region = physical["region"].as_object().unwrap();
+        assert_eq!(region["startLine"], 10);
+        assert_eq!(region["startColumn"], 3);
+        assert_eq!(region["endLine"], 10);
+        assert_eq!(region["endColumn"], 8);
+        let fingerprints = value["runs"][0]["results"][0]["partialFingerprints"]
+            .as_object()
+            .unwrap();
+        assert_eq!(
+            fingerprints[FINGERPRINT_VERSION],
+            result.findings[0].fingerprint()
+        );
+    }
+
     /// Check SARIF output: hostile title and path are sanitized in message and uri.
     #[test]
     fn hostile_title_and_path_are_sanitized_in_message_and_uri() {
@@ -602,6 +737,10 @@ mod tests {
         assert!(!uri.contains('\u{202e}'));
         assert!(!uri.contains('\u{202c}'));
         assert!(!uri.contains('\\'));
+        assert_eq!(
+            decode_uri_reference(uri),
+            "src/safegnisaeler-tsetevil.test.ts"
+        );
 
         let message_text = value["runs"][0]["results"][0]["message"]["text"]
             .as_str()

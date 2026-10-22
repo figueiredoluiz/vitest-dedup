@@ -988,15 +988,27 @@ mod tests {
                 loc.path = PathBuf::from(format!("\u{1b}{}\u{202e}", "界".repeat(length)));
             }
             let fingerprint = result.findings[0].fingerprint();
-            for reporter in [
-                Box::new(super::super::JsonReporter::new()) as Box<dyn Reporter>,
-                Box::new(super::super::SarifReporter::new()),
+            for (reporter, pointers, expected) in [
+                (
+                    Box::new(super::super::JsonReporter::new()) as Box<dyn Reporter>,
+                    ["/findings/0/locations/0/path", "/findings/0/locations/1/path"],
+                    "界".repeat(length),
+                ),
+                (
+                    Box::new(super::super::SarifReporter::new()),
+                    [
+                        "/runs/0/results/0/locations/0/physicalLocation/artifactLocation/uri",
+                        "/runs/0/results/0/relatedLocations/0/physicalLocation/artifactLocation/uri",
+                    ],
+                    "%E7%95%8C".repeat(length),
+                ),
             ] {
                 let mut full = Vec::new();
                 reporter.write_report(&result, &mut full).unwrap();
-                assert!(String::from_utf8(full)
-                    .unwrap()
-                    .contains(&"界".repeat(length)));
+                let report: Value = serde_json::from_slice(&full).unwrap();
+                for pointer in pointers {
+                    assert_eq!(report.pointer(pointer).unwrap(), &expected);
+                }
             }
             let lines = render_lines(&result);
             let finding = &lines[0];
