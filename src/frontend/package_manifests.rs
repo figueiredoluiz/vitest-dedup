@@ -414,13 +414,15 @@ enum Load {
 /// is left out; so is a Node builtin. A specifier that is neither relative nor a package name
 /// (`#internal`, absolute, `file:`), carries a `?`, `#` or `%`, or is not a plain string, is an
 /// [`Load::Unknown`], as is any other use of the name `require` (an alias, `(0, require)(x)`).
-fn loads(path: &Path, text: &str) -> Vec<Load> {
-    struct Scan {
+fn loads(path: &Path, text: &str, own: Option<&str>) -> Vec<Load> {
+    struct Scan<'n> {
+        /// The package's own name: a bare load of it resolves inside the package.
+        own: Option<&'n str>,
         found: Vec<Load>,
         /// Callee identifiers already read as a call, by span start.
         handled: HashSet<u32>,
     }
-    impl Scan {
+    impl Scan<'_> {
         /// Records one written specifier: relative to follow, a package or builtin to skip, else unknown.
         fn specifier(&mut self, specifier: &str) {
             let relative = matches!(specifier, "." | "..")
@@ -432,7 +434,15 @@ fn loads(path: &Path, text: &str) -> Vec<Load> {
                     .next()
                     .is_some_and(|first| first.is_ascii_alphanumeric() || first == '@')
                     && !specifier.contains(':');
-            if specifier.contains(['?', '#', '%', '\\', '\n']) || !(relative || package_or_builtin)
+            let self_reference = self.own.is_some_and(|own| {
+                specifier == own
+                    || specifier
+                        .strip_prefix(own)
+                        .is_some_and(|rest| rest.starts_with('/'))
+            });
+            if self_reference
+                || specifier.contains(['?', '#', '%', '\\', '\n'])
+                || !(relative || package_or_builtin)
             {
                 self.found.push(Load::Unknown);
             } else if relative {
@@ -454,7 +464,14 @@ fn loads(path: &Path, text: &str) -> Vec<Load> {
             }
         }
     }
-    impl<'a> Visit<'a> for Scan {
+    impl<'a> Visit<'a> for Scan<'_> {
+        /// `import x = require('y')`.
+        fn visit_ts_external_module_reference(
+            &mut self,
+            it: &oxc_ast::ast::TSExternalModuleReference<'a>,
+        ) {
+            self.specifier(it.expression.value.as_str());
+        }
         /// `import ... from 'x'`.
         fn visit_import_declaration(&mut self, it: &oxc_ast::ast::ImportDeclaration<'a>) {
             self.specifier(it.source.value.as_str());
@@ -504,6 +521,12 @@ fn loads(path: &Path, text: &str) -> Vec<Load> {
         }
         /// Skips `require.resolve` and the like, which do not load.
         fn visit_static_member_expression(&mut self, it: &StaticMemberExpression<'a>) {
+            // `import.meta.glob(...)` imports files by pattern, which are not followed.
+            if matches!(&it.object, Expression::ImportMeta(_))
+                && matches!(it.property.name.as_str(), "glob" | "globEager")
+            {
+                self.found.push(Load::Unknown);
+            }
             // `require.resolve`, `require.cache` and the like do not load.
             if matches!(&it.object, Expression::Identifier(identifier) if identifier.name == "require")
             {
@@ -518,6 +541,9 @@ fn loads(path: &Path, text: &str) -> Vec<Load> {
             }
         }
     }
+    if super::extract::parse_refusal(text).is_some() {
+        return vec![Load::Unknown];
+    }
     let allocator = Allocator::default();
     let source_type = SourceType::from_path(path)
         .unwrap_or_default()
@@ -527,6 +553,7 @@ fn loads(path: &Path, text: &str) -> Vec<Load> {
         return vec![Load::Unknown];
     }
     let mut scan = Scan {
+        own,
         found: Vec::new(),
         handled: HashSet::new(),
     };
@@ -658,7 +685,11 @@ fn resolve_target(
         else {
             return false;
         };
-        if let Some(main) = value.get("main").and_then(Value::as_str) {
+        // A bundler that inlines the package may take `module` over `main`.
+        for field in ["main", "module"] {
+            let Some(main) = value.get(field).and_then(Value::as_str) else {
+                continue;
+            };
             let target = normalized(&base.join(main));
             if !target.starts_with(real_root)
                 || !resolve_target(&target, real_root, false, false, found)
@@ -709,6 +740,10 @@ fn reached_files_register(entry: &Path, globals: bool) -> bool {
     let Some(real_root) = package_root(&real_entry) else {
         return true;
     };
+    let own = std::fs::read_to_string(real_root.join("package.json"))
+        .ok()
+        .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+        .and_then(|value| value.get("name").and_then(Value::as_str).map(str::to_owned));
     let mut pending = vec![real_entry];
     let mut seen: HashSet<PathBuf> = HashSet::new();
     let mut bytes = 0u64;
@@ -734,7 +769,7 @@ fn reached_files_register(entry: &Path, globals: bool) -> bool {
         if text.contains("vitest") || (globals && calls_registration_global(&text)) {
             return true;
         }
-        for load in loads(&file, &text) {
+        for load in loads(&file, &text, own.as_deref()) {
             match load {
                 Load::Unknown => return true,
                 Load::Relative(specifier) => match follow(&file, &real_root, &specifier) {
@@ -1015,6 +1050,35 @@ mod tests {
     }
 
     /// A link out of the package cannot be followed, which refuses the package.
+    /// TypeScript's `import x = require(...)` is a load, and a script too deep to parse safely
+    /// refuses the package.
+    #[test]
+    fn typescript_import_assignments_and_unparseable_scripts_are_judged() {
+        let directory = tempfile::tempdir().unwrap();
+        let package = install(directory.path(), "ts", r#"{"name":"ts"}"#);
+        write_file(
+            &package,
+            "registrar.cjs",
+            "exports.go = () => test('a', () => {})",
+        );
+        write_file(&package, "clean.cjs", "exports.go = () => 1");
+        for (entry, refused) in [
+            ("import r = require('./registrar.cjs'); r.go();", false),
+            ("import r = require('./clean.cjs'); r.go();", true),
+        ] {
+            write_file(&package, "index.ts", entry);
+            forget_reached();
+            VERDICTS.with(|verdicts| verdicts.borrow_mut().clear());
+            assert_eq!(
+                cannot_register_tests(&package.join("index.ts"), true),
+                refused,
+                "{entry}"
+            );
+        }
+        let deep = format!("{}0;", "!".repeat(1_000_000));
+        assert_entry(&package, &deep, true, true);
+    }
+
     #[cfg(unix)]
     #[test]
     fn a_link_out_of_the_package_is_not_followed() {
@@ -1110,11 +1174,25 @@ mod tests {
         write("sub/nested/package.json", r#"{"main":"clean.js"}"#);
         write("sub/nested/clean.js", clean);
         write("sub/nested/index.js", registers);
+        write(
+            "modular/package.json",
+            r#"{"main":"clean.js","module":"reg.js"}"#,
+        );
+        write("modular/clean.js", clean);
+        write("modular/reg.js", registers);
         write("twin.js", clean);
         write("twin.ts", registers);
         write("both.js", clean);
         write("both.mjs", registers);
         for (entry, registers) in [
+            (
+                "exports.go = import.meta.glob('./*.js', { eager: true })",
+                true,
+            ),
+            ("exports.go = require('node').go", true),
+            ("exports.go = require('node/sub').go", true),
+            ("exports.go = require('nodes').go", false),
+            ("exports.go = require('./modular').go", true),
             ("exports.go = require('./twin.js').go", true),
             ("exports.go = require('./both').go", true),
             ("exports.go = require /* c */ ('./registrar.cjs').go", true),

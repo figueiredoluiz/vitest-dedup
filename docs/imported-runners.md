@@ -114,9 +114,9 @@ what the code reads:
   files must also not call a registration global as a free name. The loads are read from each
   script's syntax tree. A name that could be several files (`./x` as `x.js`, `x.mjs` or `x.ts`, or
   a directory) is checked against every one of them, and directories are followed through their
-  `package.json` `main` and index. A package is refused when it is past those bounds, when a script
+  `package.json` `main`, `module` and index. A package is refused when it is past those bounds, when a script
   cannot be parsed, when a load cannot be read (a computed or template specifier, `require` used as
-  a value), or when a load leaves the package, needs a manifest that cannot be read, or is spelled in a
+  a value, `import.meta.glob`, a load of the package's own name), or when a load leaves the package, needs a manifest that cannot be read, or is spelled in a
   way that cannot be followed (`#internal` and absolute specifiers, `?` or `#` suffixes, escapes). An
   unreadable manifest or a missing dependency is
   refused. `mountSuspended`, `renderSuspended`, `registerEndpoint`, `mockNuxtImport` and
