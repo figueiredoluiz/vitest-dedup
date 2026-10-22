@@ -116,7 +116,7 @@ what the code reads:
   a directory) is checked against every one of them, and directories are followed through their
   `package.json` `main`, `module` and index. A package is refused when it is past those bounds, when a script
   cannot be parsed, when a load cannot be read (a computed or template specifier, `require` used as
-  a value or through `.call`/`.apply`, `import.meta.glob`, a load of the package's own name, a
+  a value or through `.call`/`.apply`, `createRequire`, `import.meta.glob`, a load of the package's own name, a
   relative load that names nothing on disk, a manifest with `exports` or `browser`, a `main` that is a
   directory with its own manifest), or when a load leaves the package, needs a manifest that cannot be read, or is spelled in a
   way that cannot be followed (`#internal` and absolute specifiers, `?` or `#` suffixes, escapes). An

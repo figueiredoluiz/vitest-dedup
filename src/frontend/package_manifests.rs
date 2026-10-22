@@ -465,6 +465,12 @@ fn loads(path: &Path, text: &str, own: Option<&str>) -> Vec<Load> {
         }
     }
     impl<'a> Visit<'a> for Scan<'_> {
+        /// `import { createRequire } from 'module'`: the loader it builds is not followed.
+        fn visit_import_specifier(&mut self, it: &oxc_ast::ast::ImportSpecifier<'a>) {
+            if it.imported.name() == "createRequire" {
+                self.found.push(Load::Unknown);
+            }
+        }
         /// `import x = require('y')`.
         fn visit_ts_external_module_reference(
             &mut self,
@@ -475,6 +481,7 @@ fn loads(path: &Path, text: &str, own: Option<&str>) -> Vec<Load> {
         /// `import ... from 'x'`.
         fn visit_import_declaration(&mut self, it: &oxc_ast::ast::ImportDeclaration<'a>) {
             self.specifier(it.source.value.as_str());
+            walk::walk_import_declaration(self, it);
         }
         /// `export { a } from 'x'`.
         fn visit_export_from_declaration(&mut self, it: &oxc_ast::ast::ExportFromDeclaration<'a>) {
@@ -521,6 +528,9 @@ fn loads(path: &Path, text: &str, own: Option<&str>) -> Vec<Load> {
         }
         /// Skips `require.resolve` and the like, which do not load.
         fn visit_static_member_expression(&mut self, it: &StaticMemberExpression<'a>) {
+            if it.property.name == "createRequire" {
+                self.found.push(Load::Unknown);
+            }
             // `import.meta.glob(...)` imports files by pattern, which are not followed.
             if matches!(&it.object, Expression::ImportMeta(_))
                 && matches!(it.property.name.as_str(), "glob" | "globEager")
@@ -541,8 +551,12 @@ fn loads(path: &Path, text: &str, own: Option<&str>) -> Vec<Load> {
             }
             walk::walk_static_member_expression(self, it);
         }
-        /// Any other mention of `require` is a use the walk cannot follow.
+        /// Any other mention of `require`, or of `createRequire` (which returns a loader), is a use
+        /// the walk cannot follow.
         fn visit_identifier_reference(&mut self, it: &IdentifierReference<'a>) {
+            if it.name == "createRequire" {
+                self.found.push(Load::Unknown);
+            }
             if it.name == "require" && !self.handled.contains(&it.span.start) {
                 self.found.push(Load::Unknown);
             }
@@ -598,8 +612,12 @@ enum Followed {
 /// JSX forms as well as Node's three.
 const SCRIPT_EXTENSIONS: [&str; 8] = ["js", "mjs", "cjs", "ts", "mts", "cts", "tsx", "jsx"];
 
-/// Files Node does not run as JavaScript: parsed as data, or a native addon.
-const NOT_SCRIPTS: &[&str] = &["json", "node"];
+/// Files that are data, a native addon or a binary asset. Any other extension is run as
+/// JavaScript by Node's `require`, so it is read as a script.
+const NOT_SCRIPTS: &[&str] = &[
+    "json", "node", "css", "scss", "sass", "less", "svg", "png", "jpg", "jpeg", "gif", "webp",
+    "ico", "woff", "woff2", "ttf", "otf", "wasm",
+];
 
 /// Follows the relative `specifier` written in `from`: every file it can name, then a directory
 /// through its manifest's `main` and its index. All in real paths: `from` and `real_root` are
@@ -1215,6 +1233,7 @@ mod tests {
         write("nested/inner/package.json", r#"{"main":"reg.js"}"#);
         write("nested/inner/reg.js", registers);
         write("nested/inner/index.js", clean);
+        write("style.css", "a { color: red }");
         write("twin.js", clean);
         write("twin.ts", registers);
         write("both.js", clean);
@@ -1229,6 +1248,13 @@ mod tests {
             ("exports.go = require('nodes').go", false),
             ("exports.go = require('./modular').go", true),
             ("exports.go = require.call(null, './registrar.cjs')", true),
+            (
+                "import { createRequire } from 'module'; exports.go = 1",
+                true,
+            ),
+            ("exports.go = module.createRequire(__filename)('./x')", true),
+            ("import './style.css'", false),
+            ("const { createRequire } = require('node:module'); exports.go = createRequire(__filename)('./x')", true),
             (
                 "exports.go = require.apply(null, ['./registrar.cjs'])",
                 true,
