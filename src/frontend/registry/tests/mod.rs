@@ -2644,3 +2644,79 @@ fn a_tagged_template_on_the_root_itself_is_not_a_table() {
         "there is no `.each`/`.for` member for the template to close over"
     );
 }
+
+/// The ECMAScript number spelling, pinned where it is a *value identity* (keys, folds) and
+/// where it is display text, plus the one deliberate divergence.
+///
+/// Rust's `f64` Display and ECMAScript differ at least wherever ECMAScript switches notation
+/// (`|x| >= 1e21`, `|x| < 1e-6`) and can also pick different shortest digits on in-range
+/// ties, so no magnitude is trusted to agree by accident. `1e21` as an object key is `"1e+21"` at
+/// runtime (Node v26.0.0: `Object.keys({1e21: 1})` is `["1e+21"]`), so any fold that spelled it
+/// as `1000000000000000000000` merged the key with the unrelated decimal string and split it
+/// from the equivalent string `'1e+21'`. Both directions are pinned here at the spelling level
+/// and in the corpus fixtures at the finding level.
+#[test]
+fn number_folds_take_the_ecmascript_spelling_except_signed_zero() {
+    #[rustfmt::skip]
+    let cases: &[(f64, &str)] = &[
+        (0.0, "0"),
+        (1.0, "1"),
+        (-1.0, "-1"),
+        (0.5, "0.5"),
+        (123.456, "123.456"),
+        // The notation switch Rust's Display does not make.
+        (1e20, "100000000000000000000"),
+        (1e21, "1e+21"),
+        (-1e21, "-1e+21"),
+        (1e-6, "0.000001"),
+        (1e-7, "1e-7"),
+        (f64::NAN, "NaN"),
+        (f64::INFINITY, "Infinity"),
+        (f64::NEG_INFINITY, "-Infinity"),
+    ];
+    for (value, expected) in cases {
+        assert_eq!(&format_number(*value), expected, "format_number({value})");
+        assert_eq!(
+            &js_number_to_string(*value),
+            expected,
+            "js_number_to_string({value})"
+        );
+    }
+    // The one deliberate divergence: the FINGERPRINT keeps `-0` distinct from `0`
+    // (`Object.is(0, -0)` is false, so two fixture values must not fold together), while
+    // ToString text spells both as `0`, exactly as JavaScript does.
+    assert_eq!(format_number(-0.0), "-0");
+    assert_eq!(js_number_to_string(-0.0), "0");
+    // The spelling round-trips: `Number('1e+21')` is the value it came from.
+    assert_eq!(number_of_string("1e+21"), Some(1e21));
+    assert_eq!(number_of_string("1e-7"), Some(1e-7));
+}
+
+/// Numeric object keys canonicalize to the runtime key they bind, so the two spellings of
+/// `1e+21` fold together and the look-alike decimal string stays its own key.
+#[test]
+fn object_key_canonicals_follow_the_runtime_key() {
+    let display_of = |object: &str| {
+        let rows = each_rows(&format!("test.each([[{object}]])('%s', () => {{}});"));
+        cell_displays(&rows[0])[0].clone()
+    };
+    let exponent = display_of("{1e21: 1}").expect("the numeric-key object folds");
+    let spelled = display_of("{'1e+21': 1}").expect("the string-key object folds");
+    let decimal = display_of("{'1000000000000000000000': 1}").expect("the decimal string folds");
+    assert_eq!(
+        exponent, spelled,
+        "numeric 1e21 and the string '1e+21' bind one runtime key and must fold alike"
+    );
+    assert_ne!(
+        exponent, decimal,
+        "the decimal string is a different runtime key however similar it looks"
+    );
+    assert!(
+        exponent.contains("1e+21"),
+        "the shared key spells the ECMAScript form, got {exponent:?}"
+    );
+    assert!(
+        decimal.contains("1000000000000000000000"),
+        "the decimal key keeps its own text, got {decimal:?}"
+    );
+}

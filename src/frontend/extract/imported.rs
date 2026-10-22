@@ -581,7 +581,7 @@ impl<'a> Walker<'a> {
             // are; the declaration walk holds the bindings and decides whether the call is admitted.
             let unproved_arguments = call.arguments.iter().any(|argument| {
                 argument.as_expression().is_none_or(|expression| {
-                    !inert_expression(expression) && self.fold_expr(expression).is_none()
+                    !inert_expression(expression) && self.folds_to_known_value(expression).is_none()
                 })
             });
             if unproved_arguments && !prepare {

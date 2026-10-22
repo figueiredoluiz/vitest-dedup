@@ -2475,7 +2475,11 @@ fn numeric_value(expr: &Expression, resolve: Resolve<'_, '_>) -> Option<f64> {
 ///
 /// Arrays agree, because `%s` on an array *is* `ToString` -- `Array.prototype.join` calling
 /// `ToString` on each element is the only path either renderer takes.
-fn render_js_to_string(expr: &Expression, depth: u32, resolve: Resolve<'_, '_>) -> Option<String> {
+pub(super) fn render_js_to_string(
+    expr: &Expression,
+    depth: u32,
+    resolve: Resolve<'_, '_>,
+) -> Option<String> {
     let expr = peeled_unwrapped(expr, resolve, depth)?;
     match expr {
         // `Object.prototype.toString` -- but ONLY when that is really the method being called.
@@ -3071,32 +3075,21 @@ fn const_fold_number(expr: &Expression, resolve: Resolve<'_, '_>) -> Option<f64>
 
 /// Format numbers for static display, spelling NaN and positive/negative Infinity explicitly.
 fn format_number(value: f64) -> String {
-    if value.is_nan() {
-        return "NaN".to_owned();
+    // `-0` keeps its own spelling, deliberately NOT JavaScript's (`String(-0)` is `0`): the
+    // distinction is observable in a test via `Object.is(value, -0)`, so two fixtures bound to
+    // `0` and `-0` must not fold to one value. Every other number takes the ECMAScript
+    // `Number::toString` spelling through ryu-js (non-finite folds included, the spelling C12
+    // restored: `Infinity`, never Rust's `inf`). Rust's own `f64` Display was the previous
+    // fallback and diverges exactly where ECMAScript switches notation: `1e21` printed as
+    // `1000000000000000000000`, so an object key written `{1e21: 1}` (runtime key `"1e+21"`)
+    // folded onto the unrelated string key `{'1000000000000000000000': 1}` while the runtime-
+    // equal `{'1e+21': 1}` folded apart -- two wrong comparisons from one spelling. ryu-js is
+    // the same formatter `render_js_to_string` already trusts, so display, keys and coercion
+    // cannot drift apart again.
+    if value == 0.0 && value.is_sign_negative() {
+        return "-0".to_owned();
     }
-    if value.is_infinite() {
-        return if value < 0.0 { "-Infinity" } else { "Infinity" }.to_owned();
-    }
-    // Non-finite folds take the ECMAScript spelling (C12, corrected on PR #30 round 3): a first
-    // "disproof" checked only the `.each` display paths -- which reparse the fold through
-    // ryu-js -- and missed that DIRECT titles forward this text verbatim: `test(1 / 0)` and
-    // `` test(`n ${1 / 0}`) `` render through `extract_title` -> `fold_expr` -> `const_fold`
-    // and titled as `inf` where JavaScript's `String(1/0)` is `Infinity`. Measured against the
-    // binary before this restoration. The spelling is also what `number_of_string` expects:
-    // `Number('Infinity')` is the value it denotes, where `Number('inf')` is `NaN` -- so folds
-    // now round-trip to the value they came from instead of refusing.
-    if value.fract() == 0.0 && value.abs() < 1e15 {
-        // `-0.0 as i64` is `0`, so the sign is lost and `-0` becomes indistinguishable from `0`.
-        // That distinction is observable in a test via `Object.is(value, -0)`, so two fixtures
-        // bound to `0` and `-0` would otherwise produce an equivalent context and let genuinely
-        // different tests group as duplicates.
-        if value == 0.0 && value.is_sign_negative() {
-            return "-0".to_owned();
-        }
-        (value as i64).to_string()
-    } else {
-        value.to_string()
-    }
+    js_number_to_string(value)
 }
 
 /// Borrow the innermost expression after removing parenthesized wrappers.
