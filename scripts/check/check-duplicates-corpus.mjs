@@ -506,22 +506,10 @@ const DELIBERATE_BLIND_FILES = new Set([
   'recall/mixed-loop-each-under-projects-entry/pkg/loops.spec.ts',
   // Framework-application shapes the analyzer cannot read yet: each file is blind on purpose until the
   // row that supports its shape lands, and leaves this list in the same change.
-  'recall/framework-auto-import-in-helper/known.test.ts',
   'recall/framework-auto-import-in-helper/unknown.test.ts',
+  'recall/framework-auto-import-ungenerated-control/known.test.ts',
   'recall/framework-hook-helper-server/orders.test.ts',
-  'recall/framework-mock-module-effects/alpha.test.ts',
-  'recall/framework-mock-module-effects/beta.test.ts',
   'recall/framework-package-mock-call-uninstalled/users.test.ts',
-  'recall/framework-package-mock-call/users.test.ts',
-  'recall/framework-package-mock-factory-differs-negative/evening.test.ts',
-  'recall/framework-package-mock-factory-differs-negative/morning.test.ts',
-  'recall/framework-setup-helper-shapes/branch.test.ts',
-  'recall/framework-setup-helper-shapes/foreach.test.ts',
-  'recall/framework-setup-helper-shapes/globalcall.test.ts',
-  'recall/framework-setup-helper-shapes/localconst.test.ts',
-  'recall/framework-setup-helper-shapes/memberassign.test.ts',
-  'recall/framework-setup-helper-shapes/objectkeys.test.ts',
-  'recall/framework-setup-helper-shapes/spy.test.ts',
   // Default exports a runner must keep refusing (a `let`, a reassigned declaration, an imported
   // binding): blind on purpose, permanently, as the controls for the default-identifier support.
   'recall/framework-runner-default-imported-negative/slugs.test.ts',

@@ -75,9 +75,64 @@ it refuses the outer runner. Recursion through modules or local helpers is refus
 - Named or default object method calls as runner candidates, and function `.call()` / `.apply()`
   invocations.
 - Mocked runners and mocked re-export hops: they cannot contribute their real bodies.
-- Installed-package bodies.
+- Installed-package bodies that are runners. A package whose manifests name no test runner can be
+  part of a setup helper (see below); a package that registers tests is refused.
 
 Proved ordinary utilities and shadowed inert callbacks contribute no declarations.
+
+### Setup helpers
+
+A call to an imported function that registers no test or hook is setup, not a runner. The call is
+proved harmless when nothing it can run reaches Vitest's registration API (`test`, `it`, `describe`,
+`suite`, `bench`, `beforeAll`, `beforeEach`, `afterAll`, `afterEach`, `onTestFinished`,
+`onTestFailed`, `aroundEach`, `aroundAll`) and its arguments carry none either. The proof follows
+what the code reads:
+
+- Importing a module runs its top-level initializers (enum members included), never the bodies of
+  functions it merely declares; calling an export runs that export. Everything the walk reads joins
+  it: local declarations, imports by module and export, globals.
+- A top level that is not declarations (a bare call, `if`, a loop) is refused. `vi.mock(...)`,
+  `vi.fn()` and other `vi` or `expect` calls are setup, not registration.
+- A name taken from `vitest` is judged by what it is, however it is re-exported: `test`, `it`,
+  `describe`, `suite`, `bench`, `beforeAll`, `beforeEach`, `afterAll`, `afterEach`,
+  `onTestFinished`, `onTestFailed`, `aroundEach` and `aroundAll` register; the namespace import does.
+- A name the host does not define is unknown unless the project's `.nuxt/imports.d.ts` lists it;
+  see [Nuxt projects](#nuxt-projects). `#imports` is that list under another spelling. `globalThis`,
+  `eval`, `require`, a computed `import()`, `import.meta.glob` and `import.meta.vitest` reach code by name and are
+  refused, except one named property of the global object (`globalThis.ready = true`). Node's `vm`,
+  `child_process`, `worker_threads`, `module`, `repl`, `cluster` and `inspector` run code from text
+  or elsewhere and are refused.
+- The arguments of the call are held to the same rule, and a binding they read must not be written
+  after it is declared: a callback reassigned, or a config changed through a member (`config.mode =
+  2`, `items[0]++`, `delete config.mode`), is refused. Calls that change a value through a method
+  (`items.push(1)`) are not tracked.
+- Installed packages are judged by their manifests: one whose whole dependency closure names no
+  test runner (`vitest`, `vitest-*`, `@vitest/*`, `jest`, `@jest/*`, `mocha`, `jasmine`,
+  `playwright`, `playwright-core`, `@playwright/*`), and whose imported file does not mention
+  `vitest`, cannot register a test. When the project enables Vitest globals that file must also not
+  call a registration global as a free name. An unreadable manifest or a missing dependency is
+  refused. `mountSuspended`, `renderSuspended`, `registerEndpoint`, `mockNuxtImport` and
+  `mockComponent` from `@nuxt/test-utils/runtime` are known by name.
+- An `import` whose bindings are never read as values and that names no module on disk (a package
+  that ships only types) is ignored, as TypeScript erases it; a project that keeps such imports
+  (`verbatimModuleSyntax`) is not covered by that assumption.
+- Single-file components contribute their script blocks; `<script setup>` runs when mounted, not
+  when imported. Styles, images, fonts and JSON carry no code.
+
+The proof is lexical and aimed at code that is not written to evade it. It does not follow a value
+through an alias (`const alias = config; alias.mode = 2`), a method that mutates (`items.push(1)`), a
+registration global reached by another name (`const register = test`), reflection
+(`process.getBuiltinModule('vm')`, `({}).constructor.constructor(...)`) or a mock of a package that
+the helper imports several modules away. Those cases can make a helper that registers read as setup.
+
+A setup call changes what every test in the file runs under, so it joins each test's context, in
+call order and once per call: the helper's module and export, how many framework setup statements
+(`vi.stubGlobal(...)`, awaited calls) precede it, the call's text, the text of every local
+declaration the arguments read, the module and export each imported name stands for, and the file
+`import.meta` stands for. Files that call different helpers, with different arguments, in a
+different order or a different number of times do not compare equal; files that set up the same way
+do. A mocked helper, an argument the proof cannot place,
+and a helper that registers anything are refused as before.
 
 ### Module dependencies
 
@@ -92,9 +147,28 @@ tests and its suite record. Those records are excluded from comparison. The `jso
 reports list the file with a reason code naming the refusal; see
 [Excluded files](incomplete-runs.md#excluded-files).
 
+## Nuxt projects
+
+A Nuxt project is supported where the generated files are present: run `nuxt prepare` (the
+[missing-prerequisite notice](incomplete-runs.md#missing-prerequisites) names it when they are not).
+
+- Unimported names in helpers resolve from the nearest `.nuxt/imports.d.ts`: a first-party export
+  joins the proof, a library entry must pass the package check. Without the file, or for a name it
+  does not list, the name is unknown and the helper is refused.
+- `mockNuxtImport(name, factory)` from `@nuxt/test-utils/runtime` at the top level of a test file is
+  a hoisted mock of that auto-imported binding, keyed `nuxt-import:<name>`; its factory must be
+  inline and must not itself reach a registration API. Anywhere else, or with an unreadable
+  factory, the file is unresolved, as for `vi.mock`.
+- Aliases such as `~/` resolve through `.nuxt/tsconfig.json`.
+
+Component auto-imports, `nuxt.config` settings and auto-imports a module registers outside the
+generated list are not read.
+
 ## Budgets
 
 - Local and imported expansion share a depth of 8 and 2,000 body admissions across both passes.
+- One setup-helper proof visits at most 64 modules, and reads at most 256 manifests for each
+  installed package it reaches.
 - Helper files share the source byte limit (8 MiB), the bracket nesting limit (256) and the
   export-hop limit (8).
 - Exact helper sources retained for one caller share an additional 8 MiB budget; repeated calls

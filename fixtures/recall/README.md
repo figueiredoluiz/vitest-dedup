@@ -160,13 +160,13 @@ a known miss records the wanted finding and the extraction counts it will change
 | Runner that is both `export const f` and `export default f` | `framework-runner-named-and-default` | found | as wanted: found |
 | Default export that must stay refused: a `let` binding, a reassigned function declaration, an imported binding | `framework-runner-default-let-negative`, `framework-runner-default-reassigned-negative`, `framework-runner-default-imported-negative` | not compared, silent: the runner cannot be proven to be the declaration | as wanted: not compared. Controls for any change that accepts every default identifier |
 | Runner exported as `export { f as default }`, or by name | `framework-runner-default-alias-control`, `framework-runner-named-control` | unchanged: found | found |
-| Setup helper whose body calls an auto-imported global, branches, loops with `forEach` or `Object.keys(...).forEach`, assigns a member, spies, or declares a local constant | `framework-setup-helper-shapes` (one file per trait) | a helper that registers nothing and cannot change what a test computes does not exclude the file; identical tests are reported | every file is not compared |
+| Setup helper whose body calls an auto-imported global, branches, loops with `forEach` or `Object.keys(...).forEach`, assigns a member, spies, or declares a local constant | `framework-setup-helper-shapes` (one file per trait) | a helper that registers nothing and cannot change what a test computes does not exclude the file; identical tests are reported | as wanted: all seven identical pairs are reported (the fixture carries a generated `.nuxt/imports.d.ts`) |
 | Same, empty helper | `framework-setup-helper-empty-control` | found | found |
 | Helper that registers a per-test spy through hooks, called in one suite only | `framework-setup-helper-spy-context-negative` | the hooks are part of the context: the suites never pair | as wanted: compared and distinct. A control for any change that treats helpers as inert |
-| Top-level call of an installed package's mocking API (`mockImport(name, factory)`, `registerEndpoint(url, handler)`) | `framework-package-mock-call` | static name plus inline factory read as mock declarations; identical pair reported | not compared |
+| Top-level call of an installed package's mocking API (`mockImport(name, factory)`, `registerEndpoint(url, handler)`) | `framework-package-mock-call` | static name plus inline factory read as mock declarations; identical pair reported | as wanted: the pair is reported |
 | Same calls, package not installed | `framework-package-mock-call-uninstalled` | stays not compared, and the run names the missing package | not compared |
-| Same calls, different factories in two files | `framework-package-mock-factory-differs-negative` | the factory is part of the context: never paired | not compared |
-| Call into a mock module that runs `vi.hoisted`/`vi.mock` at module level | `framework-mock-module-effects` | module effects are context: each file's pair is reported, the two files never pair | not compared |
+| Same calls, different factories in two files | `framework-package-mock-factory-differs-negative` | the factory is part of the context: never paired | as wanted: compared and distinct |
+| Call into a mock module that runs `vi.hoisted`/`vi.mock` at module level | `framework-mock-module-effects` | module effects are context: each file's pair is reported, the two files never pair | as wanted: each file's pair is reported, the two files never pair |
 | Same module imported for its effects only | `framework-mock-module-import-control` | each file's pair found; files with different mock modules never pair | pairs found; the two files are paired wrongly (known false positive) |
 | Helper that registers `beforeAll`/`afterAll` over module state (server setup) | `framework-hook-helper-server` | hooks are context shared by both tests; pair reported | not compared |
 | Same hooks with inline callbacks, no module state | `framework-hook-helper-inline-control` | found | found |
@@ -175,7 +175,8 @@ a known miss records the wanted finding and the extraction counts it will change
 | Generated parent absent | `framework-tsconfig-extends-missing` | silent, and the run says which file is missing and what creates it | as wanted: silent, incomplete, the missing file named |
 | Analysis root below the generated parent's directory | `framework-tsconfig-extends-outside-root` | silent, and the run names the alias target outside the root | silent; the run reports incomplete, and the excluded-file list names `import-outside-root` |
 | Auto-imported name called at the top level of a test file | `framework-auto-import-top-level` | resolved to its export; pair reported | found (an undeclared name is ignored) |
-| Auto-imported name called inside a setup helper | `framework-auto-import-in-helper` | resolved to its export; pair reported. A name declared nowhere stays not compared | not compared |
+| Auto-imported name called inside a setup helper | `framework-auto-import-in-helper` | resolved to its export; pair reported. A name declared nowhere stays not compared | as wanted: the pair is reported with a generated list; a name the list does not hold stays not compared |
+| The same helper and tests without `.nuxt/imports.d.ts` (`nuxt prepare` not run) | `framework-auto-import-ungenerated-control` | not compared: nothing says what the name stands for | as wanted: not compared |
 | Parent ignore file with an unanchored directory name | `framework-nested-repository-ignore-control` | see below | `api/` ignored, as git does |
 
 A nested repository cannot be a fixture: git refuses to track a `.git` entry. The control case is the
@@ -195,9 +196,9 @@ generated parent and the analysis root below it.
 
 `minimumRecall` is the measured value rounded down, not the target: a gate that is red on arrival
 gets routed around, after which the number it guards is worse than unmeasured. `recallDestination`
-records the destination. The corpus currently detects 148 of its 160 desired findings (92.5%), so
-`minimumRecall` is 0.925; the 12 missing are the known misses of the framework cases above, so
-`knownMissBaseline` is 12. Each change that finds one of them moves its entry from `knownMisses` to
+records the destination. The corpus currently detects 159 of its 160 desired findings (99.4%), so
+`minimumRecall` is 0.99; the one missing is the known miss of the framework cases above, so
+`knownMissBaseline` is 1. Each change that finds one of them moves its entry from `knownMisses` to
 `expectedFindings`, lowers the baseline and raises `minimumRecall` to the new measured value in the
 same commit.
 

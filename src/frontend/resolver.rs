@@ -213,6 +213,11 @@ fn has_package_syntax(specifier: &str) -> bool {
     }
 }
 
+/// Whether `specifier` is a Node core module (prefixed, or one of the unprefixed names).
+pub(super) fn is_node_builtin(specifier: &str) -> bool {
+    specifier.starts_with("node:") || NODE_BUILTINS.contains(&specifier)
+}
+
 /// Whether `specifier` names an installable package the analyzer does not resolve by name.
 ///
 /// Node's prefix-only modules (`node:sqlite`, `node:sea`, `node:test`) are not in the builtin list:

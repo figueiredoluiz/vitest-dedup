@@ -94,8 +94,8 @@ alone. Past the cap the files with the fewest excluded tests are left out of the
 
 | Code | Meaning |
 | --- | --- |
-| `helper-export-unreadable` | An imported runner's export could not be resolved, read, or proved to be one function. |
-| `helper-setup-effects` | An imported runner or a module on its chain has setup, fixture or module effects that were not proved inert. |
+| `helper-export-unreadable` | An imported runner's export could not be resolved, read, or proved to be one function, and the call could not be proved to register nothing. |
+| `helper-setup-effects` | An imported runner or a module on its chain has setup, fixture or module effects that were not proved inert, and the call could not be proved to register nothing. |
 | `helper-effects-unproved` | A call, argument or parameter write inside an imported runner has unproved effects. |
 | `helper-limit` | A helper expansion budget, recursion or depth limit was reached. |
 | `helper-sources-unavailable` | Helper bodies are unavailable in a historical revision baseline. |

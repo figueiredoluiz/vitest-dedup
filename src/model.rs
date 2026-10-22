@@ -1411,6 +1411,12 @@ impl std::io::Write for DigestWriter {
     }
 }
 
+/// A fixed-width spelling of `text`'s identity: SHA-256 truncated to 128 bits, in hex. For setup
+/// facts whose full text would otherwise be held once per test in a file.
+pub fn identity_digest(text: &str) -> String {
+    format!("{:032x}", sha256_128(text))
+}
+
 impl BodyDigest {
     /// Digests one normalized view's serialized text.
     ///

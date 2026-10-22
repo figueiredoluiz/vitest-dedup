@@ -3117,7 +3117,7 @@ fn unwrap_parens<'e, 'a>(expr: &'e Expression<'a>) -> &'e Expression<'a> {
 /// tool makes. Refusing to read the first was not caution; it excluded the test from comparison
 /// altogether over a type annotation that the fingerprint erases anyway. Measured on a real
 /// 24,147-test corpus: 207 unreadable cells, the largest non-composite cause.
-fn unwrap_transparent<'e, 'a>(expr: &'e Expression<'a>) -> &'e Expression<'a> {
+pub(super) fn unwrap_transparent<'e, 'a>(expr: &'e Expression<'a>) -> &'e Expression<'a> {
     let mut current = expr;
     loop {
         current = match current {

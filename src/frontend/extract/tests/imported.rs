@@ -286,14 +286,13 @@ fn missing_nested_package_and_cyclic_exports_are_bounded_refusals() {
     for helper in [
         "export { run } from './runner';",
         "export { run } from './missing';",
-        "export function other() {}",
         "import { nested } from './nested'; export function run() { nested(); }",
         "export function broken( {",
     ] {
         let case = RunnerCase::new(helper, "run(); run(); test('direct', () => {});");
         let extraction = case.extract(Globals::Disabled);
         assert_eq!(extraction.tests.len(), 1, "{helper}");
-        assert_eq!(extraction.diagnostics.len(), 1);
+        assert_eq!(extraction.diagnostics.len(), 1, "{helper}");
         assert!(extraction.incomplete && extraction.tests[0].context.unresolved);
     }
     let case = RunnerCase::new(SIMPLE_RUNNER, "run(); test('direct', () => {});");
@@ -606,7 +605,6 @@ fn default_namespace_spread_and_opaque_nested_callables_are_explicitly_refused()
         "export function run() { const local = () => test('a', () => {}); local(); }",
         "export function run() { const local = setup(); }",
         "export function run(value = test('default', () => {})) { return 2; }",
-        "export function run({ value }) { return 2; }",
         "export function run() { return; test('a', () => {}); }",
     ];
     for helper in helpers {
@@ -628,7 +626,17 @@ fn default_namespace_spread_and_opaque_nested_callables_are_explicitly_refused()
             "export function run() { return 2; }",
             &format!("run.{method}(); test('direct', () => {{}});"),
         );
-        let refused = ordinary.extract(Globals::Disabled);
+        // A helper that registers nothing is setup however it is invoked.
+        let setup = ordinary.extract(Globals::Disabled);
+        assert_eq!(setup.tests.len(), 1);
+        assert!(!setup.incomplete && !setup.tests[0].context.unresolved);
+        assert_eq!(setup.tests[0].context.module_setup.len(), 1);
+        // A runner that declares tests is not read through `.call`/`.apply`.
+        let runner = RunnerCase::new(
+            SIMPLE_RUNNER,
+            &format!("run.{method}(); test('direct', () => {{}});"),
+        );
+        let refused = runner.extract(Globals::Disabled);
         assert_eq!(refused.tests.len(), 1);
         assert!(refused.incomplete && refused.tests[0].context.unresolved);
     }
@@ -696,9 +704,10 @@ fn unique_helper_sources_share_a_retention_budget_while_repeat_calls_share_one_s
 
 /// Requires one unresolved direct test when an erased binding cannot provide a runner.
 fn assert_refused_type_binding(extraction: FileExtraction) {
+    let diagnostics = extraction.diagnostics.clone();
     assert_eq!(extraction.tests.len(), 1);
     assert_eq!(extraction.tests[0].full_title(), "direct");
-    assert!(extraction.incomplete);
+    assert!(extraction.incomplete, "{diagnostics:?} {extraction:?}");
     assert!(extraction.tests[0].context.unresolved);
 }
 
@@ -711,16 +720,24 @@ fn type_only_imports_and_reexports_never_supply_runtime_runner_bindings() {
         let extraction = extract(&source, &case.file, Globals::Disabled);
         assert_refused_type_binding(extraction);
     }
-    for export in [
-        "export type { run } from './runner';",
+    // `export { type run }` still loads the runner module, which registers tests.
+    std::fs::write(
+        case.directory.path().join("barrel.ts"),
         "export { type run } from './runner';",
-        "function run() {} export type { run };",
-    ] {
-        std::fs::write(case.directory.path().join("barrel.ts"), export).unwrap();
-        let source = case.source.replace("from './runner'", "from './barrel'");
-        let extraction = extract(&source, &case.file, Globals::Disabled);
-        assert_refused_type_binding(extraction);
-    }
+    )
+    .unwrap();
+    let source = case.source.replace("from './runner'", "from './barrel'");
+    assert_refused_type_binding(extract(&source, &case.file, Globals::Disabled));
+    // A whole type-only re-export loads nothing at runtime: the runner's tests are never read
+    // through it, and nothing it exports can register.
+    std::fs::write(
+        case.directory.path().join("barrel.ts"),
+        "export type { run } from './runner';",
+    )
+    .unwrap();
+    let extraction = extract(&source, &case.file, Globals::Disabled);
+    assert_eq!(extraction.tests.len(), 1);
+    assert_eq!(extraction.tests[0].full_title(), "direct");
 }
 
 #[test]
@@ -1459,7 +1476,7 @@ fn unsupported_nested_runners_refuse_the_outer_runner_and_taint_the_file() {
         std::fs::create_dir_all(&package).unwrap();
         std::fs::write(
             package.join("package.json"),
-            r#"{"name":"leaf-package","type":"module","main":"index.js"}"#,
+            r#"{"name":"leaf-package","type":"module","main":"index.js","peerDependencies":{"vitest":"*"}}"#,
         )
         .unwrap();
         std::fs::write(package.join("index.js"), "export function leaf() {}").unwrap();
@@ -1525,4 +1542,652 @@ fn recovered_and_nested_refusals_carry_their_own_codes() {
     );
     let extraction = case.extract(Globals::Disabled);
     assert_eq!(extraction.reasons, vec![ExclusionReason::HelperLimit]);
+}
+
+// ---- Setup helpers: a call that provably registers nothing ----------------------------------
+
+/// A directory of helper modules a caller can be written beside and extracted from repeatedly, so
+/// two extractions can name the same helper files.
+struct Site {
+    directory: tempfile::TempDir,
+}
+
+impl Site {
+    fn new(files: &[(&str, &str)]) -> Self {
+        let site = Self {
+            directory: tempfile::tempdir().unwrap(),
+        };
+        for (name, text) in files {
+            site.write(name, text);
+        }
+        site
+    }
+
+    fn write(&self, name: &str, text: &str) {
+        let path = self.directory.path().join(name);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, text).unwrap();
+    }
+
+    fn extract(&self, caller: &str) -> FileExtraction {
+        self.extract_with(caller, Globals::Disabled)
+    }
+
+    fn extract_with(&self, caller: &str, globals: Globals) -> FileExtraction {
+        self.extract_in("", caller, globals)
+    }
+
+    /// Extracts `caller` written to `relative/caller.test.ts`.
+    fn extract_in(&self, relative: &str, caller: &str, globals: Globals) -> FileExtraction {
+        let directory = self.directory.path().join(relative);
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("caller.test.ts");
+        std::fs::write(&path, caller).unwrap();
+        let file = SourceFile::without_project_context(
+            path,
+            crate::discovery::SourceLanguage::TypeScript,
+            ModuleFlavor::Ambiguous,
+        );
+        extract(caller, &file, globals)
+    }
+}
+
+/// Builds a caller with the given helper modules beside it, extracts it and returns the result.
+fn with_helpers(files: &[(&str, &str)], caller: &str) -> FileExtraction {
+    Site::new(files).extract(caller)
+}
+
+const TWO_TESTS: &str =
+    "test('a', () => { expect(1).toBe(1) }); test('b', () => { expect(1).toBe(1) });";
+
+/// A helper that registers nothing is setup: nothing is refused, both tests stay comparable and
+/// each carries one setup fact.
+#[test]
+fn a_call_to_a_helper_that_registers_nothing_is_setup() {
+    let caller = format!(
+        "import {{ test, expect }} from 'vitest'; import {{ setup }} from './setup'; setup(); {TWO_TESTS}"
+    );
+    let extraction = with_helpers(
+        &[("setup.ts", "export function setup() { return 1 }")],
+        &caller,
+    );
+    assert_eq!(extraction.tests.len(), 2, "{:?}", extraction.diagnostics);
+    assert!(!extraction.incomplete, "{:?}", extraction.diagnostics);
+    for case in &extraction.tests {
+        assert!(!case.context.unresolved);
+        assert_eq!(case.context.module_setup.len(), 1);
+        assert!(case.context.module_setup[0].starts_with("helper:"));
+    }
+    // The call is setup wherever it sits, including after the tests and inside a suite.
+    let later = format!(
+        "import {{ test, expect, describe }} from 'vitest'; import {{ setup }} from './setup'; {TWO_TESTS} describe('s', () => {{ setup(); }});"
+    );
+    let extraction = with_helpers(
+        &[("setup.ts", "export function setup() { return 1 }")],
+        &later,
+    );
+    assert!(!extraction.incomplete, "{:?}", extraction.diagnostics);
+    assert!(extraction
+        .tests
+        .iter()
+        .all(|case| case.context.module_setup.len() == 1));
+}
+
+/// What the setup stands on is part of its identity: the helper, its arguments and what they read.
+#[test]
+fn setup_identity_separates_helpers_arguments_and_what_arguments_read() {
+    let site = Site::new(&[(
+        "setup.ts",
+        "export function setup(value?: unknown) { return value }",
+    )]);
+    let setup_of = |arguments: &str, prelude: &str| {
+        let caller = format!(
+            "import {{ test, expect }} from 'vitest'; import {{ setup }} from './setup'; {prelude} setup({arguments}); test('a', () => {{ expect(1).toBe(1) }});"
+        );
+        let extraction = site.extract(&caller);
+        assert!(!extraction.incomplete, "{:?}", extraction.diagnostics);
+        extraction.tests[0].context.module_setup.clone()
+    };
+    let base = setup_of("1", "");
+    assert_eq!(base, setup_of("1", ""));
+    assert_ne!(base, setup_of("2", ""));
+    // A name the argument reads is part of it: the text of the call is identical.
+    let reads = |value: &str| setup_of("config", &format!("const config = {{ mode: '{value}' }};"));
+    assert_ne!(reads("a"), reads("b"));
+    assert_eq!(reads("a"), reads("a"));
+    // The same call over a different helper module is a different setup.
+    let other = Site::new(&[(
+        "setup.ts",
+        "export function setup(value?: unknown) { return [value] }",
+    )]);
+    let caller = "import { test, expect } from 'vitest'; import { setup } from './setup'; setup(1); test('a', () => { expect(1).toBe(1) });";
+    assert_ne!(base, other.extract(caller).tests[0].context.module_setup);
+}
+
+/// A name an argument reads from another module is part of the identity by module and export: the
+/// call text is the same either way.
+#[test]
+fn setup_identity_separates_what_arguments_import() {
+    let site = Site::new(&[
+        (
+            "setup.ts",
+            "export function setup(value?: unknown) { return value }",
+        ),
+        ("config-a.ts", "export const config = { mode: 'a' }"),
+        ("config-b.ts", "export const config = { mode: 'b' }"),
+    ]);
+    let setup_of = |module: &str| {
+        let caller = format!(
+            "import {{ test, expect }} from 'vitest'; import {{ setup }} from './setup'; import {{ config }} from './{module}'; setup(config); test('a', () => {{ expect(1).toBe(1) }});"
+        );
+        let extraction = site.extract(&caller);
+        assert!(!extraction.incomplete, "{:?}", extraction.diagnostics);
+        extraction.tests[0].context.module_setup.clone()
+    };
+    assert_eq!(setup_of("config-a"), setup_of("config-a"));
+    assert_ne!(setup_of("config-a"), setup_of("config-b"));
+}
+
+/// Locals the identity can place are declarations (variables, functions, classes); one it cannot
+/// place refuses the setup instead of guessing at it.
+#[test]
+fn setup_identity_places_classes_and_refuses_what_it_cannot_place() {
+    let site = Site::new(&[(
+        "setup.ts",
+        "export function setup(value?: unknown) { return value }",
+    )]);
+    let run = |declaration: &str| {
+        let caller = format!(
+            "import {{ test, expect }} from 'vitest'; import {{ setup }} from './setup'; {declaration} setup(Subject); test('a', () => {{ expect(1).toBe(1) }});"
+        );
+        site.extract(&caller)
+    };
+    let class = run("class Subject { value = 1 }");
+    assert!(!class.incomplete, "{:?}", class.diagnostics);
+    assert_ne!(
+        class.tests[0].context.module_setup,
+        run("class Subject { value = 2 }").tests[0]
+            .context
+            .module_setup
+    );
+    let enumeration = run("enum Subject { A }");
+    assert!(enumeration.incomplete, "{:?}", enumeration.diagnostics);
+}
+
+/// A helper is handed arguments it could call: one that reaches a registration API makes the call
+/// a runner question again, not setup.
+#[test]
+fn arguments_that_could_register_something_keep_the_call_refused() {
+    let helper = (
+        "setup.ts",
+        "export function setup(callback?: () => void) { callback?.() }",
+    );
+    let refused = |arguments: &str, prelude: &str| {
+        let caller = format!(
+            "import {{ test, expect }} from 'vitest'; import {{ setup }} from './setup'; {prelude} setup({arguments}); {TWO_TESTS}"
+        );
+        let extraction = with_helpers(&[helper], &caller);
+        assert!(
+            extraction.incomplete,
+            "{arguments}: {:?}",
+            extraction.diagnostics
+        );
+        assert!(extraction.tests.iter().all(|case| case.context.unresolved));
+    };
+    refused("() => { test('inside', () => {}) }", "");
+    refused(
+        "register",
+        "function register() { test('inside', () => {}) }",
+    );
+    refused(
+        "register",
+        "const register = () => test('inside', () => {});",
+    );
+    refused("...rest", "const rest = [];");
+    // An argument that only builds data is fine.
+    let caller = format!(
+        "import {{ test, expect }} from 'vitest'; import {{ setup }} from './setup'; setup(() => 1); {TWO_TESTS}"
+    );
+    let extraction = with_helpers(&[helper], &caller);
+    assert!(!extraction.incomplete, "{:?}", extraction.diagnostics);
+}
+
+/// A helper that registers anything is still read as a runner or refused, never setup.
+#[test]
+fn a_helper_that_registers_is_not_setup() {
+    let caller = format!(
+        "import {{ test, expect }} from 'vitest'; import {{ setup }} from './setup'; setup(); {TWO_TESTS}"
+    );
+    let extraction = with_helpers(
+        &[(
+            "setup.ts",
+            "import { beforeEach } from 'vitest'; export function setup() { if (process.env.CI) { beforeEach(() => {}); } }",
+        )],
+        &caller,
+    );
+    assert!(extraction.incomplete, "{:?}", extraction.diagnostics);
+    assert!(extraction.tests.iter().all(|case| case.context.unresolved));
+}
+
+/// A mocked helper contributes its mock, not its body: it cannot be proved from the real file.
+#[test]
+fn a_mocked_helper_is_not_setup() {
+    let caller = format!(
+        "import {{ test, expect, vi }} from 'vitest'; import {{ setup }} from './setup'; vi.mock('./setup', () => ({{ setup: () => {{}} }})); setup(); {TWO_TESTS}"
+    );
+    let extraction = with_helpers(
+        &[("setup.ts", "export function setup() { return 1 }")],
+        &caller,
+    );
+    assert!(extraction.incomplete, "{:?}", extraction.diagnostics);
+    assert!(extraction.tests.iter().all(|case| case.context.unresolved));
+}
+
+/// `@nuxt/test-utils/runtime` installed the way a project has it: a manifest that lists Vitest as a
+/// peer (other entry points register hooks) and a runtime entry that never mentions it.
+fn install_test_utils(files: &mut Vec<(&'static str, &'static str)>) {
+    files.push((
+        "node_modules/@nuxt/test-utils/package.json",
+        r#"{"name":"@nuxt/test-utils","type":"module","exports":{"./runtime":"./dist/runtime-utils/index.mjs"},"peerDependencies":{"vitest":"*"}}"#,
+    ));
+    files.push((
+        "node_modules/@nuxt/test-utils/dist/runtime-utils/index.mjs",
+        "export const mountSuspended = () => 1\nexport const registerEndpoint = () => 1\nexport const mockNuxtImport = () => 1\nexport const other = () => 1",
+    ));
+}
+
+/// The framework's own runtime exports are setup by name, though the package lists Vitest as a peer;
+/// an export that is not known stays refused.
+#[test]
+fn known_test_utils_runtime_exports_are_setup() {
+    let mut files = Vec::new();
+    install_test_utils(&mut files);
+    let known = format!(
+        "import {{ test, expect }} from 'vitest'; import {{ mountSuspended }} from '@nuxt/test-utils/runtime'; mountSuspended(1); {TWO_TESTS}"
+    );
+    let extraction = with_helpers(&files, &known);
+    assert!(!extraction.incomplete, "{:?}", extraction.diagnostics);
+    assert!(extraction
+        .tests
+        .iter()
+        .all(|case| case.context.module_setup.len() == 1));
+    let unknown = known.replace("mountSuspended", "other");
+    let extraction = with_helpers(&files, &unknown);
+    assert!(extraction.incomplete, "{:?}", extraction.diagnostics);
+}
+
+/// `registerEndpoint` installs a mock endpoint when it runs and calls nothing it is handed. What it
+/// stands on is part of the setup, so files whose handlers differ never compare equal.
+#[test]
+fn register_endpoint_is_setup_that_stands_on_what_it_reads() {
+    fn setup_of(handler: &str) -> Vec<String> {
+        let caller = format!(
+            "import {{ test, expect }} from 'vitest'; import {{ registerEndpoint }} from '@nuxt/test-utils/runtime'; const handler = {handler}; registerEndpoint('/users', {{ handler }}); {TWO_TESTS}"
+        );
+        let extraction = with_helpers(&[], &caller);
+        assert!(!extraction.incomplete, "{:?}", extraction.diagnostics);
+        assert_eq!(extraction.tests.len(), 2);
+        extraction.tests[0].context.module_setup.clone()
+    }
+    let first = setup_of("() => ({ users: [] })");
+    assert_eq!(first.len(), 1);
+    assert!(first[0].starts_with("api:"));
+    assert_eq!(first, setup_of("() => ({ users: [] })"));
+    assert_ne!(first, setup_of("() => ({ users: [1] })"));
+}
+
+/// `mockNuxtImport` is a hoisted mock of one auto-imported binding, keyed by its name; it is
+/// refused like a nested `vi.mock` anywhere but the top level, and with a factory it cannot read.
+#[test]
+fn mock_nuxt_import_is_a_hoisted_mock_keyed_by_name() {
+    let import = "import { test, expect, describe } from 'vitest'; import { mockNuxtImport } from '@nuxt/test-utils/runtime';";
+    let extract_with =
+        |statement: &str| with_helpers(&[], &format!("{import} {statement} {TWO_TESTS}"));
+    let mocked = |factory: &str| {
+        let extraction = extract_with(&format!("mockNuxtImport('useRoute', {factory});"));
+        assert!(!extraction.incomplete, "{:?}", extraction.diagnostics);
+        extraction.tests[0].context.mocked_modules.clone()
+    };
+    let first = mocked("() => () => ({ path: '/a' })");
+    assert_eq!(first.len(), 1);
+    assert_eq!(&*first[0].specifier, "nuxt-import:useRoute");
+    assert!(matches!(
+        first[0].factory,
+        crate::model::MockFactory::Factory(_)
+    ));
+    assert_eq!(first, mocked("() => () => ({ path: '/a' })"));
+    assert_ne!(first, mocked("() => () => ({ path: '/b' })"));
+    // Two names are two mocks; the same name twice is one, the last winning.
+    let extraction = extract_with(
+        "mockNuxtImport('useRoute', () => () => 1); mockNuxtImport('useState', () => () => 2);",
+    );
+    assert_eq!(extraction.tests[0].context.mocked_modules.len(), 2);
+    for unreadable in [
+        "mockNuxtImport('useRoute', factory);",
+        "mockNuxtImport(name, () => () => 1);",
+        "mockNuxtImport('useRoute');",
+        "describe('s', () => { mockNuxtImport('useRoute', () => () => 1); });",
+    ] {
+        let extraction = extract_with(unreadable);
+        assert!(
+            extraction.tests.iter().all(|case| case.context.unresolved),
+            "{unreadable}"
+        );
+    }
+}
+
+/// A name written after its declaration is not what the declaration says: a callback reassigned
+/// before the call, or a config changed through a member, keeps the call from being setup.
+#[test]
+fn bindings_written_after_their_declaration_are_not_placed() {
+    let site = Site::new(&[(
+        "setup.ts",
+        "export function setup(value?: unknown) { return value }",
+    )]);
+    let run = |prelude: &str| {
+        let caller = format!(
+            "import {{ test, expect }} from 'vitest'; import {{ setup }} from './setup'; {prelude} setup(subject); {TWO_TESTS}"
+        );
+        site.extract(&caller)
+    };
+    for written in [
+        "let subject = () => {}; subject = () => test('hidden', () => {});",
+        "const subject = { mode: 1 }; subject.mode = 2;",
+        "const subject = { mode: 1 }; subject['mode']++;",
+        "const subject = { mode: 1 }; delete subject.mode;",
+        "const subject = [1]; (subject as number[])[0] = 2;",
+    ] {
+        let extraction = run(written);
+        assert!(
+            extraction.incomplete,
+            "{written}: {:?}",
+            extraction.diagnostics
+        );
+    }
+    let extraction = run("const subject = { mode: 1 };");
+    assert!(!extraction.incomplete, "{:?}", extraction.diagnostics);
+}
+
+/// Setup runs in order and as many times as it is called: both are part of the context.
+#[test]
+fn setup_calls_keep_their_order_and_their_count() {
+    let site = Site::new(&[(
+        "setup.ts",
+        "export function setup(value?: unknown) { return value }",
+    )]);
+    let setup_of = |calls: &str| {
+        let caller = format!(
+            "import {{ test, expect }} from 'vitest'; import {{ setup }} from './setup'; {calls} test('a', () => {{ expect(1).toBe(1) }});"
+        );
+        let extraction = site.extract(&caller);
+        assert!(!extraction.incomplete, "{:?}", extraction.diagnostics);
+        extraction.tests[0].context.module_setup.clone()
+    };
+    let forward = setup_of("setup(1); setup(2);");
+    assert_eq!(forward.len(), 2);
+    assert_ne!(forward, setup_of("setup(2); setup(1);"));
+    assert_ne!(setup_of("setup(1);"), setup_of("setup(1); setup(1);"));
+    assert_eq!(setup_of("setup(1); setup(1);").len(), 2);
+}
+
+/// The local name an argument reads is tied to the export it stands for.
+#[test]
+fn setup_identity_ties_each_name_to_its_export() {
+    let site = Site::new(&[
+        (
+            "setup.ts",
+            "export function setup(left?: unknown, right?: unknown) { return [left, right] }",
+        ),
+        ("values.ts", "export const a = 1; export const b = 2"),
+    ]);
+    let setup_of = |first: &str, second: &str| {
+        let caller = format!(
+            "import {{ test, expect }} from 'vitest'; import {{ setup }} from './setup'; import {{ {first} as left, {second} as right }} from './values'; setup(left, right); test('a', () => {{ expect(1).toBe(1) }});"
+        );
+        let extraction = site.extract(&caller);
+        assert!(!extraction.incomplete, "{:?}", extraction.diagnostics);
+        extraction.tests[0].context.module_setup.clone()
+    };
+    assert_eq!(setup_of("a", "b"), setup_of("a", "b"));
+    assert_ne!(setup_of("a", "b"), setup_of("b", "a"));
+}
+
+/// The arguments of `registerEndpoint` are evaluated first, so a hook registered there is refused;
+/// a package that only resembles the framework's is not the framework.
+#[test]
+fn register_endpoint_arguments_are_judged_and_the_specifier_is_exact() {
+    let hooked = format!(
+        "import {{ test, expect, beforeEach }} from 'vitest'; import {{ registerEndpoint }} from '@nuxt/test-utils/runtime'; registerEndpoint('/x', (beforeEach(() => {{}}), () => ({{}}))); {TWO_TESTS}"
+    );
+    assert!(with_helpers(&[], &hooked).incomplete);
+    // With globals the hook is a free name: the identity alone would place it.
+    let global_hook = format!(
+        "import {{ registerEndpoint }} from '@nuxt/test-utils/runtime'; registerEndpoint('/x', (beforeEach(() => {{}}), () => ({{}}))); {TWO_TESTS}"
+    );
+    assert!(
+        Site::new(&[])
+            .extract_with(&global_hook, Globals::Enabled)
+            .incomplete
+    );
+    let lookalike = format!(
+        "import {{ test, expect }} from 'vitest'; import {{ registerEndpoint }} from '@nuxt/test-utils-custom/runtime'; registerEndpoint('/x', () => ({{}})); {TWO_TESTS}"
+    );
+    assert!(with_helpers(&[], &lookalike).incomplete);
+    let mock_lookalike = format!(
+        "import {{ test, expect }} from 'vitest'; import {{ mockNuxtImport }} from '@nuxt/test-utils-custom/runtime'; mockNuxtImport('useX', () => () => 1); {TWO_TESTS}"
+    );
+    let extraction = with_helpers(&[], &mock_lookalike);
+    assert!(extraction.tests[0].context.mocked_modules.is_empty());
+}
+
+/// A `mockNuxtImport` factory runs wherever the auto-import is called, so one that registers
+/// something leaves the file unresolved.
+#[test]
+fn a_nuxt_mock_factory_that_registers_leaves_the_file_unresolved() {
+    let caller = format!(
+        "import {{ test, expect, beforeEach }} from 'vitest'; import {{ mockNuxtImport }} from '@nuxt/test-utils/runtime'; mockNuxtImport('useSetup', () => () => {{ beforeEach(() => {{}}) }}); {TWO_TESTS}"
+    );
+    let extraction = with_helpers(&[], &caller);
+    assert!(extraction.tests.iter().all(|case| case.context.unresolved));
+}
+
+/// An imported object changed through a member is not the export the proof read.
+#[test]
+fn an_imported_binding_written_by_the_caller_is_not_placed() {
+    let site = Site::new(&[
+        (
+            "setup.ts",
+            "export function setup(value?: any) { value?.callback?.() }",
+        ),
+        ("config.ts", "export const config = { callback() {} }"),
+    ]);
+    let run = |write: &str| {
+        let caller = format!(
+            "import {{ test, expect }} from 'vitest'; import {{ setup }} from './setup'; import {{ config }} from './config'; {write} setup(config); {TWO_TESTS}"
+        );
+        site.extract(&caller)
+    };
+    assert!(run("config.callback = () => test('hidden', () => {});").incomplete);
+    assert!(!run("").incomplete);
+}
+
+/// Framework setup and helper setup are recorded apart, so where a helper call stands among the
+/// framework statements is part of what it stands on.
+#[test]
+fn a_helper_call_keeps_its_place_among_framework_setup() {
+    let site = Site::new(&[("setup.ts", "export function setup() { return 1 }")]);
+    let setup_of = |body: &str| {
+        let caller = format!(
+            "import {{ test, expect, vi }} from 'vitest'; import {{ setup }} from './setup'; {body} test('a', () => {{ expect(1).toBe(1) }});"
+        );
+        let extraction = site.extract(&caller);
+        assert!(!extraction.incomplete, "{:?}", extraction.diagnostics);
+        extraction.tests[0].context.module_setup.clone()
+    };
+    let before = setup_of("vi.stubGlobal('mode', 'changed'); setup();");
+    let after = setup_of("setup(); vi.stubGlobal('mode', 'changed');");
+    assert_eq!(before.len(), 2);
+    assert_ne!(before, after);
+}
+
+/// A mocked framework runtime contributes its mock, not its real body.
+#[test]
+fn a_mocked_register_endpoint_is_not_the_real_one() {
+    let caller = format!(
+        "import {{ test, expect, vi, beforeEach }} from 'vitest'; import {{ registerEndpoint }} from '@nuxt/test-utils/runtime'; vi.mock('@nuxt/test-utils/runtime', () => ({{ registerEndpoint: () => beforeEach(() => {{}}) }})); registerEndpoint('/x', () => ({{}})); {TWO_TESTS}"
+    );
+    assert!(with_helpers(&[], &caller).incomplete);
+}
+
+/// `import.meta` stands for the file it is written in.
+#[test]
+fn setup_identity_includes_the_file_import_meta_stands_for() {
+    let site = Site::new(&[(
+        "setup.ts",
+        "export function setup(value?: unknown) { return value }",
+    )]);
+    let setup_of = |directory: &str, import: &str| {
+        let caller = format!(
+            "import {{ test, expect }} from 'vitest'; import {{ setup }} from '{import}'; setup(new URL('./fixture.json', import.meta.url)); test('a', () => {{ expect(1).toBe(1) }});"
+        );
+        let extraction = site.extract_in(directory, &caller, Globals::Disabled);
+        assert!(!extraction.incomplete, "{:?}", extraction.diagnostics);
+        extraction.tests[0].context.module_setup.clone()
+    };
+    assert_ne!(setup_of("a", "../setup"), setup_of("b", "../setup"));
+}
+
+/// A handler's own parameters and locals are part of its text, not names to place.
+#[test]
+fn setup_identity_does_not_refuse_names_declared_inside_what_it_already_holds() {
+    let site = Site::new(&[(
+        "setup.ts",
+        "export function setup(value?: unknown) { return value }",
+    )]);
+    let run = |body: &str| {
+        let caller = format!(
+            "import {{ test, expect }} from 'vitest'; import {{ setup }} from './setup'; {body}; setup(handler); {TWO_TESTS}"
+        );
+        site.extract(&caller)
+    };
+    for handler in [
+        "function handler(event) { return event.body }",
+        "const handler = (event) => { const body = event.body; return body }",
+        "class handler { run(event) { try { return event } catch (error) { return error } } }",
+    ] {
+        let extraction = run(handler);
+        assert!(
+            !extraction.incomplete,
+            "{handler}: {:?}",
+            extraction.diagnostics
+        );
+    }
+}
+
+/// `mockNuxtImport` is modelled only as a direct call; other spellings leave the file unresolved.
+#[test]
+fn mock_nuxt_import_through_a_namespace_or_call_is_not_modelled() {
+    let namespace = format!(
+        "import {{ test, expect }} from 'vitest'; import * as utils from '@nuxt/test-utils/runtime'; utils.mockNuxtImport('useRoute', () => () => 1); {TWO_TESTS}"
+    );
+    assert!(with_helpers(&[], &namespace).incomplete);
+    let applied = format!(
+        "import {{ test, expect }} from 'vitest'; import {{ mockNuxtImport }} from '@nuxt/test-utils/runtime'; mockNuxtImport.call(null, 'useRoute', () => () => 1); {TWO_TESTS}"
+    );
+    assert!(with_helpers(&[], &applied).incomplete);
+}
+
+/// A type used in an argument is erased and does not need placing.
+#[test]
+fn setup_identity_ignores_names_used_only_as_types() {
+    let site = Site::new(&[(
+        "setup.ts",
+        "export function setup(value?: unknown) { return value }",
+    )]);
+    let caller = format!(
+        "import {{ test, expect }} from 'vitest'; import {{ setup }} from './setup'; interface Options {{ mode: string }}; type Handler = (event: Options) => void; setup({{ mode: 'a' }} as Options); setup((event: Options): Handler => (() => {{}}) as Handler); {TWO_TESTS}"
+    );
+    let extraction = site.extract(&caller);
+    assert!(!extraction.incomplete, "{:?}", extraction.diagnostics);
+}
+
+/// A loop variable takes its value from the iterable, which the declaration does not show.
+#[test]
+fn a_loop_variable_read_by_a_setup_call_is_not_placed() {
+    let site = Site::new(&[(
+        "setup.ts",
+        "export function setup(callback?: any) { callback?.() }",
+    )]);
+    let run = |body: &str| {
+        site.extract(&format!(
+            "import {{ test, expect }} from 'vitest'; import {{ setup }} from './setup'; {body} {TWO_TESTS}"
+        ))
+    };
+    assert!(run("for (const cb of [() => test('hidden', () => {})]) setup(cb);").incomplete);
+    assert!(run("for (const mode in { fast: 1 }) setup(mode);").incomplete);
+    assert!(!run("const mode = 'fast'; setup(mode);").incomplete);
+}
+
+/// A call the walk may run any number of times is not one fixed piece of setup.
+#[test]
+fn setup_under_control_flow_is_not_recorded() {
+    let site = Site::new(&[(
+        "setup.ts",
+        "export function setup(value?: unknown) { return value }",
+    )]);
+    let run = |body: &str| {
+        site.extract(&format!(
+            "import {{ test, expect }} from 'vitest'; import {{ setup }} from './setup'; {body} {TWO_TESTS}"
+        ))
+    };
+    for conditional in [
+        "if (process.env.CI) setup(1);",
+        "if (process.env.CI) { setup(1) } else { setup(2) }",
+        "for (let i = 0; i < 3; i++) setup(i);",
+        "while (process.env.CI) { setup(1) }",
+        "switch (process.env.CI) { case '1': setup(1) }",
+        "try { setup(1) } catch { setup(2) }",
+        "for (const mode of process.env.MODES) setup(mode);",
+        "for (const mode of []) setup(1);",
+        "function init() { setup(1) } if (process.env.CI) init();",
+        "function init() { setup(1) } function outer() { init() } while (process.env.CI) outer();",
+    ] {
+        assert!(run(conditional).incomplete, "{conditional}");
+    }
+    assert!(!run("setup(1);").incomplete);
+    assert!(!run("for (const mode of ['a', 'b']) setup(1);").incomplete);
+    assert!(!run("function init() { setup(1) } init();").incomplete);
+}
+
+/// Framework values handed to a helper (`vi.fn()`, `expect`) are placed by name.
+#[test]
+fn setup_identity_places_names_taken_from_vitest() {
+    let site = Site::new(&[(
+        "setup.ts",
+        "export function setup(value?: unknown) { return value }",
+    )]);
+    let extraction = site.extract(&format!(
+        "import {{ test, expect, vi }} from 'vitest'; import {{ setup }} from './setup'; setup({{ onError: vi.fn(), check: expect }}); {TWO_TESTS}"
+    ));
+    assert!(!extraction.incomplete, "{:?}", extraction.diagnostics);
+}
+
+/// A setup call inside an imported runner inherits the control flow the runner is called under.
+#[test]
+fn setup_inside_a_conditionally_called_runner_is_not_recorded() {
+    let site = Site::new(&[
+        ("setup.ts", "export function setup(value?: unknown) { return value }"),
+        (
+            "runner.ts",
+            "import { test, expect } from 'vitest'; import { setup } from './setup'; export function run() { setup(1); test('inside', () => { expect(1).toBe(1) }); }",
+        ),
+    ]);
+    let run = |call: &str| {
+        site.extract(&format!(
+            "import {{ test, expect }} from 'vitest'; import {{ run }} from './runner'; {call} {TWO_TESTS}"
+        ))
+    };
+    let unconditional = run("run();");
+    assert!(!unconditional.incomplete, "{:?}", unconditional.diagnostics);
+    assert!(run("if (process.env.CI) run();").incomplete);
 }

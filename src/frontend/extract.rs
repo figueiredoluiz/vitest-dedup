@@ -35,6 +35,8 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 mod imported;
+mod registration_free;
+mod setup_identity;
 
 use super::fingerprint::{fingerprint, FunctionLike, RowSubstitution};
 use super::registry::{
@@ -117,6 +119,7 @@ fn extract_confined(
                 imported::EMISSION_LIMIT_OVERRIDE.with(|limit| limit.set(emission_limit));
                 super::registry::reset_cell_census_file_scope();
                 super::resolver::begin_file(root);
+                registration_free::begin_file(globals == Globals::Enabled);
                 let extraction = run(source, file, globals, allow_imported);
                 #[cfg(test)]
                 let extraction = (extraction, super::registry::test_cell_census_snapshot());
@@ -492,6 +495,13 @@ fn run(source: &str, file: &SourceFile, globals: Globals, allow_imported: bool) 
         let mut walker = Walker::new(source, file, program, semantic, globals);
         walker.allow_imported = allow_imported;
         walker.walk_statements(&program.body, &mut registry);
+        if !walker.helper_setup.is_empty() {
+            for case in &mut walker.tests {
+                case.context
+                    .module_setup
+                    .extend(walker.helper_setup.iter().cloned());
+            }
+        }
         walker
     });
     reasons.extend(walker.reasons);
@@ -562,7 +572,7 @@ fn collect_module_setup(
     semantic: &Semantic,
     import_specifiers: &HashMap<SymbolId, Arc<str>>,
     exported_as: &HashMap<SymbolId, String>,
-) -> Vec<String> {
+) -> Vec<(u32, String)> {
     let mut calls = Vec::new();
     for statement in &program.body {
         let Statement::ExpressionStatement(statement) = statement else {
@@ -593,7 +603,7 @@ fn collect_module_setup(
         // two different things. Raw text over-separates instead — reformatting an awaited setup
         // call changes its key and suppresses a finding — which is the safe direction for a field
         // whose whole job is to stop two files being called equal.
-        calls.push(source_text(source, span).to_owned());
+        calls.push((span.start, source_text(source, span).to_owned()));
     }
     calls
 }
@@ -722,6 +732,47 @@ fn collect_import_specifiers(
     (map, exported_as)
 }
 
+/// The local bindings of `mockNuxtImport` imported from `@nuxt/test-utils`.
+fn nuxt_mock_import_symbols(program: &Program) -> HashSet<SymbolId> {
+    let mut symbols = HashSet::new();
+    for import in super::fingerprint::value_import_declarations(program) {
+        if import.source.value.as_str() != "@nuxt/test-utils/runtime" {
+            continue;
+        }
+        for specifier in import.specifiers.iter().flatten() {
+            if let ImportDeclarationSpecifier::ImportSpecifier(specifier) = specifier {
+                if specifier.imported.name() == "mockNuxtImport"
+                    && !matches!(
+                        specifier.import_kind,
+                        oxc_ast::ast::ImportOrExportKind::Type
+                    )
+                {
+                    if let Some(symbol) = specifier.local.symbol_id.get() {
+                        symbols.insert(symbol);
+                    }
+                }
+            }
+        }
+    }
+    symbols
+}
+
+/// Whether `call` invokes one of the `mockNuxtImport` bindings.
+fn is_nuxt_mock_call(
+    call: &CallExpression,
+    semantic: &Semantic,
+    symbols: &HashSet<SymbolId>,
+) -> bool {
+    let Expression::Identifier(callee) = &call.callee else {
+        return false;
+    };
+    callee
+        .reference_id
+        .get()
+        .and_then(|reference| semantic.scoping().get_reference(reference).symbol_id())
+        .is_some_and(|symbol| symbols.contains(&symbol))
+}
+
 /// Reads the `vi` module-mocking family and folds the statically safe subset of it into the
 /// file-wide mocked-module set.
 ///
@@ -791,6 +842,18 @@ fn collect_mocked_modules(
         Unmock(String),
     }
 
+    /// A mock factory argument as its fingerprint, or `None` when it cannot be read: not an inline
+    /// function, or a body whose class-dependent parts cannot be compared.
+    fn read_factory(
+        argument: &Argument<'_>,
+        semantic: &Semantic<'_>,
+        source: &str,
+        file: &std::path::Path,
+    ) -> Option<MockFactory> {
+        let body = fingerprint(as_function_like(argument)?, semantic, source, file, None);
+        (!body.class_unresolved).then(|| MockFactory::Factory(body.into_alpha_source()))
+    }
+
     /// The member name of a `vi.<mock|unmock|doMock|doUnmock>(...)` call, or `None` for any other
     /// call. Shared by both passes so "is this a mocking call" is decided in exactly one place --
     /// a second, subtly different predicate in the nesting pass would let a call be modelled by
@@ -842,23 +905,13 @@ fn collect_mocked_modules(
                     let factory = match call.arguments.get(1) {
                         // No second argument at all: a real automock.
                         None => MockFactory::Automock,
-                        Some(argument) => match as_function_like(argument) {
-                            Some(function_like) => {
-                                let body = fingerprint(function_like, semantic, source, file, None);
-                                if body.class_unresolved {
-                                    unresolved = true;
-                                    MockFactory::Unresolved
-                                } else {
-                                    MockFactory::Factory(body.into_alpha_source())
-                                }
-                            }
-                            // A4: an imported or computed factory (identifier, call, member
-                            // expression, ...) is not automock and must never be treated as one.
-                            None => {
+                        // A4: an imported or computed factory (identifier, call, member
+                        // expression, ...) is not automock and must never be treated as one.
+                        Some(argument) => read_factory(argument, semantic, source, file)
+                            .unwrap_or_else(|| {
                                 unresolved = true;
                                 MockFactory::Unresolved
-                            }
-                        },
+                            }),
                     };
                     // The sixth instance of "unique in one scope, wrong in a wider one":
                     // `literal.value` is file-relative exactly like an `import` specifier is
@@ -901,12 +954,57 @@ fn collect_mocked_modules(
         }
     }
 
+    // `mockNuxtImport(name, factory)` from `@nuxt/test-utils`: a hoisted, module-top-level mock of
+    // one auto-imported binding, the Nuxt counterpart of `vi.mock`. The mocked thing is the
+    // binding, so it is keyed `nuxt-import:<name>`; the factory is read exactly as a `vi.mock`
+    // factory is. Anywhere but a direct top-level statement the transform does not apply, which
+    // the nesting pass below taints like a nested `vi.mock`.
+    let nuxt_mock_symbols = nuxt_mock_import_symbols(program);
+    for statement in &program.body {
+        let Statement::ExpressionStatement(expression_statement) = statement else {
+            continue;
+        };
+        let Expression::CallExpression(call) = &expression_statement.expression else {
+            continue;
+        };
+        if !is_nuxt_mock_call(call, semantic, &nuxt_mock_symbols) {
+            continue;
+        }
+        read_at_top_level.insert((call.span.start, call.span.end));
+        match (call.arguments.first(), call.arguments.get(1)) {
+            (Some(Argument::StringLiteral(name)), Some(factory)) if call.arguments.len() == 2 => {
+                // The replacement runs wherever the auto-import is called, so a factory that could
+                // register something taints every proof that reached the name.
+                let harmless =
+                    crate::frontend::extract::registration_free::arguments_register_nothing(
+                        program,
+                        semantic,
+                        &registration_free::written_bindings(program, semantic),
+                        file,
+                        &call.arguments,
+                    )
+                    .is_some();
+                match read_factory(factory, semantic, source, file).filter(|_| harmless) {
+                    Some(factory) => events.push(MockEvent::Mock(MockedModule {
+                        specifier: std::sync::Arc::from(
+                            format!("nuxt-import:{}", name.value).as_str(),
+                        ),
+                        factory,
+                    })),
+                    None => unresolved = true,
+                }
+            }
+            _ => unresolved = true,
+        }
+    }
+
     struct NestedMockScan<'r, 'a> {
         registry: &'r Registry,
         semantic: &'r Semantic<'a>,
         source: &'r str,
         file: &'r std::path::Path,
         read_at_top_level: &'r HashSet<(u32, u32)>,
+        nuxt_mock_symbols: &'r HashSet<SymbolId>,
         found: bool,
     }
     impl<'a> Visit<'a> for NestedMockScan<'_, 'a> {
@@ -916,8 +1014,9 @@ fn collect_mocked_modules(
             if !self
                 .read_at_top_level
                 .contains(&(it.span.start, it.span.end))
-                && mocking_member(it, self.registry, self.semantic, self.source, self.file)
+                && (mocking_member(it, self.registry, self.semantic, self.source, self.file)
                     .is_some()
+                    || is_nuxt_mock_call(it, self.semantic, self.nuxt_mock_symbols))
             {
                 self.found = true;
             }
@@ -930,6 +1029,7 @@ fn collect_mocked_modules(
         source,
         file,
         read_at_top_level: &read_at_top_level,
+        nuxt_mock_symbols: &nuxt_mock_symbols,
         found: false,
     };
     nested.visit_program(program);
@@ -982,6 +1082,7 @@ struct ScopeHooks {
 /// blocks: the enclosing suite titles, the stack of hook scopes, and the tests found so far.
 struct Walker<'a> {
     source: &'a str,
+    program: &'a Program<'a>,
     semantic: &'a Semantic<'a>,
     file: &'a SourceFile,
     line_index: LineIndex<'a>,
@@ -989,6 +1090,16 @@ struct Walker<'a> {
     /// Module-scope awaited calls, file-wide like `mocked_modules`; see
     /// [`crate::model::Context::module_setup`].
     module_setup: Vec<String>,
+    /// Where each of `module_setup` starts, so a helper call can say how many came before it.
+    module_setup_starts: Vec<u32>,
+    /// Registration-time calls to imported helpers proved to register nothing, one entry per
+    /// distinct call. They are setup every test in the file inherits wherever the call sits, so
+    /// they join each test's `module_setup` once the file is walked.
+    helper_setup: Vec<String>,
+    /// How many enclosing local-helper expansions were themselves called under control flow.
+    conditional_helper_depth: usize,
+    /// The bindings of this file written after they are declared, computed on first use.
+    written: std::cell::OnceCell<HashSet<SymbolId>>,
     /// Module-scope ambient-state calls, file-wide like `mocked_modules`; see
     /// Set when some hoisted mocking call in this file could not be fully read (A3/A4), when the
     /// file contains a non-hoisted `vi.doMock`/`vi.doUnmock` at all, or when any mocking call
@@ -1093,6 +1204,13 @@ struct Walker<'a> {
 
 impl<'a> Walker<'a> {
     /// Initializes a walker from this file's own semantic frame, imports and module effects.
+    /// The bindings of this file written after they are declared; see
+    /// [`registration_free::written_bindings`].
+    fn written_bindings(&self) -> &HashSet<SymbolId> {
+        self.written
+            .get_or_init(|| registration_free::written_bindings(self.program, self.semantic))
+    }
+
     fn new(
         source: &'a str,
         file: &'a SourceFile,
@@ -1104,16 +1222,23 @@ impl<'a> Walker<'a> {
         let registry = Registry::new(program, globals);
         let (mocked_modules, mocks_unresolved) =
             collect_mocked_modules(program, &registry, semantic, source, &file.path);
-        let module_setup =
-            collect_module_setup(program, source, semantic, &import_specifiers, &exported_as);
+        let (module_setup_starts, module_setup): (Vec<u32>, Vec<String>) =
+            collect_module_setup(program, source, semantic, &import_specifiers, &exported_as)
+                .into_iter()
+                .unzip();
         Self {
             source,
+            program,
             semantic,
             file,
             line_index: LineIndex::new(source),
             mocked_modules,
             mocks_unresolved,
             module_setup,
+            module_setup_starts,
+            helper_setup: Vec::new(),
+            conditional_helper_depth: 0,
+            written: std::cell::OnceCell::new(),
             import_specifiers,
             exported_as,
             suite_path: Vec::new(),
@@ -2039,9 +2164,13 @@ impl<'a> Walker<'a> {
         let Some(frame) = self.begin_helper_expansion(call) else {
             return;
         };
+        // A setup call inside this body runs as often as the body does.
+        let conditional = self.setup_is_conditional(call);
+        self.conditional_helper_depth += usize::from(conditional);
         if let Some(body) = &frame.function.body {
             walk(self, &body.statements, registry);
         }
+        self.conditional_helper_depth -= usize::from(conditional);
         self.end_helper_expansion(frame);
     }
 
@@ -8305,3 +8434,7 @@ mod imported_tests;
 #[cfg(test)]
 #[path = "extract/tests/budget.rs"]
 mod budget_tests;
+
+#[cfg(test)]
+#[path = "extract/tests/registration_free.rs"]
+mod registration_free_tests;

@@ -512,7 +512,7 @@ fn resolve_hop(reexporting_file: &Path, specifier: &str) -> Option<PathBuf> {
 /// A file inside an installed package: its body is a build artifact, not project code. The
 /// component scan (not a substring test) is exact -- a first-party directory merely *named*
 /// like one segment would have to be exactly `node_modules` to be refused.
-fn is_dependency(path: &Path) -> bool {
+pub(super) fn is_dependency(path: &Path) -> bool {
     path.components()
         .any(|component| component.as_os_str() == "node_modules")
 }
@@ -604,7 +604,7 @@ thread_local! {
 /// checked once; later calls reuse the answer while the file's length and modification time are
 /// unchanged. A file without a readable modification time, or modified within
 /// [`RACY_MODIFICATION_WINDOW`], is never cached.
-fn admitted_source(path: &Path) -> Option<std::sync::Arc<str>> {
+pub(super) fn admitted_source(path: &Path) -> Option<std::sync::Arc<str>> {
     let metadata = std::fs::metadata(path).ok()?;
     let stamp = settled_stamp(&metadata);
     let lock = || {
@@ -882,7 +882,7 @@ fn module_level_callable<'p>(program: &'p Program<'p>, name: &str) -> Option<Cal
 /// no initializer (a default), no rest, and a body present. Anything else is a refusal -- there
 /// is no argument whose rendering could stand in for a destructured, defaulted, or rest
 /// parameter without asserting an equivalence nobody verified.
-fn bindable_parameters(callable: &Callable<'_>) -> Option<usize> {
+pub(super) fn bindable_parameters(callable: &Callable<'_>) -> Option<usize> {
     let params = match callable {
         Callable::Function(function) => {
             // `TSDeclareFunction` and an overload signature have no body to render.

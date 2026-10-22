@@ -4,9 +4,11 @@
 //! makes the pre-1.0 oxc pin survivable: a breaking release is a rewrite of this subtree, not of
 //! the analyzer.
 
+mod auto_imports;
 mod extract;
 mod fingerprint;
 mod helpers;
+mod package_manifests;
 mod registry;
 mod resolver;
 

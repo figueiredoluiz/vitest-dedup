@@ -10,8 +10,8 @@ use std::path::{Path, PathBuf};
 
 #[derive(Clone)]
 pub(super) struct RunnerImport {
-    origin: ImportOrigin,
-    erased: bool,
+    pub(super) origin: ImportOrigin,
+    pub(super) erased: bool,
     local: String,
 }
 
@@ -272,6 +272,60 @@ impl<'a> Walker<'a> {
         let Some(origin) = self.runner_origin(&call.callee) else {
             return;
         };
+        // `registerEndpoint` installs a mock HTTP endpoint when it runs and calls nothing it is
+        // given while registering. It is setup: what it stands on is part of every test's context,
+        // and its arguments are judged like any helper's, since they are evaluated first.
+        if super::registration_free::is_known_runtime_export(
+            &origin.origin.specifier,
+            &origin.origin.exported,
+        ) && origin.origin.exported == "registerEndpoint"
+        {
+            let identity = super::registration_free::arguments_register_nothing(
+                self.program,
+                self.semantic,
+                self.written_bindings(),
+                &self.file.path,
+                &call.arguments,
+            )
+            .filter(|_| !self.is_mocked(&origin.origin, &[]) && !self.setup_is_conditional(call))
+            .and_then(|_| self.setup_call_identity(call));
+            match identity {
+                Some(identity) => {
+                    if !prepare {
+                        self.helper_setup.push(format!(
+                            "api:{}",
+                            crate::model::identity_digest(&format!(
+                                "{}#{}@{}:{identity}",
+                                origin.origin.component,
+                                origin.origin.exported,
+                                self.framework_setup_before(call)
+                            ))
+                        ));
+                    }
+                }
+                None => self.refuse_helper_expansion(refusal(
+                    ExclusionReason::HelperEffectsUnproved,
+                    "an endpoint registration reads a name the analyzer cannot place",
+                )),
+            }
+            return;
+        }
+        // `mockNuxtImport` is a hoisted mock, modelled with `vi.mock` in `collect_mocked_modules`.
+        if super::registration_free::is_known_runtime_export(
+            &origin.origin.specifier,
+            &origin.origin.exported,
+        ) && origin.origin.exported == "mockNuxtImport"
+        {
+            // Only a direct call is modelled there; any other spelling (`ns.mockNuxtImport(...)`,
+            // `.call`) would leave no mock in the context.
+            if !matches!(&call.callee, Expression::Identifier(_)) {
+                self.refuse_helper_expansion(refusal(
+                    ExclusionReason::RunnerMocked,
+                    "a `mockNuxtImport` call that is not a direct call cannot be read as a mock",
+                ));
+            }
+            return;
+        }
         if origin.erased {
             self.refuse_helper_expansion(refusal(
                 ExclusionReason::HelperExportUnreadable,
@@ -305,6 +359,91 @@ impl<'a> Walker<'a> {
         }
     }
 
+    /// Whether the imported module, or any module on its re-export chain, is mocked in the
+    /// calling file, or mocking in it could not be read.
+    fn is_mocked(&self, origin: &ImportOrigin, modules: &[PathBuf]) -> bool {
+        self.mocks_unresolved
+            || self.mocked_modules.iter().any(|mock| {
+                mock.specifier.as_ref() == origin.component
+                    || modules.iter().any(|path| {
+                        mock.specifier.as_ref()
+                            == super::super::fingerprint::specifier_identity(
+                                path,
+                                &path.to_string_lossy(),
+                            )
+                    })
+            })
+    }
+
+    /// How many framework setup statements (`vi.stubGlobal(...)`, awaited calls) the file runs
+    /// before `call`: the two kinds of setup are recorded apart, so where one stands among the
+    /// other is part of what the helper call stands on.
+    fn framework_setup_before(&self, call: &CallExpression<'a>) -> usize {
+        self.module_setup_starts
+            .iter()
+            .filter(|start| **start < call.span.start)
+            .count()
+    }
+
+    /// Whether `call` sits under control flow the walk does not evaluate: a branch, a loop that is
+    /// not a literal non-empty `for...of`, a short-circuit, a `switch` or a `try`, or inside a local helper that was itself called that way. Such a call may run any
+    /// number of times, including none, so recording it once would misstate the setup.
+    pub(super) fn setup_is_conditional(&self, call: &CallExpression<'a>) -> bool {
+        self.conditional_helper_depth > 0
+            || self
+                .semantic
+                .nodes()
+                .ancestor_kinds(call.node_id.get())
+                .any(|kind| match kind {
+                    // Only a literal, non-empty array is unrolled once per element.
+                    AstKind::ForOfStatement(for_of) => !matches!(
+                        &for_of.right,
+                        Expression::ArrayExpression(array) if !array.elements.is_empty()
+                    ),
+                    kind => matches!(
+                        kind,
+                        AstKind::IfStatement(_)
+                            | AstKind::ConditionalExpression(_)
+                            | AstKind::LogicalExpression(_)
+                            | AstKind::SwitchStatement(_)
+                            | AstKind::TryStatement(_)
+                            | AstKind::WhileStatement(_)
+                            | AstKind::DoWhileStatement(_)
+                            | AstKind::ForStatement(_)
+                            | AstKind::ForInStatement(_)
+                    ),
+                })
+    }
+
+    /// The modules a proof that `call` registers nothing relied on, or `None` when it cannot be
+    /// proved: the callee's export and everything it runs, and the arguments it is handed.
+    fn setup_modules(
+        &self,
+        origin: &ImportOrigin,
+        start: &Path,
+        call: &CallExpression<'a>,
+    ) -> Option<Vec<PathBuf>> {
+        if self.setup_is_conditional(call) {
+            return None;
+        }
+        let known =
+            super::registration_free::is_known_runtime_export(&origin.specifier, &origin.exported);
+        let mut modules = super::registration_free::arguments_register_nothing(
+            self.program,
+            self.semantic,
+            self.written_bindings(),
+            &self.file.path,
+            &call.arguments,
+        )?;
+        if !known {
+            modules.extend(super::registration_free::call_registers_nothing(
+                start,
+                &origin.exported,
+            )?);
+        }
+        Some(modules)
+    }
+
     /// Reads an admitted first-party export in its own parser and lexical frame.
     /// Checks module effects, callable shape, mocks and resource bounds before returning
     /// owned records with caller context and helper source identity.
@@ -320,21 +459,32 @@ impl<'a> Walker<'a> {
             ExclusionReason::HelperExportUnreadable,
             "a called named import could not be resolved",
         ))?;
+        // A call that provably registers nothing is setup, not a runner to read: neither the
+        // helper (everything it and its imports can run) nor the arguments it is handed (which it
+        // could call) reach a registration API. Its identity and what it reads become part of
+        // every test's context, so files that set up differently never compare equal.
+        if let Some(modules) = self.setup_modules(origin, start, call) {
+            if !self.is_mocked(origin, &modules) {
+                if let Some(identity) = self.setup_call_identity(call) {
+                    if !prepare {
+                        self.helper_setup.push(format!(
+                            "helper:{}",
+                            crate::model::identity_digest(&format!(
+                                "{}#{}@{}:{identity}",
+                                origin.component,
+                                origin.exported,
+                                self.framework_setup_before(call)
+                            ))
+                        ));
+                    }
+                    return Ok(Vec::new());
+                }
+            }
+        }
         let chain = resolve_export_chain(start, &origin.exported)
             .map_err(|_| refusal(ExclusionReason::HelperExportUnreadable, "a called named import's first-party export could not be read within the resolution/parser bounds"))?;
         let terminal = &chain.terminal;
-        if self.mocks_unresolved
-            || self.mocked_modules.iter().any(|mock| {
-                mock.specifier.as_ref() == origin.component
-                    || chain.modules.iter().any(|path| {
-                        mock.specifier.as_ref()
-                            == super::super::fingerprint::specifier_identity(
-                                path,
-                                &path.to_string_lossy(),
-                            )
-                    })
-            })
-        {
+        if self.is_mocked(origin, &chain.modules) {
             return Err(refusal(
                 ExclusionReason::RunnerMocked,
                 "the runner or its re-export chain is mocked or mocking is unresolved",
@@ -538,6 +688,9 @@ impl<'a> Walker<'a> {
             }
             child.expansion = Rc::clone(&self.expansion);
             child.suite_path = self.suite_path.clone();
+            // A setup call in the runner runs as often as the call to the runner does.
+            child.conditional_helper_depth =
+                self.conditional_helper_depth + usize::from(self.setup_is_conditional(call));
             child.suite_modifiers = self.suite_modifiers.clone();
             child.hook_scopes = self.hook_scopes.clone();
             child.unresolved_suite_depth = self.unresolved_suite_depth;
@@ -641,6 +794,8 @@ impl<'a> Walker<'a> {
                     .or_insert_with(|| source.to_owned());
             }
             // Sources a nested runner retained in its own frame belong to this caller's budget.
+            self.helper_setup
+                .extend(std::mem::take(&mut child.helper_setup));
             for (path, text) in std::mem::take(&mut child.helper_sources) {
                 if !self.helper_sources.contains_key(&path)
                     && self.helper_sources.values().map(String::len).sum::<usize>() as u64
@@ -934,6 +1089,29 @@ fn hook_count(scope: Option<&ScopeHooks>) -> usize {
     })
 }
 
+/// Whether defining `class` runs nothing: no decorators, no computed keys, no static member
+/// that is initialised or runs a block, and a superclass named by a plain reference.
+pub(super) fn class_is_inert(class: &oxc_ast::ast::Class) -> bool {
+    use oxc_ast::ast::ClassElement;
+    class.decorators.is_empty()
+        && class
+            .heritage
+            .as_ref()
+            .is_none_or(|heritage| matches!(heritage.expression, Expression::Identifier(_)))
+        && class.body.body.iter().all(|element| match element {
+            ClassElement::MethodDefinition(method) => {
+                !method.computed && method.decorators.is_empty()
+            }
+            ClassElement::PropertyDefinition(property) => {
+                !property.computed
+                    && property.decorators.is_empty()
+                    && (!property.r#static || property.value.is_none())
+            }
+            ClassElement::TSIndexSignature(_) => true,
+            ClassElement::StaticBlock(_) | ClassElement::AccessorProperty(_) => false,
+        })
+}
+
 /// Admits literals and function values whose evaluation alone has no effects.
 fn inert_expression(expression: &Expression) -> bool {
     matches!(
@@ -945,6 +1123,20 @@ fn inert_expression(expression: &Expression) -> bool {
             | Expression::ArrowFunctionExpression(_)
             | Expression::FunctionExpression(_)
     )
+}
+
+/// Whether re-exporting from `specifier` runs nothing unmodeled: it is a module of the validated
+/// chain, or one that is inert in its own right.
+fn reexport_is_inert(
+    file: &Path,
+    specifier: &str,
+    modules: &[PathBuf],
+    imports_inert: &mut dyn FnMut(&Path, &str) -> bool,
+) -> bool {
+    match resolver::resolve(file, specifier) {
+        Resolved::Module(path) => modules.contains(&path) || imports_inert(file, specifier),
+        Resolved::Unresolved => false,
+    }
 }
 
 /// Checks module execution for unmodeled setup effects.
@@ -970,22 +1162,19 @@ fn module_is_inert(
                 || imports_inert(file, import.source.value.as_str())
         }
         Statement::ExportFromDeclaration(export) => {
-            if matches!(export.export_kind, ImportOrExportKind::Type)
+            matches!(export.export_kind, ImportOrExportKind::Type)
                 || (!export.specifiers.is_empty()
                     && export
                         .specifiers
                         .iter()
                         .all(|specifier| matches!(specifier.export_kind, ImportOrExportKind::Type)))
-            {
-                return true;
-            }
-            match resolver::resolve(file, export.source.value.as_str()) {
-                Resolved::Module(path) => {
-                    modules.contains(&path) || imports_inert(file, export.source.value.as_str())
-                }
-                Resolved::Unresolved => false,
-            }
+                || reexport_is_inert(file, export.source.value.as_str(), modules, imports_inert)
         }
+        Statement::ExportAllDeclaration(export) => {
+            matches!(export.export_kind, ImportOrExportKind::Type)
+                || reexport_is_inert(file, export.source.value.as_str(), modules, imports_inert)
+        }
+        Statement::ClassDeclaration(class) => class_is_inert(class),
         Statement::FunctionDeclaration(_)
         | Statement::TSTypeAliasDeclaration(_)
         | Statement::TSInterfaceDeclaration(_)
@@ -1004,6 +1193,7 @@ fn module_is_inert(
             && helpers::find_export(program, "default").is_some())
         }
         Statement::ExportDeclaration(export) => match &export.declaration {
+            Declaration::ClassDeclaration(class) => class_is_inert(class),
             Declaration::FunctionDeclaration(_)
             | Declaration::TSTypeAliasDeclaration(_)
             | Declaration::TSInterfaceDeclaration(_) => true,
@@ -1024,6 +1214,9 @@ fn module_is_inert(
 /// Whether importing `specifier` from `importer` runs no unmodeled setup, memoized per module.
 /// A first-party module is inert when its own statements are and so is everything it imports.
 fn import_is_inert(state: &RefCell<ExpansionState>, importer: &Path, specifier: &str) -> bool {
+    if super::registration_free::is_known_runtime_module(specifier) {
+        return true;
+    }
     let Resolved::Module(path) = resolver::resolve(importer, specifier) else {
         return false;
     };
@@ -1036,9 +1229,22 @@ fn import_is_inert(state: &RefCell<ExpansionState>, importer: &Path, specifier: 
 }
 
 /// Walks one module's imports depth-first. A revisit is a cycle that adds no effects; installed
-/// packages, unreadable files and closures over the visit limit are not inert.
+/// An installed package is inert when its manifest closure names no test runner; unreadable files
+/// and closures over the visit limit are not inert.
 fn closure_is_inert(path: &Path, visited: &mut Vec<PathBuf>) -> bool {
     if visited.iter().any(|seen| seen == path) {
+        return true;
+    }
+    // An installed package's body is never read; its manifests say whether it can reach a runner.
+    if helpers::is_dependency(path) {
+        return crate::frontend::package_manifests::cannot_register_tests(
+            path,
+            super::registration_free::globals_enabled(),
+        );
+    }
+    // Whatever such a module does at import time follows from which module it is, and a runner's
+    // own identity (the file its tests are read from) already tells two callers apart.
+    if super::registration_free::imports_register_nothing(path) {
         return true;
     }
     if visited.len() >= MAX_IMPORT_CLOSURE {
