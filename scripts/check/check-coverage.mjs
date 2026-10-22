@@ -142,6 +142,10 @@ const RUST_MODULES = {
   'src/frontend/extract.rs': 98,
   // First-party imported registration frames: first measured at 93.01% (399/429 lines).
   'src/frontend/extract/imported.rs': 93,
+  'src/frontend/extract/registration_free.rs': 93,
+  'src/frontend/extract/setup_identity.rs': 93,
+  'src/frontend/auto_imports.rs': 97,
+  'src/frontend/package_manifests.rs': 98,
   // Formerly the weakest module at 71.3%, and the one the last four adjudicated false positives
   // lived in. Raised after a survivor-driven pass over the 466 depth-guard and 135 deleted-arm
   // mutants; the documented-unreachable lines (a Windows-only path component, `should not happen`
