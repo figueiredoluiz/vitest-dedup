@@ -96,9 +96,8 @@ impl<'a> Visit<'a> for Closure<'_, 'a> {
                     "local:{}",
                     &self.source[declarator.span.start as usize..declarator.span.end as usize]
                 ));
-                if let Some(init) = &declarator.init {
-                    self.visit_expression(init);
-                }
+                // The pattern too: a default (`{ value = fallback }`) or a computed key reads names.
+                self.visit_variable_declarator(declarator);
             }
             AstKind::Class(class) => {
                 self.covered.push(class.span);

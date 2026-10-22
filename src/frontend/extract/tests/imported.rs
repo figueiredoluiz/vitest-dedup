@@ -2276,3 +2276,35 @@ fn setup_in_local_helpers_and_loops_is_placed_where_it_runs() {
     }
     assert!(!run("for (const m of ['a', 'b']) setup(1);").incomplete);
 }
+
+/// Names read by a destructuring pattern (a default, a computed key) are part of the identity.
+#[test]
+fn setup_identity_includes_what_a_destructuring_pattern_reads() {
+    let site = Site::new(&[(
+        "setup.ts",
+        "export function setup(value?: unknown) { return value }",
+    )]);
+    let setup_of = |fallback: &str, pattern: &str| {
+        let extraction = site.extract(&format!(
+            "import {{ test, expect }} from 'vitest'; import {{ setup }} from './setup'; const fallback = '{fallback}'; {pattern} setup(value); {TWO_TESTS}"
+        ));
+        assert!(!extraction.incomplete, "{:?}", extraction.diagnostics);
+        extraction.tests[0].context.module_setup.clone()
+    };
+    for pattern in [
+        "const { value = fallback } = {};",
+        "const [value = fallback] = [];",
+        "const { [fallback]: value } = { fast: 1, slow: 2 };",
+    ] {
+        assert_ne!(
+            setup_of("fast", pattern),
+            setup_of("slow", pattern),
+            "{pattern}"
+        );
+        assert_eq!(
+            setup_of("fast", pattern),
+            setup_of("fast", pattern),
+            "{pattern}"
+        );
+    }
+}
