@@ -455,6 +455,16 @@ fn loads(path: &Path, text: &str, own: Option<&str>) -> Vec<Load> {
             }
         }
 
+        /// Whether `object` is the `module` object; any other receiver of `.require` is a load
+        /// the walk cannot place.
+        fn module_object(&mut self, object: &Expression<'_>) -> bool {
+            if matches!(object, Expression::Identifier(identifier) if identifier.name == "module") {
+                return true;
+            }
+            self.found.push(Load::Unknown);
+            false
+        }
+
         /// The first argument of a load: a string, or a template with no substitution.
         fn argument(&mut self, expression: Option<&Expression<'_>>) {
             match expression {
@@ -509,11 +519,19 @@ fn loads(path: &Path, text: &str, own: Option<&str>) -> Vec<Load> {
                     self.handled.insert(identifier.span.start);
                     true
                 }
-                Expression::StaticMemberExpression(member) => member.property.name == "require",
-                Expression::ComputedMemberExpression(member) => matches!(
-                    &member.expression,
-                    Expression::StringLiteral(literal) if literal.value == "require"
-                ),
+                // `module.require(x)` loads like `require(x)`; `require.main.require(x)` and
+                // `module.parent.require(x)` resolve from another module's directory.
+                Expression::StaticMemberExpression(member) if member.property.name == "require" => {
+                    self.module_object(&member.object)
+                }
+                Expression::ComputedMemberExpression(member)
+                    if matches!(
+                        &member.expression,
+                        Expression::StringLiteral(literal) if literal.value == "require"
+                    ) =>
+                {
+                    self.module_object(&member.object)
+                }
                 _ => false,
             };
             if loads {
@@ -1291,6 +1309,8 @@ mod tests {
             ("import './style.css'", false),
             ("exports.go = require('module')['createRequire'](__filename)('./x')", true),
             ("exports.go = require('./data').go", false),
+            ("exports.go = require.main.require('./solo/').go", true),
+            ("exports.go = module.parent.require('./solo/').go", true),
             ("const { createRequire: load } = require('module'); exports.go = load(__filename)('./x')", true),
             ("exports.go = require('node:module')._load('./x')", true),
             ("const { createRequire } = require('node:module'); exports.go = createRequire(__filename)('./x')", true),
