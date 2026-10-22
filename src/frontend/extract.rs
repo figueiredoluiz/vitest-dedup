@@ -1098,6 +1098,8 @@ struct Walker<'a> {
     helper_setup: Vec<String>,
     /// How many enclosing local-helper expansions were themselves called under control flow.
     conditional_helper_depth: usize,
+    /// Where the outermost local-helper call being expanded stands, if one is.
+    setup_site: Option<u32>,
     /// The bindings of this file written after they are declared, computed on first use.
     written: std::cell::OnceCell<HashSet<SymbolId>>,
     /// Module-scope ambient-state calls, file-wide like `mocked_modules`; see
@@ -1238,6 +1240,7 @@ impl<'a> Walker<'a> {
             module_setup_starts,
             helper_setup: Vec::new(),
             conditional_helper_depth: 0,
+            setup_site: None,
             written: std::cell::OnceCell::new(),
             import_specifiers,
             exported_as,
@@ -2164,11 +2167,19 @@ impl<'a> Walker<'a> {
         let Some(frame) = self.begin_helper_expansion(call) else {
             return;
         };
-        // A setup call inside this body runs as often as the body does.
+        // A setup call inside this body runs as often as the body does, and where the outermost
+        // helper call stands.
         let conditional = self.setup_is_conditional(call);
         self.conditional_helper_depth += usize::from(conditional);
+        let outermost = self.setup_site.is_none();
+        if outermost {
+            self.setup_site = Some(call.span.start);
+        }
         if let Some(body) = &frame.function.body {
             walk(self, &body.statements, registry);
+        }
+        if outermost {
+            self.setup_site = None;
         }
         self.conditional_helper_depth -= usize::from(conditional);
         self.end_helper_expansion(frame);

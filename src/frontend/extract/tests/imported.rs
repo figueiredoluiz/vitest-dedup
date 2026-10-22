@@ -2242,3 +2242,33 @@ fn setup_inside_an_unreadable_each_table_is_not_recorded() {
     );
     assert!(!run("describe('plain', () => { setup(1); test('x', () => {}); });").incomplete);
 }
+
+/// A setup call inside a local helper stands where the helper is called, not where it is declared;
+/// a loop the walk does not unroll is not recorded once per element.
+#[test]
+fn setup_in_local_helpers_and_loops_is_placed_where_it_runs() {
+    let site = Site::new(&[(
+        "setup.ts",
+        "export function setup(value?: unknown) { return value }",
+    )]);
+    let run = |body: &str| {
+        site.extract(&format!(
+            "import {{ test, expect, vi }} from 'vitest'; import {{ setup }} from './setup'; {body} {TWO_TESTS}"
+        ))
+    };
+    let before = run("function init() { setup(1) } vi.stubGlobal('m', 1); init();");
+    let after = run("function init() { setup(1) } init(); vi.stubGlobal('m', 1);");
+    assert!(!before.incomplete && !after.incomplete);
+    assert_ne!(
+        before.tests[0].context.module_setup,
+        after.tests[0].context.module_setup
+    );
+    for unrolled_not in [
+        "for (const m of [a(), b()]) setup(1);",
+        "for (const m of [...xs]) setup(1);",
+        "for (const [m] of [[1], [2]]) setup(1);",
+    ] {
+        assert!(run(unrolled_not).incomplete, "{unrolled_not}");
+    }
+    assert!(!run("for (const m of ['a', 'b']) setup(1);").incomplete);
+}

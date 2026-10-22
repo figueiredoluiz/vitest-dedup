@@ -379,9 +379,11 @@ impl<'a> Walker<'a> {
     /// before `call`: the two kinds of setup are recorded apart, so where one stands among the
     /// other is part of what the helper call stands on.
     fn framework_setup_before(&self, call: &CallExpression<'a>) -> usize {
+        // Inside a local helper the call runs where the outermost helper call stands.
+        let at = self.setup_site.unwrap_or(call.span.start);
         self.module_setup_starts
             .iter()
-            .filter(|start| **start < call.span.start)
+            .filter(|start| **start < at)
             .count()
     }
 
@@ -398,11 +400,8 @@ impl<'a> Walker<'a> {
                 .nodes()
                 .ancestor_kinds(call.node_id.get())
                 .any(|kind| match kind {
-                    // Only a literal, non-empty array is unrolled once per element.
-                    AstKind::ForOfStatement(for_of) => !matches!(
-                        &for_of.right,
-                        Expression::ArrayExpression(array) if !array.elements.is_empty()
-                    ),
+                    // Only a loop the walk actually unrolls is recorded once per element.
+                    AstKind::ForOfStatement(for_of) => super::literal_for_of_elements(for_of).is_none(),
                     kind => matches!(
                         kind,
                         AstKind::IfStatement(_)
