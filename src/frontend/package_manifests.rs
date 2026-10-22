@@ -442,7 +442,10 @@ fn loads(path: &Path, text: &str, own: Option<&str>) -> Vec<Load> {
                         .strip_prefix(own)
                         .is_some_and(|rest| rest.starts_with('/'))
             });
+            // `module` builds loaders (`createRequire`, `Module._load`), which are not followed.
+            let loader_builtin = matches!(specifier, "module" | "node:module");
             if self_reference
+                || loader_builtin
                 || specifier.contains(['?', '#', '%', '\\', '\n'])
                 || !(relative || package_or_builtin)
             {
@@ -1288,6 +1291,8 @@ mod tests {
             ("import './style.css'", false),
             ("exports.go = require('module')['createRequire'](__filename)('./x')", true),
             ("exports.go = require('./data').go", false),
+            ("const { createRequire: load } = require('module'); exports.go = load(__filename)('./x')", true),
+            ("exports.go = require('node:module')._load('./x')", true),
             ("const { createRequire } = require('node:module'); exports.go = createRequire(__filename)('./x')", true),
             (
                 "exports.go = require.apply(null, ['./registrar.cjs'])",
