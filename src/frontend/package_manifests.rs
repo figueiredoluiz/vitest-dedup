@@ -392,6 +392,8 @@ fn reached_verdicts() -> &'static Mutex<HashMap<(PathBuf, bool), bool>> {
 /// caller that analyses more than one project in a process must call
 /// `resolver::take_resolution_gaps` (which calls this) between runs.
 pub(crate) fn forget_reached() {
+    // The closure verdicts of the calling thread go with them; a worker thread's die with it.
+    VERDICTS.with(|verdicts| verdicts.borrow_mut().clear());
     reached_verdicts()
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -551,6 +553,17 @@ fn loads(path: &Path, text: &str, own: Option<&str>) -> Vec<Load> {
             }
             walk::walk_static_member_expression(self, it);
         }
+        /// `x['createRequire']`.
+        fn visit_computed_member_expression(
+            &mut self,
+            it: &oxc_ast::ast::ComputedMemberExpression<'a>,
+        ) {
+            if matches!(&it.expression, Expression::StringLiteral(literal) if literal.value == "createRequire")
+            {
+                self.found.push(Load::Unknown);
+            }
+            walk::walk_computed_member_expression(self, it);
+        }
         /// Any other mention of `require`, or of `createRequire` (which returns a loader), is a use
         /// the walk cannot follow.
         fn visit_identifier_reference(&mut self, it: &IdentifierReference<'a>) {
@@ -692,6 +705,10 @@ fn resolve_target(
             named.push(format!(".{extension}"));
             candidates.push(PathBuf::from(named));
         }
+        // Node resolves `./settings` to `settings.json`: data, found but not scanned.
+        let mut json = base.to_path_buf().into_os_string();
+        json.push(".json");
+        candidates.push(PathBuf::from(json));
         if let Some(stem) = base.to_str().and_then(|text| {
             ["js", "mjs", "cjs", "jsx"]
                 .iter()
@@ -1093,6 +1110,21 @@ mod tests {
     }
 
     /// A link out of the package cannot be followed, which refuses the package.
+    /// A manifest that starts naming a runner is seen once the run's verdicts are forgotten.
+    #[test]
+    fn closure_verdicts_are_forgotten_with_the_run() {
+        let directory = tempfile::tempdir().unwrap();
+        let package = install(directory.path(), "stale", r#"{"name":"stale"}"#);
+        assert!(verdict(&package));
+        fs::write(
+            package.join("package.json"),
+            r#"{"name":"stale","dependencies":{"vitest":"1"}}"#,
+        )
+        .unwrap();
+        forget_reached();
+        assert!(!cannot_register_tests(&package.join("index.js"), false));
+    }
+
     /// TypeScript's `import x = require(...)` is a load, and a script too deep to parse safely
     /// refuses the package.
     #[test]
@@ -1254,6 +1286,8 @@ mod tests {
             ),
             ("exports.go = module.createRequire(__filename)('./x')", true),
             ("import './style.css'", false),
+            ("exports.go = require('module')['createRequire'](__filename)('./x')", true),
+            ("exports.go = require('./data').go", false),
             ("const { createRequire } = require('node:module'); exports.go = createRequire(__filename)('./x')", true),
             (
                 "exports.go = require.apply(null, ['./registrar.cjs'])",
