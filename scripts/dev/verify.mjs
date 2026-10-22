@@ -79,6 +79,17 @@ export function rustChanged(paths) {
 
 /**
  * Build an ordered check list without running commands or modifying files.
+ *
+ * Cheapest first, in both profiles: [`runSteps`] stops at the first failing step, so a failure a
+ * static gate can see must surface in seconds, never after a compile. The static npm gates also
+ * lead the full profile and then run again inside `npm run check` -- idempotent and seconds each
+ * -- because the alternative is re-listing the check chain's tail here, and a second
+ * hand-maintained list is how the chain and this profile would drift apart.
+ *
+ * The fast profile is commit-time and compilation-free: `cargo fmt --check` parses without
+ * building, and Clippy, the Rust suite, the npm gate chain and the coverage ratchet run once, at
+ * push, in the full profile. A commit that needs them finds that out in seconds instead of after
+ * a cold dependency-tree build in the hook's own cargo cache.
  * Full checks always include Rust lints/tests; the rust flag selects coverage too.
  * @param {'fast'|'full'} profile Verification depth.
  * @param {boolean} [rust=true] Include conditional Rust checks or coverage.
@@ -88,25 +99,26 @@ export function rustChanged(paths) {
  */
 export function commands(profile, rust = true, docDiff) {
   if (!['fast', 'full'].includes(profile)) throw new Error(`Unknown verification profile: ${profile}`)
-  const steps = [['node', 'scripts/check/check-docstrings.mjs', ...(docDiff ? ['--diff-file', docDiff] : [])]]
-  // `npm run check` begins with these same commands, so the full profile leaves them to it.
-  if (profile === 'fast') steps.push(
+  const steps = [
+    ['node', 'scripts/check/check-docstrings.mjs', ...(docDiff ? ['--diff-file', docDiff] : [])],
     ['npm', 'run', 'check:action-pins'],
     ['npm', 'run', 'check:release-workflow'],
     ['npm', 'run', 'check:versions'],
     ['npm', 'run', 'check:docs'],
     ['npm', 'run', 'check:names'],
     ['npm', 'run', 'skills:check'],
-  )
-  if (rust || profile === 'full') steps.push(
-    ['cargo', 'fmt', '--all', '--check'],
-    ['cargo', 'clippy', '--all-targets', '--all-features', '--locked'],
-  )
-  if (profile === 'fast') steps.push(['npm', 'run', 'test:dev-checks'], ['npm', 'run', 'test:check-lib'])
-  else {
-    steps.push(['cargo', 'test', '--all-targets', '--all-features', '--locked'], ['npm', 'run', 'check'])
-    if (rust) steps.push(['npm', 'run', 'check:coverage:rust'])
+  ]
+  if (rust || profile === 'full') steps.push(['cargo', 'fmt', '--all', '--check'])
+  if (profile === 'fast') {
+    steps.push(['npm', 'run', 'test:dev-checks'], ['npm', 'run', 'test:check-lib'])
+    return steps
   }
+  steps.push(
+    ['cargo', 'clippy', '--all-targets', '--all-features', '--locked'],
+    ['cargo', 'test', '--all-targets', '--all-features', '--locked'],
+    ['npm', 'run', 'check'],
+  )
+  if (rust) steps.push(['npm', 'run', 'check:coverage:rust'])
   return steps
 }
 

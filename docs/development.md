@@ -43,8 +43,8 @@ The website syncs these pages, so how they are named shows up there.
 ## Local verification
 
 ```sh
-npm run verify:fast          # cheap checks, format, strict Clippy, gate helper tests
-npm run verify:full          # also Rust tests, npm gates and Rust coverage
+npm run verify:fast          # cheap checks, format, gate helper tests -- no compilation
+npm run verify:full          # adds strict Clippy, Rust tests, npm gates and Rust coverage
 npm run hooks:install        # opt in for this checkout/worktree
 ```
 
@@ -100,9 +100,12 @@ file reporter and, under `--update-baseline`, the baseline file.
 ## Git hooks
 
 - The pre-commit hook checks a temporary snapshot of the staged index, so unstaged edits and local
-  notes cannot make a bad staged change pass. It runs the fast profile and skips Cargo when no
-  staged path affects Rust or its coverage gate; Rust deletions and file-type changes count as
-  changes, including Unicode paths.
+  notes cannot make a bad staged change pass. It runs the fast profile -- the diff-scoped
+  docstring check, the static gates, and `cargo fmt --check` when any staged path affects Rust
+  (deletions and file-type changes count, including Unicode paths) -- and compiles nothing, so a
+  rejected commit costs seconds. Clippy, the Rust suite, the npm gate chain and the Rust coverage
+  ratchet run once, at push, in the full profile; both profiles order checks cheapest first and
+  stop at the first failure.
 - The pre-push hook checks each distinct proposed commit from Git's ref input with the full
   profile; a deletion-only push has no source to check.
 - Both hooks reject whitespace errors in the snapshot, and each loads the verifier from the staged

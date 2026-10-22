@@ -80,27 +80,57 @@ for (const input of ['a not-an-oid b '+zero, 'a '+oid+' b nope', 'a '+oid+' b', 
   test('reject malformed ref input '+input.slice(0, 18), () => assert.throws(() => pushCommits(input), /Malformed/))
 }
 
-test('fast checks leave corpus source alone and skip Cargo for non-Rust staged changes', () => {
+test('fast checks are compilation-free; full keeps every gate behind the static ones', () => {
   for (const profile of ['fast', 'full']) assert.deepEqual(commands(profile)[0], ['node', 'scripts/check/check-docstrings.mjs'])
   assert.equal(rustChanged(['fixtures/bad.test.ts']), false)
   for (const path of ['src/model.rs', 'Cargo.lock', 'Cargo.toml', 'scripts/check/check-coverage.mjs']) assert.equal(rustChanged([path]), true)
-  assert.equal(commands('fast', false).some(step => step[0] === 'cargo'), false)
-  const full = commands('full')
-  assert.ok(full.some(step => step.join(' ') === 'cargo test --all-targets --all-features --locked'))
-  assert.ok(full.some(step => step.join(' ') === 'npm run check:coverage:rust'))
-  assert.equal(commands('full', false).some(step => step.includes('check:coverage:rust')), false)
+  // The fast step list is pinned exactly: absence is not provable by filtering for what
+  // must not be there (a missing gate makes any "no X" filter pass), so the whole list --
+  // fmt gated on rust, nothing that compiles in either spelling -- is the assertion.
+  const statics = [
+    'node scripts/check/check-docstrings.mjs',
+    'npm run check:action-pins',
+    'npm run check:release-workflow',
+    'npm run check:versions',
+    'npm run check:docs',
+    'npm run check:names',
+    'npm run skills:check',
+  ]
+  assert.deepEqual(commands('fast', true).map(step => step.join(' ')), [
+    ...statics,
+    'cargo fmt --all --check',
+    'npm run test:dev-checks',
+    'npm run test:check-lib',
+  ])
+  assert.deepEqual(commands('fast', false).map(step => step.join(' ')), [...statics, 'npm run test:dev-checks', 'npm run test:check-lib'])
+  const full = commands('full').map(step => step.join(' '))
+  assert.ok(full.includes('cargo fmt --all --check'))
+  assert.ok(full.includes('cargo clippy --all-targets --all-features --locked'))
+  assert.ok(full.includes('cargo test --all-targets --all-features --locked'))
+  assert.ok(full.includes('npm run check'))
+  assert.ok(full.includes('npm run check:coverage:rust'))
+  assert.equal(commands('full', false).some(step => step.join(' ') === 'npm run check:coverage:rust'), false)
   assert.throws(() => commands('unknown'), /Unknown/)
 })
 
-test('full checks run no command twice, and leave the gates in the check chain to it', () => {
+test('full checks front-load the static gates and never repeat a compile-class step', () => {
   const manifest = JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8'))
   const chain = manifest.scripts.check.split(' && ')
   const full = commands('full').map(step => step.join(' '))
-  assert.equal(new Set(full).size, full.length)
-  assert.ok(full.includes('npm run check'))
+  // The static gates deliberately run twice: once as the fail-fast prefix, once inside
+  // `npm run check` (seconds each, idempotent). Everything that compiles or analyzes a
+  // corpus runs exactly once.
+  for (const step of ['cargo fmt --all --check', 'cargo clippy --all-targets --all-features --locked', 'cargo test --all-targets --all-features --locked', 'npm run check', 'npm run check:coverage:rust']) {
+    assert.equal(full.filter(other => other === step).length, 1, step + ' runs exactly once')
+  }
   for (const gate of ['check:action-pins', 'check:release-workflow', 'check:versions', 'check:docs', 'check:names', 'skills:check']) {
     assert.ok(chain.includes('npm run ' + gate), gate + ' is part of the check chain')
-    assert.equal(full.filter(step => step === 'npm run ' + gate).length, 0, gate + ' runs only inside npm run check')
+    // Presence first: a missing gate has index -1, which would compare "before" Clippy and
+    // pass an ordering-only assertion.
+    assert.ok(full.includes('npm run ' + gate), gate + ' leads the full profile')
+    // Fail-fast: every static gate precedes the first compile-class step, so its failure
+    // costs seconds instead of a dependency-tree build.
+    assert.ok(full.indexOf('npm run ' + gate) < full.indexOf('cargo clippy --all-targets --all-features --locked'), gate + ' precedes Clippy')
   }
   assert.ok(commands('fast', false).some(step => step.join(' ') === 'npm run check:names'))
 })
@@ -324,7 +354,10 @@ test('pre-commit checks staged Rust, pre-push checks the specified commit, and d
     snapshots.push(snapshot)
     assert.equal(options.env.CARGO_TARGET_DIR, hookCache)
     assert.equal(options.env.CARGO_LLVM_COV_TARGET_DIR, join(hookCache, 'llvm-cov-target'))
-    assert.ok(steps.some(step => step[1] === 'clippy'))
+    // Pre-commit compiles nothing (fmt only); pre-push runs the CI-like flow with Clippy.
+    assert.ok(steps.some(step => step[1] === 'fmt'))
+    if (snapshots.length === 1) assert.ok(!steps.some(step => step[1] === 'clippy'))
+    else assert.ok(steps.some(step => step[1] === 'clippy'))
   }
   writeFileSync(join(root, 'test.rs'), 'fn main() {}\n'); git(root, 'add', 'test.rs')
   main(['pre-commit'], { root, env, check, print: line => output.push(line) })
@@ -425,14 +458,15 @@ test('CLI reports invalid usage and exits nonzero', () => {
 })
 
 
-test('deleting staged Rust still runs Clippy', () => fixture(root => {
+test('deleting staged Rust still counts as a Rust change', () => fixture(root => {
   writeFileSync(join(root, 'removed.rs'), 'fn main() {}\n')
   git(root, 'add', 'removed.rs')
   git(root, '-c', 'core.hooksPath=/dev/null', 'commit', '--quiet', '-m', 'Rust fixture')
   git(root, 'rm', 'removed.rs')
   main(['pre-commit'], { root, print: () => {}, check: (snapshot, steps) => {
     assert.equal(existsSync(join(snapshot, 'removed.rs')), false)
-    assert.ok(steps.some(step => step[1] === 'clippy'))
+    // The deletion is a Rust change, so commit-time still formats; Clippy belongs to push.
+    assert.ok(steps.some(step => step[1] === 'fmt'))
   } })
 }))
 
