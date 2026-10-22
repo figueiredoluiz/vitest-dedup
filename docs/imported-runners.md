@@ -111,8 +111,10 @@ what the code reads:
   `playwright`, `playwright-core`, `@playwright/*`), and whose imported file and the scripts it loads
   by relative path (`require('./x')`, `from './x'`, `import('./x')`, up to 1,024 files and 32 MiB)
   do not mention `vitest`, cannot register a test. When the project enables Vitest globals those
-  files must also not call a registration global as a free name. A package past those bounds is
-  refused. An unreadable manifest or a missing dependency is
+  files must also not call a registration global as a free name. Directories are followed through
+  their `package.json` `main` and links by their target. A package is refused when it is past those
+  bounds, when a load cannot be read from the text (a computed, escaped or template specifier), or
+  when a load leaves the package or needs a manifest that cannot be read. An unreadable manifest or a missing dependency is
   refused. `mountSuspended`, `renderSuspended`, `registerEndpoint`, `mockNuxtImport` and
   `mockComponent` from `@nuxt/test-utils/runtime` are known by name.
 - An `import` whose bindings are never read as values and that names no module on disk (a package

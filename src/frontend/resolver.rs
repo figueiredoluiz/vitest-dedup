@@ -100,6 +100,8 @@ static GAPS: Mutex<ResolutionGaps> = Mutex::new(ResolutionGaps {
 
 /// Takes and clears the gaps recorded since the last call.
 pub fn take_resolution_gaps() -> ResolutionGaps {
+    // The end of a run: what was read about installed packages is no longer current.
+    super::package_manifests::forget_reached();
     std::mem::take(
         &mut *GAPS
             .lock()
