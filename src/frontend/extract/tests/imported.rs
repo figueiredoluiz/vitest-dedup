@@ -2223,3 +2223,22 @@ fn a_runner_setup_call_keeps_the_callers_place_among_framework_setup() {
         setup_of("run(); vi.stubGlobal('mode', 'changed');")
     );
 }
+
+/// A suite instance walked once for a table the analyzer cannot read runs once per row.
+#[test]
+fn setup_inside_an_unreadable_each_table_is_not_recorded() {
+    let site = Site::new(&[(
+        "setup.ts",
+        "export function setup(value?: unknown) { return value }",
+    )]);
+    let run = |suite: &str| {
+        site.extract(&format!(
+            "import {{ test, expect, describe }} from 'vitest'; import {{ setup }} from './setup'; {suite} {TWO_TESTS}"
+        ))
+    };
+    assert!(
+        run("describe.each(getRows())('row', () => { setup(1); test('x', () => {}); });")
+            .incomplete
+    );
+    assert!(!run("describe('plain', () => { setup(1); test('x', () => {}); });").incomplete);
+}

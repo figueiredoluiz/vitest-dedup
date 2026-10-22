@@ -267,6 +267,8 @@ fn without_comments_and_strings(text: &str) -> String {
                     }
                 }
                 out.push(' ');
+                previous = ')';
+                word.clear();
             }
             '\'' | '"' => {
                 while let Some(next) = chars.next() {
@@ -277,6 +279,8 @@ fn without_comments_and_strings(text: &str) -> String {
                     }
                 }
                 out.push(' ');
+                previous = ')';
+                word.clear();
             }
             other => {
                 out.push(other);
@@ -530,6 +534,14 @@ mod tests {
             ),
             (
                 "const q = /[\"'`]/; exports.run = () => describe('x', () => {})",
+                true,
+            ),
+            (
+                "const half = \"a\" / 2; exports.run = () => test('x', () => {}); const t = 4 / 2",
+                true,
+            ),
+            (
+                "const half = `${n}px` / 2; exports.run = () => test('x', () => {}); const t = 4 / 2",
                 true,
             ),
             ("exports.run = (a, b) => a / 2 + b / 3; /* it( */", false),

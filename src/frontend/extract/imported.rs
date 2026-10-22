@@ -390,6 +390,9 @@ impl<'a> Walker<'a> {
     /// number of times, including none, so recording it once would misstate the setup.
     pub(super) fn setup_is_conditional(&self, call: &CallExpression<'a>) -> bool {
         self.conditional_helper_depth > 0
+            // An unreadable `describe.each` table is walked as one representative instance, but
+            // runs once per row.
+            || self.unresolved_suite_depth > 0
             || self
                 .semantic
                 .nodes()
