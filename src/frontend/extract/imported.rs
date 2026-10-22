@@ -280,6 +280,21 @@ impl<'a> Walker<'a> {
             &origin.origin.exported,
         ) && origin.origin.exported == "registerEndpoint"
         {
+            // Each cause gets its own code and sentence, so a report can be triaged from them.
+            if self.is_mocked(&origin.origin, &[]) {
+                self.refuse_helper_expansion(refusal(
+                    ExclusionReason::RunnerMocked,
+                    "the endpoint registration is mocked or mocking is unresolved",
+                ));
+                return;
+            }
+            if self.setup_is_conditional(call) {
+                self.refuse_helper_expansion(refusal(
+                    ExclusionReason::HelperEffectsUnproved,
+                    "an endpoint registration under control flow may run any number of times",
+                ));
+                return;
+            }
             let identity = super::registration_free::arguments_register_nothing(
                 self.program,
                 self.semantic,
@@ -287,7 +302,6 @@ impl<'a> Walker<'a> {
                 &self.file.path,
                 &call.arguments,
             )
-            .filter(|_| !self.is_mocked(&origin.origin, &[]) && !self.setup_is_conditional(call))
             .and_then(|_| self.setup_call_identity(call));
             match identity {
                 Some(identity) => {

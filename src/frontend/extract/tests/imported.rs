@@ -2308,3 +2308,45 @@ fn setup_identity_includes_what_a_destructuring_pattern_reads() {
         );
     }
 }
+
+/// A refused endpoint registration says why: mocked, under control flow, or unplaceable.
+#[test]
+fn register_endpoint_refusals_name_their_cause() {
+    let call = |before: &str, statement: &str| {
+        let caller = format!(
+            "import {{ test, expect, vi }} from 'vitest'; import {{ registerEndpoint }} from '@nuxt/test-utils/runtime'; {before} {statement} {TWO_TESTS}"
+        );
+        with_helpers(&[], &caller)
+    };
+    let mocked = call(
+        "vi.mock('@nuxt/test-utils/runtime', () => ({ registerEndpoint: () => 1 }));",
+        "registerEndpoint('/x', () => ({}));",
+    );
+    assert!(
+        mocked.reasons.contains(&ExclusionReason::RunnerMocked),
+        "{:?}",
+        mocked.reasons
+    );
+    let conditional = call(
+        "",
+        "if (process.env.CI) { registerEndpoint('/x', () => ({})); }",
+    );
+    assert!(conditional.incomplete);
+    assert!(
+        conditional
+            .diagnostics
+            .iter()
+            .any(|text| text.contains("control flow")),
+        "{:?}",
+        conditional.diagnostics
+    );
+    let unplaceable = call("enum Mode { A }", "registerEndpoint('/x', () => Mode);");
+    assert!(
+        unplaceable
+            .diagnostics
+            .iter()
+            .any(|text| text.contains("cannot place")),
+        "{:?}",
+        unplaceable.diagnostics
+    );
+}
