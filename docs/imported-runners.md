@@ -108,9 +108,11 @@ what the code reads:
   (`items.push(1)`) are not tracked.
 - Installed packages are judged by their manifests: one whose whole dependency closure names no
   test runner (`vitest`, `vitest-*`, `@vitest/*`, `jest`, `@jest/*`, `mocha`, `jasmine`,
-  `playwright`, `playwright-core`, `@playwright/*`), and whose imported file does not mention
-  `vitest`, cannot register a test. When the project enables Vitest globals that file must also not
-  call a registration global as a free name. An unreadable manifest or a missing dependency is
+  `playwright`, `playwright-core`, `@playwright/*`), and whose imported file and the scripts it loads
+  by relative path (`require('./x')`, `from './x'`, `import('./x')`, up to 1,024 files and 32 MiB)
+  do not mention `vitest`, cannot register a test. When the project enables Vitest globals those
+  files must also not call a registration global as a free name. A package past those bounds is
+  refused. An unreadable manifest or a missing dependency is
   refused. `mountSuspended`, `renderSuspended`, `registerEndpoint`, `mockNuxtImport` and
   `mockComponent` from `@nuxt/test-utils/runtime` are known by name.
 - An `import` whose bindings are never read as values and that names no module on disk (a package
@@ -121,8 +123,7 @@ what the code reads:
 
 The proof is lexical and aimed at code that is not written to evade it. It does not follow a value
 through an alias (`const alias = config; alias.mode = 2`), a method that mutates (`items.push(1)`), a
-registration global reached by another name (`const register = test`), a package that registers
-tests from a file other than the one imported without declaring Vitest, reflection
+registration global reached by another name (`const register = test`), reflection
 (`process.getBuiltinModule('vm')`, `({}).constructor.constructor(...)`) or a mock of a package that
 the helper imports several modules away. Those cases can make a helper that registers read as setup.
 
@@ -172,6 +173,8 @@ generated list are not read.
 - Local and imported expansion share a depth of 8 and 2,000 body admissions across both passes.
 - One setup-helper proof visits at most 64 modules, and reads at most 256 manifests for each
   installed package it reaches.
+- The text check of an installed package follows relative `require`, `from` and `import()` to at
+  most 1,024 scripts and 32 MiB (8 MiB each); a package past that is refused.
 - Helper files share the source byte limit (8 MiB), the bracket nesting limit (256) and the
   export-hop limit (8).
 - Exact helper sources retained for one caller share an additional 8 MiB budget; repeated calls

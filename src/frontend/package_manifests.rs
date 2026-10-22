@@ -14,6 +14,7 @@ use serde_json::Value;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::path::{Component, Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 
 /// Most packages one closure may visit before it is refused.
 const MAX_PACKAGES: usize = 256;
@@ -21,8 +22,6 @@ const MAX_PACKAGES: usize = 256;
 thread_local! {
     /// Verdict per package root, so a barrel's many imports of one package read its closure once.
     static VERDICTS: RefCell<HashMap<PathBuf, bool>> = RefCell::new(HashMap::new());
-    /// Whether an entry file names Vitest, per file, so a shared entry is read once.
-    static ENTRIES: RefCell<HashMap<(PathBuf, bool), bool>> = RefCell::new(HashMap::new());
 }
 
 /// Whether `name` is a test runner, or a package that exists to extend one.
@@ -367,26 +366,166 @@ fn calls_registration_global(text: &str) -> bool {
     })
 }
 
-/// Whether the entry file names Vitest anywhere in its text, or -- when the project enables
-/// globals, which a package can lean on without importing anything -- calls a registration
-/// global. A package that registers tests without declaring Vitest as a dependency is caught here
-/// when it does so from the file imported; code split across other files of an undeclared package
-/// is the residual case the manifest closure cannot see.
+/// Most local files one package's entry may reach before the text rule gives up.
+const MAX_LOCAL_FILES: usize = 1024;
+/// Most bytes those files may hold in all.
+const MAX_LOCAL_BYTES: u64 = 32 * 1024 * 1024;
+
+/// Verdicts of the text rule over what an entry reaches, per entry and globals mode, shared by
+/// every worker: a package is read once per run, not once per test file that imports it.
+fn reached_verdicts() -> &'static Mutex<HashMap<(PathBuf, bool), bool>> {
+    static VERDICTS: OnceLock<Mutex<HashMap<(PathBuf, bool), bool>>> = OnceLock::new();
+    VERDICTS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Forgets every verdict of the text rule; for tests that rewrite a file and ask again.
+#[cfg(test)]
+pub(crate) fn forget_reached() {
+    reached_verdicts()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clear();
+}
+
+/// The relative specifiers a script loads: `from './x'`, `require('./x')`, `import('./x')` and
+/// `import './x'`. Read from the raw text, so a specifier inside a comment is a false lead, which
+/// at worst names a file that does not exist.
+fn local_specifiers(text: &str) -> Vec<String> {
+    let bytes = text.as_bytes();
+    let is_name = |byte: u8| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'$';
+    let mut found = Vec::new();
+    for keyword in ["from", "require", "import"] {
+        for (start, _) in text.match_indices(keyword) {
+            if start > 0 && (is_name(bytes[start - 1]) || bytes[start - 1] == b'.') {
+                continue;
+            }
+            let mut at = start + keyword.len();
+            while bytes
+                .get(at)
+                .is_some_and(|b| b.is_ascii_whitespace() || *b == b'(')
+            {
+                at += 1;
+            }
+            let Some(&quote) = bytes.get(at).filter(|b| matches!(**b, b'\'' | b'"')) else {
+                continue;
+            };
+            let rest = &text[at + 1..];
+            if let Some(end) = rest.find(quote as char) {
+                let specifier = &rest[..end];
+                if matches!(specifier, "." | "..")
+                    || specifier.starts_with("./")
+                    || specifier.starts_with("../")
+                {
+                    found.push(specifier.to_owned());
+                }
+            }
+        }
+    }
+    found
+}
+
+/// `path` with `.` and `..` folded away, without touching the file system.
+fn normalized(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::ParentDir => {
+                out.pop();
+            }
+            Component::CurDir => {}
+            other => out.push(other),
+        }
+    }
+    out
+}
+
+/// The script file a relative `specifier` written in `from` names, when it is inside `root`:
+/// as written, with a script extension, or as a directory index.
+fn resolve_local(from: &Path, root: &Path, specifier: &str) -> Option<PathBuf> {
+    let base = normalized(&from.parent()?.join(specifier));
+    if !base.starts_with(root) {
+        return None;
+    }
+    let mut candidates = vec![base.clone()];
+    for extension in ["js", "mjs", "cjs"] {
+        let mut named = base.clone().into_os_string();
+        named.push(format!(".{extension}"));
+        candidates.push(PathBuf::from(named));
+        candidates.push(base.join(format!("index.{extension}")));
+    }
+    // A link inside the package can point anywhere; only a script whose real path is inside the
+    // package's real root is part of it.
+    let real_root = root.canonicalize().ok()?;
+    candidates.into_iter().find(|candidate| {
+        candidate.is_file()
+            && candidate
+                .extension()
+                .is_some_and(|extension| matches!(extension.to_str(), Some("js" | "mjs" | "cjs")))
+            && candidate
+                .canonicalize()
+                .is_ok_and(|real| real.starts_with(&real_root))
+    })
+}
+
+/// Whether the entry file, or a script of the same package it loads by a relative path, names
+/// Vitest anywhere in its text, or -- when the project enables globals, which a package can lean
+/// on without importing anything -- calls a registration global. A package that registers tests
+/// without declaring Vitest as a dependency is caught here. Past the file and size caps, or at a
+/// file too large to read, the answer is "cannot tell", which is the refusal.
 fn entry_registers(file: &Path, globals: bool) -> bool {
     let key = (file.to_path_buf(), globals);
-    if let Some(known) = ENTRIES.with(|entries| entries.borrow().get(&key).copied()) {
+    if let Some(known) = reached_verdicts()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .get(&key)
+        .copied()
+    {
         return known;
     }
-    let registers = std::fs::metadata(file)
-        .ok()
-        .filter(|metadata| metadata.len() <= MAX_ENTRY_BYTES)
-        .and_then(|_| std::fs::read(file).ok())
-        .is_none_or(|bytes| {
-            let text = String::from_utf8_lossy(&bytes);
-            text.contains("vitest") || (globals && calls_registration_global(&text))
-        });
-    ENTRIES.with(|entries| entries.borrow_mut().insert(key, registers));
+    let registers = reached_files_register(file, globals);
+    reached_verdicts()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .insert(key, registers);
     registers
+}
+
+fn reached_files_register(entry: &Path, globals: bool) -> bool {
+    let Some(root) = package_root(entry) else {
+        return true;
+    };
+    let mut pending = vec![entry.to_path_buf()];
+    let mut seen: HashSet<PathBuf> = HashSet::new();
+    let mut bytes = 0u64;
+    while let Some(file) = pending.pop() {
+        if !seen.insert(file.clone()) {
+            continue;
+        }
+        let Some(length) = std::fs::metadata(&file)
+            .ok()
+            .map(|metadata| metadata.len())
+            .filter(|length| *length <= MAX_ENTRY_BYTES)
+        else {
+            return true;
+        };
+        bytes += length;
+        if seen.len() > MAX_LOCAL_FILES || bytes > MAX_LOCAL_BYTES {
+            return true;
+        }
+        let Ok(raw) = std::fs::read(&file) else {
+            return true;
+        };
+        let text = String::from_utf8_lossy(&raw);
+        if text.contains("vitest") || (globals && calls_registration_global(&text)) {
+            return true;
+        }
+        pending.extend(
+            local_specifiers(&text)
+                .iter()
+                .filter_map(|specifier| resolve_local(&file, &root, specifier)),
+        );
+    }
+    false
 }
 
 /// Whether the installed package that owns `file` provably cannot register Vitest tests: no
@@ -421,7 +560,7 @@ mod tests {
 
     fn verdict(package: &Path) -> bool {
         VERDICTS.with(|verdicts| verdicts.borrow_mut().clear());
-        ENTRIES.with(|entries| entries.borrow_mut().clear());
+        forget_reached();
         cannot_register_tests(&package.join("index.js"), false)
     }
 
@@ -548,7 +687,7 @@ mod tests {
             ("exports.run = () => { return /it\\(/.test('x') }", false),
         ] {
             fs::write(package.join("index.js"), source).unwrap();
-            ENTRIES.with(|entries| entries.borrow_mut().clear());
+            forget_reached();
             VERDICTS.with(|verdicts| verdicts.borrow_mut().clear());
             assert_eq!(
                 cannot_register_tests(&package.join("index.js"), true),
@@ -591,6 +730,130 @@ mod tests {
         }
         let package = install(root, "good", r#"{"dependencies":{"elsewhere":"1"}}"#);
         assert!(verdict(&package));
+    }
+
+    /// A package that registers from a file other than the one imported is refused, however that
+    /// file is reached; files outside the package and files that do not exist are not followed.
+    #[test]
+    fn local_files_an_entry_reaches_are_judged_too() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let package = install(root, "split", r#"{"name":"split"}"#);
+        let write = |name: &str, text: &str| {
+            let path = package.join(name);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, text).unwrap();
+        };
+        write(
+            "registrar.js",
+            "const { test } = require('vitest'); exports.go = () => test('a', () => {})",
+        );
+        write("globals.js", "exports.go = () => describe('a', () => {})");
+        write("lib/index.js", "exports.go = () => test('a', () => {})");
+        write("clean.js", "exports.go = () => 1");
+
+        fs::write(root.join("node_modules/outside.js"), "test('a', () => {})").unwrap();
+        for (entry, globals, registers) in [
+            ("exports.go = require('./registrar').go", false, true),
+            ("module.exports = require('./registrar.js')", false, true),
+            ("export * from './registrar'", false, true),
+            ("export { go } from './registrar.js'", false, true),
+            ("import('./registrar')", false, true),
+            ("import './registrar'", false, true),
+            ("exports.go = require('./globals').go", false, false),
+            ("exports.go = require('./globals').go", true, true),
+            ("exports.go = require('./lib').go", true, true),
+            ("exports.go = require('./clean').go", true, false),
+            ("exports.go = require('../outside').go", true, false),
+            ("exports.go = require('./absent').go", true, false),
+            ("exports.go = require('lodash').go", true, false),
+            ("// require('./registrar')\nexports.go = 1", false, true),
+        ] {
+            fs::write(package.join("index.js"), entry).unwrap();
+            forget_reached();
+            VERDICTS.with(|verdicts| verdicts.borrow_mut().clear());
+            assert_eq!(
+                cannot_register_tests(&package.join("index.js"), globals),
+                !registers,
+                "{entry} (globals {globals})"
+            );
+        }
+    }
+
+    /// A link out of the package is not a file of the package.
+    #[cfg(unix)]
+    #[test]
+    fn a_link_out_of_the_package_is_not_followed() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let package = install(root, "linked", r#"{"name":"linked"}"#);
+        fs::write(
+            root.join("outside.js"),
+            "exports.go = () => test('a', () => {})",
+        )
+        .unwrap();
+        std::os::unix::fs::symlink(root.join("outside.js"), package.join("registrar.js")).unwrap();
+        fs::write(
+            package.join("index.js"),
+            "exports.go = require('./registrar').go",
+        )
+        .unwrap();
+        forget_reached();
+        VERDICTS.with(|verdicts| verdicts.borrow_mut().clear());
+        assert!(cannot_register_tests(&package.join("index.js"), true));
+    }
+
+    /// `require('.')` and `require('..')` name a directory index.
+    #[test]
+    fn dot_specifiers_name_a_directory_index() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let package = install(root, "dots", r#"{"name":"dots"}"#);
+        fs::create_dir_all(package.join("sub")).unwrap();
+        fs::write(
+            package.join("index.js"),
+            "exports.go = () => test('a', () => {})",
+        )
+        .unwrap();
+        fs::write(
+            package.join("sub/index.js"),
+            "module.exports = require('..')",
+        )
+        .unwrap();
+        fs::write(package.join("sub/self.js"), "module.exports = require('.')").unwrap();
+        for entry in ["sub/index.js", "sub/self.js"] {
+            forget_reached();
+            VERDICTS.with(|verdicts| verdicts.borrow_mut().clear());
+            assert!(
+                !cannot_register_tests(&package.join(entry), true),
+                "{entry}"
+            );
+        }
+    }
+
+    /// Reading follows cycles once, and gives up past the file cap rather than reading without bound.
+    #[test]
+    fn local_files_are_read_once_and_within_a_cap() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let package = install(root, "ring", r#"{"name":"ring"}"#);
+        fs::write(package.join("index.js"), "require('./a')").unwrap();
+        fs::write(package.join("a.js"), "require('./b')").unwrap();
+        fs::write(package.join("b.js"), "require('./a')").unwrap();
+        forget_reached();
+        VERDICTS.with(|verdicts| verdicts.borrow_mut().clear());
+        assert!(cannot_register_tests(&package.join("index.js"), false));
+        let wide = install(root, "wide", r#"{"name":"wide"}"#);
+        let imports: Vec<String> = (0..=MAX_LOCAL_FILES)
+            .map(|n| format!("require('./f{n}')"))
+            .collect();
+        fs::write(wide.join("index.js"), imports.join(";")).unwrap();
+        for n in 0..=MAX_LOCAL_FILES {
+            fs::write(wide.join(format!("f{n}.js")), "exports.x = 1").unwrap();
+        }
+        forget_reached();
+        VERDICTS.with(|verdicts| verdicts.borrow_mut().clear());
+        assert!(!cannot_register_tests(&wide.join("index.js"), false));
     }
 
     /// A closure past the cap is refused instead of read without bound.
