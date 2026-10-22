@@ -1098,7 +1098,7 @@ fn analyze_whole_row(cell_expr: &Expression, source: &str, resolve: Resolve<'_, 
 /// `const_fold_kind`'s doc), so this never observes one returning `Some` while the other returns
 /// `None`.
 /// Folds one row cell expression to a [`CellValue`], when [`const_fold`] can read it at all --
-/// and, under `VD_CELL_CENSUS=1`, records why when it cannot.
+/// and, when `VD_CELL_CENSUS` is set, records why when it cannot.
 ///
 /// The census is T1's re-measurement instrument (backlog): the 2,462-cell figure that sized that
 /// row came from a branch that no longer exists, so the instrumentation lives in the tree now and
@@ -1122,7 +1122,7 @@ fn fold_cell(expr: &Expression, resolve: Resolve<'_, '_>) -> Option<CellValue> {
     value
 }
 
-/// The census histogram, printed once at the end of a `VD_CELL_CENSUS=1` run by the CLI.
+/// The census histogram, printed once at the end of a run with `VD_CELL_CENSUS` set by the CLI.
 pub fn take_cell_census() -> Vec<(String, u64)> {
     with_cell_census(|census| {
         let mut counts: Vec<_> = census.counts.drain().collect();

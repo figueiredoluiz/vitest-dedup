@@ -80,7 +80,9 @@ Each rule's default severity, its meaning, and the remedy its verdict names are 
 
 `terminal` and `jsonl` both write to stdout and cannot be combined. `--output` is a filename stem:
 `--output reports/dedup` writes `reports/dedup.json`, and file reporters default to the stem
-`reports/vitest-dedup`.
+`reports/vitest-dedup`. An explicit `--output` requires a file reporter and a filename prefix;
+directory paths (including a trailing slash) are rejected. A closed stdout pipe does not change
+the analysis exit code or prevent file reporters from completing.
 
 Two diagnostic streams are available on request. `--emit-test-fingerprints` adds the per-test
 comparison keys to the `jsonl` stream, and `--debug-memory` adds a run-level record of retained

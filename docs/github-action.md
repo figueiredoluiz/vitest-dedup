@@ -32,6 +32,8 @@ The inputs are `path`, `config`, `threshold`, `reporters`, `output`, `rule`, `gl
 - `path` is the positional argument, `version` selects the release binary, and `token`
   authenticates the attestation check.
 - Each of the others maps to the flag of the same name.
+- `globals` accepts `true`, `false`, or empty (including omission). Only `true` forces globals;
+  the other accepted values preserve config detection. Other values fail before installation or analysis.
 - `rule` accepts several overrides separated by newlines or commas.
 - The JSON reporter is always enabled so the outputs below can be read.
 - `--update-baseline` is deliberately not an input: rewriting a committed record of accepted debt is

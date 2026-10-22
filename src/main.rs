@@ -28,6 +28,7 @@ mod diagnostics;
 use diagnostics::Sanitized;
 
 mod rss;
+mod stdout;
 
 #[cfg(test)]
 mod memory_roof_tests;
@@ -1022,13 +1023,13 @@ fn run_with_rss(args: ParsedArgs, mut resident: impl FnMut() -> Option<u64>) -> 
 
     let exit_code = final_exit_code(args.fail_on_incomplete, args.fail_on_new, &result, &config);
     let terminal_context = TerminalReportContext::new(&config, exit_code).with_timing(timing);
-    let mut stdout = std::io::stdout().lock();
+    let mut stdout = stdout::PipeWriter::new(std::io::stdout().lock());
     let mut written = Vec::new();
     for reporter in &args.reporters {
         match reporter {
             ReporterKind::Terminal => {
                 let color = terminal_color_enabled(
-                    stdout.is_terminal(),
+                    stdout.inner().is_terminal(),
                     std::env::var_os("NO_COLOR").as_deref(),
                     enable_stdout_ansi,
                 );
@@ -2534,6 +2535,8 @@ mod tests {
             &[
                 "--baseline-from-ref",
                 "HEAD",
+                "--fail-on-new",
+                "0",
                 "--reporters",
                 "terminal,json",
                 "--output",
@@ -2570,7 +2573,17 @@ mod tests {
         init_repository(root);
         std::fs::write(root.join("dirty.test.ts"), DUPLICATE_PAIR).unwrap();
 
-        let (code, _, stderr) = run_cli(root, &["--baseline-from-ref", "HEAD"]);
+        let (code, _, stderr) = run_cli(
+            root,
+            &[
+                "--baseline-from-ref",
+                "HEAD",
+                "--fail-on-new",
+                "0",
+                "--threshold",
+                "100",
+            ],
+        );
         assert_eq!(
             code,
             Some(1),

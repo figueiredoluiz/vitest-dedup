@@ -183,21 +183,21 @@ fn render(result: &AnalysisResult, sources: &BTreeMap<PathBuf, String>) -> Resul
     // the same rule filter the dropdown sets, so the two stay in sync by construction. Counts
     // come from the same grouping the findings body renders, so a button can never claim a
     // number the page below it does not show.
-    let mut by_rule_counts: BTreeMap<&'static str, usize> = BTreeMap::new();
+    let mut by_rule_counts: BTreeMap<Rule, usize> = BTreeMap::new();
     for finding in &result.findings {
-        *by_rule_counts.entry(finding.rule.id()).or_default() += 1;
+        *by_rule_counts.entry(finding.rule).or_default() += 1;
     }
     let rule_buttons: String = by_rule_counts
         .iter()
         .map(|(id, count)| {
             format!(
                 r#"<button type="button" class="rule-total" data-rule-total="{id}" aria-label="Show only {id} findings">{id} ({count})</button>"#,
-                id = html_escape(id),
+                id = html_escape(id.id()),
                 count = count,
             )
         })
         .collect();
-    let rule_ids: Vec<&'static str> = by_rule_counts.into_keys().collect();
+    let rule_ids: Vec<&'static str> = by_rule_counts.into_keys().map(|rule| rule.id()).collect();
     let rule_options: String = rule_ids
         .iter()
         .map(|id| format!(r#"<option value="{id}">{id}</option>"#))
@@ -960,6 +960,27 @@ mod tests {
         let output = render(&result, &sources).unwrap();
         assert!(output.contains("<summary>lines 2&#8211;3</summary>"));
         assert!(output.contains("<pre><code>line2\nline3</code></pre>"));
+    }
+
+    /// Filters and sections keep declaration order even when findings arrive shuffled.
+    #[test]
+    fn rule_controls_follow_section_order() {
+        let findings = Rule::ALL
+            .iter()
+            .rev()
+            .map(|rule| finding_with_title(*rule, "a.test.ts", "a"))
+            .collect();
+        let output = render_str(&rendered_result(findings));
+        for marker in ["data-rule-total", "value", "data-rule-group"] {
+            let offsets: Vec<_> = Rule::ALL
+                .iter()
+                .map(|rule| output.find(&format!("{marker}=\"{}\"", rule.id())).unwrap())
+                .collect();
+            assert!(
+                offsets.windows(2).all(|pair| pair[0] < pair[1]),
+                "{marker}: {offsets:?}"
+            );
+        }
     }
 
     // --- P2: per-rule totals as filters ------------------------------------------------------

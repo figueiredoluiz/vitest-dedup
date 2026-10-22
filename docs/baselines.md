@@ -43,3 +43,6 @@ A finding removed by an inline suppression directive is absent from the finding 
 `suppressionsApplied` is what stops that absence from reading as a clean result.
 
 Back to [Reports](reports.md).
+
+`--fail-on-new N` works with either `--baseline FILE` or `--baseline-from-ref REVISION`.
+It cannot be used with `--update-baseline`, and the two baseline sources cannot be combined.

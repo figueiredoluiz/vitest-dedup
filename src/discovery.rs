@@ -37,6 +37,51 @@ use ignore::WalkBuilder;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+/// Format walker-owned paths relative to the root, retaining the underlying failure cause.
+fn relative_walk_error(error: &ignore::Error, root: &Path) -> String {
+    match error {
+        ignore::Error::Partial(errors) => errors
+            .iter()
+            .map(|error| relative_walk_error(error, root))
+            .collect::<Vec<_>>()
+            .join("; "),
+        ignore::Error::WithLineNumber { line, err } => {
+            format!("line {line}: {}", relative_walk_error(err, root))
+        }
+        ignore::Error::WithPath { path, err } => format!(
+            "{}: {}",
+            relative_walk_path(path, root),
+            relative_walk_error(err, root)
+        ),
+        ignore::Error::WithDepth { err, .. } => relative_walk_error(err, root),
+        ignore::Error::Loop { ancestor, child } => format!(
+            "File system loop found: {} points to an ancestor {}",
+            relative_walk_path(child, root),
+            relative_walk_path(ancestor, root)
+        ),
+        ignore::Error::Io(error) => {
+            // walkdir wraps the OS error with a second copy of the absolute path. The
+            // surrounding WithPath already identifies it; keep the underlying OS cause.
+            let mut cause: &dyn std::error::Error = error;
+            while let Some(source) = cause.source() {
+                cause = source;
+            }
+            cause.to_string()
+        }
+        other => other.to_string(),
+    }
+}
+
+/// Render a walker path without changing external paths or similarly named sibling roots.
+fn relative_walk_path(path: &Path, root: &Path) -> String {
+    let relative = path.strip_prefix(root).unwrap_or(path);
+    if relative.as_os_str().is_empty() {
+        ".".to_owned()
+    } else {
+        relative.to_string_lossy().replace('\\', "/")
+    }
+}
+
 /// Custom ignore-file name, checked with the same negation/precedence semantics as `.gitignore`.
 ///
 /// Lets a repository exclude generated or fixture test files from analysis without touching its
@@ -495,8 +540,8 @@ pub fn discover(config: &Config, project_set: Option<&ProjectSet>) -> Result<Dis
             Ok(entry) => entry,
             Err(error) => {
                 result.errors.push(format!(
-                    "failed while walking {}: {error}",
-                    config.root.display()
+                    "failed while walking .: {}",
+                    relative_walk_error(&error, &config.root)
                 ));
                 // A directory we could not read might have hidden a duplicate.
                 result.incomplete = true;
@@ -629,8 +674,9 @@ pub fn discover(config: &Config, project_set: Option<&ProjectSet>) -> Result<Dis
             Ok(metadata) => metadata,
             Err(error) => {
                 result.errors.push(format!(
-                    "failed to read metadata for {}: {error}",
-                    path.display()
+                    "failed to read metadata for {}: {}",
+                    relative_walk_path(&path, &config.root),
+                    relative_walk_error(&error, &config.root)
                 ));
                 result.incomplete = true;
                 result.traversal_failed = true;

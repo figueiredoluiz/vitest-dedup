@@ -1,7 +1,10 @@
 # Configuration
 
 A `.vitest-dedup.json` file is found by walking upward from the analyzed directory, or named with
-`--config`. Command-line flags override it.
+`--config`. A relative `--config` path is resolved against the analyzed directory, not the shell's
+working directory. Automatic discovery chooses the nearest file up to the filesystem root,
+including files above a Git repository. Use `--config` to select a specific file instead.
+Command-line flags override it.
 
 ```json
 {

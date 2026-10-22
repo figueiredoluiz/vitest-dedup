@@ -114,6 +114,7 @@ impl From<ExitCode> for i32 {
 #[derive(Debug, Parser)]
 #[command(
     name = "vitest-dedup",
+    bin_name = "vitest-dedup",
     version,
     about = "Detect duplicate and near-duplicate Vitest tests",
     after_help = "Examples:\n  vitest-dedup .\n  vitest-dedup check .\n  vitest-dedup . --reporters terminal,json"
@@ -142,7 +143,7 @@ enum RawCommand {
 
 #[derive(Debug, Clone, Args, Default)]
 struct RawOptions {
-    /// Explicit `.vitest-dedup.json` configuration file, bypassing upward auto-discovery.
+    /// Explicit configuration file (relative to PATH), bypassing upward auto-discovery.
     #[arg(long, short = 'c', global = true, value_name = "FILE")]
     config: Option<PathBuf>,
 
@@ -159,7 +160,7 @@ struct RawOptions {
     #[arg(long, global = true, value_delimiter = ',')]
     reporters: Option<Vec<ReporterKind>>,
 
-    /// Filename prefix for file-based reports.
+    /// Filename prefix for file-based reports; requires json, html, or sarif. Directories are rejected.
     #[arg(long, global = true, value_name = "PREFIX")]
     output: Option<PathBuf>,
 
@@ -254,7 +255,7 @@ struct RawOptions {
     )]
     baseline_from_ref: Option<String>,
 
-    /// Fail the quality gate when more than N findings are absent from the baseline.
+    /// Fail the quality gate when more than N findings are absent from a file or revision baseline.
     ///
     /// Additional to `--threshold`, not a replacement for it: an un-baselined error-severity
     /// finding still fails the default threshold on its own.
@@ -354,6 +355,70 @@ pub struct ParsedArgs {
     pub memory_budget_mib: Option<u64>,
 }
 
+/// A clap diagnostic with sanitized values and trusted usage layout.
+#[derive(Debug)]
+pub struct CliDiagnostic(String);
+
+impl std::fmt::Display for CliDiagnostic {
+    /// Render the already-sanitized diagnostic without flattening usage lines.
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+impl std::error::Error for CliDiagnostic {}
+
+/// Sanitize clap's dynamic values before they are interpolated into its trusted layout.
+fn safe_clap_error(error: clap::Error) -> CliDiagnostic {
+    use crate::reporters::terminal_safe;
+    use clap::error::{ContextKind, ContextValue};
+    use clap::CommandFactory;
+    if matches!(
+        error.kind(),
+        ErrorKind::DisplayHelp
+            | ErrorKind::DisplayVersion
+            | ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand
+    ) {
+        return CliDiagnostic(error.to_string());
+    }
+    let mut command = RawCli::command();
+    command.build();
+    // Rebuild without the opaque source: clap may transform its control sequences while
+    // rendering, so replacing its raw text afterward cannot reliably sanitize it.
+    let mut safe = clap::Error::new(error.kind()).with_cmd(&command);
+    for (kind, value) in error.context() {
+        let value = if kind == ContextKind::Usage {
+            value.clone()
+        } else {
+            match value {
+                ContextValue::String(value) => ContextValue::String(terminal_safe(value)),
+                ContextValue::Strings(values) => {
+                    ContextValue::Strings(values.iter().map(|value| terminal_safe(value)).collect())
+                }
+                ContextValue::StyledStr(value) => {
+                    ContextValue::StyledStr(terminal_safe(&value.to_string()).into())
+                }
+                ContextValue::StyledStrs(values) => ContextValue::StyledStrs(
+                    values
+                        .iter()
+                        .map(|value| terminal_safe(&value.to_string()).into())
+                        .collect(),
+                ),
+                other => other.clone(),
+            }
+        };
+        safe.insert(kind, value);
+    }
+    let mut rendered = safe.to_string();
+    if let Some(source) = std::error::Error::source(&error) {
+        let line_end = rendered.find('\n').unwrap_or(rendered.len());
+        rendered.insert_str(
+            line_end,
+            &format!(": {}", terminal_safe(&source.to_string())),
+        );
+    }
+    CliDiagnostic(rendered)
+}
+
 impl ParsedArgs {
     /// Parses the process's own `argv`.
     ///
@@ -387,7 +452,7 @@ impl ParsedArgs {
                 let _ = stdout.flush();
                 std::process::exit(0);
             }
-            Err(error) => Err(error.into()),
+            Err(error) => Err(safe_clap_error(error).into()),
         }
     }
 
@@ -402,7 +467,7 @@ impl ParsedArgs {
         I: IntoIterator<Item = T>,
         T: Into<OsString> + Clone,
     {
-        Self::from_raw(RawCli::try_parse_from(args)?)
+        Self::from_raw(RawCli::try_parse_from(args).map_err(safe_clap_error)?)
     }
 
     /// Validates and converts the raw clap output into [`ParsedArgs`]: every rejection the
@@ -420,6 +485,23 @@ impl ParsedArgs {
             .options
             .reporters
             .unwrap_or_else(|| vec![ReporterKind::Terminal]);
+        if let Some(output) = &cli.options.output {
+            if !reporters
+                .iter()
+                .any(|reporter| !reporter.writes_to_stdout())
+            {
+                bail!("`--output` requires a file reporter: json, html, or sarif");
+            }
+            let raw = output.as_os_str().to_string_lossy();
+            if matches!(
+                raw.rsplit(std::path::is_separator).next(),
+                None | Some("" | "." | "..")
+            ) || output.is_dir()
+                || output.file_name().is_none()
+            {
+                bail!("`--output` must be a filename prefix, not a directory; use reports/vitest-dedup");
+            }
+        }
         // Selecting the same reporter twice is a harmless typo; running it twice is not, since a
         // file reporter would write its report and then immediately overwrite it.
         //

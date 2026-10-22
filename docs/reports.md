@@ -35,7 +35,8 @@ with the file reporters, which never touch stdout.
 
 `--output` is a filename stem, not a directory: `--output reports/vd` writes `reports/vd.json`.
 Without `--output`, file reporters use the stem `reports/vitest-dedup`. Parent directories are
-created as needed.
+created as needed. An explicit `--output` requires a file reporter and a filename prefix;
+an existing directory or a path ending in a directory separator is rejected.
 
 - Each report is buffered into a temporary file in its output directory, then atomically replaces
   the destination after successful serialization and flush.
@@ -85,3 +86,7 @@ process-dependent figures such as peak RSS. A memory-limited run may admit a dif
 file prefix as process residency changes. Findings are ordered by their participants' locations
 (root-relative path, then position), then by rule, then by message. Paths are compared component by
 component rather than as strings, so the order does not depend on the platform's separator.
+
+Set `VD_CELL_CENSUS` to enable unreadable `.each` cell diagnostics on stderr. This is a
+presence-based debugging switch: any value, including empty, `0`, or `1`, enables it.
+Unset the variable to disable it. It does not change findings or machine-readable stdout.

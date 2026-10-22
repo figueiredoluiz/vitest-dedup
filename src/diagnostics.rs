@@ -44,6 +44,9 @@ pub use sanitized::Sanitized;
 
 /// Sanitizes the operational error chain; the caller retains the exit-code decision.
 pub fn write_error(writer: &mut dyn Write, error: &anyhow::Error) -> io::Result<()> {
+    if let Some(error) = error.downcast_ref::<vitest_dedup::cli::CliDiagnostic>() {
+        return write!(writer, "{error}");
+    }
     writeln!(
         writer,
         "vitest-dedup: {}",
@@ -303,7 +306,7 @@ pub fn write_run(writer: &mut dyn Write, context: &RunDiagnostics<'_>) -> io::Re
         }
     }
 
-    // T1's census (backlog): `VD_CELL_CENSUS=1` histograms why every unreadable `.each` cell was
+    // T1's census (backlog): setting `VD_CELL_CENSUS` (any value) histograms why every unreadable `.each` cell was
     // refused, worst cause first. stderr and last, so it never interleaves with a machine
     // reporter's stdout. Empty -- and free -- on every run without the variable.
     if !census.is_empty() {

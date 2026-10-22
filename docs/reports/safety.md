@@ -46,7 +46,8 @@ cannot supply its own terminal escapes.
 ### `jsonl`
 
 Free-text fields are bounded at 2,000 Unicode characters, measured in characters so truncation
-cannot split a codepoint. A `truncatedFields` array names every field that was shortened.
+cannot split a codepoint. A `truncatedFields` array names every field that was shortened, including finding paths
+as `locations[0].path`, `locations[1].path`, and so on. Full JSON and SARIF paths are not truncated.
 
 ### Workflow commands
 

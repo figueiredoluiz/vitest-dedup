@@ -6,6 +6,7 @@
 // as exit code 1, which is reserved for "the quality gate failed".
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import { EventEmitter } from 'node:events'
 import { chmod, mkdir, mkdtemp, readFile, readdir, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -149,13 +150,24 @@ test('VITEST_DEDUP_BINARY overrides platform resolution entirely', async () => {
   )
 })
 
-test('argv is forwarded verbatim', () => {
+/** Emit a native child result asynchronously, matching child_process.spawn's contract. */
+function mockChild({ status = null, signal = null, error } = {}) {
+  const child = new EventEmitter()
+  child.kill = () => true
+  queueMicrotask(() => {
+    if (error) child.emit('error', error)
+    child.emit('close', status, signal)
+  })
+  return child
+}
+
+test('argv is forwarded verbatim', async () => {
   let seen
-  run(['check', 'src', '--no-metrics', '--rule', 'duplicate-test=warning', '--', '--not-a-flag'], {
+  await run(['check', 'src', '--no-metrics', '--rule', 'duplicate-test=warning', '--', '--not-a-flag'], {
     binary: '/controlled/vitest-dedup',
     spawn(binary, args, options) {
       seen = { binary, args, options }
-      return { status: 0, signal: null }
+      return mockChild({ status: 0, signal: null })
     },
   })
   assert.deepEqual(seen, {
@@ -165,24 +177,26 @@ test('argv is forwarded verbatim', () => {
   })
 })
 
-test('all three documented exit codes are forwarded unchanged', () => {
+test('all three documented exit codes are forwarded unchanged', async () => {
+  const listeners = ['SIGINT', 'SIGTERM'].map(signal => process.listenerCount(signal))
   for (const status of [0, 1, 2]) {
     assert.equal(
-      run([], { binary: '/controlled/vitest-dedup', spawn: () => ({ status, signal: null }) }),
+      await run([], { binary: '/controlled/vitest-dedup', spawn: () => mockChild({ status, signal: null }) }),
       status,
       `exit code ${status}`,
     )
+    assert.deepEqual(['SIGINT', 'SIGTERM'].map(signal => process.listenerCount(signal)), listeners)
   }
 })
 
-test('launcher-side failures report 2, never 1', () => {
+test('launcher-side failures report 2, never 1', async () => {
   let diagnostic = ''
   const stderr = { write: (value) => { diagnostic += value } }
 
   assert.equal(
-    run([], {
+    await run([], {
       binary: '/controlled/vitest-dedup',
-      spawn: () => ({ status: null, signal: null, error: new Error('permission denied') }),
+      spawn: () => mockChild({ error: new Error('permission denied') }),
       stderr,
     }),
     2,
@@ -191,21 +205,51 @@ test('launcher-side failures report 2, never 1', () => {
 
   // An unknown outcome must not be reported as a clean run.
   assert.equal(
-    run([], {
+    await run([], {
       binary: '/controlled/vitest-dedup',
-      spawn: () => ({ status: null, signal: null }),
+      spawn: () => mockChild(),
       stderr,
     }),
     2,
   )
 })
 
-test('a signalled analyzer reports the shell convention, not a quality-gate failure', () => {
+test('resolution failures stop before spawning and return an operational error', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'vitest-dedup-missing-'))
+  const original = process.env.VITEST_DEDUP_BINARY
+  let diagnostic = ''
+  try {
+    process.env.VITEST_DEDUP_BINARY = join(directory, 'missing-binary')
+    assert.equal(await run([], {
+      spawn: () => assert.fail('an unresolved binary must not be spawned'),
+      stderr: { write: value => { diagnostic += value } },
+    }), 2)
+    assert.match(diagnostic, /^vitest-dedup: no vitest-dedup binary at /)
+    assert.doesNotMatch(diagnostic, /\n\s+at /)
+  } finally {
+    if (original === undefined) delete process.env.VITEST_DEDUP_BINARY
+    else process.env.VITEST_DEDUP_BINARY = original
+  }
+})
+
+test('synchronous spawn failures return an operational error without leaking signal handlers', async () => {
+  const listeners = ['SIGINT', 'SIGTERM'].map(signal => process.listenerCount(signal))
+  let diagnostic = ''
+  assert.equal(await run([], {
+    binary: '/controlled/vitest-dedup',
+    spawn: () => { throw new Error('invalid spawn options') },
+    stderr: { write: value => { diagnostic += value } },
+  }), 2)
+  assert.match(diagnostic, /^vitest-dedup: failed to start .*invalid spawn options/)
+  assert.deepEqual(['SIGINT', 'SIGTERM'].map(signal => process.listenerCount(signal)), listeners)
+})
+
+test('a signalled analyzer reports the shell convention, not a quality-gate failure', async () => {
   let diagnostic = ''
   assert.equal(
-    run([], {
+    await run([], {
       binary: '/controlled/vitest-dedup',
-      spawn: () => ({ status: null, signal: 'SIGINT' }),
+      spawn: () => mockChild({ signal: 'SIGINT' }),
       stderr: { write: (value) => { diagnostic += value } },
     }),
     130,
@@ -243,4 +287,30 @@ test('the shipped launcher code contains no URL or IP address literal', async ()
   for (const file of files) {
     assert.doesNotMatch(await readFile(file, 'utf8'), NETWORK_LITERAL, `${file} carries a URL or IP address literal`)
   }
+})
+
+// A signal sent to the wrapper PID must also stop and reap its native child.
+test('launcher forwards SIGTERM and reaps the native child', { skip: process.platform === 'win32', timeout: 10000 }, async (t) => {
+  const { spawn } = await import('node:child_process')
+  const { once } = await import('node:events')
+  const { setTimeout: delay } = await import('node:timers/promises')
+  const entry = fileURLToPath(new URL('../bin/vitest-dedup.js', import.meta.url))
+  const wrapper = spawn(process.execPath, [entry, '-e', 'console.log(process.pid); setInterval(() => {}, 1000)'], {
+    env: { ...process.env, VITEST_DEDUP_BINARY: process.execPath }, stdio: ['ignore', 'pipe', 'pipe'],
+  })
+  let nativePid
+  t.after(() => {
+    wrapper.kill('SIGKILL')
+    if (nativePid) { try { process.kill(nativePid, 'SIGKILL') } catch {} }
+  })
+  const exited = once(wrapper, 'exit')
+  const [data] = await once(wrapper.stdout, 'data')
+  nativePid = Number(String(data).trim())
+  assert.ok(Number.isInteger(nativePid) && nativePid > 0)
+  wrapper.kill('SIGTERM')
+  const status = await Promise.race([exited, delay(3000).then(() => { throw new Error('launcher did not exit') })])
+  await delay(50)
+  assert.throws(() => process.kill(nativePid, 0), { code: 'ESRCH' }, 'native child survived wrapper termination')
+  assert.ok(status[0] === 143 || status[1] === 'SIGTERM')
+  nativePid = undefined
 })

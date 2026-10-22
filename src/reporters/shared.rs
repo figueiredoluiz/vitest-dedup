@@ -277,7 +277,7 @@ impl From<&ExcludedFile> for JsonExcludedFile {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct JsonLocation {
-    path: String,
+    pub(super) path: String,
     line: u32,
     column: u32,
     end_line: u32,

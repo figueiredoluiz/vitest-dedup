@@ -20,7 +20,7 @@
 // that manifest exists to prevent.
 import { accessSync, constants, existsSync } from 'node:fs'
 import { createRequire } from 'node:module'
-import { spawnSync } from 'node:child_process'
+import { spawn as spawnChild } from 'node:child_process'
 import { constants as osConstants } from 'node:os'
 import { dirname, resolve } from 'node:path'
 
@@ -125,13 +125,14 @@ function assertUsableBinary(binary, platform) {
 }
 
 /**
- * Runs the native binary and returns the exit code the launcher process should adopt.
+ * Runs the native binary, forwards termination signals, and waits for the child to close.
  *
  * `stdio: 'inherit'` keeps the child attached to the real streams, which matters more than it
  * looks: the `terminal` and `jsonl` reporters both write to stdout and downstream consumers pipe
  * them. Buffering and re-emitting would break `--reporters jsonl | jq` and destroy TTY detection.
+ * @returns {Promise<number>} The native exit code or the launcher failure code.
  */
-export function run(args, { binary = undefined, spawn = spawnSync, stderr = process.stderr } = {}) {
+export async function run(args, { binary = undefined, spawn = spawnChild, stderr = process.stderr } = {}) {
   let resolved
   try {
     resolved = binary ?? resolveBinary()
@@ -140,18 +141,36 @@ export function run(args, { binary = undefined, spawn = spawnSync, stderr = proc
     return 2
   }
 
-  const result = spawn(resolved, args, { stdio: 'inherit' })
-  if (result.error) {
-    stderr.write(`vitest-dedup: failed to start ${resolved}: ${result.error.message}\n`)
-    return 2
-  }
-  // A signalled child has no exit status. 128+signal is the shell convention, so Ctrl-C through
-  // the launcher reports 130 exactly as it would running the binary directly.
-  if (result.signal) {
-    stderr.write(`vitest-dedup: the analyzer was terminated by ${result.signal}\n`)
-    return 128 + (osConstants.signals[result.signal] ?? 0)
-  }
-  // `status` is null only in states already handled above; treating a null as 2 rather than 0
-  // keeps an unknown outcome from being reported as a clean run.
-  return result.status ?? 2
+  return new Promise((resolveExit) => {
+    let child
+    const handlers = new Map()
+    const finish = (code) => {
+      for (const [signal, handler] of handlers) process.removeListener(signal, handler)
+      resolveExit(code)
+    }
+    const failed = (error) => {
+      stderr.write(`vitest-dedup: failed to start ${resolved}: ${error.message}\n`)
+      finish(2)
+    }
+    try {
+      child = spawn(resolved, args, { stdio: 'inherit' })
+    } catch (error) {
+      failed(error)
+      return
+    }
+    for (const signal of ['SIGINT', 'SIGTERM']) {
+      const handler = () => { child.kill(signal) }
+      handlers.set(signal, handler)
+      process.on(signal, handler)
+    }
+    child.once('error', failed)
+    child.once('close', (status, signal) => {
+      if (signal) {
+        stderr.write(`vitest-dedup: the analyzer was terminated by ${signal}\n`)
+        finish(128 + (osConstants.signals[signal] ?? 0))
+      } else {
+        finish(status ?? 2)
+      }
+    })
+  })
 }

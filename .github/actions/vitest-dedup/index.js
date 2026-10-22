@@ -100,6 +100,9 @@ export function resolveReporters(reportersInput) {
  * indication why.
  */
 export function buildArguments(inputs) {
+  if (inputs.globals !== undefined && !["", "false", "true"].includes(inputs.globals)) {
+    throw new Error('invalid globals input; expected true, false, or empty');
+  }
   if (
     inputs.failOnIncomplete !== undefined &&
     inputs.failOnIncomplete !== "" &&
@@ -276,7 +279,7 @@ export function describeExitCode(exitCode) {
   if (exitCode === 1) {
     return {
       failed: true,
-      message: "VitestDedup quality gate failed: findings exceeded the configured threshold (exit code 1).",
+      message: "VitestDedup quality gate failed: the configured threshold or --fail-on-new limit was exceeded (exit code 1).",
     };
   }
   return {

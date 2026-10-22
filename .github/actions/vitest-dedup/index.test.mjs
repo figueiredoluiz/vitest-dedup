@@ -190,6 +190,12 @@ describe("buildArguments", () => {
     });
   }
 
+  for (const globals of ["tru", "TRUE", "1"]) {
+    test(`rejects invalid globals ${globals}`, () => {
+      assert.throws(() => buildArguments({ globals }), /invalid globals input.*true.*false/);
+    });
+  }
+
   test("omits threshold, config, and output when empty", () => {
     const args = buildArguments({ path: ".", config: "", threshold: "", output: "" });
     assert.ok(!args.includes("--config"));
@@ -426,6 +432,10 @@ describe("describeExitCode", () => {
     assert.match(message, /operational error/i);
   });
 
+  test("exit 1 names both possible quality gate causes", () => {
+    assert.match(describeExitCode(1).message, /threshold.*or.*fail-on-new/);
+  });
+
   test("1 and 2 never produce the same message", () => {
     assert.notEqual(describeExitCode(1).message, describeExitCode(2).message);
   });
@@ -595,6 +605,25 @@ describe("runAction", () => {
     extraScript,
     "process.exit(0);",
   ].join("\n");
+
+  test("invalid globals fail before install or analyzer execution", async (t) => {
+    const fixture = actionFixture(t);
+    await assert.rejects(fixture.runUnpinned({ INPUT_GLOBALS: "tru" }), /invalid globals input/);
+    await assert.rejects(fixture.run("throw new Error('must not run')", { INPUT_GLOBALS: "TRUE" }), /invalid globals input/);
+  });
+
+  test("fail-on-new preserves quality gate exit and forwarding", async (t) => {
+    const fixture = actionFixture(t);
+    const argvPath = join(fixture.dir, "argv.json");
+    const report = { schemaVersion: "0.1", testsAnalyzed: 1, filesAnalyzed: 1, incomplete: false, findings: [] };
+    const script = reportWriter(fixture.reportPath, report,
+      `writeFileSync(${JSON.stringify(argvPath)}, JSON.stringify(process.argv.slice(2))); process.exit(1);`);
+    assert.equal(await fixture.run(script, { INPUT_BASELINE: "baseline.json", "INPUT_FAIL-ON-NEW": "0" }), 1);
+    const argv = JSON.parse(readFileSync(argvPath, "utf8"));
+    assert.equal(argv[argv.indexOf("--fail-on-new") + 1], "0");
+    assert.equal(argv[argv.indexOf("--baseline") + 1], "baseline.json");
+    assert.equal(fixture.outputs()["exit-code"], "1");
+  });
 
   test("the analyzer process never receives the token input", async (t) => {
     // The runner exposes every input as INPUT_*; only gh needs the token.

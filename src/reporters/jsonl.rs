@@ -15,7 +15,7 @@
 //!
 //! Two properties matter specifically because the consumer may be an agent rather than a human:
 //!
-//! - **Bounded free text.** `message` and each entry of `titles` are capped at
+//! - **Bounded free text.** `message`, each entry of `titles`, and each finding location path are capped at
 //!   [`MAX_TEXT_CHARS`] Unicode scalar values. Analyzed repository content has no size limit the
 //!   analyzer controls, and hallucinated or hostile monster titles could otherwise smuggle
 //!   unbounded text straight into an agent's context window through what looks like a small,
@@ -473,7 +473,20 @@ impl From<&Finding> for JsonlFindingRecord {
             severity: finding.severity,
             verdict: finding.rule.verdict(),
             message,
-            locations: finding.locations.iter().map(JsonLocation::from).collect(),
+            locations: finding
+                .locations
+                .iter()
+                .enumerate()
+                .map(|(index, location)| {
+                    let mut rendered = JsonLocation::from(location);
+                    rendered.path = bounded_text(
+                        &rendered.path,
+                        &format!("locations[{index}].path"),
+                        &mut truncated_fields,
+                    );
+                    rendered
+                })
+                .collect(),
             registration_files,
             titles,
             any_inert: finding.has_inert_participant(),
@@ -962,6 +975,56 @@ mod tests {
             .write_report(result, &mut buffer)
             .expect("writing to a Vec<u8> never fails");
         buffer
+    }
+
+    /// Finding paths share the free-text bound without changing identity or coordinates.
+    #[test]
+    fn finding_paths_are_bounded_after_sanitizing() {
+        for length in [MAX_TEXT_CHARS - 1, MAX_TEXT_CHARS, MAX_TEXT_CHARS + 1] {
+            let mut result = sample_result();
+            assert_eq!(result.findings.len(), 1);
+            assert_eq!(result.findings[0].locations.len(), 2);
+            for loc in &mut result.findings[0].locations {
+                loc.path = PathBuf::from(format!("\u{1b}{}\u{202e}", "界".repeat(length)));
+            }
+            let fingerprint = result.findings[0].fingerprint();
+            for reporter in [
+                Box::new(super::super::JsonReporter::new()) as Box<dyn Reporter>,
+                Box::new(super::super::SarifReporter::new()),
+            ] {
+                let mut full = Vec::new();
+                reporter.write_report(&result, &mut full).unwrap();
+                assert!(String::from_utf8(full)
+                    .unwrap()
+                    .contains(&"界".repeat(length)));
+            }
+            let lines = render_lines(&result);
+            let finding = &lines[0];
+            assert_eq!(finding["fingerprint"], fingerprint);
+            let expected: Vec<_> = if length > MAX_TEXT_CHARS {
+                vec!["locations[0].path", "locations[1].path"]
+            } else {
+                vec![]
+            };
+            assert_eq!(finding["truncatedFields"], serde_json::json!(expected));
+            for (index, loc) in result.findings[0].locations.iter().enumerate() {
+                let rendered = &finding["locations"][index];
+                let path = rendered["path"].as_str().unwrap();
+                assert_eq!(path.chars().count(), length.min(MAX_TEXT_CHARS));
+                assert!(!path.contains('\u{1b}') && !path.contains('\u{202e}'));
+                assert_eq!(rendered["line"], loc.span.start.line);
+                assert_eq!(rendered["column"], loc.span.start.column);
+                let full = JsonLocation::from(loc);
+                assert_eq!(
+                    serde_json::to_value(full).unwrap()["path"]
+                        .as_str()
+                        .unwrap()
+                        .chars()
+                        .count(),
+                    length
+                );
+            }
+        }
     }
 
     /// Verify zero findings still emits a summary line.

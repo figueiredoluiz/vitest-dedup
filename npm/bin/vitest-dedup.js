@@ -3,4 +3,4 @@
 // spawning a process; this file exists only because `bin` needs a real path with a shebang.
 import { run } from '../lib/launcher.mjs'
 
-process.exitCode = run(process.argv.slice(2))
+process.exitCode = await run(process.argv.slice(2))
