@@ -121,7 +121,8 @@ what the code reads:
 
 The proof is lexical and aimed at code that is not written to evade it. It does not follow a value
 through an alias (`const alias = config; alias.mode = 2`), a method that mutates (`items.push(1)`), a
-registration global reached by another name (`const register = test`), reflection
+registration global reached by another name (`const register = test`), a package that registers
+tests from a file other than the one imported without declaring Vitest, reflection
 (`process.getBuiltinModule('vm')`, `({}).constructor.constructor(...)`) or a mock of a package that
 the helper imports several modules away. Those cases can make a helper that registers read as setup.
 
