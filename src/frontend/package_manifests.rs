@@ -1342,7 +1342,12 @@ mod tests {
             "exports.go = () => test('a', () => {})",
         )
         .unwrap();
-        crate::frontend::take_resolution_gaps();
+        {
+            let _gaps = crate::frontend::resolver::GAPS_TEST_LOCK
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            crate::frontend::take_resolution_gaps();
+        }
         VERDICTS.with(|verdicts| verdicts.borrow_mut().clear());
         assert!(!cannot_register_tests(&package.join("index.js"), true));
     }

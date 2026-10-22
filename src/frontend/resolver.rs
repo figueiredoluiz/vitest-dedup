@@ -98,6 +98,11 @@ static GAPS: Mutex<ResolutionGaps> = Mutex::new(ResolutionGaps {
     packages_not_found: BTreeMap::new(),
 });
 
+/// Held by tests that record into [`GAPS`] and read it back, or that drain it, so they do not
+/// take each other's entries.
+#[cfg(test)]
+pub(crate) static GAPS_TEST_LOCK: Mutex<()> = Mutex::new(());
+
 /// Takes and clears the gaps recorded since the last call.
 pub fn take_resolution_gaps() -> ResolutionGaps {
     // The end of a run: what was read about installed packages is no longer current.
@@ -590,6 +595,9 @@ mod tests {
     #[test]
     fn tsconfig_failures_are_classified_as_absent_or_unreadable() {
         use oxc_resolver::ResolveError;
+        let _gaps = GAPS_TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let dir = tempfile::tempdir().unwrap();
         let missing_a = dir.path().join("unique-classification-a/tsconfig.json");
         let missing_b = dir.path().join("unique-classification-b/tsconfig.json");
