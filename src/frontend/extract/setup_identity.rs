@@ -40,6 +40,7 @@ impl<'a> Visit<'a> for Closure<'_, 'a> {
         self.add(format!("import.meta:{}", self.file.display()));
     }
 
+    /// Adds what a name the call reads stands for: its declaration's text, or its import.
     fn visit_identifier_reference(&mut self, ident: &IdentifierReference<'a>) {
         if self.failed {
             return;

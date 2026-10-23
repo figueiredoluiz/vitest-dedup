@@ -2342,8 +2342,9 @@ impl<'a> Walker<'a> {
         self.diagnostics.push(sentence);
     }
 
-    /// Refuses a call to a local `function` declared more than once at runtime: which body runs
-    /// cannot be told from the first declaration, and skipping it would drop its tests silently.
+    /// Refuses a call to a local `function` declared more than once at runtime, or an overload set
+    /// the file reassigns: which body runs cannot be told from a declaration, and skipping it would
+    /// drop its tests silently.
     fn refuse_redeclared_helper(&mut self, expr: &Expression) -> bool {
         let Expression::Identifier(ident) = expr else {
             return false;
@@ -2356,17 +2357,25 @@ impl<'a> Walker<'a> {
         else {
             return false;
         };
-        let declares_function = semantic
-            .scoping()
+        let scoping = semantic.scoping();
+        let declares_function = scoping
             .symbol_declarations(symbol)
             .any(|node| matches!(semantic.nodes().kind(node), AstKind::Function(_)));
-        if !declares_function || !registration_free::redeclared_at_runtime(semantic, symbol) {
+        if !declares_function {
             return false;
         }
-        self.refuse_helper_expansion(refusal(
-            ExclusionReason::HelperExportUnreadable,
-            "the called helper is declared more than once",
-        ));
+        // An overload set resolves to its implementation only while nothing reassigns the name:
+        // after `register = () => ...` the implementation is not what the call runs.
+        let text = if registration_free::redeclared_at_runtime(semantic, symbol) {
+            "the called helper is declared more than once"
+        } else if !scoping.symbol_redeclarations(symbol).is_empty()
+            && scoping.symbol_is_mutated(symbol)
+        {
+            "the called helper is reassigned"
+        } else {
+            return false;
+        };
+        self.refuse_helper_expansion(refusal(ExclusionReason::HelperExportUnreadable, text));
         true
     }
 

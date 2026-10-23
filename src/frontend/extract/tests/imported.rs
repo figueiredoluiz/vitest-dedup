@@ -2161,6 +2161,23 @@ fn helper_fallbacks_do_not_read_a_redeclared_binding() {
         )
         .incomplete
     );
+    // An overload set resolves to its implementation, unless the file reassigns the name.
+    let overloads = "import { test, expect } from 'vitest'; function register(): void; function register() { test('old body', () => { expect(1).toBe(1) }) } REASSIGN register(); test('independent', () => { expect(1).toBe(1) });";
+    let extraction = with_helpers(&[], &overloads.replace("REASSIGN", ""));
+    assert!(!extraction.incomplete, "{:?}", extraction.diagnostics);
+    assert_eq!(extraction.tests.len(), 2);
+    let extraction = with_helpers(
+        &[],
+        &overloads.replace(
+            "REASSIGN",
+            "register = () => { test('replacement', () => { expect(2).toBe(2) }) };",
+        ),
+    );
+    assert!(extraction.incomplete);
+    assert!(extraction
+        .tests
+        .iter()
+        .all(|case| !format!("{:?}", case.title).contains("old body")));
     // Ambient overloads alone declare nothing that runs, so the call is not a redeclared helper.
     let ambient = "import { test, expect } from 'vitest'; declare function setup(): void; declare function setup(x: number): void; setup(); test('a', () => { expect(1).toBe(1) });";
     let extraction = with_helpers(&[], ambient);
