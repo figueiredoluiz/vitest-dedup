@@ -25,6 +25,11 @@ Rust coverage requirement are in [docs/development.md](docs/development.md).
 
 Run `cargo fmt --all` before committing. Clippy runs with `-D warnings`, matching CI.
 
+`npm run evaluate:corpus` measures the recall corpus instead of gating it: it reports every
+violation with its denominator and exits 0 unless `--fail-on-violation` (or `--fail-on-regression`,
+with `--baseline-binary`) is given, and with `--baseline-binary` it classifies each expectation an
+older binary gained or lost. `npm run check:recall` remains the enforced gate.
+
 ## Commits
 
 [Conventional Commits](https://www.conventionalcommits.org/):

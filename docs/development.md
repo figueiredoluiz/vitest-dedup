@@ -26,6 +26,12 @@ They are slow: `check:memory`, `check:memory:scaling`, `check:coverage:rust`, `c
 CI runs the first three; `check:mutation` runs weekly from `mutants.yml`. `npm run check:not-run`
 prints the current list.
 
+`npm run evaluate:corpus` is a measurement rather than a gate, so it stays out of `npm run check`
+as well: it runs every recall case, reports each violation with its denominator instead of
+stopping at the first one, and exits 0 on violations unless `--fail-on-violation` (or
+`--fail-on-regression`, with `--baseline-binary`) is given. `npm run check:recall` stays the
+enforced contract; `fixtures/recall/README.md` documents the corpus and the comparison classes.
+
 ## Writing documentation
 
 The website syncs these pages, so how they are named shows up there.
