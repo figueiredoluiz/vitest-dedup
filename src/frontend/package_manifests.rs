@@ -20,8 +20,12 @@ use oxc_span::SourceType;
 use serde_json::Value;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
+use std::ffi::OsString;
 use std::path::{Component, Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 /// Most packages one closure may visit before it is refused.
 const MAX_PACKAGES: usize = 256;
@@ -476,7 +480,7 @@ enum Load {
 /// is left out; so is a Node builtin. A specifier that is neither relative nor a package name
 /// (`#internal`, absolute, `file:`), carries a `?`, `#` or `%`, or is not a plain string, is an
 /// [`Load::Unknown`], as is any other use of the name `require` (an alias, `(0, require)(x)`).
-fn loads(path: &Path, text: &str, own: Option<&str>) -> Vec<Load> {
+fn loads(path: &Path, text: &str, own: Option<&str>, guarded: bool) -> Vec<Load> {
     struct Scan<'n> {
         /// The package's own name: a bare load of it resolves inside the package.
         own: Option<&'n str>,
@@ -656,7 +660,7 @@ fn loads(path: &Path, text: &str, own: Option<&str>) -> Vec<Load> {
             }
         }
     }
-    if super::extract::parse_refusal(text).is_some() {
+    if guarded && super::extract::parse_refusal(text).is_some() {
         return vec![Load::Unknown];
     }
     let allocator = Allocator::default();
@@ -864,6 +868,144 @@ fn resolve_target(
     true
 }
 
+/// Whether package scans run in a child process (see [`use_package_worker`]).
+static WORKER_MODE: AtomicBool = AtomicBool::new(false);
+
+/// The argument that starts the binary as a package scan worker.
+const WORKER_ARG: &str = "--vitest-dedup-package-worker";
+
+/// Set in a worker's environment: a worker never starts another, so an embedding program that
+/// forgot [`run_package_worker`] cannot recurse.
+const WORKER_ENV: &str = "VITEST_DEDUP_PACKAGE_WORKER";
+
+/// Longest a worker may run before it is killed and the package refused.
+const WORKER_DEADLINE: Duration = Duration::from_secs(20);
+
+/// Stack of the thread that parses in a worker: ample for deeply nested but valid code. A stack
+/// overflow past it aborts the worker, never the analyzer.
+const WORKER_STACK: usize = 64 * 1024 * 1024;
+
+/// Runs the installed-package scan in a child process from now on.
+///
+/// A parser stack overflow aborts the whole process and `oxc_parser` has no recursion limit, so
+/// by default (library callers, tests) a script that trips [`super::extract::parse_refusal`]'s
+/// size budget is refused unread. The command-line tool calls this instead: the scan then runs
+/// in a worker started from the current executable, without the budget, and a worker that
+/// crashes, times out, cannot be started or answers anything but a complete verdict refuses the
+/// package. There is no in-process fallback once this is on. The embedding executable must call
+/// [`run_package_worker`] first thing in `main`.
+pub fn use_package_worker() {
+    WORKER_MODE.store(true, Ordering::Relaxed);
+}
+
+/// Whether this process may start a worker: not if it is one.
+fn may_start_worker() -> bool {
+    std::env::var_os(WORKER_ENV).is_none()
+}
+
+/// Runs `command` and returns what it printed, only if it exited successfully within `deadline`;
+/// a child past the deadline is killed and reaped.
+fn supervise(mut command: Command, deadline: Duration) -> Option<String> {
+    use std::io::Read;
+    let mut child = command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+    let started = Instant::now();
+    let mut pause = Duration::from_millis(1);
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if started.elapsed() < deadline => {
+                std::thread::sleep(pause);
+                pause = (pause * 2).min(Duration::from_millis(4));
+            }
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+        }
+    };
+    // A worker that finished after the deadline (the parent was descheduled) is as late as one
+    // that was killed.
+    if !status.success() || started.elapsed() >= deadline {
+        return None;
+    }
+    let mut out = String::new();
+    child
+        .stdout
+        .take()?
+        .take(256)
+        .read_to_string(&mut out)
+        .ok()?;
+    Some(out)
+}
+
+/// The verdict a worker printed: clean only on exactly the expected answer.
+fn registers_from_worker(output: Option<&str>) -> bool {
+    output != Some("clean\n")
+}
+
+/// Whether the package entered at `file` registers tests, asked of a worker process.
+fn scan_in_worker(file: &Path, globals: bool) -> bool {
+    if !may_start_worker() {
+        return true;
+    }
+    let Ok(exe) = std::env::current_exe() else {
+        return true;
+    };
+    let mut command = Command::new(exe);
+    command
+        .env(WORKER_ENV, "1")
+        .arg(WORKER_ARG)
+        .arg(file)
+        .arg(if globals { "1" } else { "0" });
+    registers_from_worker(supervise(command, WORKER_DEADLINE).as_deref())
+}
+
+/// The worker side: `Some(exit code)` when this process was started as a package scan worker, so
+/// `main` can return it before any other work.
+pub fn run_package_worker(args: &[OsString]) -> Option<i32> {
+    if args.get(1).and_then(|argument| argument.to_str()) != Some(WORKER_ARG) {
+        return None;
+    }
+    // Only the supervisor starts a worker: it marks the environment and passes exactly a file and
+    // the globals flag.
+    let (Some(file), Some(globals), 4, true) = (
+        args.get(2),
+        args.get(3).and_then(|globals| globals.to_str()),
+        args.len(),
+        !may_start_worker(),
+    ) else {
+        return Some(2);
+    };
+    if !matches!(globals, "0" | "1") {
+        return Some(2);
+    }
+    // A worker that outlives its deadline (its parent may be gone) ends itself.
+    std::thread::spawn(|| {
+        std::thread::sleep(WORKER_DEADLINE + Duration::from_secs(5));
+        std::process::exit(3);
+    });
+    let file = PathBuf::from(file);
+    let globals = globals == "1";
+    let registers = std::thread::Builder::new()
+        .stack_size(WORKER_STACK)
+        .spawn(move || reached_files_register(&file, globals, false))
+        .ok()
+        .and_then(|scan| scan.join().ok());
+    match registers {
+        Some(registers) => {
+            println!("{}", if registers { "registers" } else { "clean" });
+            Some(0)
+        }
+        None => Some(4),
+    }
+}
+
 /// Whether the entry file, or a script of the same package it loads by a relative path, names
 /// Vitest anywhere in its text, or -- when the project enables globals, which a package can lean
 /// on without importing anything -- calls a registration global. A package that registers tests
@@ -879,7 +1021,11 @@ fn entry_registers(file: &Path, globals: bool) -> bool {
     {
         return known;
     }
-    let registers = reached_files_register(file, globals);
+    let registers = if WORKER_MODE.load(Ordering::Relaxed) {
+        scan_in_worker(file, globals)
+    } else {
+        reached_files_register(file, globals, true)
+    };
     reached_verdicts()
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -888,7 +1034,7 @@ fn entry_registers(file: &Path, globals: bool) -> bool {
 }
 
 /// Whether any script reachable from `entry` registers tests, or the walk cannot tell.
-fn reached_files_register(entry: &Path, globals: bool) -> bool {
+fn reached_files_register(entry: &Path, globals: bool, guarded: bool) -> bool {
     // Everything below is in real paths, so a link inside the package neither hides a file nor
     // changes which directory a later relative load resolves from.
     let Ok(real_entry) = entry.canonicalize() else {
@@ -941,7 +1087,7 @@ fn reached_files_register(entry: &Path, globals: bool) -> bool {
         if kind == Kind::Data {
             continue;
         }
-        for load in loads(&file, &text, own.as_deref()) {
+        for load in loads(&file, &text, own.as_deref(), guarded) {
             match load {
                 Load::Unknown => return true,
                 Load::Relative(specifier) => match follow(&file, &real_root, &specifier) {
@@ -1235,6 +1381,106 @@ mod tests {
         .unwrap();
         forget_reached();
         assert!(!cannot_register_tests(&package.join("index.js"), false));
+    }
+
+    /// A large flat bundle trips the in-process size budget and is refused unread; the unguarded
+    /// scan a worker runs reads it, and still refuses a bundle that registers a test.
+    #[test]
+    fn the_size_budget_applies_in_process_but_not_in_a_worker() {
+        let directory = tempfile::tempdir().unwrap();
+        let package = install(directory.path(), "bundle", r#"{"name":"bundle"}"#);
+        let entry = package.join("index.js");
+        let flat = "x();\n".repeat(10_000);
+        fs::write(&entry, &flat).unwrap();
+        assert!(reached_files_register(&entry, true, true));
+        assert!(!reached_files_register(&entry, true, false));
+        fs::write(&entry, format!("{flat}describe('a', () => {{}})")).unwrap();
+        assert!(reached_files_register(&entry, true, false));
+    }
+
+    /// The dispatch leaves an ordinary command line alone and answers a malformed worker call with
+    /// a failure code; a process marked as a worker never starts another.
+    #[test]
+    fn worker_dispatch_ignores_ordinary_arguments() {
+        let args = |items: &[&str]| items.iter().map(OsString::from).collect::<Vec<_>>();
+        assert_eq!(run_package_worker(&args(&["vitest-dedup"])), None);
+        assert_eq!(run_package_worker(&args(&["vitest-dedup", "."])), None);
+        assert_eq!(run_package_worker(&args(&[])), None);
+        assert_eq!(
+            run_package_worker(&args(&["vitest-dedup", WORKER_ARG])),
+            Some(2)
+        );
+        assert_eq!(
+            run_package_worker(&args(&["vitest-dedup", WORKER_ARG, "/x"])),
+            Some(2)
+        );
+        // Well-formed operands without the supervisor's marker, and malformed ones with it.
+        assert_eq!(
+            run_package_worker(&args(&["vitest-dedup", WORKER_ARG, "/x", "1"])),
+            Some(2)
+        );
+        // The one test that sets the marker, so no other test sees it.
+        assert!(may_start_worker());
+        std::env::set_var(WORKER_ENV, "1");
+        let marked_may_start = may_start_worker();
+        let malformed = [
+            run_package_worker(&args(&["vitest-dedup", WORKER_ARG, "/x", "2"])),
+            run_package_worker(&args(&["vitest-dedup", WORKER_ARG, "/x", "1", "extra"])),
+        ];
+        std::env::remove_var(WORKER_ENV);
+        assert!(
+            !marked_may_start,
+            "a marked process must not start a worker"
+        );
+        assert_eq!(malformed, [Some(2), Some(2)]);
+    }
+
+    /// Only the exact answer `clean` admits a package; anything else is "cannot tell".
+    #[test]
+    fn only_a_complete_clean_answer_admits_a_package() {
+        assert!(!registers_from_worker(Some("clean\n")));
+        for output in [
+            None,
+            Some(""),
+            Some("registers\n"),
+            Some("clean"),
+            Some("clean\nclean\n"),
+            Some("clean \n"),
+        ] {
+            assert!(registers_from_worker(output), "{output:?}");
+        }
+    }
+
+    /// A worker that is slow, fails, or prints nothing yields no answer, and a slow one is killed.
+    #[cfg(unix)]
+    #[test]
+    fn a_misbehaving_child_gives_no_answer() {
+        let shell = |script: &str| {
+            let mut command = Command::new("sh");
+            command.arg("-c").arg(script);
+            command
+        };
+        let quick = Duration::from_secs(10);
+        assert_eq!(
+            supervise(shell("printf 'clean\\n'"), quick).as_deref(),
+            Some("clean\n")
+        );
+        assert_eq!(supervise(shell("printf 'clean\\n'; exit 3"), quick), None);
+        let started = Instant::now();
+        assert_eq!(
+            supervise(shell("sleep 30"), Duration::from_millis(150)),
+            None
+        );
+        assert!(started.elapsed() < Duration::from_secs(5));
+        assert_eq!(supervise(Command::new("/nonexistent/worker"), quick), None);
+        // A child that floods its output blocks on the full pipe and is killed at the deadline.
+        assert_eq!(
+            supervise(shell("yes | head -c 1000000"), Duration::from_millis(300)),
+            None
+        );
+        // Output past the bound is cut.
+        let long = supervise(shell("head -c 1000 /dev/zero | tr '\\\\0' a"), quick).unwrap();
+        assert_eq!(long.len(), 256);
     }
 
     /// A registration global is a call however the name is separated from its parenthesis, and a

@@ -188,6 +188,12 @@ generated list are not read.
   installed package it reaches.
 - The text check of an installed package follows relative `require`, `from` and `import()` to at
   most 1,024 scripts and 32 MiB (8 MiB each); a package past that is refused.
+- The command-line tool reads an installed package in a separate worker process with a 20 s deadline
+  and a 64 MiB parser stack, so a large bundle is read and a script that crashes or hangs the parser
+  refuses only its package; a worker that cannot be started, times out, crashes or answers anything but
+  a complete verdict refuses it too. A program that embeds the library gets an in-process scan instead,
+  which refuses a script past the parser's syntax size budget (8,192 units) unread, unless it calls
+  `frontend::use_package_worker` and runs `frontend::run_package_worker` first in `main`.
 - Helper files share the source byte limit (8 MiB), the bracket nesting limit (256) and the
   export-hop limit (8).
 - Exact helper sources retained for one caller share an additional 8 MiB budget; repeated calls

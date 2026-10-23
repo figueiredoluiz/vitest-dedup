@@ -36,6 +36,11 @@ mod memory_roof_tests;
 /// Run the CLI, preserving quality-gate exit codes and reporting operational errors with
 /// sanitized diagnostics.
 fn main() -> ProcessExitCode {
+    let args: Vec<std::ffi::OsString> = std::env::args_os().collect();
+    if let Some(code) = vitest_dedup::frontend::run_package_worker(&args) {
+        return ProcessExitCode::from(u8::try_from(code).unwrap_or(2));
+    }
+    vitest_dedup::frontend::use_package_worker();
     match run() {
         Ok(code) => process_code(code),
         Err(error) => {

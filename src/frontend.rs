@@ -16,6 +16,7 @@ use crate::discovery::SourceFile;
 use crate::model::TestCase;
 use std::path::Path;
 
+pub use package_manifests::{run_package_worker, use_package_worker};
 pub use registry::{take_cell_census, Globals};
 pub use resolver::{take_resolution_gaps, ResolutionGaps, TsconfigGap};
 
