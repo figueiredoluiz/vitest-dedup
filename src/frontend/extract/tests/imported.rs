@@ -1919,6 +1919,16 @@ fn bindings_written_after_their_declaration_are_not_placed() {
     }
     let extraction = run("const subject = { mode: 1 };");
     assert!(!extraction.incomplete, "{:?}", extraction.diagnostics);
+    // Read through a member, a written binding is placed when every value written in is visible to
+    // the comparison: in a hook, not at module level, where no context records it.
+    let placed = |write: &str| {
+        let caller = format!(
+            "import {{ test, expect, beforeEach }} from 'vitest'; import {{ setup }} from './setup'; const subject = {{ mode: 1 }}; {write} setup(subject.mode); {TWO_TESTS}"
+        );
+        !site.extract(&caller).incomplete
+    };
+    assert!(placed("beforeEach(() => { subject.mode = 2 });"));
+    assert!(!placed("subject.mode = 2;"));
 }
 
 /// Setup runs in order and as many times as it is called: both are part of the context.
@@ -2002,6 +2012,175 @@ fn a_nuxt_mock_factory_that_registers_leaves_the_file_unresolved() {
     );
     let extraction = with_helpers(&[], &caller);
     assert!(extraction.tests.iter().all(|case| case.context.unresolved));
+}
+
+/// A factory may read a binding the file writes when every value written into it is visible and
+/// registers nothing; a bare reference, a hidden write or a registering value still refuses.
+#[test]
+fn a_nuxt_mock_factory_may_read_a_binding_the_file_writes() {
+    let run = |body: &str| {
+        let caller = format!(
+            "import {{ test, expect, beforeEach, describe }} from 'vitest'; import {{ mockNuxtImport }} from '@nuxt/test-utils/runtime'; {body} {TWO_TESTS}"
+        );
+        let extraction = with_helpers(&[], &caller);
+        assert!(extraction.tests.len() >= 2, "{body}");
+        extraction.tests.iter().all(|case| !case.context.unresolved)
+    };
+    let route = "const routeMock = { value: { path: '/' } }; mockNuxtImport('useRoute', () => () => routeMock.value);";
+    for accepted in [
+        format!("{route} beforeEach(() => {{ routeMock.value = {{ path: '/x' }} }});"),
+        format!("{route} beforeEach(() => {{ (routeMock as any).value.path = '/x' }});"),
+        format!("{route} type Route = typeof routeMock; beforeEach(() => {{ routeMock.value = {{ path: '/x' }} as Route['value'] }});"),
+        format!("{route} beforeEach(() => {{ Object.assign(routeMock.value, {{ path: '/y' }}) }});"),
+        format!("{route} beforeEach(() => {{ delete routeMock.value; expect(routeMock.value).toBe(1) }});"),
+        "const state = { count: 0 }; mockNuxtImport('useCount', () => () => state.count); beforeEach(() => { state.count++ });".to_owned(),
+        "let route = { path: '/' }; mockNuxtImport('useRoute', () => () => route.path); beforeEach(() => { route = { path: '/x' } });".to_owned(),
+        "const holder = { value: vi.fn() }; mockNuxtImport('useHolder', () => () => holder.value); beforeEach(() => { holder.value = vi.fn(); holder.value.mockImplementation(() => 1) });".to_owned(),
+        "const kinds = { Kind: class {} }; mockNuxtImport('useKind', () => () => kinds.Kind); beforeEach(() => { kinds.Kind = class {}; new kinds.Kind(() => 1) });".to_owned(),
+        format!("{route} beforeEach(async () => {{ await (routeMock.value = {{ path: '/x' }}); try {{ routeMock.value = {{ path: '/y' }} }} catch {{ routeMock.value = {{ path: '/z' }} }} }});"),
+        "const state = { run: () => {} }; beforeEach(() => { state.run = () => {} }); mockNuxtImport('useRun', () => () => state.run);".to_owned(),
+        "import { afterAll as finally_ } from 'vitest'; const state = { run: () => {} }; finally_(() => { state.run = () => {} }); mockNuxtImport('useRun', () => () => state.run);".to_owned(),
+        format!("{route} test('writes', () => {{ routeMock.value = {{ path: '/x' }} }});"),
+        format!("{route} beforeEach(() => {{ routeMock.value = {{ path: '/x' }}; globalThis.eval('1') }});"),
+        "const state = { run: () => {} }; mockNuxtImport('useRun', () => () => state.run); beforeEach(() => { try { void 0 } catch { var picked = () => {} } state.run = picked });".to_owned(),
+        format!("{route} describe('suite', () => {{ {{ beforeEach(() => {{ routeMock.value = {{ path: '/x' }} }}) }}; test('inner', () => {{}}) }});"),
+        format!("{route} describe('suite', () => {{ const pick = () => {{ return 1 }}; pick(); beforeEach(() => {{ routeMock.value = {{ path: '/x' }} }}); test('inner', () => {{}}) }});"),
+        format!("{route} describe('suite', () => {{ function pick() {{ return 1 }} class Kind {{ make() {{ throw new Error('x') }} }} pick(); new Kind(); beforeEach(() => {{ routeMock.value = {{ path: '/x' }} }}); test('inner', () => {{}}) }});"),
+        format!("{route} beforeEach(() => {{ routeMock.value = {{ path: '/x' }} }}); test('loops', () => {{ for (const key in routeMock.value) {{ expect(key).toBe('path') }} let path; ({{ path = routeMock.value.path }} = {{}} as {{ path?: string }}) }});"),
+        "const state = { marker: 0, make: () => <T,>(value: T) => value }; mockNuxtImport('useMarker', () => () => state.marker); beforeEach(() => { state.marker = 1; (state.make())<number>; });".to_owned(),
+    ] {
+        assert!(run(&accepted), "{accepted}");
+    }
+    for refused in [
+        format!("{route} beforeEach(() => {{ routeMock.value = () => test('hidden', () => {{}}) }});"),
+        format!("{route} function reset(target: unknown) {{ return target }} beforeEach(() => {{ routeMock.value = {{ path: '/x' }}; reset(routeMock) }});"),
+        format!("{route} beforeEach(() => {{ ({{ a: routeMock.value }} = {{ a: {{ path: '/x' }} }}) }});"),
+        format!("{route} beforeEach(() => {{ for (routeMock.value of [{{ path: '/x' }}]) {{}} }});"),
+        format!("{route} beforeEach(() => {{ routeMock.value = {{ path: '/x' }}; routeMock.value.tag`${{() => test('hidden', () => {{}})}}` }});"),
+        "const state = { count: 0 }; mockNuxtImport('useState', () => () => state); beforeEach(() => { state.count++ });".to_owned(),
+        "let n = 0; mockNuxtImport('useCount', () => () => n); beforeEach(() => { n++ });".to_owned(),
+        "let route = { path: '/' }; mockNuxtImport('useRoute', () => () => route.path); beforeEach(() => { route = { path: () => test('hidden', () => {}) } });".to_owned(),
+        "let route; mockNuxtImport('useRoute', () => () => route.path); beforeEach(() => { route = { path: '/x' } });".to_owned(),
+        "const holder = { value: vi.fn() }; mockNuxtImport('useHolder', () => () => holder.value); beforeEach(() => { holder.value = vi.fn(); holder.value.mockImplementation(() => beforeEach(() => {})) });".to_owned(),
+        "const holder = { value: vi.fn() }; mockNuxtImport('useHolder', () => () => holder.value); beforeEach(() => { holder.value = vi.fn(); holder.value.mockImplementation(...[() => 1]) });".to_owned(),
+        "const kinds = { Kind: class {} }; mockNuxtImport('useKind', () => () => kinds.Kind); beforeEach(() => { kinds.Kind = class {}; new kinds.Kind(() => test('hidden', () => {})) });".to_owned(),
+        "const kinds = { Kind: class {} }; mockNuxtImport('useKind', () => () => kinds.Kind); beforeEach(() => { kinds.Kind = class {}; new kinds.Kind(...[() => 1]) });".to_owned(),
+        "const { route } = { route: { path: '/' } }; mockNuxtImport('useRoute', () => () => route.path); beforeEach(() => { route.path = '/x' });".to_owned(),
+        "mockNuxtImport('useRoute', () => (route = { path: '/' }) => { route.path = '/x'; return route.path });".to_owned(),
+        "const holder = { value: vi.fn() }; mockNuxtImport('useHolder', () => () => holder.value); beforeEach(() => { holder.value = vi.fn() }); beforeEach(() => holder.value.mockImplementation(() => 1));".to_owned(),
+        "const state = { run: () => {} }; mockNuxtImport('useRun', () => () => state.run); beforeEach(() => { const set = (fn: () => void) => { state.run = fn }; set(() => test('hidden', () => {})) });".to_owned(),
+        "const state = { run: () => {} }; mockNuxtImport('useRun', () => () => state.run); beforeEach(() => { function plant(this: { fn: () => void }) { state.run = this.fn } plant.call({ fn: () => test('hidden', () => {}) }) });".to_owned(),
+        "const state = { run: () => {} }; mockNuxtImport('useRun', () => () => state.run); beforeEach(() => { try { throw () => test('hidden', () => {}) } catch (error) { state.run = error as () => void } });".to_owned(),
+        "const state = { run: () => {} }; mockNuxtImport('useRun', () => () => state.run); beforeEach(() => { class Planter { static { state.run = () => {} } } new Planter() });".to_owned(),
+        "const state = { run: () => {}, self() { return this } }; beforeEach(() => { state.run = () => {}; const alias = state.self(); alias.run = () => test('hidden', () => {}) }); mockNuxtImport('useRun', () => () => state.run);".to_owned(),
+        // Writes the compared context cannot see, each one edit from an accepted case.
+        format!("{route} delete routeMock.value;"),
+        "const state = { count: 0 }; mockNuxtImport('useCount', () => () => state.count); state.count++;".to_owned(),
+        "let route = { path: '/' }; mockNuxtImport('useRoute', () => () => route.path); beforeEach(() => { route = { path: '/x' } }); (route as any)++;".to_owned(),
+        format!("{route} onReady(() => {{ routeMock.value = {{ path: '/x' }} }});"),
+        // A write the compared context cannot see: module level, a plain function, a chained test
+        // callee, a local function that is only named like a hook.
+        format!("{route} test.only('writes', () => {{ routeMock.value = {{ path: '/x' }} }});"),
+        // Codex rounds 3-4: hook calls the walker never registers, or records as if they always ran;
+        // a free hook outside globals mode.
+        format!("{route} describe('suite', () => {{ if (routeMock.value) {{ beforeEach(() => {{ routeMock.value = {{ path: '/x' }} }}) }} }});"),
+        format!("{route} for (const _ of [1]) {{ beforeEach(() => {{ routeMock.value = {{ path: '/x' }} }}) }}"),
+        format!("{route} try {{ beforeEach(() => {{ routeMock.value = {{ path: '/x' }} }}) }} finally {{}}"),
+        format!("{route} afterAll(() => {{ routeMock.value = {{ path: '/x' }} }});"),
+        // Codex round 7: a callback the walker does not read as the body, and a hook no test is
+        // governed by (accepted from syntax, refused because the walk recorded no host).
+        format!("{route} beforeEach(...[], () => {{ routeMock.value = {{ path: '/x' }} }});"),
+        format!("{route} beforeEach(() => {{}}, () => {{ routeMock.value = {{ path: '/x' }} }});"),
+        format!("{route} test('t', () => {{}}, () => {{ routeMock.value = {{ path: '/x' }} }});"),
+        format!("{route} describe('suite', () => {{ beforeEach(() => {{ routeMock.value = {{ path: '/x' }} }}) }});"),
+        // A redeclared binding is read from its first declaration only, written or not.
+        "var run = () => {}; var run = () => test('hidden', () => {}); mockNuxtImport('useRun', () => () => run);".to_owned(),
+        // Codex round 8: a `var` hoisted out of a `catch` carries the thrown value.
+        "const state = { run: () => {} }; mockNuxtImport('useRun', () => () => state.run); beforeEach(() => { try { throw () => test('hidden', () => {}) } catch (error) { var carried = error } state.run = carried as () => void });".to_owned(),
+        "const state = { run: () => {} }; mockNuxtImport('useRun', () => () => state.run); beforeEach(() => { try { throw () => test('hidden', () => {}) } catch (error) { try { throw 0 } catch { var carried = error } } state.run = carried as () => void });".to_owned(),
+        // Codex round 6: an exported binding escapes without a reference.
+        "export const routeMock = { value: { path: '/' } }; mockNuxtImport('useRoute', () => () => routeMock.value); beforeEach(() => { routeMock.value = { path: '/x' } });".to_owned(),
+        format!("{route} beforeEach(() => {{ routeMock.value = {{ path: '/x' }} }}); export {{ routeMock }};"),
+        format!("{route} beforeEach(() => {{ routeMock.value = {{ path: '/x' }} }}); export default routeMock;"),
+        format!("{route} beforeEach(() => {{ routeMock.value = {{ path: '/x' }}; eval(\"routeMock.value = {{ run: () => test('hidden', () => {{}}) }}\") }});"),
+        // Codex round 5: a wrapped callee, and a hook after an early exit in its suite.
+        format!("{route} (beforeEach as typeof beforeEach)(() => {{ routeMock.value = {{ path: '/x' }} }});"),
+        format!("{route} (beforeEach)(() => {{ routeMock.value = {{ path: '/x' }} }});"),
+        format!("{route} describe('suite', () => {{ test('first', () => {{}}); return; beforeEach(() => {{ routeMock.value = {{ path: '/x' }} }}) }});"),
+        format!("{route} describe('suite', () => {{ if (routeMock.value) {{ throw new Error('x') }} beforeEach(() => {{ routeMock.value = {{ path: '/x' }} }}) }});"),
+        format!("{route} describe('suite', () => {{ class Kind {{ static {{ throw new Error('x') }} }} beforeEach(() => {{ routeMock.value = {{ path: '/x' }} }}) }});"),
+        format!("{route} void beforeEach(() => {{ routeMock.value = {{ path: '/x' }} }});"),
+        format!("{route} if (beforeEach(() => {{ routeMock.value = {{ path: '/x' }} }})) {{}}"),
+        format!("{route} if (describe('suite', () => {{ beforeEach(() => {{ routeMock.value = {{ path: '/x' }} }}) }})) {{}}"),
+        format!("{route} await beforeEach(() => {{ routeMock.value = {{ path: '/x' }} }});"),
+        format!("{route} const hooks = () => {{ beforeEach(() => {{ routeMock.value = {{ path: '/x' }} }}) }}; hooks();"),
+        format!("{route} describe.skip('suite', () => {{ beforeEach(() => {{ routeMock.value = {{ path: '/x' }} }}) }});"),
+        format!("{route} const run = () => describe('suite', () => {{ beforeEach(() => {{ routeMock.value = {{ path: '/x' }} }}) }}); run();"),
+        format!("{route} routeMock.value = {{ path: '/x' }};"),
+        format!("{route} const reset = () => {{ routeMock.value = {{ path: '/x' }} }}; beforeEach(reset);"),
+        "const routeMock = { value: { path: '/' } }; mockNuxtImport('useRoute', () => () => routeMock.value); const afterAll = (run: () => void) => run(); afterAll(() => { routeMock.value = { path: '/x' } });".to_owned(),
+        // Codex round 1, reproduced before fixing.
+        "var state = { run: () => {} }; beforeEach(() => { state.marker = 1 }); var state = { run: () => test('hidden', () => {}) }; mockNuxtImport('useRun', () => () => state.run);".to_owned(),
+        "let state = { run: () => {} }; beforeEach(() => { const alias = (state = { run: () => {} }); alias.run = () => test('hidden', () => {}) }); mockNuxtImport('useRun', () => () => state.run);".to_owned(),
+        "const state = { run: () => {}, set<T>(fn: () => void) { this.run = fn } }; beforeEach(() => { state.run = () => {}; (state.set<unknown>)(() => test('hidden', () => {})) }); mockNuxtImport('useRun', () => () => state.run);".to_owned(),
+    ] {
+        assert!(!run(&refused), "{refused}");
+    }
+}
+
+/// An accepted write sits where the walker records it: the suite hook is in the context of the test
+/// it governs, and a free hook counts only when the project enables globals.
+#[test]
+fn an_accepted_written_binding_write_is_in_the_compared_context() {
+    // Each accepted placement: the hook must be recorded in the governed test's context, or the
+    // proof is accepting a write the comparison cannot see.
+    let mock = "import { mockNuxtImport } from '@nuxt/test-utils/runtime'; const routeMock = { value: { path: '/' } }; mockNuxtImport('useRoute', () => () => routeMock.value);";
+    let check = |imports: &str, body: &str, globals: Globals| {
+        let caller = format!("{imports} {mock} {body}");
+        let extraction = Site::new(&[]).extract_with(&caller, globals);
+        let tests: Vec<_> = extraction
+            .tests
+            .iter()
+            .filter(|case| case.kind == crate::model::DeclarationKind::Test)
+            .collect();
+        assert_eq!(tests.len(), 1, "{body}");
+        assert!(!tests[0].context.unresolved, "{body}");
+        assert_eq!(
+            tests[0].context.hooks.len(),
+            1,
+            "{body}: {:?}",
+            tests[0].context.hooks
+        );
+    };
+    let imports = "import { test, expect, beforeEach, describe, suite } from 'vitest';";
+    let write = "beforeEach(() => { routeMock.value = { path: '/x' } });";
+    let reads = "test('reads', () => { expect(routeMock.value.path).toBe('/x') });";
+    check(imports, &format!("{write} {reads}"), Globals::Disabled);
+    check(
+        imports,
+        &format!("describe('s', () => {{ {write} {reads} }});"),
+        Globals::Disabled,
+    );
+    check(
+        imports,
+        &format!("describe('s', () => {{ describe('t', () => {{ {{ {write} }} {reads} }}) }});"),
+        Globals::Disabled,
+    );
+    check(
+        imports,
+        &format!("suite('s', () => {{ {write} {reads} }});"),
+        Globals::Disabled,
+    );
+    check(
+        "import { test, expect, beforeEach as before } from 'vitest';",
+        &format!("before(() => {{ routeMock.value = {{ path: '/x' }} }}); {reads}"),
+        Globals::Disabled,
+    );
+    check(
+        "",
+        &format!("describe('s', () => {{ {write} {reads} }});"),
+        Globals::Enabled,
+    );
 }
 
 /// An imported object changed through a member is not the export the proof read.

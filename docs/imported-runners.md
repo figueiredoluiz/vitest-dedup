@@ -102,10 +102,23 @@ what the code reads:
   refused, except one named property of the global object (`globalThis.ready = true`). Node's `vm`,
   `child_process`, `worker_threads`, `module`, `repl`, `cluster` and `inspector` run code from text
   or elsewhere and are refused.
-- The arguments of the call are held to the same rule, and a binding they read must not be written
-  after it is declared: a callback reassigned, or a config changed through a member (`config.mode =
-  2`, `items[0]++`, `delete config.mode`), is refused. Calls that change a value through a method
-  (`items.push(1)`) are not tracked.
+- The arguments of the call are held to the same rule. A binding they read that the file writes
+  after declaring it (`route = next`, `config.mode = 2`, `items[0]++`, `delete config.mode`) is
+  accepted only when the comparison can see every write and every value written passes the rule
+  too. Each write must sit in a `beforeEach`, `beforeAll`, `afterEach`, `afterAll`, `test` or `it`
+  callback (the argument read as its body) that the analysis records for a test, whose call is a
+  plain statement naming the hook directly, at the top level or in a
+  `describe` callback with no `return` or `throw` (not under `if`, a loop or `try`, and a free name
+  only with globals enabled), outside any nested `function`,
+  class, `catch (error)` or arrow function with parameters, and
+  assignments and calls through the binding (`state.fn.mockImplementation(f)`) must be whole
+  statements; their right sides and arguments join the proof. Every other use must read through a
+  member (`state.value`, `expect(state.value)`). A bare use anywhere (passed, returned, stored), a
+  write at module level or in a plain function, a destructuring or loop target, a template tag, a
+  redeclared or exported binding, one without an initialiser, or any binding in a file that calls
+  `eval` is refused. A binding the file never writes this
+  way is read from its declaration alone, so a change made through a method (`items.push(1)`) or a
+  call handed a member (`Object.assign(config.nested, v)`) is not tracked.
 - Installed packages are judged by their manifests: one whose whole dependency closure names no
   test runner (`vitest`, `vitest-*`, `@vitest/*`, `jest`, `@jest/*`, `mocha`, `jasmine`,
   `playwright`, `playwright-core`, `@playwright/*`), and whose imported file and the scripts it loads

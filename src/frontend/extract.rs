@@ -120,7 +120,8 @@ fn extract_confined(
                 super::registry::reset_cell_census_file_scope();
                 super::resolver::begin_file(root);
                 registration_free::begin_file(globals == Globals::Enabled);
-                let extraction = run(source, file, globals, allow_imported);
+                let mut extraction = run(source, file, globals, allow_imported);
+                unresolve_unrecorded_writes(&mut extraction);
                 #[cfg(test)]
                 let extraction = (extraction, super::registry::test_cell_census_snapshot());
                 extraction
@@ -2717,6 +2718,39 @@ fn describe_body<'r, 'a>(body_arg: Option<&'r Argument<'a>>) -> Option<DescribeB
             .as_deref()
             .map(|body| DescribeBody::Block(body.statements.as_slice())),
         None => None,
+    }
+}
+
+/// Marks every test unresolved when a written-binding write a proof relied on has no host the walk
+/// recorded: no hook in any test's context and no test at one of its calls. The proof predicts the
+/// walker from syntax; this holds it to what the walker actually recorded.
+fn unresolve_unrecorded_writes(extraction: &mut FileExtraction) {
+    let needed = registration_free::take_write_hosts();
+    if needed.is_empty() {
+        return;
+    }
+    let span_of =
+        |location: &crate::model::Location| (location.span.start_byte, location.span.end_byte);
+    let recorded: HashSet<(u32, u32)> = extraction
+        .tests
+        .iter()
+        .flat_map(|case| {
+            std::iter::once(span_of(&case.location)).chain(
+                case.context
+                    .hooks
+                    .iter()
+                    .map(|hook| span_of(&hook.location)),
+            )
+        })
+        .collect();
+    if needed
+        .iter()
+        .all(|hosts| hosts.iter().any(|host| recorded.contains(host)))
+    {
+        return;
+    }
+    for case in &mut extraction.tests {
+        case.context.unresolved = true;
     }
 }
 
