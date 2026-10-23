@@ -3,8 +3,8 @@
 //
 // The two tests have identical bodies, but the hook runs once per test, so the first observes 1 and
 // the second 2: Vitest passes the first and fails the second, and deleting either changes the
-// outcome. The pair must not be reported. One edit from `framework-nuxt-mock-written-binding`: a
-// hook that resets `state.count = 1` instead keeps the pair a duplicate-test.
+// outcome. The pair must not be reported. (The factory reading a binding the file writes is refused
+// whatever the hook does, so this also holds if that refusal is ever narrowed.)
 import { beforeEach, expect, test } from 'vitest'
 import { mockNuxtImport } from '@nuxt/test-utils/runtime'
 

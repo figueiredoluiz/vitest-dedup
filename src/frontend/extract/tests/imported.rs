@@ -2161,6 +2161,10 @@ fn helper_fallbacks_do_not_read_a_redeclared_binding() {
         )
         .incomplete
     );
+    // Ambient overloads alone declare nothing that runs, so the call is not a redeclared helper.
+    let ambient = "import { test, expect } from 'vitest'; declare function setup(): void; declare function setup(x: number): void; setup(); test('a', () => { expect(1).toBe(1) });";
+    let extraction = with_helpers(&[], ambient);
+    assert!(!extraction.incomplete, "{:?}", extraction.diagnostics);
     // A local helper declared twice is refused, not skipped: its hook would vanish unseen.
     let local = "import { test, expect, beforeEach } from 'vitest'; let count = 0; function install() {} function install() { beforeEach(() => { count++ }) } install(); test('a', () => { expect(count).toBe(1) }); test('b', () => { expect(count).toBe(1) });";
     let extraction = with_helpers(&[], local);

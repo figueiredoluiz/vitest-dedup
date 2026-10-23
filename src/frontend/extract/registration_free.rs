@@ -589,7 +589,8 @@ enum Pending<'a> {
 /// replaces or extends what the first one says (`var x = a; var x = b`, `function Run` merged with
 /// a `namespace Run` that holds values). Interfaces, type aliases, overload signatures, `declare`
 /// declarations and namespaces of types only are erased, so `const Foo` beside `interface Foo`
-/// resolves to the `const`, and an overload set to its implementation.
+/// resolves to the `const`, and an overload set to its implementation. A name with no declaration
+/// that runs (only `declare` overloads) resolves to its first declaration, as an ambient one does.
 pub(in crate::frontend::extract) fn runtime_declaration(
     semantic: &Semantic<'_>,
     symbol: SymbolId,
@@ -616,7 +617,9 @@ pub(in crate::frontend::extract) fn runtime_declaration(
     let mut running = scoping
         .symbol_declarations(symbol)
         .filter(|node| runs(*node));
-    let first = running.next()?;
+    let Some(first) = running.next() else {
+        return Some(scoping.symbol_declaration(symbol));
+    };
     running.next().is_none().then_some(first)
 }
 
