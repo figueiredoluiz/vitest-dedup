@@ -16,6 +16,7 @@
 // deliberately never touches `knownTruePositives` -- those are hand-reviewed prose describing
 // findings that must keep appearing, not derived data, and a project whose run no longer covers
 // one is refused an update (see below) rather than having the regression silently absorbed.
+// A failed globals check also preserves the project's entire baseline, including missing figures.
 //
 // What "drift" means here, and why aggregate counts are not enough:
 //
@@ -447,6 +448,12 @@ for (const project of manifest.projects) {
     driftedProjects.add(project.repo)
     continue
   }
+  // Capture eligibility before ordinary baseline drift is recorded below: reviewed drift may be
+  // updated, but a run that failed an independent check must not establish any baseline fields.
+  const canUpdate = update && !driftedProjects.has(project.repo) && knownTruePositiveFailures.length === 0
+  if (update && driftedProjects.has(project.repo)) {
+    console.log(`     refusing to update ${project.repo}'s baseline: a project check failed`)
+  }
   const ok =
     changed.length === 0 &&
     !identityDrifted &&
@@ -458,9 +465,7 @@ for (const project of manifest.projects) {
     )
     if (exclusionChange.unrecorded) {
       console.log('     note: no exclusion baseline recorded yet; review the figures above and run --update to record')
-      // Never from a project that already failed this run (its globals check, for one): a failed
-      // run must not establish the next accepted baseline.
-      if (update && knownTruePositiveFailures.length === 0 && !driftedProjects.has(project.repo)) {
+      if (canUpdate) {
         base.excluded = recordable(excluded)
         console.log('     recorded the exclusion baseline')
       }
@@ -472,7 +477,7 @@ for (const project of manifest.projects) {
     // Record the identity set even on a passing run. Recording used to live only on the failure
     // path, so once an unrecorded baseline stopped counting as drift, `--update` reported
     // "baselines updated" while writing nothing -- a silent no-op wearing a success message.
-    if (update && identityUnrecorded && knownTruePositiveFailures.length === 0) {
+    if (canUpdate && identityUnrecorded) {
       base.findingIds = currentIds
       console.log(`     recorded ${currentIds.length} finding identities`)
     }
@@ -500,7 +505,7 @@ for (const project of manifest.projects) {
     if (update) {
       console.log(`       refusing to update ${project.repo}'s baseline: a known true positive would be silently dropped`)
     }
-  } else if (update) {
+  } else if (canUpdate) {
     for (const k of numericKeys) base[k] = actual[k]
     base.findingIds = currentIds
     base.excluded = recordable(excluded)
