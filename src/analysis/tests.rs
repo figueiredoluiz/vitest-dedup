@@ -3874,6 +3874,9 @@ fn suite_at(
         .build_with_span(start_byte, end_byte)
 }
 
+/// The suite rule reports the duplicated `describe` blocks themselves -- titles prove which
+/// declarations grouped, which counts alone cannot (two identical child tests grouped by mistake
+/// would also collapse to one finding).
 #[test]
 fn duplicate_suite_reports_the_copy_once_and_suppresses_cross_copy_child_findings() {
     let config = default_config();
@@ -3895,6 +3898,18 @@ fn duplicate_suite_reports_the_copy_once_and_suppresses_cross_copy_child_finding
 
     let result = analyze_with(suites, &config, 1);
     assert_eq!(rule_count(&result.findings, Rule::DuplicateSuite), 1);
+    let suite_finding = result
+        .findings
+        .iter()
+        .find(|finding| finding.rule == Rule::DuplicateSuite)
+        .expect("exactly one duplicate-suite finding was asserted");
+    assert_eq!(
+        suite_finding.titles,
+        ["checkout", "checkout"],
+        "the suite rule must group the describe blocks, not the identical tests inside them: \
+         {:#?}",
+        suite_finding.titles
+    );
     // duplicate-test between the two copies' children: suppressed. Between a copy's child and
     // the outsider: kept.
     let duplicate_tests: Vec<&Finding> = result
