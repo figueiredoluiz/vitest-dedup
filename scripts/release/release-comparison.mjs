@@ -96,6 +96,8 @@ function figures(comparison) {
     newForbidden: detector['new-forbidden'],
     newUnclaimed: comparison.totals.newUnclaimed,
     extractionRegressed: comparison.totals.extractionRegressed,
+    // An evaluator that predates the figure leaves it out; that reads as not measured.
+    excluded: comparison.totals.excluded ?? { baseline: 0, candidate: 0, measuredCases: 0, more: [], fewer: 0 },
     unavailable: comparison.unavailableCases,
     changedCases: comparison.labelChangedCases.length,
   }
@@ -143,6 +145,10 @@ export function renderSection({ comparison, version, previousTag, cases, key = C
       `| **Expectations newly violated** (a forbidden finding appeared) | ${f.newForbidden} |`,
       `| **New findings the labels do not mention** | ${f.newUnclaimed} |`,
       `| **Cases whose extraction regressed** | ${f.extractionRegressed} |`,
+      `| **Cases that leave more tests out of comparison than ${previousTag}** | ${f.excluded.more.length} |`,
+      `| Tests left out of comparison, over the ${f.excluded.measuredCases} case(s) measured in both builds (${previousTag} to v${version}) | ${
+        f.excluded.measuredCases === 0 ? 'not measured' : `${f.excluded.baseline} to ${f.excluded.candidate}`
+      } |`,
       `| Cases ${previousTag} could not be run on | ${f.unavailable} |`,
       `| Cases new or changed since ${previousTag}, counted apart | ${f.changedCases} |`,
     )

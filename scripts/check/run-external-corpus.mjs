@@ -33,6 +33,10 @@
 //     - finding *identity* -- rule plus each finding's sorted participant locations -- not just
 //       how many findings exist, so a wholesale swap of which tests are flagged is visible even
 //       when the totals match.
+//     - what the run leaves out of comparison: tests and files, in all and by reason, read from the
+//       summary's `exclusions` and shown as a share of the analyzed tests. A rise fails as a regression;
+//       a fall fails until it is recorded with `--update`, so the ceiling cannot go slack. A baseline
+//       without the figures is reported as unrecorded and `--update` records it.
 //     - each project's `knownTruePositives`: hand-written prose naming a specific location (or
 //       pair of locations) that must still appear in a finding. Wired into a real assertion
 //       (`isKnownTruePositiveCovered`) rather than left as documentation, so a precision change
@@ -48,6 +52,7 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { defaultBinary, runAnalyzerJsonl } from './lib/run-analyzer.mjs'
+import { compareExcluded, excludedFigures, exclusionsDrifted, recordable, shareText } from './lib/excluded-share.mjs'
 import { ALL_RULES } from './lib/fixture-directives.mjs'
 import {
   clauseRule,
@@ -269,6 +274,17 @@ for (const project of manifest.projects) {
     continue
   }
 
+  // What the run leaves out of comparison, in the summary's own words: tests and files, in all and by
+  // reason. The unresolved count above moves when a pattern stops being read; these say which
+  // pattern and how many files, and they are read from a binary that states them or not at all.
+  let excluded
+  try {
+    excluded = excludedFigures(summary)
+  } catch (error) {
+    console.error(`FAIL ${project.repo}: ${error.message}`)
+    driftedProjects.add(project.repo)
+    continue
+  }
   const numericKeys = ['tests', 'files', 'errors', 'warnings', 'unresolved']
   // The globals-derivation check (S4/G11): with `--globals` no longer passed, a project whose
   // config implies `globals: true` or `globals: false` must have that mode DERIVED, and derived
@@ -420,11 +436,35 @@ for (const project of manifest.projects) {
     )
   }
 
-  const ok = changed.length === 0 && !identityDrifted && knownTruePositiveFailures.length === 0
+  // A rise is a regression and a fall is a gain that must be recorded, or the ceiling becomes
+  // slack a later regression hides inside; both are drift. A baseline without the figures is a
+  // distinct, reported condition, as an unrecorded finding-identity set is.
+  let exclusionChange
+  try {
+    exclusionChange = compareExcluded(base.excluded, excluded)
+  } catch (error) {
+    console.error(`FAIL ${project.repo}: ${error.message}`)
+    driftedProjects.add(project.repo)
+    continue
+  }
+  const ok =
+    changed.length === 0 &&
+    !identityDrifted &&
+    knownTruePositiveFailures.length === 0 &&
+    !exclusionsDrifted(exclusionChange)
   if (ok) {
     console.log(
-      `ok   ${project.repo.padEnd(22)} ${actual.tests} tests, ${actual.errors}E ${actual.warnings}W, ${actual.unresolved} unresolved`,
+      `ok   ${project.repo.padEnd(22)} ${actual.tests} tests, ${actual.errors}E ${actual.warnings}W, ${actual.unresolved} unresolved, ${excluded.tests} excluded (${shareText(excluded)}) in ${excluded.files} file(s)`,
     )
+    if (exclusionChange.unrecorded) {
+      console.log('     note: no exclusion baseline recorded yet; review the figures above and run --update to record')
+      // Never from a project that already failed this run (its globals check, for one): a failed
+      // run must not establish the next accepted baseline.
+      if (update && knownTruePositiveFailures.length === 0 && !driftedProjects.has(project.repo)) {
+        base.excluded = recordable(excluded)
+        console.log('     recorded the exclusion baseline')
+      }
+    }
     // Counts and known true positives matched, but identity cannot be checked until a baseline
     // exists. Say so on the passing line rather than staying silent: a check nobody knows is
     // unavailable is indistinguishable from one that is passing.
@@ -442,6 +482,10 @@ for (const project of manifest.projects) {
   driftedProjects.add(project.repo)
   console.log(`DIFF ${project.repo}`)
   for (const k of changed) console.log(`       ${k}: baseline ${expected[k]} -> now ${actual[k]}`)
+  console.log(`       excluded from comparison: ${excluded.tests} of ${actual.tests} tests (${shareText(excluded)}), ${excluded.files} file(s)`)
+  if (exclusionChange.unrecorded) console.log('       exclusions: no baseline recorded yet, so they were not compared')
+  for (const item of exclusionChange.rose) console.log(`       EXCLUSION REGRESSION: ${item}`)
+  for (const item of exclusionChange.fell) console.log(`       exclusion improved, record it with --update: ${item}`)
   if (identityNote) {
     console.log(`       identity: ${identityNote}`)
     for (const id of identityAdded.slice(0, 5)) console.log(`         + ${id}`)
@@ -459,6 +503,7 @@ for (const project of manifest.projects) {
   } else if (update) {
     for (const k of numericKeys) base[k] = actual[k]
     base.findingIds = currentIds
+    base.excluded = recordable(excluded)
   }
 }
 

@@ -340,6 +340,7 @@ const JS_MODULES = {
   'scripts/check/lib/corpus-labels.mjs': 98,
   'scripts/check/lib/corpus-evaluation.mjs': 98,
   'scripts/check/lib/corpus-comparison.mjs': 98,
+  'scripts/check/lib/excluded-share.mjs': 100,
   'scripts/check/evaluate-corpus.mjs': 98,
   'scripts/check/lib/output-equivalence.mjs': 98,
   'scripts/check/lib/equivalence-shim.mjs': 100,

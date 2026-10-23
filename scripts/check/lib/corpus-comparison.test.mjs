@@ -17,6 +17,7 @@ import {
   compareCase,
   compareCorpus,
   corpusDigest,
+  excludedLine,
   readLabelChanges,
   regressedCases,
   renderComparison,
@@ -456,4 +457,56 @@ test('binary versions and git calls report failure rather than guessing', () => 
   assert.match(runGit(['--version'], tmpdir()), /git version/)
   assert.throws(() => runGit(['definitely-not-a-command'], tmpdir()), /failed/)
   assert.throws(() => runGit(['--version'], '/nonexistent/dir'))
+})
+
+/** An evaluated case whose run left `unresolved` tests out of comparison. */
+const leaving = (name, unresolved) => evaluated(name, ['satisfied'], [], { extraction: { matches: true, unresolved } })
+
+test('a case that leaves more tests out of comparison than the baseline is a regression even when every finding is kept', () => {
+  const worse = [leaving('w', 9), { evaluated: leaving('w', 4) }]
+  const same = [leaving('s', 3), { evaluated: leaving('s', 3) }]
+  const better = [leaving('b', 1), { evaluated: leaving('b', 7) }]
+  const out = compare([worse, same, better])
+  assert.deepEqual(out.totals.excluded, { baseline: 14, candidate: 13, measuredCases: 3, more: [{ name: 'w', was: 4, is: 9 }], fewer: 1 })
+  assert.equal(out.regressions, 1, 'only the rise counts; the fall is an improvement')
+  const text = renderComparison(out).join('\n')
+  assert.match(text, /tests excluded from comparison: baseline 14, candidate 13 over 3 case\(s\); 1 case\(s\) exclude more, 1 fewer/)
+  assert.match(text, /w: excludes more tests from comparison \(4 -> 9\)/)
+  assert.equal(compare([better]).regressions, 0)
+})
+
+test('exclusion totals leave out what cannot be compared and say so when nothing could be', () => {
+  const unstated = [evaluated('u', ['satisfied']), { evaluated: evaluated('u', ['satisfied']) }]
+  const oneSide = [leaving('o', 5), { evaluated: evaluated('o', ['satisfied']) }]
+  const pending = [evaluated('p', ['satisfied'], [], { pending: 'waits', extraction: { matches: true, unresolved: 9 } }), { evaluated: leaving('p', 1) }]
+  const relabelled = [leaving('r', 9), { evaluated: leaving('r', 1) }]
+  const out = compare([unstated, oneSide, pending, relabelled], new Map([['r', 'manifest entry differs']]))
+  assert.equal(out.totals.excluded.measuredCases, 0)
+  assert.equal(out.regressions, 0)
+  assert.match(renderComparison(out).join('\n'), /tests excluded from comparison: not measured/)
+  assert.equal(excludedLine({ baseline: 0, candidate: 0, measuredCases: 0, more: [], fewer: 0 }).includes('not measured'), true)
+  const unavailable = compareCase(leaving('x', 2), { unavailable: 'crashed' }, null)
+  assert.deepEqual(unavailable.excluded, { was: null, is: 2, rose: false })
+})
+
+test('a rise to exactly the count the case\'s labels pin is the labelled behaviour, not drift', () => {
+  const pinned = (name, unresolved, expectedUnresolved) => evaluated(name, ['satisfied'], [], { extraction: { matches: true, unresolved, expectedUnresolved } })
+  const labelled = [pinned('l', 2, 2), { evaluated: pinned('l', 0, 2) }]
+  const beyond = [pinned('b', 3, 2), { evaluated: pinned('b', 0, 2) }]
+  const unlabelled = [pinned('u', 2, null), { evaluated: pinned('u', 0, null) }]
+  assert.equal(compare([labelled]).regressions, 0)
+  assert.deepEqual(compare([labelled]).totals.excluded.more, [])
+  assert.deepEqual(compare([beyond]).totals.excluded.more.map((c) => c.name), ['b'])
+  assert.deepEqual(compare([unlabelled]).totals.excluded.more.map((c) => c.name), ['u'])
+})
+
+test('comparison data from before the exclusion figures existed still renders and lists nothing for them', () => {
+  const old = compare([[evaluated('e', ['satisfied']), { evaluated: evaluated('e', ['satisfied']) }]])
+  for (const c of old.cases) delete c.excluded
+  delete old.totals.excluded
+  assert.deepEqual(regressedCases(old), [])
+  assert.match(renderComparison(old).join('\n'), /tests excluded from comparison: not measured/)
+  const broken = compare([[evaluated('e', ['missing']), { evaluated: evaluated('e', ['satisfied']) }]])
+  delete broken.cases[0].excluded
+  assert.match(renderComparison(broken).join('\n'), /e: e#1 regressed/)
 })

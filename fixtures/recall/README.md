@@ -241,6 +241,12 @@ is an error. The baseline is not asked for `--emit-test-fingerprints`, since it 
 Classes follow the labels as written: a known false positive whose `expectCount` the candidate no
 longer meets leaves its overlapping `expectedAbsent` entry violated, and is reported as such.
 
+Each run also states how many tests it left out of comparison because their context could not be resolved
+(the summary's `unresolvedTests`). The comparison totals that figure over the cases both runs state it for,
+lists the cases that leave more tests out than the baseline as regressions (a rise narrows what the detector
+looks at without moving a finding, unless the case's labels pin exactly that count), and says `not measured` when no case states it in both runs, so a zero
+over nothing is never read as a clean result.
+
 `--baseline-ref REF` names the commit the baseline was built from. Cases that are new there, whose
 expectations differ, or whose files or governing configuration (the nearest `.vitest-dedup.json`,
 or the one `--config` names) differ are totalled apart, because a difference on them is not a
@@ -249,6 +255,6 @@ outside its own directory is not seen. The baseline tree is extracted with `git 
 and `tar` are needed. `--json` carries the whole comparison and a run record: both binaries by
 sha256 and `--version`, the corpus by sha256, the checkout and baseline commits, and the arguments
 each case ran with. `--fail-on-regression` exits 1 on a regression, a new unclaimed finding, a case that no longer
-extracts what its labels say, or an unavailable case; a baseline that cannot run a case new or changed since it was built stays data.
+extracts what its labels say, a case that leaves more tests out of comparison, or an unavailable case; a baseline that cannot run a case new or changed since it was built stays data.
 
 The fixtures are synthetic and contain no third-party source.

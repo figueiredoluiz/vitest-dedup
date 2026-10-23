@@ -98,6 +98,17 @@ function extractionChange(was, is) {
 }
 
 /**
+ * How many tests a run left out of comparison because their context could not be resolved: the
+ * summary's `unresolvedTests`, or `null` when a run does not state it.
+ *
+ * @param {{unresolved?: unknown} | undefined} extraction A case's extraction record.
+ * @returns {number | null}
+ */
+function excludedTests(extraction) {
+  return Number.isInteger(extraction?.unresolved) && extraction.unresolved >= 0 ? extraction.unresolved : null
+}
+
+/**
  * Compares one case's candidate evaluation with its baseline evaluation.
  *
  * @param {object} candidate The candidate's {@link evaluateCase} result.
@@ -112,6 +123,7 @@ export function compareCase(candidate, baseline, labelChange) {
       ...common,
       unavailable: baseline.unavailable,
       extraction: 'unavailable',
+      excluded: { was: null, is: excludedTests(candidate.extraction), rose: false },
       expectations: candidate.expectations.map((o) => ({ id: o.id, kind: o.kind, rule: o.rule, class: 'unavailable', candidate: o.status })),
       newUnclaimed: [],
       goneUnclaimed: [],
@@ -123,10 +135,20 @@ export function compareCase(candidate, baseline, labelChange) {
     if (was === undefined) throw new Error(`${candidate.name}: expectation ${o.id} is missing from the baseline evaluation`)
     return { id: o.id, kind: o.kind, rule: o.rule, class: classifyChange(o.kind, was.status, o.status), baseline: was.status, candidate: o.status }
   })
+  const was = excludedTests(baseline.evaluated.extraction)
+  const is = excludedTests(candidate.extraction)
   return {
     ...common,
     // Whether the run extracted what the case labels say is itself a contract.
     extraction: extractionChange(baseline.evaluated.extraction.matches, candidate.extraction.matches),
+    // How many tests the run left out of comparison, before and after. A rise narrows what the
+    // detector looks at without moving any finding, so it is a regression of its own -- unless the
+    // case's labels pin exactly that count, which makes it a reviewed contract rather than drift.
+    excluded: {
+      was,
+      is,
+      rose: was !== null && is !== null && is > was && candidate.extraction.expectedUnresolved !== is,
+    },
     expectations,
     newUnclaimed: surplus(candidate.unclaimed, baseline.evaluated.unclaimed),
     goneUnclaimed: surplus(baseline.evaluated.unclaimed, candidate.unclaimed),
@@ -163,6 +185,7 @@ export function compareCorpus(candidates, baselines, labelChanges) {
   let newUnclaimed = 0
   let goneUnclaimed = 0
   let extractionRegressed = 0
+  const excluded = { baseline: 0, candidate: 0, measuredCases: 0, more: [], fewer: 0 }
   for (const item of cases.filter((c) => c.pending === null)) {
     const tally = item.labelChange === null ? detector : labelled
     for (const outcome of item.expectations) {
@@ -176,11 +199,18 @@ export function compareCorpus(candidates, baselines, labelChanges) {
       newUnclaimed += item.newUnclaimed.length
       goneUnclaimed += item.goneUnclaimed.length
       if (item.extraction === 'regressed') extractionRegressed += 1
+      if (item.excluded.was !== null && item.excluded.is !== null) {
+        excluded.baseline += item.excluded.was
+        excluded.candidate += item.excluded.is
+        excluded.measuredCases += 1
+        if (item.excluded.rose) excluded.more.push({ name: item.name, was: item.excluded.was, is: item.excluded.is })
+        if (item.excluded.is < item.excluded.was) excluded.fewer += 1
+      }
     }
   }
   return {
-    totals: { detector, labelChanged: labelled, newUnclaimed, goneUnclaimed, extractionRegressed },
-    regressions: detector.regressed + detector['new-forbidden'] + newUnclaimed + extractionRegressed,
+    totals: { detector, labelChanged: labelled, newUnclaimed, goneUnclaimed, extractionRegressed, excluded },
+    regressions: detector.regressed + detector['new-forbidden'] + newUnclaimed + extractionRegressed + excluded.more.length,
     // A baseline that cannot run a case new since it was built is expected, and stays data.
     unavailableCases: cases.filter((c) => c.unavailable !== undefined && c.labelChange === null).length,
     unavailableOnChangedCases: cases.filter((c) => c.unavailable !== undefined && c.labelChange !== null).length,
@@ -203,7 +233,22 @@ export function regressedCases(comparison) {
     (c) =>
       c.pending === null &&
       c.labelChange === null &&
-      (c.newUnclaimed.length > 0 || c.extraction === 'regressed' || c.expectations.some((o) => ['regressed', 'new-forbidden'].includes(o.class))),
+      (c.newUnclaimed.length > 0 || c.extraction === 'regressed' || c.excluded?.rose === true || c.expectations.some((o) => ['regressed', 'new-forbidden'].includes(o.class))),
+  )
+}
+
+/**
+ * The line that states how many tests the corpus leaves out of comparison, or says it was not
+ * measured: a total of zero over no case at all must not read as a clean result.
+ *
+ * @param {{baseline: number, candidate: number, measuredCases: number, more: object[], fewer: number}} excluded
+ * @returns {string}
+ */
+export function excludedLine(excluded) {
+  if (excluded.measuredCases === 0) return '  tests excluded from comparison: not measured (no case states its unresolved count in both runs)'
+  return (
+    `  tests excluded from comparison: baseline ${excluded.baseline}, candidate ${excluded.candidate} over ${excluded.measuredCases} case(s); ` +
+    `${excluded.more.length} case(s) exclude more, ${excluded.fewer} fewer`
   )
 }
 
@@ -222,6 +267,8 @@ export function renderComparison(comparison) {
       (comparison.unavailableOnChangedCases > 0 ? ` (and ${comparison.unavailableOnChangedCases} more on cases new or changed since the baseline)` : ''),
     `  detector changes   ${row(detector)}, unavailable ${detector.unavailable}`,
     `  new unclaimed findings ${newUnclaimed}, unclaimed findings gone ${goneUnclaimed}, extraction regressions ${comparison.totals.extractionRegressed}`,
+    // Comparison data from an evaluator that predates the figure reads as not measured.
+    excludedLine(comparison.totals.excluded ?? { baseline: 0, candidate: 0, measuredCases: 0, more: [], fewer: 0 }),
   ]
   if (comparison.labelChangedCases.length > 0) {
     lines.push(`  labels or files changed since the baseline (${comparison.labelChangedCases.length} case(s); not detector changes): ${row(labelChanged)}`)
@@ -231,6 +278,7 @@ export function renderComparison(comparison) {
     const items = c.expectations.filter((o) => ['regressed', 'new-forbidden'].includes(o.class)).map((o) => `${o.id} ${o.class}`)
     for (const f of c.newUnclaimed) items.push(`new unclaimed ${f.rule} @ ${f.locations.join(' + ')}`)
     if (c.extraction === 'regressed') items.push('extraction no longer matches the labels')
+    if (c.excluded?.rose) items.push(`excludes more tests from comparison (${c.excluded.was} -> ${c.excluded.is})`)
     lines.push(`  ${c.name}: ${items.join('; ')}`)
   }
   for (const c of comparison.cases.filter((x) => x.unavailable !== undefined)) lines.push(`  unavailable: ${c.name} -- ${c.unavailable}`)
