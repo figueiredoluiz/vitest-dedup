@@ -106,6 +106,7 @@ test('fast checks are compilation-free; full keeps every gate behind the static 
   const full = commands('full').map(step => step.join(' '))
   assert.ok(full.includes('cargo fmt --all --check'))
   assert.ok(full.includes('cargo clippy --all-targets --all-features --locked'))
+  assert.ok(full.includes('cargo doc --no-deps --document-private-items --locked'))
   assert.ok(full.includes('cargo test --all-targets --all-features --locked'))
   assert.ok(full.includes('npm run check'))
   assert.ok(full.includes('npm run check:coverage:rust'))
@@ -120,7 +121,7 @@ test('full checks front-load the static gates and never repeat a compile-class s
   // The static gates deliberately run twice: once as the fail-fast prefix, once inside
   // `npm run check` (seconds each, idempotent). Everything that compiles or analyzes a
   // corpus runs exactly once.
-  for (const step of ['cargo fmt --all --check', 'cargo clippy --all-targets --all-features --locked', 'cargo test --all-targets --all-features --locked', 'npm run check', 'npm run check:coverage:rust']) {
+  for (const step of ['cargo fmt --all --check', 'cargo clippy --all-targets --all-features --locked', 'cargo doc --no-deps --document-private-items --locked', 'cargo test --all-targets --all-features --locked', 'npm run check', 'npm run check:coverage:rust']) {
     assert.equal(full.filter(other => other === step).length, 1, step + ' runs exactly once')
   }
   for (const gate of ['check:action-pins', 'check:release-workflow', 'check:versions', 'check:docs', 'check:names', 'skills:check']) {
@@ -322,6 +323,7 @@ test('successful command uses CI warnings and preserves supplied flags without s
     spawn: (cmd, args, options) => {
       assert.equal(cmd, 'cargo'); assert.deepEqual(args, ['clippy'])
       assert.equal(options.env.RUSTFLAGS, '-C debuginfo=0 -D warnings')
+      assert.equal(options.env.RUSTDOCFLAGS, '-D warnings')
       assert.equal(options.env.GIT_DIR, undefined)
       assert.equal(options.stdio[1], options.stdio[2])
       return { status: 0 }
@@ -658,7 +660,7 @@ test('existing CI Rust flags keep their Cargo cache identity without weakening w
   ]) {
     runSteps(root, [['cargo', 'clippy']], {
       logRoot: join(root, 'logs'), env: { RUSTFLAGS: flags }, print: () => {},
-      spawn: (_cmd, _args, options) => { assert.equal(options.env.RUSTFLAGS, expected); return { status: 0 } },
+      spawn: (_cmd, _args, options) => { assert.equal(options.env.RUSTFLAGS, expected); assert.ok(/-D\s*warnings/.test(options.env.RUSTDOCFLAGS)); return { status: 0 } },
     })
   }
 }))

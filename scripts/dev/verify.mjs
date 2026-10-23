@@ -115,6 +115,7 @@ export function commands(profile, rust = true, docDiff) {
   }
   steps.push(
     ['cargo', 'clippy', '--all-targets', '--all-features', '--locked'],
+    ['cargo', 'doc', '--no-deps', '--document-private-items', '--locked'],
     ['cargo', 'test', '--all-targets', '--all-features', '--locked'],
     ['npm', 'run', 'check'],
   )
@@ -133,8 +134,11 @@ export function commands(profile, rust = true, docDiff) {
  */
 export function runSteps(root, steps, { env = process.env, logRoot, spawn = spawnSync, print = console.log } = {}) {
   const runEnv = cleanEnvironment(env)
-  const flags = (runEnv.RUSTFLAGS || '').trim()
-  runEnv.RUSTFLAGS = /(?:^|\s)-D\s*warnings$/.test(flags) ? flags : `${flags} -D warnings`.trim()
+  // CI denies warnings for the compiler and for rustdoc, whose broken intra-doc links it rejects.
+  for (const name of ['RUSTFLAGS', 'RUSTDOCFLAGS']) {
+    const flags = (runEnv[name] || '').trim()
+    runEnv[name] = /(?:^|\s)-D\s*warnings$/.test(flags) ? flags : `${flags} -D warnings`.trim()
+  }
   mkdirSync(logRoot, { recursive: true })
   for (const [i, [command, ...args]] of steps.entries()) {
     const log = join(logRoot, `${i + 1}-${command}.log`)
