@@ -36,7 +36,7 @@ use oxc_ast::AstKind;
 use oxc_ast_visit::{walk, Visit};
 use oxc_parser::Parser;
 use oxc_semantic::{Semantic, SemanticBuilder, SymbolId};
-use oxc_span::{GetSpan, SourceType};
+use oxc_span::SourceType;
 use oxc_syntax::scope::ScopeFlags;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -451,23 +451,12 @@ thread_local! {
     /// Finished proofs, by starting point. Only whole queries are kept: a part proved inside a
     /// cycle leans on its ancestors being proved, so it is no verdict on its own.
     static PROVED: RefCell<HashMap<Edge, Option<Vec<PathBuf>>>> = RefCell::new(HashMap::new());
-
-    /// For each written-binding write an accepted proof of this file relies on, the hook or test
-    /// calls that may host it.
-    static WRITE_HOSTS: RefCell<Vec<Vec<(u32, u32)>>> = const { RefCell::new(Vec::new()) };
 }
 
 /// Records whether the project enables Vitest globals for the extraction about to run on this
 /// thread: under them an installed package can register tests without importing anything.
 pub(super) fn begin_file(globals_enabled: bool) {
     GLOBALS.with(|globals| globals.set(globals_enabled));
-    WRITE_HOSTS.with(|hosts| hosts.borrow_mut().clear());
-}
-
-/// The hosts every accepted written-binding write of this file needs: the walker must have recorded
-/// one call of each list, as a hook or a test, or the comparison cannot see that write.
-pub(super) fn take_write_hosts() -> Vec<Vec<(u32, u32)>> {
-    WRITE_HOSTS.with(|hosts| std::mem::take(&mut *hosts.borrow_mut()))
 }
 
 /// Whether the project enables Vitest globals for the file being extracted on this thread.
@@ -527,11 +516,7 @@ pub(super) fn arguments_register_nothing(
         return None;
     }
     let mut proof = Proof::default();
-    if !proof.prove_edges(scanner.edges) {
-        return None;
-    }
-    WRITE_HOSTS.with(|hosts| hosts.borrow_mut().extend(scanner.hosts));
-    Some(proof.modules)
+    proof.prove_edges(scanner.edges).then_some(proof.modules)
 }
 
 /// Scans the part of the file at `path` named by `root`, and returns the edges it reaches.
@@ -598,6 +583,87 @@ enum Pending<'a> {
     Declarator(&'a VariableDeclarator<'a>),
     Class(&'a Class<'a>),
     Enum(&'a TSEnumDeclaration<'a>),
+}
+
+/// The one declaration of `symbol` that runs, or `None` when several do: a later declaration
+/// replaces or extends what the first one says (`var x = a; var x = b`, `function Run` merged with
+/// a `namespace Run` that holds values). Interfaces, type aliases, overload signatures, `declare`
+/// declarations and namespaces of types only are erased, so `const Foo` beside `interface Foo`
+/// resolves to the `const`, and an overload set to its implementation.
+pub(in crate::frontend::extract) fn runtime_declaration(
+    semantic: &Semantic<'_>,
+    symbol: SymbolId,
+) -> Option<oxc_semantic::NodeId> {
+    let scoping = semantic.scoping();
+    if scoping.symbol_redeclarations(symbol).is_empty() {
+        return Some(scoping.symbol_declaration(symbol));
+    }
+    let nodes = semantic.nodes();
+    let runs = |node: oxc_semantic::NodeId| match nodes.kind(node) {
+        AstKind::TSInterfaceDeclaration(_) | AstKind::TSTypeAliasDeclaration(_) => false,
+        AstKind::Function(function) => function.body.is_some() && !function.declare,
+        AstKind::Class(class) => !class.declare,
+        AstKind::TSEnumDeclaration(declaration) => !declaration.declare && !declaration.r#const,
+        AstKind::TSNamespaceDeclaration(declaration) => {
+            !declaration.declare && namespace_holds_values(declaration)
+        }
+        AstKind::VariableDeclarator(_) => !matches!(
+            nodes.parent_kind(node),
+            AstKind::VariableDeclaration(declaration) if declaration.declare
+        ),
+        _ => true,
+    };
+    let mut running = scoping
+        .symbol_declarations(symbol)
+        .filter(|node| runs(*node));
+    let first = running.next()?;
+    running.next().is_none().then_some(first)
+}
+
+/// Whether `symbol` has more than one declaration that runs (see [`runtime_declaration`]).
+pub(in crate::frontend::extract) fn redeclared_at_runtime(
+    semantic: &Semantic<'_>,
+    symbol: SymbolId,
+) -> bool {
+    runtime_declaration(semantic, symbol).is_none()
+}
+
+/// Whether a namespace emits code: anything in it but interfaces, type aliases, `declare`
+/// statements and namespaces of types only.
+fn namespace_holds_values(namespace: &TSNamespaceDeclaration<'_>) -> bool {
+    let mut body = &namespace.body;
+    let block = loop {
+        match body {
+            TSNamespaceDeclarationBody::TSNamespaceDeclaration(inner) => body = &inner.body,
+            TSNamespaceDeclarationBody::TSModuleBlock(block) => break block,
+        }
+    };
+    block.body.iter().any(|statement| {
+        let declaration = match statement {
+            Statement::ExportDeclaration(export) => &export.declaration,
+            other => match other.as_declaration() {
+                Some(declaration) => declaration,
+                None => return true,
+            },
+        };
+        match declaration {
+            Declaration::TSInterfaceDeclaration(_) | Declaration::TSTypeAliasDeclaration(_) => {
+                false
+            }
+            Declaration::TSNamespaceDeclaration(inner) => {
+                !inner.declare && namespace_holds_values(inner)
+            }
+            Declaration::VariableDeclaration(variables) => !variables.declare,
+            Declaration::FunctionDeclaration(function) => {
+                !function.declare && function.body.is_some()
+            }
+            Declaration::ClassDeclaration(class) => !class.declare,
+            Declaration::TSEnumDeclaration(declaration) => {
+                !declaration.declare && !declaration.r#const
+            }
+            _ => true,
+        }
+    })
 }
 
 /// The declaration a top-level statement introduces, exported or not.
@@ -696,377 +762,6 @@ pub(super) fn written_bindings(
     writes.symbols
 }
 
-/// What a written binding contributes to a proof: every value written into it, and for each write
-/// the spans of the hook or test calls that host it, one of which the walker must record (see
-/// [`take_write_hosts`]).
-type WrittenValues<'a> = (Vec<Pending<'a>>, Vec<Vec<(u32, u32)>>);
-
-/// Every value code in this file can store into the written local `symbol`, or `None` when one
-/// could enter unseen.
-///
-/// Accepted only for a plain-identifier declarator, declared once (one without an initialiser is
-/// refused by the caller), whose every reference is the whole target of an assignment
-/// (`x = v`, `x += v`) or an update (`x++`), or the root object of a member chain. At the chain's
-/// use, an assignment to it contributes its right side, a call or `new` through it contributes
-/// every argument (`x.mockImplementation(f)`), an update or `delete` contributes nothing, and any
-/// other use is a value read, being passed to a call included (a callee that mutates `x.a` is the
-/// sub-object case the walk does not see). A bare reference
-/// anywhere (passed, returned, stored) lets code this file does not show write into the binding,
-/// so it refuses, as do a chain inside a destructuring or loop target and a chain used as a
-/// template tag. Every write site must be [`quiet_site`] and hosted by a call in [`write_hosts`]: a write elsewhere never
-/// reaches the compared context. An assignment or a call through the chain must also be a whole
-/// statement, since its value would alias the binding.
-fn written_values<'a>(semantic: &Semantic<'a>, symbol: SymbolId) -> Option<WrittenValues<'a>> {
-    let nodes = semantic.nodes();
-    let declaration = semantic.scoping().symbol_declaration(symbol);
-    let AstKind::VariableDeclarator(declarator) = nodes.kind(declaration) else {
-        return None;
-    };
-    // An exported declaration escapes without a reference (a self-import aliases it), and so does
-    // every local under a direct `eval`. A redeclaration is refused by the caller.
-    let evaluates = semantic
-        .scoping()
-        .root_unresolved_references()
-        .iter()
-        .any(|(name, _)| name.as_str() == "eval");
-    let exported = matches!(
-        nodes.ancestor_kinds(declaration).nth(1),
-        Some(AstKind::ExportDeclaration(_))
-    );
-    if exported
-        || evaluates
-        || !matches!(
-            &declarator.id,
-            oxc_ast::ast::BindingPattern::BindingIdentifier(binding)
-                if binding.symbol_id.get() == Some(symbol)
-        )
-    {
-        return None;
-    }
-    let mut values = Vec::new();
-    let hosts = RefCell::new(Vec::new());
-    for reference in semantic.scoping().get_resolved_references(symbol) {
-        // A type-only use is erased and holds no value.
-        if !reference.is_value() {
-            continue;
-        }
-        let mut node = reference.node_id();
-        let mut span = nodes.kind(node).span();
-        let mut member = false;
-        // Climb through wrappers and, for a read, the member chain the binding roots.
-        let parent = loop {
-            let parent = nodes.parent_id(node);
-            let kind = nodes.kind(parent);
-            let through = match kind {
-                AstKind::ParenthesizedExpression(inner) => inner.expression.span() == span,
-                AstKind::TSAsExpression(inner) => inner.expression.span() == span,
-                AstKind::TSSatisfiesExpression(inner) => inner.expression.span() == span,
-                AstKind::TSNonNullExpression(inner) => inner.expression.span() == span,
-                AstKind::TSTypeAssertion(inner) => inner.expression.span() == span,
-                AstKind::TSInstantiationExpression(inner) => inner.expression.span() == span,
-                AstKind::ChainExpression(_) => true,
-                AstKind::StaticMemberExpression(inner) if !reference.is_write() => {
-                    member |= inner.object.span() == span;
-                    inner.object.span() == span
-                }
-                AstKind::ComputedMemberExpression(inner) if !reference.is_write() => {
-                    member |= inner.object.span() == span;
-                    inner.object.span() == span
-                }
-                AstKind::PrivateFieldExpression(inner) if !reference.is_write() => {
-                    member |= inner.object.span() == span;
-                    inner.object.span() == span
-                }
-                _ => false,
-            };
-            if !through {
-                break parent;
-            }
-            node = parent;
-            span = kind.span();
-        };
-        // A write is accepted only where the comparison can see it, and an aliasing one only as a
-        // whole statement.
-        let writes = |aliased: bool| {
-            let found = write_hosts(semantic, parent);
-            let accepted = (!aliased || is_whole_statement(nodes, parent))
-                && quiet_site(nodes, parent)
-                && !found.is_empty();
-            if accepted {
-                hosts.borrow_mut().push(found);
-            }
-            accepted
-        };
-        if reference.is_write() {
-            match nodes.kind(parent) {
-                AstKind::AssignmentExpression(assignment)
-                    if assignment.left.span() == span && writes(true) =>
-                {
-                    values.push(Pending::Expression(&assignment.right));
-                }
-                AstKind::UpdateExpression(_) if writes(false) => {}
-                _ => return None,
-            }
-            continue;
-        }
-        if !member {
-            return None;
-        }
-        let arguments = match nodes.kind(parent) {
-            AstKind::AssignmentExpression(assignment) if assignment.left.span() == span => {
-                if !writes(true) {
-                    return None;
-                }
-                values.push(Pending::Expression(&assignment.right));
-                continue;
-            }
-            AstKind::UpdateExpression(_) => {
-                if !writes(false) {
-                    return None;
-                }
-                continue;
-            }
-            AstKind::UnaryExpression(unary)
-                if unary.operator == oxc_ast::ast::UnaryOperator::Delete =>
-            {
-                if !writes(false) {
-                    return None;
-                }
-                continue;
-            }
-            // A call through the chain can store its arguments; one taking the chain only reads it.
-            AstKind::CallExpression(call) if call.callee.span() == span => Some(&call.arguments),
-            AstKind::NewExpression(call) if call.callee.span() == span => Some(&call.arguments),
-            // A target the chain is written through; as a loop source or a default it is read.
-            AstKind::TaggedTemplateExpression(_)
-            | AstKind::ArrayAssignmentTarget(_)
-            | AstKind::ObjectAssignmentTarget(_)
-            | AstKind::AssignmentTargetRest(_) => return None,
-            AstKind::AssignmentTargetWithDefault(target) if target.binding.span() == span => {
-                return None
-            }
-            AstKind::AssignmentTargetPropertyProperty(target) if target.binding.span() == span => {
-                return None
-            }
-            AstKind::ForInStatement(statement) if statement.left.span() == span => return None,
-            AstKind::ForOfStatement(statement) if statement.left.span() == span => return None,
-            _ => None,
-        };
-        if let Some(arguments) = arguments {
-            if !writes(true) {
-                return None;
-            }
-            for argument in arguments {
-                if matches!(argument, Argument::SpreadElement(_)) {
-                    return None;
-                }
-                values.push(Pending::Argument(argument));
-            }
-        }
-    }
-    Some((values, hosts.into_inner()))
-}
-
-/// The spans of the Vitest hook or test calls the walker registers whose callback holds `node`
-/// (empty when none does): a hook
-/// body is part of the compared context of every test in its scope, a test body is that test's
-/// compared body. A later test reading the state does not carry the writing test's body, the same
-/// leak a hook in another suite has.
-fn write_hosts(semantic: &Semantic<'_>, node: oxc_semantic::NodeId) -> Vec<(u32, u32)> {
-    let nodes = semantic.nodes();
-    nodes
-        .ancestor_ids(node)
-        .filter_map(|id| {
-            let call = nodes.parent_id(id);
-            (callback_of(semantic, id, call, WRITE_CALLBACKS)
-                && registered_statement(semantic, call))
-            .then(|| {
-                let span = nodes.kind(call).span();
-                (span.start, span.end)
-            })
-        })
-        .collect()
-}
-
-/// Whether the node `callback` is the arrow function the walker reads as the body of the call at
-/// `call` (a hook's first argument, a test's or suite's after its title and options), whose callee
-/// is one of `names` as Vitest provides it.
-fn callback_of(
-    semantic: &Semantic<'_>,
-    callback: oxc_semantic::NodeId,
-    call: oxc_semantic::NodeId,
-    names: &[&str],
-) -> bool {
-    let nodes = semantic.nodes();
-    let AstKind::ArrowFunctionExpression(arrow) = nodes.kind(callback) else {
-        return false;
-    };
-    let AstKind::CallExpression(expression) = nodes.kind(call) else {
-        return false;
-    };
-    let Some(name) = names
-        .iter()
-        .find(|name| is_vitest_name(semantic, &expression.callee, &[name]))
-    else {
-        return false;
-    };
-    let body = if HOOKS.contains(name) {
-        expression.arguments.first()
-    } else {
-        super::split_declaration_args(&expression.arguments).2
-    };
-    body.is_some_and(|body| body.span() == arrow.span)
-}
-
-/// Whether the call at `call` is a statement the walker registers and records as it runs: the whole
-/// expression of a statement reached from the program through plain blocks and the callbacks of
-/// `describe` statements. `void hook(...)`, `await hook(...)` and a hook inside a plain function
-/// register nothing anywhere.
-fn registered_statement(semantic: &Semantic<'_>, call: oxc_semantic::NodeId) -> bool {
-    let nodes = semantic.nodes();
-    let mut current = nodes.parent_id(call);
-    if !matches!(nodes.kind(current), AstKind::ExpressionStatement(_)) {
-        return false;
-    }
-    loop {
-        current = nodes.parent_id(current);
-        match nodes.kind(current) {
-            AstKind::Program(_) => return true,
-            // Not `if`, loops or `try`: the walker records a hook there as if it always ran once.
-            AstKind::BlockStatement(_) | AstKind::FunctionBody(_) => {}
-            AstKind::ArrowFunctionExpression(arrow) => {
-                let suite = nodes.parent_id(current);
-                if !callback_of(semantic, current, suite, &["describe", "suite"])
-                    || !matches!(nodes.parent_kind(suite), AstKind::ExpressionStatement(_))
-                    || may_stop_early(arrow)
-                {
-                    return false;
-                }
-                current = nodes.parent_id(suite);
-            }
-            _ => return false,
-        }
-    }
-}
-
-/// Vitest hooks, whose callback is their first argument.
-const HOOKS: &[&str] = &["beforeEach", "beforeAll", "afterEach", "afterAll"];
-
-/// Vitest calls whose callback a write may sit in.
-const WRITE_CALLBACKS: &[&str] = &[
-    "beforeEach",
-    "beforeAll",
-    "afterEach",
-    "afterAll",
-    "test",
-    "it",
-];
-
-/// Whether a suite callback holds a `return` or `throw` outside nested functions (a class static
-/// block runs in place, so it counts): a hook after one is recorded by the walker but may never
-/// register.
-fn may_stop_early(callback: &oxc_ast::ast::ArrowFunctionExpression<'_>) -> bool {
-    struct Exits(bool);
-    impl<'a> Visit<'a> for Exits {
-        /// A `return` ends the suite callback.
-        fn visit_return_statement(&mut self, _: &oxc_ast::ast::ReturnStatement<'a>) {
-            self.0 = true;
-        }
-        /// A `throw` ends the suite callback.
-        fn visit_throw_statement(&mut self, _: &oxc_ast::ast::ThrowStatement<'a>) {
-            self.0 = true;
-        }
-        /// A nested function's exits are its own.
-        fn visit_function(&mut self, _: &Function<'a>, _: ScopeFlags) {}
-        /// A nested arrow function's exits are its own.
-        fn visit_arrow_function_expression(
-            &mut self,
-            _: &oxc_ast::ast::ArrowFunctionExpression<'a>,
-        ) {
-        }
-    }
-    let mut exits = Exits(false);
-    // A concise body is one expression, which holds neither.
-    if let oxc_ast::ast::ArrowFunctionBody::FunctionBody(body) = &callback.body {
-        exits.visit_function_body(body);
-    }
-    exits.0
-}
-
-/// Whether `callee` is one of `names` as Vitest provides it: imported from `vitest` under that name,
-/// or a free name when the project enables globals.
-fn is_vitest_name(semantic: &Semantic<'_>, callee: &Expression<'_>, names: &[&str]) -> bool {
-    // A plain name only: the walker does not unwrap `(beforeEach as typeof beforeEach)`.
-    let Expression::Identifier(ident) = callee else {
-        return false;
-    };
-    let symbol = ident
-        .reference_id
-        .get()
-        .and_then(|reference| semantic.scoping().get_reference(reference).symbol_id());
-    let Some(symbol) = symbol else {
-        return globals_enabled() && names.contains(&ident.name.as_str());
-    };
-    let nodes = semantic.nodes();
-    let declaration = semantic.scoping().symbol_declaration(symbol);
-    match (nodes.kind(declaration), nodes.parent_kind(declaration)) {
-        (AstKind::ImportSpecifier(specifier), AstKind::ImportDeclaration(import)) => {
-            import.source.value == "vitest" && names.contains(&specifier.imported.name().as_str())
-        }
-        _ => false,
-    }
-}
-
-/// Whether the declarator at `node` is inside a parameterised `catch` clause of its own function
-/// scope. A `var` there hoists out with the thrown value; a `let` or `const` is readable only
-/// inside the clause, where a write is refused anyway.
-fn declared_in_catch(semantic: &Semantic<'_>, node: oxc_semantic::NodeId) -> bool {
-    let nodes = semantic.nodes();
-    for kind in nodes.ancestor_kinds(node) {
-        match kind {
-            AstKind::CatchClause(clause) if clause.param.is_some() => return true,
-            AstKind::Function(_) | AstKind::ArrowFunctionExpression(_) | AstKind::Program(_) => {
-                return false
-            }
-            _ => {}
-        }
-    }
-    false
-}
-
-/// Whether the expression at `node` is a whole statement, so its value is discarded.
-fn is_whole_statement(nodes: &oxc_semantic::AstNodes<'_>, node: oxc_semantic::NodeId) -> bool {
-    for kind in nodes.ancestor_kinds(node) {
-        match kind {
-            AstKind::ParenthesizedExpression(_)
-            | AstKind::AwaitExpression(_)
-            | AstKind::ChainExpression(_)
-            | AstKind::TSAsExpression(_)
-            | AstKind::TSSatisfiesExpression(_)
-            | AstKind::TSNonNullExpression(_)
-            | AstKind::TSTypeAssertion(_)
-            | AstKind::TSInstantiationExpression(_) => {}
-            AstKind::ExpressionStatement(_) => return true,
-            _ => return false,
-        }
-    }
-    false
-}
-
-/// Whether a value written at `node` can only come from what the file shows there: no enclosing
-/// non-arrow function or class body (`this`, `arguments`), parameterised arrow function or `catch`
-/// clause, any of which carries a value from a call the walk does not see.
-fn quiet_site(nodes: &oxc_semantic::AstNodes<'_>, node: oxc_semantic::NodeId) -> bool {
-    nodes.ancestor_kinds(node).all(|kind| match kind {
-        AstKind::Function(_) | AstKind::Class(_) => false,
-        AstKind::ArrowFunctionExpression(arrow) => {
-            arrow.params.items.is_empty() && arrow.params.rest.is_none()
-        }
-        AstKind::CatchClause(clause) => clause.param.is_none(),
-        _ => true,
-    })
-}
-
 /// What an import binding is: the module it came from and the name it has there.
 struct Binding {
     source: String,
@@ -1081,18 +776,14 @@ struct Scanner<'s, 'a> {
     seen: HashSet<SymbolId>,
     queue: Vec<Pending<'a>>,
     edges: Vec<Edge>,
-    /// Bindings that are written after they are declared. When present, the scan is of a call's
-    /// arguments, and a callback reassigned or a config changed before the call is not the
-    /// declaration that was read: following one adds every value written into it, or refuses (see
-    /// [`written_values`]).
+    /// Bindings that are written after they are declared. When present, following one is refused:
+    /// the scan is of a call's arguments, and a callback reassigned or a config changed before the
+    /// call is not the declaration that was read.
     written: Option<&'s HashSet<SymbolId>>,
-    /// For each written-binding write the proof accepted, the calls that may host it.
-    hosts: Vec<Vec<(u32, u32)>>,
     failed: bool,
 }
 
 impl<'s, 'a> Scanner<'s, 'a> {
-    /// A scanner for `program` at `file`, with the module's import bindings indexed.
     fn new(semantic: &'s Semantic<'a>, program: &Program<'a>, file: &'s Path) -> Self {
         let mut bindings = HashMap::new();
         for statement in &program.body {
@@ -1122,7 +813,6 @@ impl<'s, 'a> Scanner<'s, 'a> {
             queue: Vec::new(),
             edges: Vec::new(),
             written: None,
-            hosts: Vec::new(),
             failed: false,
         }
     }
@@ -1351,8 +1041,8 @@ impl<'s, 'a> Scanner<'s, 'a> {
         let mut found = false;
         let mut stars = false;
         for statement in &program.body {
-            if let Some(declared) = declared_by(statement) {
-                found |= self.queue_declared(declared, Some(name));
+            if let Some(queued) = self.queue_named(statement, name) {
+                found |= queued;
                 continue;
             }
             match statement {
@@ -1463,8 +1153,8 @@ impl<'s, 'a> Scanner<'s, 'a> {
     fn seed_local(&mut self, program: &'a Program<'a>, name: &str) {
         let mut found = false;
         for statement in &program.body {
-            if let Some(declared) = declared_by(statement) {
-                found |= self.queue_declared(declared, Some(name));
+            if let Some(queued) = self.queue_named(statement, name) {
+                found |= queued;
                 continue;
             }
             let Statement::ImportDeclaration(import) = statement else {
@@ -1490,12 +1180,72 @@ impl<'s, 'a> Scanner<'s, 'a> {
 
     /// Queues every declaration, when nothing narrower can be named.
     fn seed_everything(&mut self, program: &'a Program<'a>) {
+        self.seed_declarations(&program.body);
         for statement in &program.body {
-            if let Some(declared) = declared_by(statement) {
-                self.queue_declared(declared, None);
-            } else if let Statement::ExportDefaultDeclaration(export) = statement {
+            if let Statement::ExportDefaultDeclaration(export) = statement {
                 self.queue_default(program, &export.declaration);
             }
+        }
+    }
+
+    /// Queues what `statement` declares under `name`, a merged namespace's members included:
+    /// `Some(whether anything was queued)` when it is a declaration, `None` otherwise.
+    fn queue_named(&mut self, statement: &'a Statement<'a>, name: &str) -> Option<bool> {
+        if self.seed_namespace_named(statement, name) {
+            return Some(true);
+        }
+        declared_by(statement).map(|declared| self.queue_declared(declared, Some(name)))
+    }
+
+    /// Queues the members of `statement` when it is a namespace called `name`, which merges into
+    /// any function, class or enum of that name. Whether it was one.
+    fn seed_namespace_named(&mut self, statement: &'a Statement<'a>, name: &str) -> bool {
+        let namespace = match statement {
+            Statement::TSNamespaceDeclaration(namespace) => namespace,
+            Statement::ExportDeclaration(export) => match &export.declaration {
+                Declaration::TSNamespaceDeclaration(namespace) => namespace,
+                _ => return false,
+            },
+            _ => return false,
+        };
+        if namespace.id.name.as_str() != name {
+            return false;
+        }
+        self.seed_declarations(std::slice::from_ref(statement));
+        true
+    }
+
+    /// Queues every declaration inside `namespace`, nested namespaces included.
+    fn seed_namespace_members(&mut self, namespace: &'a TSNamespaceDeclaration<'a>) {
+        let mut body = &namespace.body;
+        loop {
+            match body {
+                TSNamespaceDeclarationBody::TSNamespaceDeclaration(inner) => body = &inner.body,
+                TSNamespaceDeclarationBody::TSModuleBlock(block) => {
+                    self.seed_declarations(&block.body);
+                    return;
+                }
+            }
+        }
+    }
+
+    /// Queues every declaration among `statements`, and those inside namespaces, whose members
+    /// are reachable as properties of the namespace object.
+    fn seed_declarations(&mut self, statements: &'a [Statement<'a>]) {
+        for statement in statements {
+            if let Some(declared) = declared_by(statement) {
+                self.queue_declared(declared, None);
+                continue;
+            }
+            let namespace = match statement {
+                Statement::TSNamespaceDeclaration(namespace) => namespace,
+                Statement::ExportDeclaration(export) => match &export.declaration {
+                    Declaration::TSNamespaceDeclaration(namespace) => namespace,
+                    _ => continue,
+                },
+                _ => continue,
+            };
+            self.seed_namespace_members(namespace);
         }
     }
 
@@ -1504,34 +1254,19 @@ impl<'s, 'a> Scanner<'s, 'a> {
         if !self.seen.insert(symbol) {
             return;
         }
-        // Only the first declaration is followed, so a redeclaration (`var x = a; var x = b`)
-        // would go unread.
-        if !self
-            .semantic
-            .scoping()
-            .symbol_redeclarations(symbol)
-            .is_empty()
-        {
+        // The declaration that runs: a redeclaration (`var x = a; var x = b`) has no single one.
+        let Some(declaration) = runtime_declaration(self.semantic, symbol) else {
             self.failed = true;
             return;
-        }
+        };
         if self
             .written
             .is_some_and(|written| written.contains(&symbol))
             || (self.written.is_some() && self.semantic.scoping().symbol_is_mutated(symbol))
         {
-            match written_values(self.semantic, symbol) {
-                Some((values, hosts)) => {
-                    self.queue.extend(values);
-                    self.hosts.extend(hosts);
-                }
-                None => {
-                    self.failed = true;
-                    return;
-                }
-            }
+            self.failed = true;
+            return;
         }
-        let declaration = self.semantic.scoping().symbol_declaration(symbol);
         match self.semantic.nodes().get_node(declaration).kind() {
             AstKind::VariableDeclarator(declarator) => {
                 // In a call's arguments a declarator with no initialiser takes its value from
@@ -1540,16 +1275,12 @@ impl<'s, 'a> Scanner<'s, 'a> {
                     self.failed = true;
                     return;
                 }
-                // A `var` in a `catch (e)` clause hoists out of it with the thrown value, which
-                // comes from a `try` the walk may never see.
-                if self.written.is_some() && declared_in_catch(self.semantic, declaration) {
-                    self.failed = true;
-                    return;
-                }
                 self.queue.push(Pending::Declarator(declarator));
             }
             AstKind::Function(function) => self.queue.push(Pending::Function(function)),
             AstKind::Class(class) => self.queue.push(Pending::Class(class)),
+            // A namespace object carries every member it declares.
+            AstKind::TSNamespaceDeclaration(namespace) => self.seed_namespace_members(namespace),
             _ => {}
         }
     }

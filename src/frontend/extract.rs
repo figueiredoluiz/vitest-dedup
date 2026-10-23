@@ -120,8 +120,7 @@ fn extract_confined(
                 super::registry::reset_cell_census_file_scope();
                 super::resolver::begin_file(root);
                 registration_free::begin_file(globals == Globals::Enabled);
-                let mut extraction = run(source, file, globals, allow_imported);
-                unresolve_unrecorded_writes(&mut extraction);
+                let extraction = run(source, file, globals, allow_imported);
                 #[cfg(test)]
                 let extraction = (extraction, super::registry::test_cell_census_snapshot());
                 extraction
@@ -2179,11 +2178,7 @@ impl<'a> Walker<'a> {
     /// inheriting caller registration context and the same depth/budget. Installed package
     /// bodies remain refused: the original package-runner motivating shape belongs to C11.
     fn walk_helper_call(&mut self, call: &CallExpression<'a>, registry: &mut Registry) {
-        if self.resolve_local_helper(&call.callee).is_some() {
-            self.with_helper_body(call, registry, Self::walk_statement_list);
-        } else {
-            self.imported_helper_call(call, false);
-        }
+        self.helper_call(call, registry, Self::walk_statement_list, false);
     }
 
     /// [`Self::walk_helper_call`]'s pre-scan counterpart: registers the hooks and bindings an
@@ -2196,10 +2191,25 @@ impl<'a> Walker<'a> {
     /// "a hook applies to every test in its scope regardless of textual order" rule intact for a
     /// helper called after the tests it affects.
     fn prepare_helper_call(&mut self, call: &CallExpression<'a>, registry: &mut Registry) {
+        self.helper_call(call, registry, Self::prepare_statements, true);
+    }
+
+    /// Both helper passes: refuse a redeclared local helper, inline one this file declares with
+    /// `walk`, and hand anything else to the imported-helper path.
+    fn helper_call(
+        &mut self,
+        call: &CallExpression<'a>,
+        registry: &mut Registry,
+        walk: fn(&mut Self, &[Statement<'a>], &mut Registry),
+        prepare: bool,
+    ) {
+        if self.refuse_redeclared_helper(&call.callee) {
+            return;
+        }
         if self.resolve_local_helper(&call.callee).is_some() {
-            self.with_helper_body(call, registry, Self::prepare_statements);
+            self.with_helper_body(call, registry, walk);
         } else {
-            self.imported_helper_call(call, true);
+            self.imported_helper_call(call, prepare);
         }
     }
 
@@ -2332,6 +2342,34 @@ impl<'a> Walker<'a> {
         self.diagnostics.push(sentence);
     }
 
+    /// Refuses a call to a local `function` declared more than once at runtime: which body runs
+    /// cannot be told from the first declaration, and skipping it would drop its tests silently.
+    fn refuse_redeclared_helper(&mut self, expr: &Expression) -> bool {
+        let Expression::Identifier(ident) = expr else {
+            return false;
+        };
+        let semantic: &'a Semantic<'a> = self.semantic;
+        let Some(symbol) = ident
+            .reference_id
+            .get()
+            .and_then(|reference| semantic.scoping().get_reference(reference).symbol_id())
+        else {
+            return false;
+        };
+        let declares_function = semantic
+            .scoping()
+            .symbol_declarations(symbol)
+            .any(|node| matches!(semantic.nodes().kind(node), AstKind::Function(_)));
+        if !declares_function || !registration_free::redeclared_at_runtime(semantic, symbol) {
+            return false;
+        }
+        self.refuse_helper_expansion(refusal(
+            ExclusionReason::HelperExportUnreadable,
+            "the called helper is declared more than once",
+        ));
+        true
+    }
+
     /// The callee of `expr`, when it names a `function` declaration in *this* file.
     ///
     /// Deliberately narrow, and every restriction is load-bearing:
@@ -2354,7 +2392,9 @@ impl<'a> Walker<'a> {
         let semantic: &'a Semantic<'a> = self.semantic;
         let reference_id = ident.reference_id.get()?;
         let symbol = semantic.scoping().get_reference(reference_id).symbol_id()?;
-        let AstKind::Function(function) = semantic.symbol_declaration(symbol).kind() else {
+        // The declaration that runs: an overload set's implementation, none when redeclared.
+        let node = registration_free::runtime_declaration(semantic, symbol)?;
+        let AstKind::Function(function) = semantic.nodes().kind(node) else {
             return None;
         };
         if function.r#type != FunctionType::FunctionDeclaration || function.body.is_none() {
@@ -2718,39 +2758,6 @@ fn describe_body<'r, 'a>(body_arg: Option<&'r Argument<'a>>) -> Option<DescribeB
             .as_deref()
             .map(|body| DescribeBody::Block(body.statements.as_slice())),
         None => None,
-    }
-}
-
-/// Marks every test unresolved when a written-binding write a proof relied on has no host the walk
-/// recorded: no hook in any test's context and no test at one of its calls. The proof predicts the
-/// walker from syntax; this holds it to what the walker actually recorded.
-fn unresolve_unrecorded_writes(extraction: &mut FileExtraction) {
-    let needed = registration_free::take_write_hosts();
-    if needed.is_empty() {
-        return;
-    }
-    let span_of =
-        |location: &crate::model::Location| (location.span.start_byte, location.span.end_byte);
-    let recorded: HashSet<(u32, u32)> = extraction
-        .tests
-        .iter()
-        .flat_map(|case| {
-            std::iter::once(span_of(&case.location)).chain(
-                case.context
-                    .hooks
-                    .iter()
-                    .map(|hook| span_of(&hook.location)),
-            )
-        })
-        .collect();
-    if needed
-        .iter()
-        .all(|hosts| hosts.iter().any(|host| recorded.contains(host)))
-    {
-        return;
-    }
-    for case in &mut extraction.tests {
-        case.context.unresolved = true;
     }
 }
 

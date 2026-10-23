@@ -653,6 +653,23 @@ impl<'a> Walker<'a> {
                     "imported runners require a direct named call",
                 )));
             }
+            // The callable found is the first declaration; a later one would run instead, so a
+            // redeclared runner is refused before its body shape is trusted.
+            if let Callable::Function(function) = &callable {
+                if function
+                    .id
+                    .as_ref()
+                    .and_then(|id| id.symbol_id.get())
+                    .is_some_and(|symbol| {
+                        super::registration_free::redeclared_at_runtime(semantic, symbol)
+                    })
+                {
+                    return Some(Err(refusal(
+                        ExclusionReason::HelperExportUnreadable,
+                        "the exported runner is declared more than once",
+                    )));
+                }
+            }
             match shape {
                 Ok(false) => return Some(Ok(Vec::new())),
                 Err(reason) => return Some(Err(reason)),
@@ -933,9 +950,12 @@ impl<'a> Walker<'a> {
         else {
             return false;
         };
-        let AstKind::VariableDeclarator(declaration) =
-            self.semantic.symbol_declaration(symbol).kind()
+        // The declaration that runs; a redeclared binding has no single one.
+        let Some(node) = super::registration_free::runtime_declaration(self.semantic, symbol)
         else {
+            return false;
+        };
+        let AstKind::VariableDeclarator(declaration) = self.semantic.nodes().kind(node) else {
             return false;
         };
         if self.semantic.scoping().symbol_is_mutated(symbol) {
