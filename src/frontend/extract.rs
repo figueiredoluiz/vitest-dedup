@@ -35,7 +35,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 mod imported;
-mod registration_free;
+pub(super) mod registration_free;
 mod setup_identity;
 
 use super::fingerprint::{fingerprint, FunctionLike, RowSubstitution};

@@ -46,7 +46,7 @@ use std::path::{Path, PathBuf};
 const MAX_MODULES: usize = 64;
 
 /// Vitest names that register a test, a suite or a hook.
-const REGISTRATION: &[&str] = &[
+pub(in crate::frontend) const REGISTRATION: &[&str] = &[
     "test",
     "it",
     "describe",
