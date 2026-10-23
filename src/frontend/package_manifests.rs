@@ -888,8 +888,8 @@ const WORKER_STACK: usize = 64 * 1024 * 1024;
 /// Runs the installed-package scan in a child process from now on.
 ///
 /// A parser stack overflow aborts the whole process and `oxc_parser` has no recursion limit, so
-/// by default (library callers, tests) a script that trips [`super::extract::parse_refusal`]'s
-/// size budget is refused unread. The command-line tool calls this instead: the scan then runs
+/// by default (library callers, tests) a script that trips the parser's raw syntax size
+/// budget (8,192 units) is refused unread. The command-line tool calls this instead: the scan then runs
 /// in a worker started from the current executable, without the budget, and a worker that
 /// crashes, times out, cannot be started or answers anything but a complete verdict refuses the
 /// package. There is no in-process fallback once this is on. The embedding executable must call
