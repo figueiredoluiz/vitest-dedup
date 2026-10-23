@@ -202,6 +202,10 @@ generated list are not read.
   a complete verdict refuses it too. A program that embeds the library gets an in-process scan instead,
   which refuses a script past the parser's syntax size budget (8,192 units) unread, unless it calls
   `frontend::use_package_worker` and runs `frontend::run_package_worker` first in `main`.
+- Worker stdout is read within the same deadline as its exit, with at most 256 bytes accepted.
+  A descendant holding stdout open cannot extend that deadline. On Unix a failed read kills the
+  worker's process group before reaping it; Windows cancels pipe I/O and terminates the worker.
+  Failures are counted in the [run notice](incomplete-runs.md#package-worker-failures).
 - Helper files share the source byte limit (8 MiB), the bracket nesting limit (256) and the
   export-hop limit (8).
 - Exact helper sources retained for one caller share an additional 8 MiB budget; repeated calls

@@ -1835,6 +1835,38 @@ fn capitalize_first(text: &str) -> String {
         .unwrap_or_default()
 }
 
+/// An infrastructure failure of an installed-package scan, counted per uncached attempt.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PackageWorkerFailure {
+    /// The executable or worker thread could not be started.
+    Start,
+    /// The complete response and successful exit were not observed before the deadline.
+    Timeout,
+    /// The worker exited unsuccessfully or was killed by a signal.
+    Exit,
+    /// The response was malformed, incomplete, or exceeded the output bound.
+    Output,
+    /// Process supervision or pipe I/O failed.
+    Io,
+    /// A process marked as a worker tried to start another worker.
+    Nested,
+}
+
+impl PackageWorkerFailure {
+    /// A fixed diagnostic label, independent of paths, OS errors and child output.
+    pub fn description(self) -> &'static str {
+        match self {
+            Self::Start => "could not start",
+            Self::Timeout => "exceeded the deadline",
+            Self::Exit => "exited unsuccessfully",
+            Self::Output => "returned invalid or oversized output",
+            Self::Io => "failed during process or pipe I/O",
+            Self::Nested => "was blocked from starting a nested worker",
+        }
+    }
+}
+
 /// Why a run could not compare every test, and how much each cause accounts for.
 ///
 /// `incomplete` used to be one `bool` aggregated from nine unrelated conditions, and the banner
@@ -1889,6 +1921,9 @@ pub struct IncompleteCauses {
     /// Files or directories the run needed to resolve imports and did not find.
     #[serde(default)]
     pub missing_prerequisites: Vec<MissingPrerequisite>,
+    /// Failed package-worker attempts by cause; cache hits do not count again.
+    #[serde(default)]
+    pub package_worker_failures: std::collections::BTreeMap<PackageWorkerFailure, usize>,
 }
 
 impl IncompleteCauses {
@@ -1914,10 +1949,12 @@ impl IncompleteCauses {
             findings_truncated,
             withheld_unchanged,
             missing_prerequisites,
+            package_worker_failures,
         } = self;
         *discovery_failed
             || *project_config_degraded
             || *nothing_read
+            || package_worker_failures.values().any(|count| *count > 0)
             || !missing_prerequisites.is_empty()
             || *pair_budget_exhausted
             || *hook_scan_exhausted
@@ -1964,10 +2001,12 @@ impl IncompleteCauses {
             findings_truncated: _findings_truncated,
             withheld_unchanged: _withheld_unchanged,
             missing_prerequisites,
+            package_worker_failures,
         } = self;
         *discovery_failed
             || *project_config_degraded
             || *nothing_read
+            || package_worker_failures.values().any(|count| *count > 0)
             || !missing_prerequisites.is_empty()
             || *files_too_large > 0
             || *files_unreadable > 0
@@ -2000,6 +2039,7 @@ impl IncompleteCauses {
             findings_truncated,
             withheld_unchanged: _withheld_unchanged,
             missing_prerequisites: _missing_prerequisites,
+            package_worker_failures: _package_worker_failures,
         } = self;
         *pair_budget_exhausted
             || *hook_scan_exhausted
@@ -2041,6 +2081,14 @@ impl IncompleteCauses {
                 .iter()
                 .map(MissingPrerequisite::sentence),
         );
+        for (cause, count) in &self.package_worker_failures {
+            if *count > 0 {
+                reasons.push(format!(
+                    "{count} package scan worker(s) {}; affected packages could not be compared",
+                    cause.description()
+                ));
+            }
+        }
         if self.pair_budget_exhausted {
             reasons.push(
                 "the pair-comparison budget ran out before every pair had been compared"
@@ -2884,7 +2932,7 @@ mod tests {
     /// the struct and handled in `any()` but forgotten here fails this test instead of passing it.
     #[test]
     fn every_incomplete_cause_on_its_own_makes_the_run_incomplete() {
-        let flips: [(&str, CauseSetter); 14] = [
+        let flips: [(&str, CauseSetter); 15] = [
             ("discoveryFailed", |causes| causes.discovery_failed = true),
             ("projectConfigDegraded", |causes| {
                 causes.project_config_degraded = true;
@@ -2912,6 +2960,11 @@ mod tests {
             }),
             ("findingsTruncated", |causes| causes.findings_truncated = 1),
             ("withheldUnchanged", |causes| causes.withheld_unchanged = 1),
+            ("packageWorkerFailures", |causes| {
+                causes
+                    .package_worker_failures
+                    .insert(PackageWorkerFailure::Start, 1);
+            }),
             ("missingPrerequisites", |causes| {
                 causes.missing_prerequisites = vec![MissingPrerequisite {
                     kind: PrerequisiteKind::NodeModules,
@@ -3052,6 +3105,10 @@ mod tests {
             |c: &mut IncompleteCauses| c.files_partially_read = 1,
             |c: &mut IncompleteCauses| c.files_globals_undetermined = 1,
             |c: &mut IncompleteCauses| c.unresolved_contexts = 1,
+            |c: &mut IncompleteCauses| {
+                c.package_worker_failures
+                    .insert(PackageWorkerFailure::Timeout, 1);
+            },
         ] {
             assert_class(set, true);
         }
@@ -3094,6 +3151,10 @@ mod tests {
             files_over_memory_budget: 8,
             findings_truncated: 6,
             withheld_unchanged: 7,
+            package_worker_failures: std::collections::BTreeMap::from([(
+                PackageWorkerFailure::Start,
+                10,
+            )]),
             missing_prerequisites: vec![MissingPrerequisite {
                 kind: PrerequisiteKind::NodeModules,
                 path: "node_modules".to_string(),
@@ -3111,25 +3172,22 @@ mod tests {
                     .unwrap_or(reason)
             })
             .collect();
-        assert_eq!(
-            reasons.len(),
-            14,
-            "every cause fired, so all fourteen speak"
-        );
+        assert_eq!(reasons.len(), 15, "every cause fired, so all fifteen speak");
         assert!(reasons[0].starts_with("every discovered file failed to read"));
         assert!(reasons[1].starts_with("directory traversal failed"));
         assert!(reasons[2].starts_with("a Vitest project's configuration"));
         assert!(reasons[3].starts_with("`node_modules` is missing or empty"));
-        assert!(reasons[4].starts_with("the pair-comparison budget ran out"));
-        assert!(reasons[5].starts_with("the `redundant-hook` scan budget"));
-        assert!(leads[6].starts_with("file(s) were not analyzed because the memory budget"));
-        assert!(leads[7].starts_with("finding(s) were dropped by the display cap"));
-        assert!(leads[8].starts_with("test(s) were excluded from comparison"));
-        assert!(leads[9].starts_with("file(s) could not be read in full"));
-        assert!(leads[10].starts_with("file(s) were skipped because reading them failed"));
-        assert!(leads[11].starts_with("file(s) were skipped for exceeding the source-size limit"));
-        assert!(leads[12].starts_with("file(s) had an undetermined `globals` setting"));
-        assert!(leads[13].starts_with("finding(s) lying entirely within unchanged files"));
+        assert!(reasons[4].starts_with("10 package scan worker(s) could not start"));
+        assert!(reasons[5].starts_with("the pair-comparison budget ran out"));
+        assert!(reasons[6].starts_with("the `redundant-hook` scan budget"));
+        assert!(leads[7].starts_with("file(s) were not analyzed because the memory budget"));
+        assert!(leads[8].starts_with("finding(s) were dropped by the display cap"));
+        assert!(leads[9].starts_with("test(s) were excluded from comparison"));
+        assert!(leads[10].starts_with("file(s) could not be read in full"));
+        assert!(leads[11].starts_with("file(s) were skipped because reading them failed"));
+        assert!(leads[12].starts_with("file(s) were skipped for exceeding the source-size limit"));
+        assert!(leads[13].starts_with("file(s) had an undetermined `globals` setting"));
+        assert!(leads[14].starts_with("finding(s) lying entirely within unchanged files"));
     }
 
     // --- context equivalence -----------------------------------------------------------------

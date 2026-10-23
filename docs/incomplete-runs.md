@@ -25,7 +25,7 @@ for different responses.
 
 - `=reads` counts only causes meaning the project could not be fully read: unreadable, oversized or
   partially read files, undetermined config, tests whose context could not be resolved, and
-  [missing prerequisites](#missing-prerequisites).
+  [missing prerequisites](#missing-prerequisites) and [package worker failures](#package-worker-failures).
 - `=limits` counts only the analyzer's own bounded work being capped: the pair budget, the hook-scan
   budget, the memory budget, and truncated findings.
 
@@ -55,6 +55,20 @@ reported. On Windows a tsconfig is not found from a canonical importer path at a
 `tsconfig-*` kinds are not detected there (the same gap that keeps `paths` aliases from applying); the
 `node-modules` kind does not depend on tsconfig discovery. The failures are collected process-wide and
 drained once per run, so the reports describe one analysis per process.
+
+### Package worker failures
+
+`incompleteCauses.packageWorkerFailures` counts failed installed-package scan attempts by cause:
+`start` (executable or parser thread unavailable), `timeout`, `exit` (unsuccessful exit or signal),
+`output` (invalid or oversized response), `io`, and `nested` (recursive worker startup blocked).
+Every reporter includes the counts in its run notice. Counts are per uncached attempt, not per test;
+a cached refusal does not increment them. A valid package refusal is not a worker failure.
+
+These failures make the run incomplete and count for `--fail-on-incomplete=reads` and `=any`.
+They do not add findings. For `start`, check executable permissions and process/thread limits;
+for `nested`, remove an inherited `VITEST_DEDUP_PACKAGE_WORKER` environment marker from the caller.
+Library callers drain `frontend::take_package_worker_failures()` between analyses, alongside
+`frontend::take_resolution_gaps()`; overlapping analyses share these process-wide counters.
 
 ### Blind spots
 

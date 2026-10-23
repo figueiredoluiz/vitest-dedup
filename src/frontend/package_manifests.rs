@@ -11,6 +11,8 @@
 //! polyfills) are not modelled, exactly as they are not for a package the test file imports.
 
 use super::extract::registration_free::REGISTRATION;
+use super::package_supervisor::supervise;
+use crate::model::PackageWorkerFailure;
 use oxc_allocator::Allocator;
 use oxc_ast::ast::{
     Argument, CallExpression, Expression, IdentifierReference, StaticMemberExpression,
@@ -22,13 +24,14 @@ use oxc_semantic::SemanticBuilder;
 use oxc_span::{GetSpan, SourceType};
 use serde_json::Value;
 use std::cell::RefCell;
+use std::collections::BTreeMap;
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
 use std::path::{Component, Path, PathBuf};
-use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use subprocess::Exec;
 
 /// Most packages one closure may visit before it is refused.
 const MAX_PACKAGES: usize = 256;
@@ -747,67 +750,56 @@ fn may_start_worker() -> bool {
     std::env::var_os(WORKER_ENV).is_none()
 }
 
-/// Runs `command` and returns what it printed, only if it exited successfully within `deadline`;
-/// a child past the deadline is killed and reaped.
-fn supervise(mut command: Command, deadline: Duration) -> Option<String> {
-    use std::io::Read;
-    let mut child = command
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .ok()?;
-    let started = Instant::now();
-    let mut pause = Duration::from_millis(1);
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break status,
-            Ok(None) if started.elapsed() < deadline => {
-                std::thread::sleep(pause);
-                pause = (pause * 2).min(Duration::from_millis(4));
-            }
-            _ => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return None;
-            }
-        }
-    };
-    // A worker that finished after the deadline (the parent was descheduled) is as late as one
-    // that was killed.
-    if !status.success() || started.elapsed() >= deadline {
-        return None;
+/// Failure counts describe uncached attempts, not affected tests or cache hits.
+static WORKER_FAILURES: Mutex<BTreeMap<PackageWorkerFailure, usize>> = Mutex::new(BTreeMap::new());
+
+/// Drain worker failures once per analysis. Like resolution gaps, simultaneous analyses in
+/// one process share these counters; library callers drain them between runs.
+pub fn take_package_worker_failures() -> BTreeMap<PackageWorkerFailure, usize> {
+    std::mem::take(
+        &mut *WORKER_FAILURES
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner),
+    )
+}
+
+/// Valid refusal and clean responses are distinct from infrastructure or protocol failures.
+fn registers_from_worker(
+    output: Result<String, PackageWorkerFailure>,
+) -> Result<bool, PackageWorkerFailure> {
+    match output?.as_str() {
+        "clean\n" => Ok(false),
+        "registers\n" => Ok(true),
+        _ => Err(PackageWorkerFailure::Output),
     }
-    let mut out = String::new();
-    child
-        .stdout
-        .take()?
-        .take(256)
-        .read_to_string(&mut out)
-        .ok()?;
-    Some(out)
 }
 
-/// The verdict a worker printed: clean only on exactly the expected answer.
-fn registers_from_worker(output: Option<&str>) -> bool {
-    output != Some("clean\n")
+/// Refuse a failed attempt and retain its fixed, path-free cause for the run notice.
+fn record_worker_result(result: Result<bool, PackageWorkerFailure>) -> bool {
+    result.unwrap_or_else(|cause| {
+        let mut failures = WORKER_FAILURES
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *failures.entry(cause).or_default() += 1;
+        true
+    })
 }
 
-/// Whether the package entered at `file` registers tests, asked of a worker process.
+/// Ask a supervised worker whether this package can register tests.
 fn scan_in_worker(file: &Path, globals: bool) -> bool {
-    if !may_start_worker() {
-        return true;
-    }
-    let Ok(exe) = std::env::current_exe() else {
-        return true;
+    let answer = if !may_start_worker() {
+        Err(PackageWorkerFailure::Nested)
+    } else if let Ok(exe) = std::env::current_exe() {
+        let command = Exec::cmd(exe)
+            .env(WORKER_ENV, "1")
+            .arg(WORKER_ARG)
+            .arg(file)
+            .arg(if globals { "1" } else { "0" });
+        registers_from_worker(supervise(command, WORKER_DEADLINE))
+    } else {
+        Err(PackageWorkerFailure::Start)
     };
-    let mut command = Command::new(exe);
-    command
-        .env(WORKER_ENV, "1")
-        .arg(WORKER_ARG)
-        .arg(file)
-        .arg(if globals { "1" } else { "0" });
-    registers_from_worker(supervise(command, WORKER_DEADLINE).as_deref())
+    record_worker_result(answer)
 }
 
 /// The worker side: `Some(exit code)` when this process was started as a package scan worker, so
@@ -838,15 +830,17 @@ pub fn run_package_worker(args: &[OsString]) -> Option<i32> {
     let globals = globals == "1";
     let registers = std::thread::Builder::new()
         .stack_size(WORKER_STACK)
-        .spawn(move || reached_files_register(&file, globals, false))
-        .ok()
-        .and_then(|scan| scan.join().ok());
+        .spawn(move || reached_files_register(&file, globals, false));
+    let Ok(scan) = registers else {
+        return Some(4);
+    };
+    let registers = scan.join().ok();
     match registers {
         Some(registers) => {
             println!("{}", if registers { "registers" } else { "clean" });
             Some(0)
         }
-        None => Some(4),
+        None => Some(5),
     }
 }
 
@@ -1290,52 +1284,41 @@ mod tests {
         assert_eq!(malformed, [Some(2), Some(2)]);
     }
 
-    /// Only the exact answer `clean` admits a package; anything else is "cannot tell".
+    /// Clean and refusal responses are valid; all other bytes are infrastructure failures.
     #[test]
     fn only_a_complete_clean_answer_admits_a_package() {
-        assert!(!registers_from_worker(Some("clean\n")));
-        for output in [
-            None,
-            Some(""),
-            Some("registers\n"),
-            Some("clean"),
-            Some("clean\nclean\n"),
-            Some("clean \n"),
-        ] {
-            assert!(registers_from_worker(output), "{output:?}");
+        assert_eq!(registers_from_worker(Ok("clean\n".into())), Ok(false));
+        assert_eq!(registers_from_worker(Ok("registers\n".into())), Ok(true));
+        for output in ["", "clean", "clean\nclean\n", "clean \n"] {
+            assert_eq!(
+                registers_from_worker(Ok(output.into())),
+                Err(PackageWorkerFailure::Output)
+            );
         }
+        assert_eq!(
+            registers_from_worker(Err(PackageWorkerFailure::Start)),
+            Err(PackageWorkerFailure::Start)
+        );
     }
 
-    /// A worker that is slow, fails, or prints nothing yields no answer, and a slow one is killed.
-    #[cfg(unix)]
+    /// Successful verdicts do not count as worker failures, and draining resets the run.
     #[test]
-    fn a_misbehaving_child_gives_no_answer() {
-        let shell = |script: &str| {
-            let mut command = Command::new("sh");
-            command.arg("-c").arg(script);
-            command
-        };
-        let quick = Duration::from_secs(10);
+    fn worker_failures_are_counted_and_drained() {
+        assert!(take_package_worker_failures().is_empty());
+        assert!(!record_worker_result(Ok(false)));
+        assert!(record_worker_result(Ok(true)));
+        assert!(take_package_worker_failures().is_empty());
+        assert!(record_worker_result(Err(PackageWorkerFailure::Start)));
+        assert!(record_worker_result(Err(PackageWorkerFailure::Start)));
+        assert!(record_worker_result(Err(PackageWorkerFailure::Timeout)));
         assert_eq!(
-            supervise(shell("printf 'clean\\n'"), quick).as_deref(),
-            Some("clean\n")
+            take_package_worker_failures(),
+            BTreeMap::from([
+                (PackageWorkerFailure::Start, 2),
+                (PackageWorkerFailure::Timeout, 1),
+            ])
         );
-        assert_eq!(supervise(shell("printf 'clean\\n'; exit 3"), quick), None);
-        let started = Instant::now();
-        assert_eq!(
-            supervise(shell("sleep 30"), Duration::from_millis(150)),
-            None
-        );
-        assert!(started.elapsed() < Duration::from_secs(5));
-        assert_eq!(supervise(Command::new("/nonexistent/worker"), quick), None);
-        // A child that floods its output blocks on the full pipe and is killed at the deadline.
-        assert_eq!(
-            supervise(shell("yes | head -c 1000000"), Duration::from_millis(300)),
-            None
-        );
-        // Output past the bound is cut.
-        let long = supervise(shell("head -c 1000 /dev/zero | tr '\\\\0' a"), quick).unwrap();
-        assert_eq!(long.len(), 256);
+        assert!(take_package_worker_failures().is_empty());
     }
 
     /// A registration global is read as a free name however the call is spelled, and only then:

@@ -167,6 +167,14 @@ pub(crate) mod test_support {
             files_over_memory_budget: 6,
             findings_truncated: 7,
             withheld_unchanged: 8,
+            package_worker_failures: std::collections::BTreeMap::from([
+                (crate::model::PackageWorkerFailure::Start, 10),
+                (crate::model::PackageWorkerFailure::Timeout, 11),
+                (crate::model::PackageWorkerFailure::Exit, 12),
+                (crate::model::PackageWorkerFailure::Output, 13),
+                (crate::model::PackageWorkerFailure::Io, 14),
+                (crate::model::PackageWorkerFailure::Nested, 15),
+            ]),
             missing_prerequisites: vec![crate::model::MissingPrerequisite {
                 kind: crate::model::PrerequisiteKind::NodeModules,
                 path: "node_modules".to_string(),

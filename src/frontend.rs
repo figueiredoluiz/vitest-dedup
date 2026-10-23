@@ -9,6 +9,7 @@ mod extract;
 mod fingerprint;
 mod helpers;
 mod package_manifests;
+mod package_supervisor;
 mod registry;
 mod resolver;
 
@@ -16,7 +17,7 @@ use crate::discovery::SourceFile;
 use crate::model::TestCase;
 use std::path::Path;
 
-pub use package_manifests::{run_package_worker, use_package_worker};
+pub use package_manifests::{run_package_worker, take_package_worker_failures, use_package_worker};
 pub use registry::{take_cell_census, Globals};
 pub use resolver::{take_resolution_gaps, ResolutionGaps, TsconfigGap};
 
