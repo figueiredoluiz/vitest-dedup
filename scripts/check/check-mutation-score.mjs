@@ -30,12 +30,14 @@
 //
 // ## Scope is part of the number, so the gate owns it
 //
-// A full run is 6,075 mutants (`cargo mutants --list`, 2026-10-18; it listed 2,927 on 2026-09-18,
-// when a full run was estimated at ~4h on the development machine, and cargo-mutants must rebuild
-// and re-run the suite for each one). The measured scope is the fingerprint module's files
-// (except `classes/`) and `src/analysis.rs` -- 1,475 mutants enumerated. The 71 minutes at
-// `--jobs 2` below was timed on the 1,171 mutants of the earlier scope; the larger one has not
-// been re-timed. Those are not an arbitrary slice: the fingerprint module is where every
+// A full run is 7,068 mutants (`cargo mutants --list`, 2026-10-24; it listed 6,075 on 2026-10-18,
+// and 2,927 on 2026-09-18, when a full run was estimated at ~4h on the development machine, and
+// cargo-mutants must rebuild and re-run the suite for each one). The measured scope is the
+// fingerprint module's files (except `classes/`) and `src/analysis.rs` -- 1,537 mutants
+// enumerated. The 71 minutes at `--jobs 2` below was timed on the 1,171 mutants of the earlier
+// scope; the larger one averaged 17.0s per mutant over a 2026-10-24 attempt's first 65, ~7.3
+// hours serially, which is why the run asks for two jobs. Those are not an arbitrary slice: the
+// fingerprint module is where every
 // adjudicated false positive has lived and is the weakest
 // module in the coverage gate (71.30%), and analysis.rs turns its output into the findings users
 // act on. A mutant that survives in either is behaviour the product's verdicts depend on and no
@@ -111,7 +113,7 @@ export const MINIMUM_SCORED = 1050
 // than quietly improve the score.
 //
 // Widened one file at a time, deliberately. The workflow is a single job with a 300-minute cap and
-// no sharding, and the 30 unmeasured files hold ~4,600 mutants against the 1,475 already in scope --
+// no sharding, and the 39 unmeasured files hold 5,531 mutants against the 1,537 already in scope --
 // adding them all at once would most likely produce a timeout instead of a number, which is the one
 // outcome worse than a narrow score.
 //
@@ -272,9 +274,14 @@ export function isScoreableExit(code) {
 }
 
 /** Runs cargo-mutants over `SCOPE`. Split out, and the spawn injected, so the tests can drive
- * every exit-code branch without a two-hour build. */
+ * every exit-code branch without a two-hour build.
+ *
+ * Two jobs, not one: an attempt on 2026-10-24 averaged 17.0s per mutant over its first 65 (a
+ * mutant nothing fails on reruns the whole suite), ~7 hours for the scope serially -- past the
+ * workflow's 300-minute cap -- and roughly half that here. Each job builds in its own copy, so
+ * this doubles build directories; that is the trade, made for a run that can finish at all. */
 export function runMutants(argv, { spawn = spawnSync } = {}) {
-  const args = [...scopeArguments(), '--jobs', '1']
+  const args = [...scopeArguments(), '--jobs', '2']
   const result = spawn('cargo', ['mutants', ...args], {
     stdio: 'inherit',
     env: {

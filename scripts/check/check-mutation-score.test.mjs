@@ -351,7 +351,7 @@ test('only exit 0 and exit 2 from cargo-mutants are scoreable', () => {
 test('--run propagates a non-scoreable cargo-mutants exit instead of scoring the leftovers', () => {
   const spawn = (command, args) => {
     assert.equal(command, 'cargo')
-    assert.deepEqual(args, ['mutants', ...scopeArguments(), '--jobs', '1'])
+    assert.deepEqual(args, ['mutants', ...scopeArguments(), '--jobs', '2'])
     return { status: 4 }
   }
   const { status, err } = runCli(['--run'], { read: fakeRead({}), spawn })

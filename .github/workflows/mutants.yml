@@ -1,9 +1,13 @@
 # Scheduled mutation testing of the fingerprint and analysis contracts.
 #
 # Why this is not a pull-request gate: cargo-mutants rebuilds and re-runs the whole suite once per
-# mutant, and the scope is 1,475 mutants (the last timed run, of 1,171, took around 75 minutes
-# on the development machine, and longer on a hosted runner). Per-pull-request is impossible,
-# and the answer changes slowly enough that weekly is the right cadence.
+# mutant, and the scope is 1,537 mutants (`cargo mutants --list`, 2026-10-24; the last timed full
+# run, of 1,171, took around 75 minutes on the development machine, and longer on a hosted runner).
+# A 2026-10-24 attempt over the first 65 mutants of the current scope averaged 17.0s per mutant --
+# ~7.3 hours serially, past this job's 300-minute cap -- so the gate asks cargo-mutants for two
+# jobs, roughly half that here; how long a hosted run takes is known only from the first one that
+# finishes. Per-pull-request is impossible, and the answer changes slowly enough that weekly is
+# the right cadence.
 #
 # Why weekly is right *here*, when it is the wrong cadence
 # for the duplication and coverage ratchets: those guard a number that a single commit can move, so
@@ -44,7 +48,10 @@ env:
 jobs:
   mutants:
     name: Fingerprint and analysis mutation score
-    runs-on: ubuntu-22.04
+    # 24.04, not the 22.04 the other workflows use: the pinned cargo-mutants release binary is
+    # built against glibc 2.39, which 22.04 (glibc 2.35) does not have, so the job failed before
+    # executing a single mutant. `ubuntu-latest` would silently move to 26.04 one day.
+    runs-on: ubuntu-24.04
     timeout-minutes: 300
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -68,7 +75,7 @@ jobs:
           fallback: none
 
       # Deviation from cuke-dedup, which spells the run out in bash here: the scope, the
-      # `--jobs 1`, and the "which exit codes are a result" decision all live in the gate script
+      # `--jobs 2`, and the "which exit codes are a result" decision all live in the gate script
       # instead (`--run`, `isScoreableExit`), where they are unit-tested and cannot drift from the
       # threshold they produced. A scheduled job nobody watches is the worst place to keep an
       # untested exit-code comparison.
