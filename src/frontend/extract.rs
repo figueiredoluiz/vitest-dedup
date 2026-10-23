@@ -2365,12 +2365,12 @@ impl<'a> Walker<'a> {
             return false;
         }
         // An overload set resolves to its implementation only while nothing reassigns the name:
-        // after `register = () => ...` the implementation is not what the call runs.
+        // after `register = () => ...` the implementation is not what the call runs. A plain
+        // declaration is refused under the same condition -- what the call runs is the assigned
+        // value, not the body a declaration states.
         let text = if registration_free::redeclared_at_runtime(semantic, symbol) {
             "the called helper is declared more than once"
-        } else if !scoping.symbol_redeclarations(symbol).is_empty()
-            && scoping.symbol_is_mutated(symbol)
-        {
+        } else if scoping.symbol_is_mutated(symbol) {
             "the called helper is reassigned"
         } else {
             return false;
