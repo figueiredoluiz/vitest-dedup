@@ -117,7 +117,9 @@ what the code reads:
   or indexed use, a value stored for later) except `typeof name`; so does a property of `globalThis`,
   `global`, `window` or `self` that names one, when the file does not bind that object. A `with`
   statement, or a TypeScript `declare` of such a name (which binds nothing at run time), refuses the
-  package. A package
+  package. Setting such a property (`globalThis.test = handler`) is not a read. This check does not
+  follow a registration name taken from the global object by destructuring
+  (`const { test } = globalThis`) or reached through `eval`, `Function` or other reflection. A package
   imported as a data file or asset (`.json`,
   a stylesheet, an image) is judged by its manifest and by the word `vitest`, and is not parsed or
   followed, as the bundler treats it, including when a script loads it by a relative
@@ -139,7 +141,7 @@ what the code reads:
 - Single-file components contribute their script blocks; `<script setup>` runs when mounted, not
   when imported. Styles, images, fonts and JSON carry no code.
 
-The proof is lexical and aimed at code that is not written to evade it. It does not follow a value
+The in-file helper proof is lexical and aimed at code that is not written to evade it. It does not follow a value
 through an alias (`const alias = config; alias.mode = 2`), a method that mutates (`items.push(1)`), a
 registration global reached by another name (`const register = test`), a package that registers
 tests from another installed package's files without either declaring Vitest, reflection

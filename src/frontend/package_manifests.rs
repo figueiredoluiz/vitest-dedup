@@ -19,7 +19,7 @@ use oxc_ast::AstKind;
 use oxc_ast_visit::{walk, Visit};
 use oxc_parser::Parser;
 use oxc_semantic::SemanticBuilder;
-use oxc_span::SourceType;
+use oxc_span::{GetSpan, SourceType};
 use serde_json::Value;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -462,7 +462,7 @@ fn reads_registration_global(program: &oxc_ast::ast::Program<'_>) -> bool {
     }
     // The node that uses the reference, skipping the parentheses and the TypeScript wrappers
     // (`as`, `!`, `satisfies`, `<T>x`, `x<T>`) around it.
-    let user_of = |id: oxc_semantic::NodeId| {
+    let user_id = |id: oxc_semantic::NodeId| {
         let mut id = nodes.parent_id(id);
         while matches!(
             nodes.kind(id),
@@ -475,8 +475,9 @@ fn reads_registration_global(program: &oxc_ast::ast::Program<'_>) -> bool {
         ) {
             id = nodes.parent_id(id);
         }
-        nodes.kind(id)
+        id
     };
+    let user_of = |id: oxc_semantic::NodeId| nodes.kind(user_id(id));
     for (name, references) in scoping.root_unresolved_references() {
         let name = name.as_str();
         let registration = REGISTRATION.contains(&name);
@@ -493,15 +494,27 @@ fn reads_registration_global(program: &oxc_ast::ast::Program<'_>) -> bool {
                 !matches!(user, AstKind::UnaryExpression(unary)
                     if unary.operator == oxc_ast::ast::UnaryOperator::Typeof)
             } else {
-                let property = match user {
-                    AstKind::StaticMemberExpression(member) => Some(member.property.name.as_str()),
+                let (property, span) = match user {
+                    AstKind::StaticMemberExpression(member) => {
+                        (Some(member.property.name.as_str()), member.span)
+                    }
                     AstKind::ComputedMemberExpression(member) => match &member.expression {
-                        Expression::StringLiteral(literal) => Some(literal.value.as_str()),
-                        _ => None,
+                        Expression::StringLiteral(literal) => {
+                            (Some(literal.value.as_str()), member.span)
+                        }
+                        _ => (None, member.span),
                     },
-                    _ => None,
+                    _ => (None, oxc_span::Span::default()),
                 };
-                property.is_some_and(|property| REGISTRATION.contains(&property))
+                // `globalThis.test = handler` only sets the property; `+=` and `++` read it first.
+                let assigned = property.is_some()
+                    && matches!(
+                        user_of(user_id(reference.node_id())),
+                        AstKind::AssignmentExpression(assign)
+                            if assign.operator == oxc_ast::ast::AssignmentOperator::Assign
+                                && assign.left.span() == span
+                    );
+                !assigned && property.is_some_and(|property| REGISTRATION.contains(&property))
             };
             if counts {
                 return true;
@@ -1372,6 +1385,12 @@ mod tests {
             ("const t = test; t('a')", "x.js", true),
             ("[test].forEach((f) => f('a'))", "x.js", true),
             ("test++", "x.js", true),
+            ("globalThis.test += 1", "x.js", true),
+            ("globalThis.test++", "x.js", true),
+            ("globalThis.test = handler", "x.js", false),
+            ("(globalThis as any).test = handler", "x.ts", false),
+            ("globalThis['test'] = handler", "x.js", false),
+            ("globalThis.test = globalThis.test", "x.js", true),
             ("{ function test() {} }\ntest('a')", "x.mjs", true),
             (
                 "declare const test: (name: string, fn: () => void) => void\ntest('a', () => {})",
