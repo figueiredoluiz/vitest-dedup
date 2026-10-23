@@ -1,5 +1,6 @@
 //! Nominal class identity, aliases, and instance-name resolution.
 use super::*;
+use crate::frontend::extract::registration_free::binding_may_differ_from_declaration;
 
 impl<'a, 'b, 's, 'm> Serializer<'a, 'b, 's, 'm> {
     /// Resolve one reference through the semantic graph, independent of local spelling.
@@ -132,7 +133,9 @@ impl<'a, 'b, 's, 'm> Serializer<'a, 'b, 's, 'm> {
             .get_node(self.ctx.semantic.scoping().symbol_declaration(symbol))
             .kind();
         if let AstKind::Class(class) = declaration {
-            if self.ctx.semantic.scoping().symbol_is_mutated(symbol) {
+            // A redeclared binding runs the same refusal as a reassigned one: the first
+            // declaration is not necessarily the class the reference observes.
+            if binding_may_differ_from_declaration(self.ctx.semantic, symbol) {
                 self.unknown_class();
             }
             return Some(class);

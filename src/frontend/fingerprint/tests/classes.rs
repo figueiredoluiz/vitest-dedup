@@ -287,3 +287,68 @@ fn a_quoted_escape_inside_a_type_argument_is_carried_through_verbatim() {
 }
 
 // -----------------------------------------------------------------------------------------
+
+// First-declaration reads
+// -----------------------------------------------------------------------------------------
+//
+// `symbol_declaration` answers from a symbol's first declaration alone, and the class side
+// reads it to claim what a name holds. A binding that is reassigned, or that has more than one
+// declaration which runs (a class merged with a value-bearing namespace), does not necessarily
+// hold its first declaration, so the claim must degrade to uncertainty instead.
+
+/// `class C` + `namespace C` is one symbol whose declarations both run: serializing the
+/// reference from the first declaration alone reports a class state the namespace extends.
+#[test]
+fn a_class_merged_with_a_value_namespace_marks_the_reference_unresolved() {
+    let merged = fingerprint_all(
+        "test('t', () => { class C { read() { return 1 } } namespace C { export const tag = 'x' } \
+         const k = C; expect(new k().read()).toBe(1) });",
+    );
+    assert_eq!(merged.len(), 1);
+    assert!(
+        merged[0].class_unresolved,
+        "a class merged with a value-bearing namespace must not serialize as the bare first \
+         class: {}",
+        merged[0].alpha
+    );
+
+    // The namespace holding only types does not run, so the class is the whole value and no
+    // uncertainty is owed.
+    let type_only = fingerprint_all(
+        "test('t', () => { class C { read() { return 1 } } namespace C { export type T = 1 } \
+         const k = C; expect(new k().read()).toBe(1) });",
+    );
+    assert_eq!(type_only.len(), 1);
+    assert!(
+        !type_only[0].class_unresolved,
+        "a type-only namespace adds nothing that runs: {}",
+        type_only[0].alpha
+    );
+}
+
+/// A redeclared capture is not read from its first initializer either: the write history that
+/// `value_at` honors covers assignments, and a later `var` is a declaration, not a write.
+#[test]
+fn a_redeclared_capture_is_not_read_from_its_first_initializer() {
+    let redeclared = fingerprint_all(
+        "test('t', () => { var n = 1; var n = 2; class C { read() { return n } } \
+         const c = new C(); expect(c.read()).toBe(2) });",
+    );
+    assert_eq!(redeclared.len(), 1);
+    assert!(
+        redeclared[0].class_unresolved,
+        "a capture whose binding is redeclared must not read the first initializer: {}",
+        redeclared[0].alpha
+    );
+
+    let plain = fingerprint_all(
+        "test('t', () => { var n = 1; class C { read() { return n } } \
+         const c = new C(); expect(c.read()).toBe(1) });",
+    );
+    assert_eq!(plain.len(), 1);
+    assert!(
+        !plain[0].class_unresolved,
+        "without the redeclaration the initializer is what the capture holds: {}",
+        plain[0].alpha
+    );
+}

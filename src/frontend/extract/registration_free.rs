@@ -624,11 +624,23 @@ pub(in crate::frontend::extract) fn runtime_declaration(
 }
 
 /// Whether `symbol` has more than one declaration that runs (see [`runtime_declaration`]).
-pub(in crate::frontend::extract) fn redeclared_at_runtime(
+pub(in crate::frontend) fn redeclared_at_runtime(
     semantic: &Semantic<'_>,
     symbol: SymbolId,
 ) -> bool {
     runtime_declaration(semantic, symbol).is_none()
+}
+
+/// Whether the value a reference to `symbol` observes can differ from what its first declaration
+/// says: more than one declaration runs, or the binding is reassigned. `Scoping::symbol_declaration`
+/// answers from the first declaration alone, and `runtime_declaration` from the unique declaration
+/// that runs -- so a reader that claims what the name holds from either must refuse first. The
+/// fingerprint side has no reason to report, so refusal there is silent.
+pub(in crate::frontend) fn binding_may_differ_from_declaration(
+    semantic: &Semantic<'_>,
+    symbol: SymbolId,
+) -> bool {
+    redeclared_at_runtime(semantic, symbol) || semantic.scoping().symbol_is_mutated(symbol)
 }
 
 /// Whether a namespace emits code: anything in it but interfaces, type aliases, `declare`

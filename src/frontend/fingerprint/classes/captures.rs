@@ -1,5 +1,6 @@
 //! Point-sensitive capture values, selected literals, and owned mutation histories.
 use super::*;
+use crate::frontend::extract::registration_free::redeclared_at_runtime;
 
 /// One indexed operation; parser handles remain confined to this temporary frontend cache.
 #[derive(Clone)]
@@ -151,6 +152,12 @@ impl<'a, 'b, 's, 'm> Serializer<'a, 'b, 's, 'm> {
         position: u32,
     ) -> Option<&'a Expression<'a>> {
         if self.ctx.semantic.nodes().iter().len() == 0 {
+            self.unknown_class();
+            return None;
+        }
+        // The write history below covers assignments; a redeclaration is a declaration, not a
+        // write, so `initializer`'s first declarator would be read as what the name holds.
+        if redeclared_at_runtime(self.ctx.semantic, symbol) {
             self.unknown_class();
             return None;
         }
