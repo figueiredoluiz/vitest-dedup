@@ -358,3 +358,14 @@ test('a then read reports when code under the root makes it, not when the runtim
   }
   assert.deepEqual(reads, ['./m#then'])
 })
+
+test('a Windows root matches the forward-slash ids Vite gives importers', async () => {
+  const [resolver, inspector] = missingModuleStubs('C:\\repo\\fixtures')
+  const context = { resolve: async () => null }
+  const importer = 'C:/repo/fixtures/ns.test.ts'
+  inspector.transform.call({ parse: (ast) => ast }, program(importOf('./flags', { type: 'ImportNamespaceSpecifier' })), importer)
+  assert.match(await resolver.resolveId.call(context, './flags', importer, {}), /whole:\.\/flags$/)
+  assert.match(await resolver.resolveId.call(context, './named', importer, {}), /named:\.\/named$/)
+  assert.equal(await resolver.resolveId.call(context, './x', 'C:/elsewhere/a.test.ts', {}), null)
+  assert.match(resolver.load('\0vitest-dedup-stub:named:./m'), /includes\("C:\/repo\/fixtures"\)/)
+})

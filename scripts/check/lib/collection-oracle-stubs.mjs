@@ -21,6 +21,9 @@ const PREFIX = '\0vitest-dedup-stub:'
 const WHOLE = 'whole:'
 const NAMED = 'named:'
 
+/** `path` with forward slashes. */
+const slashed = (path) => path.replaceAll('\\', '/')
+
 /** Every node in an ESTree `ast`, depth first. */
 function* nodes(node) {
   if (Array.isArray(node)) {
@@ -68,7 +71,9 @@ function stubSource(specifier, whole, root) {
   // This function and the trap are both stub frames; the caller is the first frame after them.
   const own = frames.findIndex((frame) => frame.includes(${JSON.stringify(PREFIX.slice(1))}))
   const caller = own < 0 ? undefined : frames.slice(own).find((frame) => !frame.includes(${JSON.stringify(PREFIX.slice(1))}))
-  return caller !== undefined && caller.includes(${JSON.stringify(root)}) && !/[\\\\/]node_modules[\\\\/]/.test(caller)
+  // Windows frames print backslashes; \`root\` is compared in forward slashes, as Vite writes ids.
+  const location = caller?.replaceAll('\\\\', '/')
+  return location !== undefined && location.includes(${JSON.stringify(root)}) && !/\\/node_modules\\//.test(location)
 }
 Object.setPrototypeOf(__vite_ssr_exports__, new Proxy(Object.create(null), {
   get(_, key) {
@@ -84,16 +89,18 @@ Object.setPrototypeOf(__vite_ssr_exports__, new Proxy(Object.create(null), {
  * becomes a stub instead of an error; the inspector runs after the TypeScript transform, where
  * `this.parse` reads the module as it will run.
  *
- * @param {string} root - only imports from files under this directory are stubbed.
+ * @param {string} directory - only imports from files under this directory are stubbed.
  * @returns {import('vite').Plugin[]}
  */
-export function missingModuleStubs(root) {
+export function missingModuleStubs(directory) {
+  // Vite ids use forward slashes on every platform; \`path.resolve\` gives backslashes on Windows.
+  const root = slashed(directory)
   const whole = new Map()
   const resolver = {
     name: 'vitest-dedup-missing-module-stubs',
     enforce: 'pre',
     async resolveId(id, importer, options) {
-      if (id.startsWith(PREFIX) || !importer || !importer.startsWith(root)) return null
+      if (id.startsWith(PREFIX) || !importer || !slashed(importer).startsWith(root)) return null
       const resolved = await this.resolve(id, importer, { ...options, skipSelf: true })
       if (resolved) return null
       // An importer never inspected (or whose inspection failed) takes every stub whole.
@@ -109,7 +116,7 @@ export function missingModuleStubs(root) {
   const inspector = {
     name: 'vitest-dedup-whole-module-imports',
     transform(code, id) {
-      if (!id.startsWith(root)) return null
+      if (!slashed(id).startsWith(root)) return null
       let ast = null
       try {
         ast = this.parse(code)
