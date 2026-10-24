@@ -401,6 +401,12 @@ fn accessor_redefinitions_refuse_imported_constants() {
             "vi.spyOn(console, 'log')\nvi.spyOn(console, 'error')",
             false,
         ),
+        (
+            "vi.spy\\u004Fn(console, 'log')\nvi.spyOn(globalThis, 'Y', 'get')",
+            true,
+        ),
+        ("vi.mock('vitest-dedup-not-installed', () => ({}))", false),
+        ("vi.mock('node:fs')", false),
     ] {
         let tests = ConstantCase::new(
             &modules,
@@ -454,4 +460,24 @@ fn a_mock_of_the_module_behind_an_import_export_barrel_is_seen() {
         .tests();
         assert_eq!(tests[0].1, unresolved, "{mock:?}: {tests:?}");
     }
+}
+
+#[test]
+/// Only a value over the import is an alias: imports read inside calls or composites are not
+/// candidates, so they cannot push a table's own import past the bound.
+fn only_value_aliases_make_an_import_a_candidate() {
+    let count = crate::frontend::registry::imported_constants::MAX_IMPORTED_CONSTANTS;
+    let names: Vec<String> = (0..count).map(|index| format!("C{index}")).collect();
+    let module: String = names
+        .iter()
+        .map(|name| format!("export const {name} = '{name}'\n"))
+        .chain(std::iter::once("export const X = 'fast'\n".to_owned()))
+        .collect();
+    let source = format!(
+        "import {{ test }} from 'vitest'\nimport {{ {}, X }} from './m'\nconst props = make({{ {} }})\ntest.each([[X]])('t %s', () => {{}})\n",
+        names.join(", "),
+        names.join(", ")
+    );
+    let tests = ConstantCase::new(&[("m.ts", &module)], &source).tests();
+    assert_eq!(tests, vec![("t fast".to_owned(), false)]);
 }

@@ -12,7 +12,7 @@ use super::{
 };
 use crate::frontend::helpers::{find_value_export, with_parsed_file, ValueExport};
 use oxc_allocator::{Allocator, CloneIn};
-use oxc_ast::ast::{Argument, Expression, UnaryOperator};
+use oxc_ast::ast::{Argument, Expression, UnaryOperator, VariableDeclarationKind};
 use oxc_ast::AstKind;
 use oxc_semantic::{Semantic, SemanticBuilder, SymbolId};
 use oxc_span::{GetSpan, GetSpanMut, Span};
@@ -29,8 +29,8 @@ impl<'a> ImportedConstants<'a> {
 }
 
 /// Whether some reference to `symbol` sits inside the arguments of an `.each`/`.for` call or the
-/// quasi of an `.each`/`.for` tagged template, or inside a variable initializer (a local alias a
-/// table may read): the only places an imported constant is read. A filter on which imports are
+/// quasi of an `.each`/`.for` tagged template, or in a `const` initializer that is a value over it
+/// (a local alias a table may read): the only places an imported constant is read. A filter on which imports are
 /// worth a proof, so a miss costs recall only.
 pub(in crate::frontend) fn referenced_in_table(semantic: &Semantic, symbol: SymbolId) -> bool {
     let scoping = semantic.scoping();
@@ -45,12 +45,28 @@ pub(in crate::frontend) fn referenced_in_table(semantic: &Semantic, symbol: Symb
         .any(|reference_id| {
             let node = scoping.get_reference(*reference_id).node_id();
             let span = nodes.kind(node).span();
-            // A `const` initializer that reads the import (`const L = X`, `const L = `${X}``) is a
-            // local alias a table may read.
-            let aliased = nodes.ancestor_kinds(node).any(|kind| {
-                matches!(kind, AstKind::VariableDeclarator(declarator)
-                    if declarator.init.as_ref().is_some_and(|init| init.span().contains_inclusive(span)))
-            });
+            // A `const` initializer that is a value over the import (`const L = X`,
+            // `const L = `${X}-1``) is a local alias a table may read; a call, function or
+            // composite in between is not.
+            let mut value = node;
+            while matches!(
+                nodes.parent_kind(value),
+                AstKind::TemplateLiteral(_)
+                    | AstKind::BinaryExpression(_)
+                    | AstKind::UnaryExpression(_)
+                    | AstKind::ParenthesizedExpression(_)
+                    | AstKind::TSAsExpression(_)
+                    | AstKind::TSSatisfiesExpression(_)
+                    | AstKind::TSNonNullExpression(_)
+                    | AstKind::TSTypeAssertion(_)
+            ) {
+                value = nodes.parent_id(value);
+            }
+            let declarator = nodes.parent_id(value);
+            let aliased = matches!(nodes.kind(declarator), AstKind::VariableDeclarator(declarator)
+                if declarator.init.as_ref().is_some_and(|init| init.span() == nodes.kind(value).span()))
+                && matches!(nodes.parent_kind(declarator), AstKind::VariableDeclaration(declaration)
+                    if declaration.kind == VariableDeclarationKind::Const);
             aliased
                 || nodes.ancestor_kinds(node).any(|kind| match kind {
                     AstKind::CallExpression(call) => {
@@ -76,16 +92,18 @@ pub(in crate::frontend) fn referenced_in_table(semantic: &Semantic, symbol: Symb
 /// text, so renaming, destructuring or a computed key does not hide them: any mention of
 /// `defineProperty`, `defineProperties`, `__defineGetter__` or `__defineSetter__` counts, and so
 /// does every mention of `spyOn` that is not a direct call with at most two plain arguments.
-/// Only a name built at runtime (`'spy' + 'On'`) is not seen.
+/// A unicode escape anywhere counts too, since it can spell any of these names without their
+/// text. Only a name built at runtime (`'spy' + 'On'`) is not seen.
 pub(in crate::frontend) fn redefines_accessors(semantic: &Semantic, source: &str) -> bool {
-    if [
-        "defineProperty",
-        "defineProperties",
-        "__defineGetter__",
-        "__defineSetter__",
-    ]
-    .iter()
-    .any(|name| source.contains(name))
+    if source.contains("\\u")
+        || [
+            "defineProperty",
+            "defineProperties",
+            "__defineGetter__",
+            "__defineSetter__",
+        ]
+        .iter()
+        .any(|name| source.contains(name))
     {
         return true;
     }

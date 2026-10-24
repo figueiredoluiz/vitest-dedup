@@ -55,9 +55,10 @@ renders `undefined` as empty, JSON array elements become `null`, and JSON object
 that value are omitted.
 
 **Imported constants**: a cell naming a value import (`import { MODE } from './modes'`), or a
-local `const` alias of one, is read when the import resolves, through named re-exports
-(`export { X } from`, or `import { X }` then `export { X }`), to a
-first-party module that declares it with a module-level `const` whose initializer is a string,
+local `const` whose initializer is a value over one (`const L = MODE`, `` const L = `${MODE}-1` ``),
+is read when the import resolves, through named re-exports (`export { X } from`, or `import { X }`
+then `export { X }`), to a first-party module that declares it with a module-level `const` whose
+initializer is a string,
 number, signed number, boolean, `null`, bigint or substitution-free template literal, directly or
 through an earlier local `const` alias (never through a member read). The value then reads exactly
 like the literal. Everything else stays unresolved: `let`/`var` and `declare` exports, computed
@@ -66,14 +67,16 @@ members, default and namespace imports, `export *`, declaration files, installed
 import whose chain returns to the test file. An import is not read when the test file mocks a
 module or re-export hop on its chain (`vi.mock`, or a `mockNuxtImport` of a name on the chain). A
 file reads no imported constant at all when its mocking cannot be fully read (a `vi.doMock`, a
-nested or unreadable `vi.mock`, a mocked specifier that does not resolve), or when it can redefine
-a property accessor, which is how a module object's export is rewritten however the object was
-reached. The names are read from the source text: any mention of `defineProperty`,
+nested or unreadable `vi.mock`, a mocked path or alias that does not resolve; an unresolved
+package or Node builtin cannot be a first-party module and does not count), or when it can
+redefine a property accessor, which is how a module object's export is rewritten however the
+object was reached. The names are read from the source text: any mention of `defineProperty`,
 `defineProperties`, `__defineGetter__` or `__defineSetter__` counts, and so does any mention of
 `spyOn` other than a direct call with at most two plain arguments (`vi.spyOn(ns, 'X', 'get')`
-counts, `vi.spyOn(console, 'log')` does not). A name assembled at runtime is not seen. Mocks and accessor redefinitions outside the test file, in `setupFiles` or in a
-module the test file imports, are not seen: the analyzer then reads the real value where Vitest
-uses the replacement.
+counts, `vi.spyOn(console, 'log')` does not), and any unicode escape. A name assembled at runtime
+is not seen. Mocks and accessor redefinitions outside the test file, in `setupFiles` or in a module
+the test file imports, are not seen: the analyzer then reads the real value where Vitest uses the
+replacement.
 
 **Static-analysis fallback rule**: whenever the table itself is not a literal array/object
 expression at the call site (e.g. `test.each(getCases())`), the extractor cannot enumerate rows at

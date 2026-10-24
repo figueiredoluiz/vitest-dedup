@@ -239,14 +239,15 @@ impl<'a> Walker<'a> {
     /// tried; every unproved binding stays an unresolved cell. A historical file is never proved:
     /// the modules on disk are today's, not the ones it imported.
     pub(super) fn prove_imported_constants(&mut self, allocator: &'a Allocator) {
-        // Unreadable mocks, and a mock of a specifier that does not resolve, could replace any
-        // module, so nothing is tried.
+        // Unreadable mocks, and a mock of a path or alias that does not resolve, could replace any
+        // first-party module, so nothing is tried. An unresolved package or builtin cannot.
         if !self.allow_imported
             || self.mocks_unresolved
-            || self
-                .mocked_modules
-                .iter()
-                .any(|mock| mock.specifier.starts_with("unresolved:"))
+            || self.mocked_modules.iter().any(|mock| {
+                mock.specifier
+                    .strip_prefix("unresolved:")
+                    .is_some_and(resolver::may_name_first_party)
+            })
         {
             return;
         }
