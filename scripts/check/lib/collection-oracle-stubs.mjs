@@ -77,7 +77,8 @@ function stubSource(specifier, whole, root) {
   const caller = own < 0 ? undefined : frames.slice(own).find((frame) => !frame.includes(${JSON.stringify(PREFIX.slice(1))}))
   // Windows frames print backslashes; \`root\` is compared in forward slashes, as Vite writes ids.
   const location = caller?.replaceAll('\\\\', '/')
-  return location !== undefined && location.includes(${JSON.stringify(`${root}/`)}) && !/\\/node_modules\\//.test(location)
+  // Vite's module runner and Vitest are the runtime; any other package, a fixture's stand-in, is code under test.
+  return location !== undefined && location.includes(${JSON.stringify(`${root}/`)}) && !/\\/node_modules\\/(?:vite|vitest|@vitest)\\//.test(location)
 }
 Object.setPrototypeOf(__vite_ssr_exports__, new Proxy(Object.create(null), {
   get(_, key) {

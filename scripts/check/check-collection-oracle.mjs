@@ -51,7 +51,8 @@ const MIN_HOOK_SITES_COMPARED = 95
 // What the probe must report for the self-check directories, checked before anything is compared:
 // hooks that do not register (`if (false)`, after `return`), one registered per loop iteration,
 // `test.beforeEach`, a helper's hook at the helper's own line, and every way a file can read a stub
-// (by name, whole, through a re-export of `then`, or by sharing one load under `isolate: false`).
+// (by name, whole, for its side effects, through a re-export of `then` in a module or a fixture's own
+// package, or by sharing one load under `isolate: false`).
 const SELF_CHECK = {
   'scripts/check/collection-oracle-self-check': {
     'hooks.test.ts': {
@@ -65,6 +66,7 @@ const SELF_CHECK = {
     'stub-read.test.ts': { tests: ['reads a stub while collecting > always'], hooks: [], stubReads: ['./missing-module#enabled'] },
     'stub-side-effect.test.ts': { tests: ['always'], hooks: [], stubReads: ['./missing-module#*'] },
     'stub-then.test.ts': { tests: ['always'], hooks: [], stubReads: ['./missing-module#then'] },
+    'stub-then-package.test.ts': { tests: ['always'], hooks: [], stubReads: ['./missing-module#then'] },
     'stub-then-reexport.test.ts': { tests: ['always'], hooks: [], stubReads: ['./missing-module#then'] },
   },
 }
