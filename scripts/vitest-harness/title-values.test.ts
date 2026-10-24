@@ -95,3 +95,40 @@ test.each`
 `('tagged %o', () => {
   expect(true).toBe(true)
 })
+
+// Global primitive values use distinct coercion, inspection, and JSON paths.
+const ABSENT = undefined
+const NOT_A_NUMBER = NaN
+const UNBOUNDED = Infinity
+
+test.each([[undefined], [ABSENT], [NaN], [NOT_A_NUMBER], [Infinity], [-UNBOUNDED], [[ABSENT, null, NaN, Infinity]]])('global coerce %s', () => {
+  expect(true).toBe(true)
+})
+test.each([[undefined], [NaN], [Infinity], [[ABSENT, NaN]], [{ a: ABSENT, b: Infinity }]])('global inspect %o', () => {
+  expect(true).toBe(true)
+})
+test.each([[NaN], [Infinity], [-Infinity], [[ABSENT, NaN]], [{ a: ABSENT, b: Infinity }]])('global json %j', () => {
+  expect(true).toBe(true)
+})
+test.each([[Infinity], [-Infinity]])('global numeric %d', () => {
+  expect(true).toBe(true)
+})
+test.each([{ v: undefined }, { v: NaN }, { v: Infinity }])('global field $v', () => {
+  expect(true).toBe(true)
+})
+test.for([undefined, NaN, Infinity])('global for %s', () => {
+  expect(true).toBe(true)
+})
+test.each`
+  v
+  ${undefined}
+  ${NaN}
+  ${Infinity}
+`('global tagged $v', () => {
+  expect(true).toBe(true)
+})
+
+// Numeric folds preserve signed zero in printf; string folds keep their own bytes.
+test.each([[1 / -Infinity], [-1 / Infinity], [-0], ['-0' + ' ']])('global signed %s', () => {
+  expect(true).toBe(true)
+})

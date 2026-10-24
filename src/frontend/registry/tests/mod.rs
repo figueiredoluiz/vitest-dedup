@@ -488,7 +488,10 @@ fn resolve_first_call_in_file(
 ) -> Option<ResolvedCallee> {
     let allocator = Allocator::default();
     let program = parse(&allocator, source);
-    let semantic = SemanticBuilder::new().build(&program).semantic;
+    let semantic = SemanticBuilder::new()
+        .with_build_nodes(true)
+        .build(&program)
+        .semantic;
     let registry = Registry::new(&program, globals);
     let mut resolver = FirstCallResolver {
         registry: &registry,
@@ -2719,4 +2722,114 @@ fn object_key_canonicals_follow_the_runtime_key() {
         decimal.contains("1000000000000000000000"),
         "the decimal key keeps its own text, got {decimal:?}"
     );
+}
+
+/// Global primitive cells and const aliases carry typed values without collapsing distinct cases.
+#[test]
+fn global_constant_cells_preserve_values_and_aliases() {
+    let rows = each_rows("const U = undefined; const N = NaN; const I = Infinity; test.each([[undefined], [U], [NaN], [N], [Infinity], [I], [-Infinity], [null], ['undefined']])('%s', () => {});");
+    assert_eq!(rows.len(), 9);
+    assert!(rows.iter().all(|row| !row.unresolved));
+    let values: Vec<_> = rows
+        .iter()
+        .map(|row| {
+            let RowCells::Positional(cells) = &row.cells else {
+                panic!("positional row")
+            };
+            let cell = cells[0].as_ref().expect("known cell");
+            (cell.kind, cell.raw.as_str())
+        })
+        .collect();
+    assert_eq!(
+        values,
+        vec![
+            ("undefined", "undefined"),
+            ("undefined", "undefined"),
+            ("number", "NaN"),
+            ("number", "NaN"),
+            ("number", "Infinity"),
+            ("number", "Infinity"),
+            ("number", "-Infinity"),
+            ("null", "null"),
+            ("string", "undefined")
+        ]
+    );
+    assert_eq!(rows[0].identity(), rows[1].identity());
+    for index in [2, 4, 6, 7, 8] {
+        assert_ne!(rows[0].identity(), rows[index].identity());
+    }
+}
+
+/// Lexical bindings, imports, and dynamic scopes never inherit a standard global's value.
+#[test]
+fn global_constant_cells_require_semantic_global_provenance() {
+    for name in ["undefined", "NaN", "Infinity"] {
+        for prefix in [
+            format!("let {name} = 7;"),
+            format!("import {{ value as {name} }} from './values';"),
+        ] {
+            let rows = each_rows(&format!(
+                "{prefix} test.each([[{name}]])('%s', () => {{}});"
+            ));
+            assert_eq!(rows.len(), 1);
+            assert!(rows[0].unresolved, "{prefix}");
+        }
+        let rows = each_rows(&format!(
+            "const {name} = 7; test.each([[{name}]])('%s', () => {{}});"
+        ));
+        assert_eq!(cell_displays(&rows[0]), vec![Some("7".to_owned())]);
+        let rows = each_rows(&format!(
+            "function declare({name}) {{ test.each([[{name}]])('%s', () => {{}}); }}"
+        ));
+        assert!(rows[0].unresolved);
+        with_parsed_expression!(name, |expr| {
+            assert_eq!(const_fold_kind(&expr, None), None);
+        });
+    }
+    let rows = each_rows("with (source) { test.each([[undefined]])('%s', () => {}); }");
+    assert!(rows[0].unresolved);
+    let rows = each_rows("test.each([[unknown]])('%s', () => {});");
+    assert!(rows[0].unresolved);
+}
+
+/// Undefined has separate join and JSON rules, while nonfinite numbers stay numeric identities.
+#[test]
+fn global_constant_cells_follow_each_title_coercion() {
+    let rows = each_rows("const U = undefined; test.each([[U], [NaN], [Infinity], [-Infinity], [[U, null, NaN, Infinity]], [{ a: U, b: NaN, c: Infinity }], [+U], [Infinity - Infinity]])('%s', () => {});");
+    assert_eq!(rows.len(), 8);
+    assert!(rows.iter().all(|row| !row.unresolved));
+    let args: Vec<_> = rows
+        .iter()
+        .map(|row| row.title_args[0].as_ref().unwrap())
+        .collect();
+    assert_eq!(args[0].coerced, "undefined");
+    assert_eq!(args[0].json, None);
+    assert_eq!(args[0].number, None);
+    assert_eq!(args[1].json.as_deref(), Some("null"));
+    assert_eq!(args[1].number, None);
+    assert_eq!(args[2].number, Some(TitleNumber::Number(f64::INFINITY)));
+    assert_eq!(args[3].number, Some(TitleNumber::Number(f64::NEG_INFINITY)));
+    assert_eq!(args[4].coerced, ",,NaN,Infinity");
+    assert_eq!(args[4].json.as_deref(), Some("[null,null,null,null]"));
+    assert_eq!(args[5].json.as_deref(), Some("{\"b\":null,\"c\":null}"));
+    assert_eq!(args[6].coerced, "NaN");
+    assert_eq!(args[7].coerced, "NaN");
+}
+
+/// Numeric arithmetic keeps signed zero for printf without coercing string-valued folds.
+#[test]
+fn global_constant_arithmetic_preserves_signed_zero_titles() {
+    let rows = each_rows(
+        "test.each([[1 / -Infinity], [-1 / Infinity], [-0], ['-0' + ' ']])('%s', () => {});",
+    );
+    assert_eq!(rows.len(), 4);
+    assert!(rows.iter().all(|row| !row.unresolved));
+    let titles: Vec<_> = rows
+        .iter()
+        .map(|row| row.title_args[0].as_ref().unwrap().coerced.as_str())
+        .collect();
+    assert_eq!(titles, vec!["-0", "-0", "-0", "-0 "]);
+    assert_eq!(rows[0].identity(), rows[1].identity());
+    assert_eq!(rows[1].identity(), rows[2].identity());
+    assert_ne!(rows[2].identity(), rows[3].identity());
 }

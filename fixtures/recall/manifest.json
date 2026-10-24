@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "minimumCases": 160,
+  "minimumCases": 163,
   "knownMissBaseline": 1,
   "minimumRecall": 0.99,
   "recallDestination": 1,
@@ -4846,6 +4846,112 @@
           "titles": [
             "old body",
             "independent"
+          ]
+        }
+      ],
+      "expectedAbsent": []
+    },
+    {
+      "name": "duplicate-each-row-global-constants",
+      "path": "duplicate-each-row-global-constants",
+      "rule": "duplicate-each-row",
+      "role": "positive",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-10-24",
+      "expectedTests": 8,
+      "expectedIncomplete": false,
+      "expectedUnresolved": 0,
+      "expectedFindings": [
+        {
+          "rule": "duplicate-each-row",
+          "severity": "warning",
+          "titles": [
+            "reads undefined",
+            "reads undefined"
+          ]
+        },
+        {
+          "rule": "duplicate-each-row",
+          "severity": "warning",
+          "titles": [
+            "reads NaN",
+            "reads NaN"
+          ]
+        },
+        {
+          "rule": "duplicate-each-row",
+          "severity": "warning",
+          "titles": [
+            "reads Infinity",
+            "reads Infinity"
+          ]
+        },
+        {
+          "rule": "duplicate-each-row",
+          "severity": "warning",
+          "titles": [
+            "reads -Infinity",
+            "reads -Infinity"
+          ]
+        }
+      ],
+      "expectedAbsent": []
+    },
+    {
+      "name": "duplicate-each-row-global-constants-negative",
+      "path": "duplicate-each-row-global-constants-negative",
+      "rule": "duplicate-each-row",
+      "role": "negative",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-10-24",
+      "expectedTests": 8,
+      "expectedIncomplete": false,
+      "expectedUnresolved": 0,
+      "expectedFindings": [],
+      "expectedAbsent": [
+        {
+          "rule": "duplicate-each-row",
+          "titles": [
+            "distinguishes undefined",
+            "distinguishes undefined"
+          ]
+        },
+        {
+          "rule": "duplicate-each-row",
+          "titles": [
+            "distinguishes NaN",
+            "distinguishes NaN"
+          ]
+        },
+        {
+          "rule": "duplicate-each-row",
+          "titles": [
+            "distinguishes Infinity",
+            "distinguishes Infinity"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "duplicate-each-row-global-signed-zero",
+      "path": "duplicate-each-row-global-signed-zero",
+      "rule": "duplicate-each-row",
+      "role": "positive",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-10-24",
+      "expectedTests": 2,
+      "expectedIncomplete": false,
+      "expectedUnresolved": 0,
+      "expectedFindings": [
+        {
+          "rule": "duplicate-each-row",
+          "severity": "warning",
+          "titles": [
+            "signed -0",
+            "signed -0"
           ]
         }
       ],

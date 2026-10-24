@@ -1379,6 +1379,31 @@ fn const_declarator<'a>(
     }
 }
 
+/// Recognize immutable ECMAScript globals only after semantic resolution rules out lexical
+/// bindings and dynamic `with` scopes. Missing semantic evidence never proves a global.
+fn global_constant(expr: &Expression, resolve: Resolve<'_, '_>) -> Option<&'static str> {
+    let Expression::Identifier(ident) = unwrap_transparent(expr) else {
+        return None;
+    };
+    let name = match ident.name.as_str() {
+        "undefined" => "undefined",
+        "NaN" => "NaN",
+        "Infinity" => "Infinity",
+        _ => return None,
+    };
+    let semantic = resolve?;
+    let scoping = semantic.scoping();
+    let reference = scoping.get_reference(ident.reference_id.get()?);
+    if reference.symbol_id().is_some()
+        || scoping
+            .scope_ancestors(reference.scope_id())
+            .any(|scope| scoping.scope_flags(scope).is_with())
+    {
+        return None;
+    }
+    Some(name)
+}
+
 /// TDZ guard (Copilot review, PR #28 round 4): a `const` declarator only backs a static read
 /// when it is initialized before the read executes.
 ///
@@ -1512,7 +1537,10 @@ fn is_immutable_value<'a>(expr: &Expression<'a>, semantic: &Semantic<'a>, hops: 
         // inside the initializer's binary expression read as "not a literal", blocking the
         // peel of B -- and with the peel gone, the fold never sees the binary at all, since it
         // only receives the cell's own (unpeeled) expression.
-        Expression::Identifier(_) => resolved_binding(expr, semantic, hops + 1).is_some(),
+        Expression::Identifier(_) => {
+            global_constant(expr, Some(semantic)).is_some()
+                || resolved_binding(expr, semantic, hops + 1).is_some()
+        }
         Expression::TemplateLiteral(template) => template
             .expressions
             .iter()
@@ -1783,6 +1811,9 @@ fn js_number_value(expr: &Expression, depth: u32, resolve: Resolve<'_, '_>) -> O
         return None;
     }
     let expr = peeled(expr, resolve);
+    if global_constant(expr, resolve).is_some() {
+        return const_fold_number(expr, resolve).filter(|value| !value.is_nan());
+    }
     match unwrap_transparent(expr) {
         Expression::NullLiteral(_) => Some(0.0),
         Expression::BooleanLiteral(literal) => Some(if literal.value { 1.0 } else { 0.0 }),
@@ -2108,8 +2139,7 @@ fn assembled_object_within_budget(
 /// const-foldable template-literal titles (`` `title with ${1 + 1}` ``, per
 /// `docs/vitest-surface.md` fixture #7).
 ///
-/// Anything else -- an identifier, a function call, string concatenation with a variable --
-/// returns `None`. This is deliberately conservative: hazard 6 warns that Vitest's own
+/// This syntax-only helper refuses identifiers and calls. Hazard 6 warns that Vitest's own
 /// title-rendering changed across majors, so this extractor never pretends to reproduce runtime
 /// formatting beyond values it can prove from source alone.
 /// Kind-tagged constant folding, for values that are COMPARED rather than displayed.
@@ -2162,8 +2192,8 @@ pub(super) fn const_fold_tagged(expr: &Expression) -> Option<String> {
 /// directly as a literal in source -- including `null`, where this returns `("null", "null")`
 /// rather than `const_fold_tagged`'s bare `<null>` (no raw part), because `Serializer::literal`
 /// itself always renders `null` as `self.literal("null", "null")`. Accepts exactly the same
-/// expression shapes as [`const_fold`] (both match `StringLiteral`/`NumericLiteral`/
-/// `BooleanLiteral`/`NullLiteral`/`BinaryExpression` and nothing else), so the two never disagree
+/// expression shapes as [`const_fold`], including semantically proven global primitives,
+/// so the two never disagree
 /// about whether a given cell is readable at all -- only about the shape of what they return for
 /// one that is.
 pub(super) fn const_fold_kind(
@@ -2197,6 +2227,14 @@ fn const_fold_kind_scalar(
     resolve: Resolve<'_, '_>,
 ) -> Option<(&'static str, String)> {
     let expr = peeled(expr, resolve);
+    if let Some(value) = global_constant(expr, resolve) {
+        let kind = if value == "undefined" {
+            "undefined"
+        } else {
+            "number"
+        };
+        return Some((kind, value.to_owned()));
+    }
     match unwrap_transparent(expr) {
         Expression::StringLiteral(literal) => Some(("string", literal.value.as_str().to_owned())),
         Expression::NumericLiteral(literal) => Some(("number", format_number(literal.value))),
@@ -2226,9 +2264,13 @@ fn const_fold_kind_scalar(
 }
 
 /// Render supported constant expressions as display text, returning None for forms the
-/// evaluator cannot establish.
+/// evaluator cannot establish. With semantic evidence, immutable global primitives and earlier
+/// local const aliases also resolve; unknown bindings and calls remain refused.
 pub(super) fn const_fold(expr: &Expression, resolve: Resolve<'_, '_>) -> Option<String> {
     let expr = peeled(expr, resolve);
+    if let Some(value) = global_constant(expr, resolve) {
+        return Some(value.to_owned());
+    }
     match unwrap_transparent(expr) {
         Expression::StringLiteral(literal) => Some(literal.value.as_str().to_owned()),
         Expression::NumericLiteral(literal) => Some(format_number(literal.value)),
@@ -2453,11 +2495,10 @@ fn render_coerce(expr: &Expression, depth: u32, resolve: Resolve<'_, '_>) -> Opt
 /// `render_js_to_string`, and ECMAScript's `ToString(-0)` printed `0` where Vitest's `%s`
 /// keeps the sign. A wrong accepted value, not a refusal.
 fn numeric_value(expr: &Expression, resolve: Resolve<'_, '_>) -> Option<f64> {
-    match unwrap_transparent(expr) {
-        Expression::NumericLiteral(literal) => Some(literal.value),
-        inner @ Expression::UnaryExpression(_) => fold_signed_number(inner, resolve),
-        _ => None,
+    if is_string_valued(expr, resolve) {
+        return None;
     }
+    const_fold_number(expr, resolve)
 }
 
 /// ECMAScript `ToString`, which is what `+` and a template substitution use.
@@ -2481,6 +2522,9 @@ pub(super) fn render_js_to_string(
     resolve: Resolve<'_, '_>,
 ) -> Option<String> {
     let expr = peeled_unwrapped(expr, resolve, depth)?;
+    if let Some(value) = global_constant(expr, resolve) {
+        return Some(value.to_owned());
+    }
     match expr {
         // `Object.prototype.toString` -- but ONLY when that is really the method being called.
         Expression::ObjectExpression(_) => {
@@ -2569,7 +2613,11 @@ fn render_js_join_element(
     depth: u32,
     resolve: Resolve<'_, '_>,
 ) -> Option<String> {
-    match unwrap_transparent(expr) {
+    let expr = peeled_unwrapped(expr, resolve, depth)?;
+    if global_constant(expr, resolve) == Some("undefined") {
+        return Some(String::new());
+    }
+    match expr {
         Expression::NullLiteral(_) => Some(String::new()),
         other => render_js_to_string(other, depth, resolve),
     }
@@ -2915,12 +2963,16 @@ fn is_bare_inspect_key(name: &str) -> bool {
 
 /// `JSON.stringify` of a cell, for the `%j` directive.
 ///
-/// `None` where `JSON.stringify` has no string to give: a BigInt throws outright, and this
+/// `None` where `JSON.stringify` has no string to give: undefined yields no string, a BigInt
+/// throws outright, and this
 /// refuses rather than inventing a representation. Compact separators, matching the real thing
 /// (`{"a":1}`, not `{ "a": 1 }`) -- measured: `%j` on `'a'` prints `"a"` while `%o` on the same
 /// value prints `'a'`, which is exactly why the two cannot share one rendering.
 fn render_json(expr: &Expression, depth: u32, resolve: Resolve<'_, '_>) -> Option<String> {
     let expr = peeled_unwrapped(expr, resolve, depth)?;
+    if let Some(value) = global_constant(expr, resolve) {
+        return (value != "undefined").then(|| "null".to_owned());
+    }
     match expr {
         Expression::StringLiteral(literal) => Some(json_string(literal.value.as_str())),
         Expression::TemplateLiteral(template) => {
@@ -2946,9 +2998,14 @@ fn render_json(expr: &Expression, depth: u32, resolve: Resolve<'_, '_>) -> Optio
             let elements = array_elements(expr)?;
             let mut parts = Vec::with_capacity(elements.len());
             for element in elements {
-                // `JSON.stringify([undefined])` is `[null]`; anything this cannot render at all
-                // refuses the whole value rather than guessing which case it is.
-                parts.push(render_json(element, depth + 1, resolve)?);
+                // Only a proven undefined value becomes null; an unknown element still refuses.
+                parts.push(
+                    if global_constant(peeled(element, resolve), resolve) == Some("undefined") {
+                        "null".to_owned()
+                    } else {
+                        render_json(element, depth + 1, resolve)?
+                    },
+                );
             }
             Some(format!("[{}]", parts.join(",")))
         }
@@ -2956,6 +3013,9 @@ fn render_json(expr: &Expression, depth: u32, resolve: Resolve<'_, '_>) -> Optio
             let fields = object_fields(expr)?;
             let mut parts = Vec::with_capacity(fields.len());
             for (name, value) in fields {
+                if global_constant(peeled(value, resolve), resolve) == Some("undefined") {
+                    continue;
+                }
                 parts.push(format!(
                     "{}:{}",
                     json_string(&name),
@@ -3065,7 +3125,13 @@ fn is_string_valued(expr: &Expression, resolve: Resolve<'_, '_>) -> bool {
 
 /// Read a numeric literal or supported folded numeric expression as f64.
 fn const_fold_number(expr: &Expression, resolve: Resolve<'_, '_>) -> Option<f64> {
-    match unwrap_transparent(peeled(expr, resolve)) {
+    let expr = peeled(expr, resolve);
+    match global_constant(expr, resolve) {
+        Some("Infinity") => return Some(f64::INFINITY),
+        Some("NaN" | "undefined") => return Some(f64::NAN),
+        _ => {}
+    }
+    match unwrap_transparent(expr) {
         Expression::NumericLiteral(literal) => Some(literal.value),
         Expression::BinaryExpression(_) => const_fold(expr, resolve)?.parse().ok(),
         inner @ Expression::UnaryExpression(_) => fold_signed_number(inner, resolve),

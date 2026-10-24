@@ -32,9 +32,9 @@ Three table shapes:
    ```
    Statically: the header row's identifiers become field names; the `${...}` expressions are the
    `TaggedTemplateExpression`'s `expressions` array, positionally matched to header columns in
-   row-major order. Only const-foldable expressions in the cells yield a static concrete title;
-   non-literal expressions (e.g. `${someVar}`) mean the row's concrete value, and therefore its
-   title, is not statically known and must be treated as an opaque/dynamic row.
+   row-major order. Expressions with a statically proven value, including earlier local `const`
+   aliases, can yield a concrete title. Unresolved expressions leave the row's value and title
+   unknown, so the row remains opaque/dynamic.
 
 **`test.for` vs `test.each`**: identical table syntax and identical title-derivation rules; the only
 difference is at the callback-argument level, `.for` does **not** spread an array row into
@@ -46,6 +46,13 @@ template) rows behave identically between `.each` and `.for`.
 `describe.each` / `describe.for` use the same table/title rules to generate multiple `describe`
 blocks (each with its own interpolated title and independently nested tests) rather than multiple
 tests.
+
+**Global primitive cells**: unshadowed `undefined`, `NaN`, and `Infinity` are readable values,
+including signed infinity and earlier local `const` aliases. A local or imported binding with one
+of these names must prove its own value; the spelling alone never identifies a global. Distinct
+value kinds remain distinct row identities. Titles follow their formatter: array string coercion
+renders `undefined` as empty, JSON array elements become `null`, and JSON object properties with
+that value are omitted. Imported scalar values and imported object members remain unresolved.
 
 **Static-analysis fallback rule**: whenever the table itself is not a literal array/object
 expression at the call site (e.g. `test.each(getCases())`), the extractor cannot enumerate rows at
