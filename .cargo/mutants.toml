@@ -15,17 +15,19 @@
 #
 # `gitignore = true` keeps the 1.1 GB of `fixtures/` clones and `mutants.out/` out of the copy.
 #
-# `copy_vcs` must stay `true` -- cargo-mutants defaults it to `false`, and several integration
-# tests shell out to `git` against their own checkout -- the docs-contract test lists tracked
-# pages with `git ls-files` -- so in a copy without a `.git` the unmutated baseline fails,
-# which cargo-mutants reports as exit 4 and the gate refuses to score. The `.git` directory is
-# ~150 MB, cheap next to one build directory; `gitignore = true` still keeps the corpus clones out.
+# `copy_vcs` stays `true` -- cargo-mutants defaults it to `false`. No current test needs it: the
+# suites that read this checkout's `.git` (the docs-contract test lists tracked pages with
+# `git ls-files`) no longer run under the unittest selection below, and the `git` calls left in
+# `src/main.rs`'s tests initialize their own fixture repositories. It is kept as cheap insurance
+# for the next test that does shell out against the checkout -- ~150 MB once per run, and the
+# alternative is a baseline that fails with exit 4, which the gate refuses to score.
 #
 # ## Timeouts
 #
-# `minimum_test_timeout` is 60s against a warm suite that finishes in ~30s (it was ~5s when this
-# was written; the last baseline auto-set 111s). That headroom is for the copied tree's first run
-# on a loaded CI box, not for slow tests.
+# `minimum_test_timeout` is 60s against a warm baseline suite that finishes in ~6s under the
+# unittest selection above (it was ~30s under `--all-targets`; the last baseline under that
+# selection auto-set 111s). That headroom is for the copied tree's first run on a loaded CI box,
+# not for slow tests.
 #
 # `build_timeout_multiplier = 12.0` is **not** cargo-mutants' default of 3.0, and the reason is
 # recorded because the number was earned. At 3.0 the first full run of this scope auto-set a 77s
@@ -44,13 +46,49 @@
 # instead of failing. If that happens, the right answer is a test that pins the guard's behaviour,
 # not a score that quietly credits the timeout.
 #
-# ## `additional_cargo_test_args = ["--all-targets"]`
+# ## `additional_cargo_test_args = ["--lib", "--bins"]`
 #
-# Same reason `AGENTS.md` insists on it for revert checks: `cargo test --lib` does not rebuild the
-# standalone binary that the `assert_cmd` tests in `src/main.rs` execute, and the two integration
-# suites in `tests/` drive that binary. Without `--all-targets`, every mutant those suites would
-# have caught is scored as missed, and the score becomes a measurement of the unit tests alone
-# while claiming to measure the test suite.
+# The per-mutant test run executes the lib unittest binary and the `src/main.rs` unittest binary,
+# and nothing else. The evidence is the 2026-10-24 hosted run (767 of 1,537 mutants completed
+# before the cap cancelled it): its per-mutant logs name the failing test, and all 513 caught
+# mutants were caught by one of the two unittest binaries -- 503 by the lib binary alone, 10 by
+# the `src/main.rs` binary alone, none by any of the 24 integration suites in `tests/`. That
+# run still selected every target, so the suites were executed whenever nothing failed earlier
+# -- cargo stops at the first failing test binary, which means on the baseline and on every
+# missed mutant -- and every suite passed on each of them. Each of those mutants therefore
+# classifies identically under this selection too: a unittest binary still fails first, or
+# everything still passes, and the build phase is untouched. That is a statement about the
+# recorded sample, not about the evidence future runs will carry -- from now on the mutation
+# run itself provides none about the integration suites, which is the residual risk recorded
+# below. Paired runs over the smallest scoped file (`fingerprint/row_substitution.rs`, 10
+# mutants) confirm the classification identity directly: 6 caught, 0 missed, 4 unviable under
+# both selections.
+#
+# What the selection buys is the test phase, and only its uncapped tail: a caught mutant stops
+# in one of the two unittest binaries either way (7.1s vs 8.9s average test phase in the paired
+# runs, noise), but
+# a missed mutant runs the whole selection, and the full suite measures 33.1s against 5.6s for
+# lib+bins on the development machine; the unmutated baseline each run starts from drops from
+# 20s to 7s of test time. That is real but not a fix for the cap: the per-mutant build phase,
+# which still compiles and links all 24 suites, is the larger half of the run, and cargo-mutants
+# 27.1.0 gives `additional_cargo_test_args` to the test phase only (`src/cargo.rs`
+# `cargo_argv`). `additional_cargo_args` does reach the build phase and was tried -- with it the
+# unmutated baseline fails: a narrowed build never produces the standalone binary, and
+# `CARGO_BIN_EXE_vitest-dedup`, the env var the `assert_cmd` calls in `src/main.rs` resolve it
+# from, is unset, so 70 end-to-end tests panic before they run a step. The build-phase narrowing
+# is therefore recorded here as tried and rejected, and the cap decision (sharding, more jobs, a
+# higher cap) remains a separate one.
+#
+# Two boundaries are recorded rather than discovered later. The build phase still compiles
+# every suite, so a mutant that breaks an integration suite's compilation still fails the build
+# and scores unviable exactly as before -- the unviable/missed boundary does not move (in the
+# hosted sample all 31 unviable mutants failed to compile the lib itself, none an integration
+# suite). The residual risk that a future mutant is caught only by an integration suite is
+# absorbed the same way the floors absorb equivalent mutants: the suites keep running in CI
+# itself, and the floors in `scripts/check/check-mutation-score.mjs` are re-measured under this
+# selection when the first full run completes. If the scope ever widens to files whose
+# behaviour surfaces only through the CLI's rendered output (report paths, SARIF, terminal
+# layout), revisit this selection with the same evidence standard.
 #
 # ## Exclusions: one, and it is not a coverage dodge
 #
@@ -101,5 +139,5 @@ copy_target = false
 minimum_test_timeout = 60.0
 build_timeout_multiplier = 12.0
 timeout_multiplier = 4.0
-additional_cargo_test_args = ["--all-targets"]
+additional_cargo_test_args = ["--lib", "--bins"]
 exclude_globs = ["src/analysis/tests.rs"]

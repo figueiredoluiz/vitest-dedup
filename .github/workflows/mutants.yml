@@ -1,12 +1,16 @@
 # Scheduled mutation testing of the fingerprint and analysis contracts.
 #
-# Why this is not a pull-request gate: cargo-mutants rebuilds and re-runs the whole suite once per
-# mutant, and the scope is 1,537 mutants (`cargo mutants --list`, 2026-10-24; the last timed full
-# run, of 1,171, took around 75 minutes on the development machine, and longer on a hosted runner).
-# A 2026-10-24 attempt over the first 65 mutants of the current scope averaged 17.0s per mutant --
-# ~7.3 hours serially, past this job's 300-minute cap -- so the gate asks cargo-mutants for two
-# jobs, roughly half that here; how long a hosted run takes is known only from the first one that
-# finishes. Per-pull-request is impossible, and the answer changes slowly enough that weekly is
+# Why this is not a pull-request gate: cargo-mutants rebuilds and re-runs the test selection once
+# per mutant, and the scope is 1,537 mutants (`cargo mutants --list`, 2026-10-24). The measured
+# history of that cost: the last timed full run, of 1,171, took around 75 minutes on the
+# development machine; a 2026-10-24 hosted attempt at the current scope averaged 46.7s per mutant (median 44s)
+# at `--jobs 2` and was cancelled at this job's 300-minute cap with 767 of 1,537 done. That
+# run's per-mutant logs showed the 24 `tests/` integration suites never catch anything the two
+# unittest binaries miss, so `.cargo/mutants.toml` now runs the test phase against those binaries
+# only -- what that buys, and the narrowing of the build phase that was tried and rejected there,
+# are recorded in that file. Whether a full hosted run fits the cap is answered by the first one
+# that finishes.
+# Per-pull-request is impossible, and the answer changes slowly enough that weekly is
 # the right cadence.
 #
 # Why weekly is right *here*, when it is the wrong cadence

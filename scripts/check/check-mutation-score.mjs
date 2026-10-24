@@ -35,8 +35,11 @@
 // cargo-mutants must rebuild and re-run the suite for each one). The measured scope is the
 // fingerprint module's files (except `classes/`) and `src/analysis.rs` -- 1,537 mutants
 // enumerated. The 71 minutes at `--jobs 2` below was timed on the 1,171 mutants of the earlier
-// scope; the larger one averaged 17.0s per mutant over a 2026-10-24 attempt's first 65, ~7.3
-// hours serially, which is why the run asks for two jobs. Those are not an arbitrary slice: the
+// scope. The 2026-10-24 hosted attempt at the current scope averaged 46.7s per mutant (median 44s) and was
+// cancelled at the workflow's 300-minute cap with 767 of 1,537 done; that run's logs are why
+// `.cargo/mutants.toml` narrows the per-mutant test run to the unittest binaries, and
+// the measured phase split recorded there is what the two jobs still buy. Those are not an
+// arbitrary slice: the
 // fingerprint module is where every
 // adjudicated false positive has lived and is the weakest
 // module in the coverage gate (71.30%), and analysis.rs turns its output into the findings users
@@ -154,7 +157,8 @@ export const MINIMUM_SCORED = 1050
 // in the right direction -- a hanging mutant is certainly not caught, so counting it missed only
 // ever lowers the score, and it stays visible in the survivor list), or every file holding an
 // unguarded scanning loop stays out of scope, which is most of the parsing code this gate most
-// needs to reach. The second is the status quo and it is the reason the scope is still two files.
+// needs to reach. The second is the status quo and it is why the scope has grown one file at a
+// time rather than all at once.
 export const SCOPE = [
   // The former single `src/frontend/fingerprint.rs` (1,206 mutants) is now these files. The classes/
   // modules split from `fingerprint/classes.rs` stay out of scope, as that file was.
@@ -276,9 +280,10 @@ export function isScoreableExit(code) {
 /** Runs cargo-mutants over `SCOPE`. Split out, and the spawn injected, so the tests can drive
  * every exit-code branch without a two-hour build.
  *
- * Two jobs, not one: an attempt on 2026-10-24 averaged 17.0s per mutant over its first 65 (a
- * mutant nothing fails on reruns the whole suite), ~7 hours for the scope serially -- past the
- * workflow's 300-minute cap -- and roughly half that here. Each job builds in its own copy, so
+ * Two jobs, not one: the 2026-10-24 hosted attempt at this scope averaged 46.7s per mutant (median 44s) over
+ * its first 767 and was cancelled at the workflow's 300-minute cap -- a mutant nothing fails on
+ * reruns the whole selected suite (narrowed to the unittest binaries by
+ * `.cargo/mutants.toml`'s `additional_cargo_test_args`). Each job builds in its own copy, so
  * this doubles build directories; that is the trade, made for a run that can finish at all. */
 export function runMutants(argv, { spawn = spawnSync } = {}) {
   const args = [...scopeArguments(), '--jobs', '2']
