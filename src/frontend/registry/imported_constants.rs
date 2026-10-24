@@ -10,16 +10,13 @@
 use super::{
     const_declarator, peeled, unwrap_transparent, FoldScope, ImportedConstants, MAX_VALUE_HOPS,
 };
-use crate::frontend::helpers::{self, find_value_export, with_parsed_file, ValueExport};
-use crate::frontend::resolver::{self, Resolved};
+use crate::frontend::helpers::{find_value_export, with_parsed_file, ValueExport};
 use oxc_allocator::{Allocator, CloneIn};
-use oxc_ast::ast::{
-    Argument, Expression, ImportDeclarationSpecifier, ImportOrExportKind, UnaryOperator,
-};
+use oxc_ast::ast::{Expression, UnaryOperator};
 use oxc_ast::AstKind;
 use oxc_semantic::{Semantic, SemanticBuilder, SymbolId};
 use oxc_span::{GetSpan, GetSpanMut, Span};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 /// Most import bindings one file tries to prove; each costs a parse of its export chain.
 pub(in crate::frontend) const MAX_IMPORTED_CONSTANTS: usize = 64;
@@ -32,8 +29,9 @@ impl<'a> ImportedConstants<'a> {
 }
 
 /// Whether some reference to `symbol` sits inside the arguments of an `.each`/`.for` call or the
-/// quasi of an `.each`/`.for` tagged template, or initializes a `const` (a local alias a table may
-/// read): the only places an imported constant is read.
+/// quasi of an `.each`/`.for` tagged template, or inside a variable initializer (a local alias a
+/// table may read): the only places an imported constant is read. A filter on which imports are
+/// worth a proof, so a miss costs recall only.
 pub(in crate::frontend) fn referenced_in_table(semantic: &Semantic, symbol: SymbolId) -> bool {
     let scoping = semantic.scoping();
     let nodes = semantic.nodes();
@@ -47,21 +45,12 @@ pub(in crate::frontend) fn referenced_in_table(semantic: &Semantic, symbol: Symb
         .any(|reference_id| {
             let node = scoping.get_reference(*reference_id).node_id();
             let span = nodes.kind(node).span();
-            // `const L = X`, also through the wrappers the fold looks through (`X as const`).
-            let mut wrapper = node;
-            while matches!(
-                nodes.parent_kind(wrapper),
-                AstKind::ParenthesizedExpression(_)
-                    | AstKind::TSAsExpression(_)
-                    | AstKind::TSSatisfiesExpression(_)
-                    | AstKind::TSNonNullExpression(_)
-                    | AstKind::TSTypeAssertion(_)
-            ) {
-                wrapper = nodes.parent_id(wrapper);
-            }
-            let wrapped = nodes.kind(wrapper).span();
-            let aliased = matches!(nodes.parent_kind(wrapper), AstKind::VariableDeclarator(declarator)
-                if declarator.init.as_ref().is_some_and(|init| init.span() == wrapped));
+            // A `const` initializer that reads the import (`const L = X`, `const L = `${X}``) is a
+            // local alias a table may read.
+            let aliased = nodes.ancestor_kinds(node).any(|kind| {
+                matches!(kind, AstKind::VariableDeclarator(declarator)
+                    if declarator.init.as_ref().is_some_and(|init| init.span().contains_inclusive(span)))
+            });
             aliased
                 || nodes.ancestor_kinds(node).any(|kind| match kind {
                     AstKind::CallExpression(call) => {
@@ -79,54 +68,35 @@ pub(in crate::frontend) fn referenced_in_table(semantic: &Semantic, symbol: Symb
         })
 }
 
-/// The canonical paths of the modules this file can hold a namespace object of: every value
-/// `import * as`, `import('…')`, `vi.importActual('…')` and `vi.importMock('…')`, resolved.
-/// `None` when a dynamic specifier is not a string literal, or does not resolve, since it could
-/// name any module.
-pub(in crate::frontend) fn namespace_modules(
-    semantic: &Semantic,
-    file: &Path,
-) -> Option<Vec<PathBuf>> {
-    let canonical = |specifier: &str| match resolver::resolve(file, specifier) {
-        Resolved::Module(path) => Some(helpers::canonical(&path)),
-        Resolved::Unresolved => None,
-    };
-    let dynamic = |source: Option<&Expression>| match source {
-        Some(Expression::StringLiteral(specifier)) => canonical(specifier.value.as_str()),
-        _ => None,
-    };
-    let mut modules = Vec::new();
-    for node in semantic.nodes().iter() {
-        match node.kind() {
-            AstKind::ImportDeclaration(import) => {
-                if import.import_kind == ImportOrExportKind::Type {
-                    continue;
-                }
-                let namespace = import.specifiers.iter().flatten().any(|specifier| {
-                    matches!(
-                        specifier,
-                        ImportDeclarationSpecifier::ImportNamespaceSpecifier(_)
-                    )
-                });
-                if namespace {
-                    // An unresolved namespace names no module a chain can reach.
-                    modules.extend(canonical(import.source.value.as_str()));
-                }
+/// Whether this file can redefine a property accessor: the one way an export's value changes
+/// under its importers. Vitest's module objects reject assignment and `vi.spyOn` of a non-function
+/// value, but `vi.spyOn(module, 'X', 'get')` and `Object.defineProperty(module, 'X', …)` rewrite
+/// the binding, whichever route reached the module object (`import * as`, `vi.importActual`, a
+/// re-exported namespace). The target is not placed: any `spyOn` given an access type or used
+/// other than as a direct call, and any `defineProperty`, `defineProperties`, `__defineGetter__`
+/// or `__defineSetter__`, counts.
+pub(in crate::frontend) fn redefines_accessors(semantic: &Semantic) -> bool {
+    let nodes = semantic.nodes();
+    nodes.iter().any(|node| {
+        let name = match node.kind() {
+            AstKind::IdentifierReference(ident) => ident.name.as_str(),
+            AstKind::StaticMemberExpression(member) => member.property.name.as_str(),
+            AstKind::ComputedMemberExpression(member) => match &member.expression {
+                Expression::StringLiteral(key) => key.value.as_str(),
+                _ => return false,
+            },
+            _ => return false,
+        };
+        match name {
+            "defineProperty" | "defineProperties" | "__defineGetter__" | "__defineSetter__" => true,
+            "spyOn" => {
+                let span = node.kind().span();
+                !matches!(nodes.parent_kind(node.id()), AstKind::CallExpression(call)
+                    if call.callee.span() == span && call.arguments.len() < 3)
             }
-            AstKind::ImportExpression(import) => modules.push(dynamic(Some(&import.source))?),
-            // The actual module is the instance the import binds, so spying it rewrites the import.
-            AstKind::CallExpression(call)
-                if matches!(&call.callee, Expression::StaticMemberExpression(member)
-                    if matches!(member.property.name.as_str(), "importActual" | "importMock")) =>
-            {
-                modules.push(dynamic(
-                    call.arguments.first().and_then(Argument::as_expression),
-                )?);
-            }
-            _ => {}
+            _ => false,
         }
-    }
-    Some(modules)
+    })
 }
 
 /// The closed scalar literal the first-party module at `path` exports as `export`, cloned into

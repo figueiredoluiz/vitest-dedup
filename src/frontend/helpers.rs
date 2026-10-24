@@ -299,10 +299,11 @@ pub(in crate::frontend) mod export_contract {
         UnreadableOrUnparseable,
         /// A re-export hop's specifier did not resolve against the re-exporting file.
         UnresolvedSpecifier,
-        /// `find_export` found no admitted export of this name in this file. A present export
-        /// of an unadmitted shape (`export const run = 5`, a class, `export *`) folds into this
-        /// reason: `find_export` cannot distinguish it, and this contract adds no second
-        /// opinion.
+        /// The chain's finder ([`find_export`] for callables, [`find_value_export`] for values)
+        /// found no admitted export of this name in this file. A present export of a shape that
+        /// finder does not admit (for callables `export const run = 5`; for either a class or
+        /// `export *`) folds into this reason: the finder cannot distinguish it, and this
+        /// contract adds no second opinion.
         MissingExport,
         /// The chain was still a re-export after [`MAX_REEXPORT_HOPS`] hops. Checked before the
         /// next specifier is resolved, so a chain that is both too long and dangling reports the

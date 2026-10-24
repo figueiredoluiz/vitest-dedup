@@ -278,21 +278,22 @@ fn a_member_read_in_the_declaring_module_is_refused() {
 /// A hop that leaves the analysis root leaves the cell unresolved without marking the file
 /// incomplete: the lookup is optional.
 fn a_hop_outside_the_root_does_not_mark_the_file_incomplete() {
-    for (barrel, test_tail) in [
-        ("export { X } from '@shared/consts'", ""),
-        // The namespace scan's own lookups are optional too.
+    for (barrel, test_tail, unresolved) in [
+        ("export { X } from '@shared/consts'", "", true),
+        // A dynamic import leaving the root is not looked up by the proof at all.
         (
             "export const X = 'a'",
             "const later = () => import('@shared/consts')\n",
+            false,
         ),
     ] {
-        outside_root_case(barrel, test_tail);
+        outside_root_case(barrel, test_tail, unresolved);
     }
 }
 
 /// One `t.test.ts` under `root/src` reading `X` from `./barrel`, beside a tsconfig alias that
-/// leaves the root; asserts the file stays complete.
-fn outside_root_case(barrel: &str, test_tail: &str) {
+/// leaves the root; asserts the file stays complete and whether the cell resolves.
+fn outside_root_case(barrel: &str, test_tail: &str, unresolved: bool) {
     let outer = tempfile::tempdir().unwrap();
     let root = outer.path().join("root");
     std::fs::create_dir_all(root.join("src")).unwrap();
@@ -320,7 +321,7 @@ fn outside_root_case(barrel: &str, test_tail: &str) {
     );
     let extraction = extract_within(&source, &file, Globals::Disabled, &root);
     assert_eq!(extraction.tests.len(), 1);
-    assert!(extraction.tests[0].context.unresolved);
+    assert_eq!(extraction.tests[0].context.unresolved, unresolved);
     assert!(
         !extraction
             .reasons
@@ -349,27 +350,38 @@ fn a_nuxt_mock_of_any_name_on_the_chain_is_never_read() {
 }
 
 #[test]
-/// A namespace object of a chain module can have the export's getter spied before the table is
-/// built, and a dynamic import whose module is unknown could be one; neither is read.
-fn namespace_objects_of_a_chain_module_refuse_the_import() {
+/// Redefining an accessor is how an export changes under its importers, and the module object
+/// can be reached many ways, so any accessor redefinition in the file refuses every import. A
+/// namespace object alone, a function spy and an unresolved dynamic import do not.
+fn accessor_redefinitions_refuse_imported_constants() {
     let modules = [
         ("m.ts", "export const X = 'fast'"),
-        ("other.ts", "export const Y = 1"),
+        ("helper.ts", "export * as values from './m'"),
     ];
     for (setup, unresolved) in [
-        ("import * as other from './other'", false),
-        ("const later = () => import('./other')", false),
-        ("import * as ns from './m'\nvi.spyOn(ns, 'X', 'get')", true),
-        ("const later = () => import('./m')", true),
-        ("const later = (name: string) => import(name)", true),
-        ("vi.mock('~/nowhere', () => ({}))", true),
+        ("import * as ns from './m'", false),
         ("import type * as types from './m'", false),
-        ("const actual = () => vi.importActual('./m')", true),
-        ("const mocked = () => vi.importMock('./other')", false),
+        ("const actual = () => vi.importActual('./m')", false),
+        ("const later = () => import('node:fs')", false),
+        ("vi.spyOn(console, 'log')", false),
+        ("import * as ns from './m'\nvi.spyOn(ns, 'X', 'get')", true),
         (
-            "const actual = (name: string) => vi.importActual(name)",
+            "import { values } from './helper'\nvi.spyOn(values, 'X', 'get')",
             true,
         ),
+        (
+            "const { spyOn } = vi\nconst ns = await vi.importActual('./m')\nspyOn(ns, 'X', 'get')",
+            true,
+        ),
+        ("const spy = vi.spyOn", true),
+        ("vi['spyOn'](globalThis, 'X', 'get')", true),
+        (
+            "import * as ns from './m'\nObject.defineProperty(ns, 'X', { get: () => 'slow' })",
+            true,
+        ),
+        ("Reflect.defineProperty(globalThis, 'Y', {})", true),
+        ("({}).__defineGetter__('X', () => 1)", true),
+        ("vi.mock('~/nowhere', () => ({}))", true),
     ] {
         let tests = ConstantCase::new(
             &modules,
@@ -393,12 +405,14 @@ fn a_local_alias_of_the_import_resolves() {
 }
 
 #[test]
-/// An alias through a type wrapper is an alias.
-fn a_wrapped_local_alias_of_the_import_resolves() {
-    let tests = ConstantCase::new(
-        &[("m.ts", "export const X = 'fast'")],
-        "import { test } from 'vitest'\nimport { X } from './m'\nconst L = (X as string)!\ntest.each([[L]])('t %s', () => {})\n",
-    )
-    .tests();
-    assert_eq!(tests, vec![("t fast".to_owned(), false)]);
+/// An alias through a type wrapper, or a computation over the import, is an alias.
+fn a_wrapped_or_computed_local_alias_of_the_import_resolves() {
+    for (alias, title) in [("(X as string)!", "t fast"), ("`${X}-1`", "t fast-1")] {
+        let tests = ConstantCase::new(
+            &[("m.ts", "export const X = 'fast'")],
+            &format!("import {{ test }} from 'vitest'\nimport {{ X }} from './m'\nconst L = {alias}\ntest.each([[L]])('t %s', () => {{}})\n"),
+        )
+        .tests();
+        assert_eq!(tests, vec![(title.to_owned(), false)], "{alias}");
+    }
 }

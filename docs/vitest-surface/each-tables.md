@@ -63,13 +63,15 @@ like the literal. Everything else stays unresolved: `let`/`var` and `declare` ex
 initializers (`'a' + 'b'`), `undefined`/`NaN`/`Infinity`, objects, arrays, calls, enum and object
 members, default and namespace imports, `export *`, declaration files, installed packages, and an
 import whose chain returns to the test file. An import is not read when the test file mocks a
-module or re-export hop on its chain (`vi.mock`, or a `mockNuxtImport` of a name on the chain), or
-holds a namespace object of one (a value `import * as`, `import()`, `vi.importActual()` or
-`vi.importMock()`), which `vi.spyOn` can rewrite. A file
-whose mocking cannot be fully read (a `vi.doMock`, a nested or unreadable `vi.mock`, a mocked
-specifier that does not resolve) or that imports a non-literal specifier reads no imported
-constant at all. Mocks registered outside the test file, in `setupFiles` or in a module the test
-file imports, are not seen: the analyzer then reads the real value where Vitest uses the mock.
+module or re-export hop on its chain (`vi.mock`, or a `mockNuxtImport` of a name on the chain). A
+file reads no imported constant at all when its mocking cannot be fully read (a `vi.doMock`, a
+nested or unreadable `vi.mock`, a mocked specifier that does not resolve), or when it can redefine
+a property accessor, which is how a module object's export is rewritten however the object was
+reached: a `spyOn` given an access type (`vi.spyOn(ns, 'X', 'get')`) or used other than as a
+direct call, or any `defineProperty`, `defineProperties`, `__defineGetter__` or
+`__defineSetter__`. Mocks and accessor redefinitions outside the test file, in `setupFiles` or in a
+module the test file imports, are not seen: the analyzer then reads the real value where Vitest
+uses the replacement.
 
 **Static-analysis fallback rule**: whenever the table itself is not a literal array/object
 expression at the call site (e.g. `test.each(getCases())`), the extractor cannot enumerate rows at

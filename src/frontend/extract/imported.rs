@@ -261,7 +261,8 @@ impl<'a> Walker<'a> {
             })
             .map(|(symbol, import)| (*symbol, import))
             .collect();
-        if candidates.is_empty() {
+        // An accessor this file can redefine may be any import's (`vi.spyOn(ns, 'X', 'get')`).
+        if candidates.is_empty() || imported_constants::redefines_accessors(self.semantic) {
             return;
         }
         candidates.sort_by_key(|(symbol, _)| *symbol);
@@ -275,13 +276,6 @@ impl<'a> Walker<'a> {
         // An optional lookup: a hop that leaves the analysis root leaves the cell unresolved
         // without marking the file incomplete.
         resolver::quietly(|| {
-            // A module namespace in this file can have an export's getter spied before the table
-            // is built (`vi.spyOn(ns, 'X', 'get')`), so no chain may reach a module it names.
-            let Some(namespaces) =
-                imported_constants::namespace_modules(self.semantic, &self.file.path)
-            else {
-                return;
-            };
             for (symbol, import) in candidates
                 .into_iter()
                 .take(imported_constants::MAX_IMPORTED_CONSTANTS)
@@ -294,10 +288,10 @@ impl<'a> Walker<'a> {
                 };
                 if chain.exports.iter().any(|name| nuxt_mocked(name))
                     || self.is_mocked(&import.origin, &chain.modules)
-                    || chain.modules.iter().any(|module| {
-                        let module = helpers::canonical(module);
-                        module == own || namespaces.contains(&module)
-                    })
+                    || chain
+                        .modules
+                        .iter()
+                        .any(|module| helpers::canonical(module) == own)
                 {
                     continue;
                 }
