@@ -192,11 +192,16 @@ config defining the auto-imported globals, and a `~` alias for the tsconfig case
 except the three that depend on something missing by design: the uninstalled package, the absent
 generated parent and the analysis root below it.
 
+The `mock-spy-options-*` cases cover literal `vi.mock(specifier, { spy: true })` registrations:
+matching spies retain a cross-file duplicate, different mock modes remain comparable but distinct,
+and dynamic options remain excluded. These owned sources also run under the pinned Vitest runtime;
+the positive pair asserts both the original return value and the recorded spy call.
+
 ## The floor
 
 `minimumRecall` is the measured value rounded down, not the target: a gate that is red on arrival
 gets routed around, after which the number it guards is worse than unmeasured. `recallDestination`
-records the destination. The corpus currently detects 178 of the 179 findings its labels desire --
+records the destination. The corpus currently detects 179 of the 180 findings its labels desire --
 every `expectedFindings` entry matches; the denominator's one gap is the known miss of the framework
 cases above -- so `minimumRecall` stays 0.99 and `knownMissBaseline` stays 1. Each change that finds
 one of them moves its entry from `knownMisses` to

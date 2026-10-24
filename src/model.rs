@@ -453,13 +453,14 @@ pub enum CallbackForm {
 
 /// What a `vi.mock` registration supplies in place of the real module.
 ///
-/// A tri-state, not an `Option`. Review found `Option<String>` here conflating "automocked" with
-/// "we could not read the factory" — the third instance of that same defect in this file. A value
-/// that means two things cannot be compared correctly under any equality.
+/// An explicit registration mode, not an `Option`: automocking, preserving implementations
+/// while spying, an inline factory, and an unreadable registration must remain distinct.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum MockFactory {
     /// `vi.mock('./x')` with no factory. Two of these are genuinely the same behavior.
     Automock,
+    /// `vi.mock('./x', { spy: true })`: spy on exports while preserving their implementations.
+    Spy,
     /// An inline factory, carrying its alpha-normalized fingerprint.
     ///
     /// Shared for the same reason as [`Hook::alpha_source`]: a file's mock registrations are
@@ -501,7 +502,7 @@ pub struct MockedModule {
 
 /// What a `test.extend` fixture supplies.
 ///
-/// Tri-state for the same reason as [`MockFactory`]: review found this `Option` conflating "a
+/// Explicit states for the same reason as [`MockFactory`]: this `Option` previously conflated "a
 /// plain literal value" with "unreadable", which made `base.extend({ db: makeRealDb() })` compare
 /// equal to `base.extend({ db: 42 })`.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
