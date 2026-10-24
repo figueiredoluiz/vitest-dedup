@@ -67,8 +67,8 @@ members, default and namespace imports, `export *`, declaration files, installed
 import whose chain returns to the test file. An import is not read when the test file mocks a
 module or re-export hop on its chain (`vi.mock`, or a `mockNuxtImport` of a name on the chain). A
 file reads no imported constant at all when its mocking cannot be fully read (a `vi.doMock`, a
-nested or unreadable `vi.mock`, a mocked path or alias that does not resolve; an unresolved
-package or Node builtin cannot be a first-party module and does not count), or when it can
+nested or unreadable `vi.mock`, a mocked specifier that does not resolve, since a bundler alias
+can be spelled like a package; only a Node builtin does not count), or when it can
 redefine a property accessor, which is how a module object's export is rewritten however the
 object was reached. The names are read from the source text: any mention of `defineProperty`,
 `defineProperties`, `__defineGetter__` or `__defineSetter__` counts, and so does any mention of

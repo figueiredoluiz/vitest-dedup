@@ -239,8 +239,9 @@ impl<'a> Walker<'a> {
     /// tried; every unproved binding stays an unresolved cell. A historical file is never proved:
     /// the modules on disk are today's, not the ones it imported.
     pub(super) fn prove_imported_constants(&mut self, allocator: &'a Allocator) {
-        // Unreadable mocks, and a mock of a path or alias that does not resolve, could replace any
-        // first-party module, so nothing is tried. An unresolved package or builtin cannot.
+        // Unreadable mocks, and a mock that does not resolve, could replace any first-party module
+        // (a package-shaped name may be a bundler alias), so nothing is tried. A Node builtin
+        // cannot be one.
         if !self.allow_imported
             || self.mocks_unresolved
             || self.mocked_modules.iter().any(|mock| {
@@ -273,7 +274,7 @@ impl<'a> Walker<'a> {
         let nuxt_mocked = |name: &str| {
             self.mocked_modules
                 .iter()
-                .any(|mock| mock.specifier.as_ref() == format!("nuxt-import:{name}"))
+                .any(|mock| mock.specifier.strip_prefix("nuxt-import:") == Some(name))
         };
         let mut constants = ImportedConstants::default();
         // An optional lookup: a hop that leaves the analysis root leaves the cell unresolved

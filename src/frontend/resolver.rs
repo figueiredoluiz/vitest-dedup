@@ -220,10 +220,10 @@ fn has_package_syntax(specifier: &str) -> bool {
     }
 }
 
-/// Whether an unresolved `specifier` could still name a first-party module: it is neither a Node
-/// core module nor written as a package name (a path, or an alias such as `~/x` or `@/x`).
+/// Whether an unresolved `specifier` could still name a first-party module: anything but a Node
+/// core module, since a bundler alias can be spelled like a package (`@app/x`, `src/x`).
 pub(super) fn may_name_first_party(specifier: &str) -> bool {
-    !is_node_builtin(specifier) && !has_package_syntax(specifier)
+    !is_node_builtin(specifier)
 }
 
 /// Whether `specifier` is a Node core module (prefixed, or one of the unprefixed names).

@@ -405,7 +405,9 @@ fn accessor_redefinitions_refuse_imported_constants() {
             "vi.spy\\u004Fn(console, 'log')\nvi.spyOn(globalThis, 'Y', 'get')",
             true,
         ),
-        ("vi.mock('vitest-dedup-not-installed', () => ({}))", false),
+        // A package-shaped specifier that does not resolve may be a bundler alias.
+        ("vi.mock('vitest-dedup-not-installed', () => ({}))", true),
+        ("vi.mock('@app/modes', () => ({}))", true),
         ("vi.mock('node:fs')", false),
     ] {
         let tests = ConstantCase::new(
