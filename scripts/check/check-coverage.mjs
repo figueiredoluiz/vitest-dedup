@@ -209,6 +209,8 @@ const RUST_MODULES = {
   // paren handling never produces.
   'src/frontend/helpers.rs': 98,
   'src/frontend/registry.rs': 97,
+  // Imported table constants: measured at 94.57% (87/92 instrumented lines).
+  'src/frontend/registry/imported_constants.rs': 94,
   'src/frontend/resolver.rs': 100,
   'src/main.rs': 97,
   // Native memory readers: measured 41/44 instrumented lines (93.18%) on macOS.

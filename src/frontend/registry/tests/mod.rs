@@ -259,7 +259,7 @@ fn census_labels_distinguish_resolved_bindings() {
             panic!("the fixture ends with the reference being classified");
         };
         assert_eq!(
-            cell_refusal_cause(&statement.expression, Some(&semantic)),
+            cell_refusal_cause(&statement.expression, Some(FoldScope::local(&semantic))),
             expected
         );
     }
@@ -465,6 +465,7 @@ impl<'a, 'r, 's> Visit<'a> for FirstCallResolver<'r, 's> {
                 &it.callee,
                 self.registry,
                 self.semantic,
+                &ImportedConstants::default(),
                 self.source,
                 self.file,
             );
@@ -799,6 +800,7 @@ fn defect5_sibling_bindings_with_the_same_name_fingerprint_differently() {
                 &it.callee,
                 self.registry,
                 self.semantic,
+                &ImportedConstants::default(),
                 self.source,
                 self.file,
             ) {
@@ -953,6 +955,7 @@ fn defect4_row_with_identifier_cell_is_unresolved() {
         &statement.expression,
         usize::MAX,
         &semantic,
+        &ImportedConstants::default(),
         source,
         Path::new("x.ts"),
     )
@@ -2583,6 +2586,7 @@ impl<'a> Visit<'a> for OutermostCallResolver<'_, '_> {
             &it.callee,
             self.registry,
             self.semantic,
+            &ImportedConstants::default(),
             self.source,
             self.file,
         );

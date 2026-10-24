@@ -52,7 +52,19 @@ including signed infinity and earlier local `const` aliases. A local or imported
 of these names must prove its own value; the spelling alone never identifies a global. Distinct
 value kinds remain distinct row identities. Titles follow their formatter: array string coercion
 renders `undefined` as empty, JSON array elements become `null`, and JSON object properties with
-that value are omitted. Imported scalar values and imported object members remain unresolved.
+that value are omitted.
+
+**Imported constants**: a cell naming a value import (`import { MODE } from './modes'`) is read
+when the import resolves, through named re-exports, to a first-party module that declares it with
+a module-level `const` whose initializer is a string, number, signed number, boolean, `null`,
+bigint or substitution-free template literal, directly or through an earlier local `const` alias.
+The value then reads exactly like the literal. Everything else stays unresolved: `let`/`var` and
+`declare` exports, computed initializers (`'a' + 'b'`), `undefined`/`NaN`/`Infinity`, objects,
+arrays, calls, enum and object members, default and namespace imports, `export *`, declaration
+files, installed packages, an import whose chain returns to the test file, and any import whose
+module or re-export hop the test file mocks (`vi.mock`, `vi.doMock`, or a `mockNuxtImport` of the
+same name). Mocks registered in `setupFiles` are not seen: a setup file that mocks a constants
+module makes the analyzer read the real value.
 
 **Static-analysis fallback rule**: whenever the table itself is not a literal array/object
 expression at the call site (e.g. `test.each(getCases())`), the extractor cannot enumerate rows at

@@ -1,0 +1,261 @@
+use super::*;
+use std::path::PathBuf;
+
+/// A test file `t.test.ts` beside `modules`, extracted from disk so imports resolve.
+struct ConstantCase {
+    _directory: tempfile::TempDir,
+    file: SourceFile,
+    source: String,
+}
+
+impl ConstantCase {
+    /// Writes `modules` (relative path, source) and the test file `source` into a fresh root.
+    fn new(modules: &[(&str, &str)], source: &str) -> Self {
+        let directory = tempfile::tempdir().unwrap();
+        for (path, text) in modules {
+            let path = directory.path().join(path);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, text).unwrap();
+        }
+        let path = directory.path().join("t.test.ts");
+        std::fs::write(&path, source).unwrap();
+        let file = SourceFile::without_project_context(
+            path,
+            crate::discovery::SourceLanguage::TypeScript,
+            ModuleFlavor::Ambiguous,
+        );
+        Self {
+            _directory: directory,
+            file,
+            source: source.to_owned(),
+        }
+    }
+
+    /// The file's tests as `(title, unresolved)`.
+    fn tests(&self) -> Vec<(String, bool)> {
+        self.tests_with(true)
+    }
+
+    /// [`Self::tests`], extracted as a historical file when `allow_imported` is false.
+    fn tests_with(&self, allow_imported: bool) -> Vec<(String, bool)> {
+        extract_with_imports(&self.source, &self.file, Globals::Disabled, allow_imported)
+            .tests
+            .iter()
+            .map(|case| (case.full_title(), case.context.unresolved))
+            .collect()
+    }
+}
+
+/// One table row reading `X` imported from `./m`, over the module source `module`.
+fn single_row(module: &str) -> Vec<(String, bool)> {
+    ConstantCase::new(
+        &[("m.ts", module)],
+        "import { test } from 'vitest'\nimport { X } from './m'\ntest.each([[X]])('t %s', () => {})\n",
+    )
+    .tests()
+}
+
+#[test]
+/// Each admitted declaration shape resolves the cell to the declaring module's literal.
+fn closed_const_literals_resolve_through_every_admitted_export_shape() {
+    for (module, title) in [
+        ("export const X = 'fast'", "t fast"),
+        ("export const X: string = 'fast' as const", "t fast"),
+        ("export const X = -1", "t -1"),
+        ("export const X = `tpl`", "t tpl"),
+        ("const A = 'a'\nexport const X = A", "t a"),
+        ("const A = 'a'\nexport { A as X }", "t a"),
+        ("export const Y = 1, X = 'second'", "t second"),
+    ] {
+        assert_eq!(
+            single_row(module),
+            vec![(title.to_owned(), false)],
+            "{module}"
+        );
+    }
+}
+
+#[test]
+/// A declaration whose value the importer cannot prove leaves the row unresolved.
+fn unproved_declarations_leave_the_cell_unresolved() {
+    for module in [
+        "export let X = 'a'",
+        "export var X = 'a'",
+        "export declare const X = 'a'",
+        "export const X = 'a' + 'b'",
+        "export const X = undefined",
+        "export const X = NaN",
+        "export const X = +1n",
+        "export const X = { a: 1 }",
+        "export const X = ['a']",
+        "export const X = make()",
+        "import { Y } from './n'\nexport const X = Y",
+        "export * from './n'",
+        "export default 'a'",
+        "export function X() {}",
+        "export const X = 'a' +",
+        "export const X = 'a'\nlet X = 'b'",
+        // A redeclared neighbour is a SyntaxError: the module never evaluates.
+        "let Y = 1\nlet Y = 2\nexport const X = 'a'",
+    ] {
+        let tests = single_row(module);
+        assert_eq!(tests.len(), 1, "{module}");
+        assert!(tests[0].1, "{module} must stay unresolved: {tests:?}");
+    }
+}
+
+#[test]
+/// Named re-export hops are followed; an import the declaring module itself re-exports is not.
+fn reexport_hops_are_followed_to_the_declaring_module() {
+    let read = |barrel: &str| {
+        ConstantCase::new(
+            &[
+                ("values.ts", "export const MODE = 'fast'"),
+                ("barrel.ts", barrel),
+            ],
+            "import { test } from 'vitest'\nimport { X } from './barrel'\ntest.each([[X]])('t %s', () => {})\n",
+        )
+        .tests()
+    };
+    assert_eq!(
+        read("export { MODE as X } from './values'"),
+        vec![("t fast".to_owned(), false)]
+    );
+    for barrel in [
+        "import { MODE } from './values'\nexport { MODE as X }",
+        "export * from './values'\nexport {}",
+        "export type { MODE as X } from './values'",
+    ] {
+        assert!(read(barrel)[0].1, "{barrel}");
+    }
+}
+
+#[test]
+/// Default, namespace and type-only imports are not proved.
+fn only_named_value_imports_are_tried() {
+    let module = [("m.ts", "export const X = 'fast'\nexport default 'fast'")];
+    for import in [
+        "import X from './m'\ntest.each([[X]])('t %s', () => {})",
+        "import * as M from './m'\ntest.each([[M.X]])('t %s', () => {})",
+        "import { default as X } from './m'\ntest.each([[X]])('t %s', () => {})",
+    ] {
+        let tests = ConstantCase::new(
+            &module,
+            &format!("import {{ test }} from 'vitest'\n{import}\n"),
+        )
+        .tests();
+        assert!(tests[0].1, "{import}: {tests:?}");
+    }
+}
+
+#[test]
+/// A mock of the module, or of a hop, replaces the value; so does a same-name Nuxt mock.
+fn mocked_modules_are_never_read() {
+    let modules = [
+        ("values.ts", "export const X = 'fast'"),
+        ("barrel.ts", "export { X } from './values'"),
+    ];
+    let header = "import { test, vi } from 'vitest'\nimport { mockNuxtImport } from '@nuxt/test-utils/runtime'\nimport { X } from './barrel'\n";
+    for mock in [
+        "",
+        "vi.mock('./barrel', () => ({ X: 'slow' }))",
+        "vi.mock('./values', () => ({ X: 'slow' }))",
+        "vi.mock('./values')",
+        "mockNuxtImport('X', () => 'slow')",
+        "vi.doMock('./other', () => ({}))",
+    ] {
+        let tests = ConstantCase::new(
+            &modules,
+            &format!("{header}{mock}\ntest.each([[X]])('t %s', () => {{}})\n"),
+        )
+        .tests();
+        assert_eq!(tests[0].1, !mock.is_empty(), "{mock:?}: {tests:?}");
+    }
+}
+
+#[test]
+/// A chain that returns to the test file reads a binding still in its temporal dead zone.
+fn a_chain_back_to_the_importing_file_is_refused() {
+    for (modules, specifier) in [
+        (vec![], "./t.test"),
+        (
+            vec![("barrel.ts", "export { X } from './t.test'")],
+            "./barrel",
+        ),
+    ] {
+        let tests = ConstantCase::new(
+            &modules,
+            &format!("import {{ test }} from 'vitest'\nimport {{ X as Y }} from '{specifier}'\ntest.each([[Y]])('t %s', () => {{}})\nexport const X = 'a'\n"),
+        )
+        .tests();
+        assert!(tests[0].1, "{specifier}: {tests:?}");
+    }
+}
+
+#[test]
+/// Past the per-file bound, further imports are not tried and their rows stay unresolved.
+fn the_number_of_proved_imports_is_bounded() {
+    let count = crate::frontend::registry::imported_constants::MAX_IMPORTED_CONSTANTS + 1;
+    let names: Vec<String> = (0..count).map(|index| format!("C{index}")).collect();
+    let module: String = names
+        .iter()
+        .map(|name| format!("export const {name} = '{name}'\n"))
+        .collect();
+    let rows: Vec<String> = names.iter().map(|name| format!("[{name}]")).collect();
+    let source = format!(
+        "import {{ test }} from 'vitest'\nimport {{ {} }} from './m'\ntest.each([{}])('t %s', () => {{}})\n",
+        names.join(", "),
+        rows.join(", ")
+    );
+    let tests = ConstantCase::new(&[("m.ts", &module)], &source).tests();
+    assert_eq!(tests.len(), count);
+    // Imports are tried in declaration order, so only the last row is past the bound.
+    let unresolved: Vec<usize> = tests
+        .iter()
+        .enumerate()
+        .filter(|(_, (_, unresolved))| *unresolved)
+        .map(|(index, _)| index)
+        .collect();
+    assert_eq!(unresolved, vec![count - 1]);
+    assert_eq!(tests[count - 2].0, format!("t C{}", count - 2));
+}
+
+#[test]
+/// A declaration file describes a module without being one; its values are never read.
+fn declaration_files_supply_no_values() {
+    let directory = tempfile::tempdir().unwrap();
+    let path: PathBuf = directory.path().join("m.d.ts");
+    std::fs::write(&path, "export const X = 'a'").unwrap();
+    let allocator = Allocator::default();
+    assert!(
+        crate::frontend::registry::imported_constants::exported_literal(
+            &allocator,
+            &path,
+            "X",
+            Span::default()
+        )
+        .is_none()
+    );
+    let plain = directory.path().join("m.ts");
+    std::fs::write(&plain, "export const X = 'a'").unwrap();
+    assert!(
+        crate::frontend::registry::imported_constants::exported_literal(
+            &allocator,
+            &plain,
+            "X",
+            Span::default()
+        )
+        .is_some()
+    );
+}
+
+#[test]
+/// A historical file's imports name the modules of its own revision, not today's files.
+fn historical_files_never_read_present_day_constants() {
+    let case = ConstantCase::new(
+        &[("m.ts", "export const X = 'fast'")],
+        "import { test } from 'vitest'\nimport { X } from './m'\ntest.each([[X]])('t %s', () => {})\n",
+    );
+    assert_eq!(case.tests_with(true), vec![("t fast".to_owned(), false)]);
+    assert!(case.tests_with(false)[0].1);
+}

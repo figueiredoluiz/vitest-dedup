@@ -444,6 +444,7 @@ pub(super) fn resolve_callee(
     expr: &Expression,
     registry: &Registry,
     semantic: &Semantic<'_>,
+    imported: &ImportedConstants<'_>,
     source: &str,
     file: &Path,
 ) -> Option<ResolvedCallee> {
@@ -511,6 +512,7 @@ pub(super) fn resolve_callee(
                     &call.arguments,
                     registry.table_row_limit.get(),
                     semantic,
+                    imported,
                     source,
                     file,
                 )?;
@@ -521,6 +523,7 @@ pub(super) fn resolve_callee(
                     &tagged.quasi,
                     registry.table_row_limit.get(),
                     semantic,
+                    imported,
                     source,
                 )?;
             }
@@ -531,6 +534,7 @@ pub(super) fn resolve_callee(
                         &call.arguments,
                         registry.table_row_limit.get(),
                         semantic,
+                        imported,
                         source,
                         file,
                     )?;
@@ -620,6 +624,7 @@ fn finish_interior_call(
     arguments: &[Argument],
     row_limit: usize,
     semantic: &Semantic<'_>,
+    imported: &ImportedConstants<'_>,
     source: &str,
     file: &Path,
 ) -> Option<ResolvedCallee> {
@@ -630,14 +635,28 @@ fn finish_interior_call(
     };
     match name.as_str() {
         "each" => {
-            let rows = table_rows(arguments.first(), row_limit, semantic, source, file);
+            let rows = table_rows(
+                arguments.first(),
+                row_limit,
+                semantic,
+                imported,
+                source,
+                file,
+            );
             resolved.steps.push(ChainStep::Each {
                 is_for: false,
                 rows,
             });
         }
         "for" => {
-            let rows = table_rows(arguments.first(), row_limit, semantic, source, file);
+            let rows = table_rows(
+                arguments.first(),
+                row_limit,
+                semantic,
+                imported,
+                source,
+                file,
+            );
             resolved.steps.push(ChainStep::Each { is_for: true, rows });
         }
         "skipIf" => {
@@ -780,6 +799,7 @@ fn finish_tagged_call(
     quasi: &TemplateLiteral,
     row_limit: usize,
     semantic: &Semantic<'_>,
+    imported: &ImportedConstants<'_>,
     source: &str,
 ) -> Option<ResolvedCallee> {
     let ChainStep::Member(name) = resolved.steps.pop()? else {
@@ -790,7 +810,11 @@ fn finish_tagged_call(
         "for" => true,
         _ => return None,
     };
-    let rows = tagged_template_rows(quasi, row_limit, source, Some(semantic));
+    let scope = FoldScope {
+        semantic,
+        imported: Some(imported),
+    };
+    let rows = tagged_template_rows(quasi, row_limit, source, Some(scope));
     resolved.steps.push(ChainStep::Each { is_for, rows });
     Some(resolved)
 }
@@ -959,11 +983,12 @@ fn table_rows(
     argument: Option<&Argument>,
     row_limit: usize,
     semantic: &Semantic<'_>,
+    imported: &ImportedConstants<'_>,
     source: &str,
     file: &Path,
 ) -> Result<Vec<Row>, String> {
     match argument.and_then(Argument::as_expression) {
-        Some(table) => literal_table_rows(table, row_limit, semantic, source, file),
+        Some(table) => literal_table_rows(table, row_limit, semantic, imported, source, file),
         None => Err("<unresolved:no-table-argument>".to_owned()),
     }
 }
@@ -986,9 +1011,14 @@ fn literal_table_rows(
     expr: &Expression,
     row_limit: usize,
     semantic: &Semantic<'_>,
+    imported: &ImportedConstants<'_>,
     source: &str,
     file: &Path,
 ) -> Result<Vec<Row>, String> {
+    let scope = Some(FoldScope {
+        semantic,
+        imported: Some(imported),
+    });
     let Expression::ArrayExpression(array) = unwrap_parens(expr) else {
         // Not a literal array at all (an identifier, a call like `getCases()`, ...): the row
         // count is not statically knowable. Hazard 5: this must stay unreadable, not an empty
@@ -1047,9 +1077,9 @@ fn literal_table_rows(
                 if !uniform_arrays
                     && matches!(unwrap_parens(cell_expr), Expression::ArrayExpression(_))
                 {
-                    rows.push(analyze_whole_row(cell_expr, source, Some(semantic)));
+                    rows.push(analyze_whole_row(cell_expr, source, scope));
                 } else {
-                    rows.push(analyze_row(cell_expr, source, Some(semantic)));
+                    rows.push(analyze_row(cell_expr, source, scope));
                 }
             }
         }
@@ -1250,13 +1280,13 @@ fn record_census_refusal(cause: String) {
 fn cell_refusal_cause(expr: &Expression, resolve: Resolve<'_, '_>) -> String {
     match unwrap_transparent(expr) {
         Expression::Identifier(_) => {
-            match resolve.and_then(|semantic| resolved_binding(expr, semantic, 0)) {
+            match resolve.and_then(|scope| resolved_binding(expr, scope, 0)) {
                 Some(_) => "identifier (through a binding)".to_owned(),
                 None => "identifier".to_owned(),
             }
         }
         Expression::StaticMemberExpression(_) => {
-            match resolve.and_then(|semantic| resolved_binding(expr, semantic, 0)) {
+            match resolve.and_then(|scope| resolved_binding(expr, scope, 0)) {
                 Some(_) => "static member (through a binding)".to_owned(),
                 None => "static member".to_owned(),
             }
@@ -1306,7 +1336,33 @@ fn cell_refusal_cause(expr: &Expression, resolve: Resolve<'_, '_>) -> String {
 /// [`const_fold_tagged`]'s fixture values, whose contract treats an identifier as `Unresolved`
 /// on purpose: a fixture's *value* is compared, and pretending a same-named local in two scopes
 /// is one value is the exact defect `const_fold_tagged` exists to prevent).
-pub(super) type Resolve<'s, 'a> = Option<&'s Semantic<'a>>;
+pub(super) type Resolve<'s, 'a> = Option<FoldScope<'s, 'a>>;
+
+/// What a fold resolves names against: the file's semantic, and the imported constants proved
+/// for it ([`ImportedConstants`]; `None` where no file-level proof ran, such as an imported
+/// helper's own frame).
+#[derive(Clone, Copy)]
+pub(super) struct FoldScope<'s, 'a> {
+    semantic: &'s Semantic<'a>,
+    imported: Option<&'s ImportedConstants<'a>>,
+}
+
+impl<'s, 'a> FoldScope<'s, 'a> {
+    /// A scope that resolves only this file's own bindings.
+    pub(super) fn local(semantic: &'s Semantic<'a>) -> Self {
+        Self {
+            semantic,
+            imported: None,
+        }
+    }
+}
+
+/// Imported scalar constants proved for one file (see [`imported_constants`]): the importing
+/// binding's symbol, mapped to the declaring module's literal cloned into this file's arena.
+#[derive(Default)]
+pub(super) struct ImportedConstants<'a> {
+    values: HashMap<SymbolId, &'a Expression<'a>>,
+}
 
 /// How many binding hops a cell value may follow while resolving (see [`resolved_binding`]). A
 /// bound, not a judgement: `const` cycles are impossible in valid JavaScript (TDZ), so this
@@ -1329,8 +1385,8 @@ const MAX_VALUE_HOPS: u32 = 8;
 ///
 /// Resolution is by symbol identity, never by name -- the same discipline [`resolve_identifier`]
 /// applies to callees -- so two sibling scopes that each declare their own `MODE` resolve to
-/// their own values and never collide, and an imported binding (whose declaration is an import
-/// statement, not a `const`) is refused, keeping cross-file value resolution in C7's territory.
+/// their own values and never collide. An imported binding (whose declaration is an import
+/// statement, not a `const`) resolves only when [`ImportedConstants`] proved it for this file.
 /// The one `const` declarator that declares `symbol_id`, when the binding is a plain
 /// `const name = ...` with a single declaration.
 ///
@@ -1391,8 +1447,7 @@ fn global_constant(expr: &Expression, resolve: Resolve<'_, '_>) -> Option<&'stat
         "Infinity" => "Infinity",
         _ => return None,
     };
-    let semantic = resolve?;
-    let scoping = semantic.scoping();
+    let scoping = resolve?.semantic.scoping();
     let reference = scoping.get_reference(ident.reference_id.get()?);
     if reference.symbol_id().is_some()
         || scoping
@@ -1423,22 +1478,30 @@ fn declaration_precedes(declarator: &VariableDeclarator, use_span: oxc_span::Spa
 /// unsafe references.
 fn resolved_binding<'e, 'a: 'e>(
     expr: &'e Expression<'a>,
-    semantic: &Semantic<'a>,
+    scope: FoldScope<'_, 'a>,
     hops: u32,
 ) -> Option<&'e Expression<'a>> {
     if hops >= MAX_VALUE_HOPS {
         return None;
     }
+    let semantic = scope.semantic;
     match unwrap_transparent(expr) {
         Expression::Identifier(ident) => {
             let reference_id = ident.reference_id.get()?;
             let symbol_id = semantic.scoping().get_reference(reference_id).symbol_id()?;
+            // An import proved to hold a scalar literal: already a closed value, cloned here.
+            if let Some(value) = scope
+                .imported
+                .and_then(|imported| imported.values.get(&symbol_id))
+            {
+                return Some(value);
+            }
             let declarator = const_declarator(semantic, symbol_id)?;
             if !declaration_precedes(declarator, ident.span()) {
                 return None;
             }
             let init = declarator.init.as_ref()?;
-            let resolved = resolved_binding(init, semantic, hops + 1).unwrap_or(init);
+            let resolved = resolved_binding(init, scope, hops + 1).unwrap_or(init);
             // An IMMUTABLE value only. A scalar cannot be changed out from under this read
             // (primitives are values, and `const` bars reassignment), which is what makes
             // following the binding a proof. A composite can: `const L = { n: 1 }; L.n = 2` is
@@ -1446,7 +1509,7 @@ fn resolved_binding<'e, 'a: 'e>(
             // reading a stale 1 where the runtime observes 2 -- so composite initializers stay
             // unread as whole values. (Member reads off them are the member arm below, with
             // their own discipline.)
-            is_immutable_value(resolved, semantic, hops + 1).then_some(resolved)
+            is_immutable_value(resolved, scope, hops + 1).then_some(resolved)
         }
         Expression::StaticMemberExpression(member) => {
             // The object must be a `const` in this file whose initializer is an object literal:
@@ -1509,8 +1572,8 @@ fn resolved_binding<'e, 'a: 'e>(
                 }
             }
             let value = value?;
-            let resolved = resolved_binding(value, semantic, hops + 1).unwrap_or(value);
-            is_immutable_value(resolved, semantic, hops + 1).then_some(resolved)
+            let resolved = resolved_binding(value, scope, hops + 1).unwrap_or(value);
+            is_immutable_value(resolved, scope, hops + 1).then_some(resolved)
         }
         _ => None,
     }
@@ -1520,7 +1583,7 @@ fn resolved_binding<'e, 'a: 'e>(
 /// or a fold of scalars. Primitives are immutable and a `const` cannot be reassigned, so a
 /// `const` whose initializer is THIS is stable for the life of the file; an object or array
 /// never is, whatever the binding kind (`const L = [1]; L.push(2)`).
-fn is_immutable_value<'a>(expr: &Expression<'a>, semantic: &Semantic<'a>, hops: u32) -> bool {
+fn is_immutable_value<'a>(expr: &Expression<'a>, scope: FoldScope<'_, 'a>, hops: u32) -> bool {
     if hops >= MAX_VALUE_HOPS {
         return false;
     }
@@ -1538,23 +1601,23 @@ fn is_immutable_value<'a>(expr: &Expression<'a>, semantic: &Semantic<'a>, hops: 
         // peel of B -- and with the peel gone, the fold never sees the binary at all, since it
         // only receives the cell's own (unpeeled) expression.
         Expression::Identifier(_) => {
-            global_constant(expr, Some(semantic)).is_some()
-                || resolved_binding(expr, semantic, hops + 1).is_some()
+            global_constant(expr, Some(scope)).is_some()
+                || resolved_binding(expr, scope, hops + 1).is_some()
         }
         Expression::TemplateLiteral(template) => template
             .expressions
             .iter()
-            .all(|expression| is_immutable_value(expression, semantic, hops)),
+            .all(|expression| is_immutable_value(expression, scope, hops)),
         Expression::UnaryExpression(unary) => {
             matches!(
                 unary.operator,
                 UnaryOperator::UnaryNegation | UnaryOperator::UnaryPlus
-            ) && is_immutable_value(&unary.argument, semantic, hops)
+            ) && is_immutable_value(&unary.argument, scope, hops)
         }
         // Every arithmetic, comparison, and logical operator over scalars produces a scalar.
         Expression::BinaryExpression(binary) => {
-            is_immutable_value(&binary.left, semantic, hops)
-                && is_immutable_value(&binary.right, semantic, hops)
+            is_immutable_value(&binary.left, scope, hops)
+                && is_immutable_value(&binary.right, scope, hops)
         }
         _ => false,
     }
@@ -1638,7 +1701,7 @@ fn member_chain_is_invoked(nodes: &AstNodes<'_>, mut chain_id: oxc_semantic::Nod
 /// [`Resolve`] applied to one expression: what it resolves through, or itself unchanged.
 fn peeled<'e, 'a: 'e>(expr: &'e Expression<'a>, resolve: Resolve<'_, 'a>) -> &'e Expression<'a> {
     resolve
-        .and_then(|semantic| resolved_binding(expr, semantic, 0))
+        .and_then(|scope| resolved_binding(expr, scope, 0))
         .unwrap_or(expr)
 }
 
@@ -3262,5 +3325,6 @@ pub(super) fn source_text(source: &str, span: oxc_span::Span) -> String {
         .to_owned()
 }
 
+pub(super) mod imported_constants;
 #[cfg(test)]
 mod tests;

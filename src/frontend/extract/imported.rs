@@ -2,11 +2,17 @@
 //! owned; no symbol ID or parameter binding crosses the boundary.
 use super::*;
 use crate::frontend::fingerprint::ImportOrigin;
-use crate::frontend::helpers::export_contract::resolve_export_chain;
+use crate::frontend::helpers::export_contract::{resolve_export_chain, resolve_value_export_chain};
 use crate::frontend::helpers::{self, Callable, Export};
+use crate::frontend::registry::imported_constants;
 use crate::frontend::resolver::{self, Resolved};
 use oxc_ast::ast::{Declaration, ExportDefaultDeclarationKind, ImportOrExportKind};
 use std::path::{Path, PathBuf};
+
+/// `path` with symlinks followed, or as given when it cannot be resolved.
+fn canonical(path: &Path) -> PathBuf {
+    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+}
 
 #[derive(Clone)]
 pub(super) struct RunnerImport {
@@ -232,6 +238,63 @@ pub(super) fn collect_imports(program: &Program, file: &Path) -> HashMap<SymbolI
 }
 
 impl<'a> Walker<'a> {
+    /// Proves which value imports read by this file's tables hold a scalar literal, cloning each
+    /// into `allocator` (see `registry::imported_constants`). An import on a mocked chain, under
+    /// unreadable mocks, or whose chain reaches this file (read in its temporal dead zone) is not
+    /// tried; every unproved binding stays an unresolved cell. A historical file is never proved:
+    /// the modules on disk are today's, not the ones it imported.
+    pub(super) fn prove_imported_constants(&mut self, allocator: &'a Allocator) {
+        if !self.allow_imported {
+            return;
+        }
+        let mut candidates: Vec<(SymbolId, &RunnerImport)> = self
+            .runner_imports
+            .iter()
+            .filter(|(symbol, import)| {
+                !import.erased
+                    && !matches!(import.origin.exported.as_str(), "*" | "default")
+                    && import.origin.resolved.is_some()
+                    && imported_constants::referenced_in_table(self.semantic, **symbol)
+            })
+            .map(|(symbol, import)| (*symbol, import))
+            .collect();
+        candidates.sort_by_key(|(symbol, _)| *symbol);
+        let own = canonical(&self.file.path);
+        let mut constants = ImportedConstants::default();
+        for (symbol, import) in candidates
+            .into_iter()
+            .take(imported_constants::MAX_IMPORTED_CONSTANTS)
+        {
+            let Some(start) = &import.origin.resolved else {
+                continue;
+            };
+            let Ok(chain) = resolve_value_export_chain(start, &import.origin.exported) else {
+                continue;
+            };
+            let nuxt_mocked = self.mocked_modules.iter().any(|mock| {
+                [&import.origin.exported, &chain.terminal.export]
+                    .iter()
+                    .any(|name| mock.specifier.as_ref() == format!("nuxt-import:{name}"))
+            });
+            if nuxt_mocked
+                || self.is_mocked(&import.origin, &chain.modules)
+                || chain.modules.iter().any(|module| canonical(module) == own)
+            {
+                continue;
+            }
+            let span = self.semantic.scoping().symbol_span(symbol);
+            if let Some(value) = imported_constants::exported_literal(
+                allocator,
+                &chain.terminal.path,
+                &chain.terminal.export,
+                span,
+            ) {
+                constants.insert(symbol, value);
+            }
+        }
+        self.imported_constants = constants;
+    }
+
     /// Resolves direct imported calls and namespace/function invocation candidates.
     /// Ordinary named/default object methods do not invoke the imported runner.
     fn runner_origin(&self, callee: &Expression) -> Option<RunnerImport> {

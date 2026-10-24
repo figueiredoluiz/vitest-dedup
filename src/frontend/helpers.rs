@@ -92,8 +92,9 @@ use super::fingerprint::{
 use super::resolver::{self, Resolved};
 use oxc_allocator::Allocator;
 use oxc_ast::ast::{
-    ArrowFunctionExpression, BindingPattern, Declaration, ExportDefaultDeclarationKind, Expression,
-    Function, FunctionType, Program, Statement, VariableDeclaration, VariableDeclarationKind,
+    ArrowFunctionExpression, BindingPattern, Declaration, ExportDefaultDeclarationKind,
+    ExportFromDeclaration, ExportSpecifier, Expression, Function, FunctionType, Program, Statement,
+    VariableDeclaration, VariableDeclarationKind,
 };
 use oxc_parser::Parser;
 use oxc_semantic::SemanticBuilder;
@@ -272,8 +273,10 @@ fn walk_locate(
 /// than inventing them inline.
 pub(in crate::frontend) mod export_contract {
     use super::{
-        find_export, is_dependency, resolve_hop, with_parsed_file, Export, MAX_REEXPORT_HOPS,
+        find_export, find_value_export, is_dependency, resolve_hop, with_parsed_file, Export,
+        ValueExport, MAX_REEXPORT_HOPS,
     };
+    use oxc_ast::ast::Program;
     use std::collections::HashSet;
     use std::path::{Path, PathBuf};
 
@@ -354,6 +357,34 @@ pub(in crate::frontend) mod export_contract {
         start: &Path,
         export: &str,
     ) -> Result<ResolvedExportChain, ExportRefusal> {
+        walk_chain(start, export, |program, export| {
+            find_export(program, export).map(|found| match found {
+                Export::Local(_) => Step::Terminal,
+                Export::Reexport { specifier, local } => Step::Hop { specifier, local },
+            })
+        })
+    }
+
+    /// [`resolve_export_chain`] for a value export: the terminal file declares the name with a
+    /// module-level binding ([`find_value_export`]) rather than an admitted callable.
+    pub(in crate::frontend) fn resolve_value_export_chain(
+        start: &Path,
+        export: &str,
+    ) -> Result<ResolvedExportChain, ExportRefusal> {
+        walk_chain(start, export, |program, export| {
+            find_value_export(program, export).map(|found| match found {
+                ValueExport::Declared(_) => Step::Terminal,
+                ValueExport::Reexport { specifier, local } => Step::Hop { specifier, local },
+            })
+        })
+    }
+
+    /// The bounded hop loop both chains share; `find` decides one file's step.
+    fn walk_chain(
+        start: &Path,
+        export: &str,
+        find: impl Fn(&Program, &str) -> Option<Step>,
+    ) -> Result<ResolvedExportChain, ExportRefusal> {
         let mut path = start.to_path_buf();
         let mut export = export.to_owned();
         let mut visited = HashSet::new();
@@ -375,13 +406,8 @@ pub(in crate::frontend) mod export_contract {
             // `Some(None)` keeps a missing export distinct from a file that cannot be read or
             // parsed; `with_parsed_file` flattens both to `None` otherwise.
             modules.push(path.clone());
-            let step = with_parsed_file(&path, |program, _| {
-                Some(find_export(program, &export).map(|found| match found {
-                    Export::Local(_) => Step::Terminal,
-                    Export::Reexport { specifier, local } => Step::Hop { specifier, local },
-                }))
-            })
-            .ok_or(ExportRefusal::UnreadableOrUnparseable)?;
+            let step = with_parsed_file(&path, |program, _| Some(find(program, &export)))
+                .ok_or(ExportRefusal::UnreadableOrUnparseable)?;
             match step {
                 Some(Step::Terminal) => {
                     return Ok(ResolvedExportChain {
@@ -740,34 +766,13 @@ pub(super) fn find_export<'p>(program: &'p Program<'p>, export: &str) -> Option<
                 }
                 // `export { local as exported }` -- the alias's target must be one of the
                 // admitted shapes in this same file, found by its local name.
-                for specifier in &it.specifiers {
-                    if matches!(
-                        specifier.export_kind,
-                        oxc_ast::ast::ImportOrExportKind::Type
-                    ) || module_export_name(&specifier.exported) != export
-                    {
-                        continue;
-                    }
-                    let local = module_export_name(&specifier.local);
+                if let Some(local) = specifier_local(&it.specifiers, export) {
                     return module_level_callable(program, &local).map(Export::Local);
                 }
             }
             Statement::ExportFromDeclaration(it) => {
-                if matches!(it.export_kind, oxc_ast::ast::ImportOrExportKind::Type) {
-                    continue;
-                }
-                for specifier in &it.specifiers {
-                    if matches!(
-                        specifier.export_kind,
-                        oxc_ast::ast::ImportOrExportKind::Type
-                    ) || module_export_name(&specifier.exported) != export
-                    {
-                        continue;
-                    }
-                    return Some(Export::Reexport {
-                        specifier: it.source.value.as_str().to_owned(),
-                        local: module_export_name(&specifier.local),
-                    });
+                if let Some((specifier, local)) = reexport_hop(it, export) {
+                    return Some(Export::Reexport { specifier, local });
                 }
             }
             Statement::ExportDefaultDeclaration(it) => {
@@ -808,6 +813,72 @@ pub(super) fn find_export<'p>(program: &'p Program<'p>, export: &str) -> Option<
         }
     }
     None
+}
+
+/// The local side of the non-type `export { local as export }` specifier in `specifiers`.
+fn specifier_local(specifiers: &[ExportSpecifier], export: &str) -> Option<String> {
+    specifiers
+        .iter()
+        .find(|specifier| {
+            !matches!(
+                specifier.export_kind,
+                oxc_ast::ast::ImportOrExportKind::Type
+            ) && module_export_name(&specifier.exported) == export
+        })
+        .map(|specifier| module_export_name(&specifier.local))
+}
+
+/// The `(specifier, local)` hop a non-type `export { local as export } from 'specifier'` names.
+fn reexport_hop(it: &ExportFromDeclaration, export: &str) -> Option<(String, String)> {
+    if matches!(it.export_kind, oxc_ast::ast::ImportOrExportKind::Type) {
+        return None;
+    }
+    specifier_local(&it.specifiers, export)
+        .map(|local| (it.source.value.as_str().to_owned(), local))
+}
+
+/// What a named export of a value is in `program`: declared by a module-level binding (its local
+/// name; whether that binding is a provable constant is the caller's semantic question), or one
+/// more named re-export hop. Default exports and `export *` are refused, as in [`find_export`].
+pub(super) fn find_value_export(program: &Program, export: &str) -> Option<ValueExport> {
+    for statement in &program.body {
+        match statement {
+            Statement::ExportDeclaration(it) => {
+                if let Declaration::VariableDeclaration(variables) = &it.declaration {
+                    let declares = variables.declarations.iter().any(|declarator| {
+                        matches!(&declarator.id, BindingPattern::BindingIdentifier(binding)
+                            if binding.name.as_str() == export)
+                    });
+                    if declares {
+                        return Some(ValueExport::Declared(export.to_owned()));
+                    }
+                }
+            }
+            Statement::ExportNamedDeclaration(it) => {
+                if matches!(it.export_kind, oxc_ast::ast::ImportOrExportKind::Type) {
+                    continue;
+                }
+                if let Some(local) = specifier_local(&it.specifiers, export) {
+                    return Some(ValueExport::Declared(local));
+                }
+            }
+            Statement::ExportFromDeclaration(it) => {
+                if let Some((specifier, local)) = reexport_hop(it, export) {
+                    return Some(ValueExport::Reexport { specifier, local });
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// What [`find_value_export`] found.
+pub(super) enum ValueExport {
+    /// The module-level binding, by local name, that declares the export in this file.
+    Declared(String),
+    /// One more named re-export hop, as in [`Export::Reexport`].
+    Reexport { specifier: String, local: String },
 }
 
 /// `export const name = <arrow or function expression>`: the one variable shape admitted,
