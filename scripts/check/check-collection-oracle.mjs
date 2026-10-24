@@ -94,6 +94,9 @@ function main() {
   const known = JSON.parse(readFileSync(KNOWN, 'utf8')).disagreements
 
   const totals = { files: 0, tests: 0, hooks: 0 }
+  // Every file not compared, per bucket, with what kept it out (Vitest's first collection error,
+  // the first stub read): listed when a floor fails, because a smaller comparison is otherwise
+  // reported only as a lower count.
   const buckets = new Map()
   const probeErrors = []
   const found = []
@@ -103,7 +106,8 @@ function main() {
     totals.tests += result.testsCompared
     totals.hooks += result.hooksCompared
     for (const [bucket, entries] of result.skipped) {
-      buckets.set(bucket, (buckets.get(bucket) ?? 0) + entries.length)
+      if (!buckets.has(bucket)) buckets.set(bucket, [])
+      buckets.get(bucket).push(...entries.map((entry) => ({ dir, ...entry })))
       if (bucket === 'probe-error') probeErrors.push(...entries.map((e) => `${dir}/${e.path}`))
     }
     found.push(...result.disagreements.map((d) => ({ dir, ...d })))
@@ -117,7 +121,7 @@ function main() {
       `${totals.tests} tests, ${totals.hooks} hook sites; ${found.length} disagreements ` +
       `(${found.length - unlisted.length} known)`,
   )
-  console.log(`  not compared: ${[...buckets].map(([b, n]) => `${b} ${n}`).join(', ')}`)
+  console.log(`  not compared: ${[...buckets].map(([bucket, entries]) => `${bucket} ${entries.length}`).join(', ')}`)
 
   const failures = [...selfCheckFailures]
   if (probeErrors.length > 0) failures.push(`probe errors (the probe and the collected suites disagree):\n    ${probeErrors.join('\n    ')}`)
@@ -129,6 +133,13 @@ function main() {
   if (totals.tests < MIN_TESTS_COMPARED) failures.push(`compared ${totals.tests} tests, floor is ${MIN_TESTS_COMPARED}`)
   if (totals.hooks < MIN_HOOK_SITES_COMPARED) failures.push(`compared ${totals.hooks} hook sites, floor is ${MIN_HOOK_SITES_COMPARED}`)
   for (const failure of failures) console.error(`FAIL: ${failure}`)
+  const belowFloor = totals.files < MIN_FILES_COMPARED || totals.tests < MIN_TESTS_COMPARED || totals.hooks < MIN_HOOK_SITES_COMPARED
+  if (belowFloor) {
+    console.error('Files not compared, by bucket:')
+    for (const [bucket, entries] of buckets) {
+      for (const { dir, path, detail } of entries) console.error(`  ${bucket}: ${dir}/${path}${detail ? ` -- ${detail}` : ''}`)
+    }
+  }
   return failures.length === 0 ? 0 : 1
 }
 

@@ -139,7 +139,8 @@ export function collectWithVitest(root, dir) {
     const result = spawnSync(
       process.execPath,
       [join(root, 'node_modules', 'vitest', 'vitest.mjs'), 'list', '--staticParse=false',
-        '--config', config, '--root', absoluteDir, `--json=${listed}`, '--fsModuleCache=false'],
+        // `--allowOnly`: on CI Vitest refuses a file with `.only` instead of collecting it.
+        '--config', config, '--root', absoluteDir, `--json=${listed}`, '--fsModuleCache=false', '--allowOnly'],
       {
         cwd: absoluteDir,
         encoding: 'utf8',
