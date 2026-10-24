@@ -72,8 +72,8 @@
 
 use crate::model::{
     Context, DeclarationKind, EachRows, EachTable, FixtureBinding, FixtureValue, Hook, HookGuard,
-    HookGuardKind, HookKind, Location, MockFactory, MockedModule, Modifier, Position, Span,
-    TestCase, Title,
+    HookGuardKind, HookGuards, HookKind, Location, MockFactory, MockedModule, Modifier, Position,
+    Span, TestCase, Title,
 };
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -271,6 +271,15 @@ impl HeapBytes for Hook {
             + idempotent.heap_bytes()
             + alpha_source.heap_bytes()
             + guards.heap_bytes()
+    }
+}
+
+impl HeapBytes for HookGuards {
+    /// Count the boxed vector header, its full reserved buffer, and each guard's owned text.
+    fn heap_bytes(&self) -> usize {
+        self.0.as_ref().map_or(0, |guards| {
+            size_of::<Vec<HookGuard>>() + guards.heap_bytes()
+        })
     }
 }
 
@@ -925,7 +934,7 @@ mod tests {
             body: Fingerprints::default(),
             idempotent: false,
             alpha_source: Arc::from("x".repeat(2_000).as_str()),
-            guards: Vec::new(),
+            guards: Default::default(),
         });
         let tests = vec![test];
         let report = MemoryReport::post_extraction(&tests, 1, 1, None);
@@ -962,7 +971,8 @@ mod tests {
                     kind: crate::model::HookGuardKind::TryBlock,
                     condition: None,
                 },
-            ],
+            ]
+            .into(),
         });
         let tests = vec![test];
         let report = MemoryReport::post_extraction(&tests, 1, 1, None);
@@ -972,6 +982,41 @@ mod tests {
             "a guard's condition text must be attributable to the hooks bucket: {:?}",
             report.fields.context
         );
+    }
+
+    /// Empty guard storage stays allocation-free; nonempty storage includes metadata and spare capacity.
+    #[test]
+    fn guard_storage_counts_allocations_and_preserves_wire_identity() {
+        let empty = HookGuards::default();
+        assert_eq!(empty.heap_bytes(), 0);
+        assert_eq!(size_of::<HookGuards>(), size_of::<usize>());
+        assert_eq!(serde_json::to_string(&empty).unwrap(), "[]");
+        assert_eq!(serde_json::from_str::<HookGuards>("[]").unwrap(), empty);
+        let mut guards = Vec::with_capacity(5);
+        guards.push(HookGuard {
+            kind: HookGuardKind::TryBlock,
+            condition: None,
+        });
+        let structural: HookGuards = guards.clone().into();
+        assert_eq!(
+            structural.heap_bytes(),
+            size_of::<Vec<HookGuard>>() + size_of::<HookGuard>()
+        );
+        guards.push(HookGuard {
+            kind: HookGuardKind::IfConsequent,
+            condition: Some(String::with_capacity(80)),
+        });
+        let expected =
+            size_of::<Vec<HookGuard>>() + guards.capacity() * size_of::<HookGuard>() + 80;
+        let encoded = serde_json::to_string(&guards).unwrap();
+        let stored: HookGuards = guards.into();
+        assert_eq!(stored.heap_bytes(), expected);
+        assert_eq!(serde_json::to_string(&stored).unwrap(), encoded);
+        assert_eq!(
+            serde_json::from_str::<HookGuards>(&encoded).unwrap(),
+            stored
+        );
+        assert_eq!(stored.clone(), stored);
     }
 
     /// The published phase names are consumed by tooling that must not see them drift.
@@ -1164,7 +1209,7 @@ mod tests {
                 body: Fingerprints::default(),
                 idempotent: false,
                 alpha_source: Arc::from("x".repeat(1_500).as_str()),
-                guards: Vec::new(),
+                guards: Default::default(),
             }],
             mocked_modules: vec![MockedModule {
                 specifier: Arc::from("resolved:/a.ts"),

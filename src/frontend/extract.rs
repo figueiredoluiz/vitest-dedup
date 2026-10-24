@@ -2403,7 +2403,7 @@ impl<'a> Walker<'a> {
             // Kept, not dropped: `analysis`'s `ContextKey` publishes this text's JSON inside
             // `contextKey`. See `Hook::alpha_source`.
             alpha_source: body.into_alpha_source(),
-            guards: Vec::new(),
+            guards: Default::default(),
         };
         // The control-flow positions this registration was written under, outermost first.
         // Empty for an ordinary registration, and serialized only when non-empty -- a hook
@@ -2734,44 +2734,27 @@ impl<'a> Walker<'a> {
             if let Some(case) = self.tests.last_mut() {
                 case.table_row_class = table_row_class;
             }
-            match &body {
-                // `.todo` suite (no callback at all): nothing to recurse into.
-                None => continue,
-                Some(DescribeBody::Block(statements)) => {
-                    if statements.is_empty() {
-                        continue;
-                    }
-                    self.enter_suite_scope(title, title_is_unresolved, &own_behavior_modifiers);
-                    // A suite callback is a new function. The control flow around the
-                    // `describe` call governs whether the suite exists at all -- it decides
-                    // that for the tests and the hooks together -- so relative to the suite's
-                    // own scope its hooks are unconditional. Keeping the outer guard would
-                    // exclude every test of `if (import.meta.vitest) { describe(...) }` from
-                    // comparison (hazard 9's idiom) while saying nothing the suite's own
-                    // identity does not already say.
-                    let outer_guards = std::mem::take(&mut self.guards);
-                    let outer_depth = std::mem::replace(&mut self.break_terminates_depth, 0);
-                    let outer_labels = std::mem::take(&mut self.label_stack);
-                    self.walk_statements(statements, registry);
-                    // A `return` in the callback leaves the callback, not the caller's list:
-                    // its conditional exits must not guard the caller's later statements.
-                    self.exiting_conditionals.clear();
-                    self.guards = outer_guards;
-                    self.break_terminates_depth = outer_depth;
-                    self.label_stack = outer_labels;
-                    self.exit_suite_scope(&own_behavior_modifiers, title_is_unresolved);
-                }
-                // Concise-body arrow (`describe("x", () => test(...))`): legal Vitest, and a
-                // silently-missed suite here is the worst failure mode this tool has -- a clean
-                // run that quietly dropped tests. There is no block to pre-scan for hooks, so
-                // the prepare/walk split ordinary bodies need is moot for a single expression.
-                Some(DescribeBody::Concise(expr)) => {
-                    self.enter_suite_scope(title, title_is_unresolved, &own_behavior_modifiers);
-                    self.walk_concise_body(expr, registry);
-                    self.exiting_conditionals.clear();
-                    self.exit_suite_scope(&own_behavior_modifiers, title_is_unresolved);
-                }
+            let Some(body) = &body else { continue };
+            if matches!(body, DescribeBody::Block(statements) if statements.is_empty()) {
+                continue;
             }
+            self.enter_suite_scope(title, title_is_unresolved, &own_behavior_modifiers);
+            // Every suite callback is a new function boundary. Caller control flow decides
+            // whether its tests and hooks exist together, not whether a hook registers
+            // relative to its own suite. The callback's syntax does not change that boundary.
+            let outer_guards = std::mem::take(&mut self.guards);
+            let outer_depth = std::mem::replace(&mut self.break_terminates_depth, 0);
+            let outer_labels = std::mem::take(&mut self.label_stack);
+            match body {
+                DescribeBody::Block(statements) => self.walk_statements(statements, registry),
+                DescribeBody::Concise(expr) => self.walk_concise_body(expr, registry),
+            }
+            // Callback exits cannot guard the caller's later statements.
+            self.exiting_conditionals.clear();
+            self.guards = outer_guards;
+            self.break_terminates_depth = outer_depth;
+            self.label_stack = outer_labels;
+            self.exit_suite_scope(&own_behavior_modifiers, title_is_unresolved);
         }
     }
 
@@ -4565,7 +4548,7 @@ mod tests {
                 .find(|case| matches!(case.kind, DeclarationKind::Test))
                 .expect("the inner test extracted");
             let hook = test.context.hooks.first().expect("one hook in context");
-            hook.guards.clone()
+            hook.guards.to_vec()
         };
         let body = "describe('suite', () => { GUARD beforeEach(() => { s.n = 1 }); test('reads', () => { expect(s.n).toBe(1) }); });";
 
@@ -8055,6 +8038,55 @@ mod tests {
         }
     }
 
+    /// Suite callback syntax must preserve boundary isolation and guards in its caller.
+    #[test]
+    fn concise_suite_hook_boundary_matches_block_callbacks() {
+        let positive =
+            include_str!("../../fixtures/recall/concise-suite-hook-retention/run.test.ts");
+        let negative = include_str!(
+            "../../fixtures/recall/concise-suite-guarded-hook-uncertainty/run.test.ts"
+        );
+        for (source, unresolved) in [(positive, false), (negative, true)] {
+            for (prefix, suffix) in [
+                ("if (enabled) {", "}"),
+                ("while (enabled) {", "break; }"),
+                ("try {", "} finally {}"),
+                ("outer: {", "break outer; }"),
+            ] {
+                let source = source
+                    .replace("if (enabled) describe(", &format!("{prefix} describe("))
+                    .replace("registerSuite())", &format!("registerSuite()); {suffix}"))
+                    .replace(
+                        "registerOtherSuite() })",
+                        &format!("registerOtherSuite() }}); {suffix}"),
+                    );
+                let tests = hook_fixture_tests(&source, 4);
+                assert_eq!(tests.len(), 2);
+                for case in tests {
+                    assert_eq!(case.context.unresolved, unresolved, "{source}");
+                    assert_eq!(case.context.hooks.len(), 1);
+                    assert_eq!(case.context.hooks[0].guards.is_empty(), !unresolved);
+                }
+            }
+        }
+        // A later hook remains governed by its caller's condition after either callback form.
+        for callback in ["() => registerSuite()", "() => { registerSuite() }"] {
+            let source = format!("import {{ describe, test, beforeEach, expect }} from 'vitest';
+                function registerSuite() {{ test('nested', () => {{ expect(1).toBe(1) }}); }}
+                if (enabled) {{ describe('suite', {callback}); beforeEach(() => {{ state.n = 1 }}); }}
+                test('caller', () => {{ expect(state.n).toBe(1) }});");
+            let tests = hook_fixture_tests(&source, 3);
+            assert_eq!(tests.len(), 2);
+            let caller = tests.last().unwrap();
+            assert!(caller.context.unresolved);
+            assert_eq!(caller.context.hooks.len(), 1);
+            assert_eq!(
+                caller.context.hooks[0].guards[0].kind,
+                HookGuardKind::IfConsequent
+            );
+        }
+    }
+
     /// A guard makes its scope incomparable whatever the condition's shape -- a literal, a
     /// `const` binding, a call, a member access. The runtime registration depends on the
     /// control flow and values around the registration, none of which this analyzer
@@ -8076,7 +8108,7 @@ mod tests {
                 .find(|case| matches!(case.kind, crate::model::DeclarationKind::Test))
                 .expect("the test extracted");
             let hook = case.context.hooks.first().expect("one hook in context");
-            (hook.guards.clone(), case.context.unresolved)
+            (hook.guards.to_vec(), case.context.unresolved)
         };
 
         for binding in ["true", "false", "compute()", "settings.enabled"] {

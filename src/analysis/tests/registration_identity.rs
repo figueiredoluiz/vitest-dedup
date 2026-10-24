@@ -594,7 +594,7 @@ fn registration_identity_shared_hook_pairs_preserve_every_caller() {
             body: case.body.clone(),
             idempotent: true,
             alpha_source: std::sync::Arc::from("reset()"),
-            guards: Vec::new(),
+            guards: Default::default(),
         })
         .collect();
     for case in &mut cases {

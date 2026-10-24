@@ -71,7 +71,7 @@ fn non_idempotent_hook(kind: HookKind, alpha: &str, line: u32) -> Hook {
         body: fingerprints(alpha, false),
         idempotent: false,
         alpha_source: std::sync::Arc::from(alpha),
-        guards: Vec::new(),
+        guards: Default::default(),
     }
 }
 
@@ -89,7 +89,8 @@ fn guarded_hook(
     hook.guards = vec![crate::model::HookGuard {
         kind: guard_kind,
         condition: Some(condition.to_owned()),
-    }];
+    }]
+    .into();
     hook
 }
 
@@ -2807,7 +2808,8 @@ fn redundant_hook_never_pairs_a_guarded_hook_with_its_unguarded_twin() {
         outer.guards = vec![crate::model::HookGuard {
             kind: HookGuardKind::IfConsequent,
             condition: Some("false".to_owned()),
-        }];
+        }]
+        .into();
         outer
     };
     let result = analyze_hooked(
@@ -4183,7 +4185,7 @@ fn redundant_hook_skips_a_pair_whose_hook_bodies_are_trivial() {
         body: fingerprints(alpha, true),
         idempotent: false,
         alpha_source: std::sync::Arc::from(alpha),
-        guards: Vec::new(),
+        guards: Default::default(),
     };
     let result = analyze_hooked(
         vec![

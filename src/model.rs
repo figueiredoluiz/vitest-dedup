@@ -250,8 +250,59 @@ pub struct Hook {
     /// ordinary registration, and serialized only when non-empty: a hook recorded before this
     /// field existed produces byte-identical JSON, so every `contextKey` already published
     /// stays where it was.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub guards: Vec<HookGuard>,
+    #[serde(default, skip_serializing_if = "HookGuards::is_empty")]
+    pub guards: HookGuards,
+}
+
+/// An owned guard sequence with no allocation and one pointer of inline storage when empty.
+/// Hooks are copied into every test context, so even unused vector capacity metadata costs
+/// retained memory. Nonempty sequences keep their vector behind the optional pointer.
+#[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
+#[allow(clippy::box_collection)] // The pointer saves two words in every unguarded hook copy.
+pub struct HookGuards(pub(crate) Option<Box<Vec<HookGuard>>>);
+
+impl HookGuards {
+    /// Whether this hook has no conditional registration positions.
+    pub fn is_empty(&self) -> bool {
+        self.0.is_none()
+    }
+}
+
+impl std::ops::Deref for HookGuards {
+    type Target = [HookGuard];
+
+    /// Expose sequence semantics without allowing an allocated empty representation.
+    fn deref(&self) -> &Self::Target {
+        self.0.as_deref().map_or(&[], Vec::as_slice)
+    }
+}
+
+impl From<Vec<HookGuard>> for HookGuards {
+    /// Canonicalize empty input to the allocation-free representation.
+    fn from(guards: Vec<HookGuard>) -> Self {
+        Self((!guards.is_empty()).then(|| Box::new(guards)))
+    }
+}
+
+impl FromIterator<HookGuard> for HookGuards {
+    /// Collect guards in their original outermost-first order.
+    fn from_iter<T: IntoIterator<Item = HookGuard>>(iter: T) -> Self {
+        Vec::from_iter(iter).into()
+    }
+}
+
+impl Serialize for HookGuards {
+    /// Preserve the existing array encoding, including an explicitly serialized empty array.
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.as_ref().serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for HookGuards {
+    /// Normalize an empty JSON array just like a missing, defaulted hook guard field.
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Vec::<HookGuard>::deserialize(deserializer).map(Into::into)
+    }
 }
 
 /// The lifecycle hooks an extractor recognizes.
@@ -3273,7 +3324,7 @@ mod tests {
             },
             idempotent: false,
             alpha_source: Arc::from(source),
-            guards: Vec::new(),
+            guards: Default::default(),
         }
     }
 

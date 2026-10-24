@@ -530,6 +530,7 @@ const DELIBERATE_BLIND_FILES = new Set([
   'recall/braceless-return-hook-uncertainty/run.test.ts',
   'recall/helper-plain-throw-uncertainty/run.test.ts',
   'recall/helper-guarded-hook-uncertainty/run.test.ts',
+  'recall/concise-suite-guarded-hook-uncertainty/run.test.ts',
   // A local helper reassigned with no overload signature: refused for the reassignment alone.
   'recall/local-helper-reassigned/run.test.ts',
   // Default exports a runner must keep refusing (a `let`, a reassigned declaration, an imported

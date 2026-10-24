@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "minimumCases": 181,
+  "minimumCases": 183,
   "knownMissBaseline": 1,
   "minimumRecall": 0.99,
   "recallDestination": 1,
@@ -5359,6 +5359,51 @@
         }
       ],
       "expectedAbsent": []
+    },
+    {
+      "name": "concise-suite-hook-retention",
+      "path": "concise-suite-hook-retention",
+      "rule": "duplicate-test",
+      "role": "positive",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-10-25",
+      "expectedTests": 2,
+      "expectedIncomplete": false,
+      "expectedUnresolved": 0,
+      "expectedFindings": [
+        {
+          "rule": "duplicate-test",
+          "titles": [
+            "suite-a > reads",
+            "suite-b > reads"
+          ],
+          "severity": "error"
+        }
+      ],
+      "expectedAbsent": []
+    },
+    {
+      "name": "concise-suite-guarded-hook-uncertainty",
+      "path": "concise-suite-guarded-hook-uncertainty",
+      "rule": "duplicate-test",
+      "role": "negative",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-10-25",
+      "expectedTests": 2,
+      "expectedIncomplete": true,
+      "expectedUnresolved": 2,
+      "expectedFindings": [],
+      "expectedAbsent": [
+        {
+          "rule": "duplicate-test",
+          "titles": [
+            "suite-a > reads",
+            "suite-b > reads"
+          ]
+        }
+      ]
     }
   ],
   "knownFalsePositiveBaseline": 1,
