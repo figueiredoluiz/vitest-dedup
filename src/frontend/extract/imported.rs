@@ -729,6 +729,10 @@ impl<'a> Walker<'a> {
             child.module_setup_starts = vec![0; self.framework_setup_before(call)];
             child.suite_modifiers = self.suite_modifiers.clone();
             child.hook_scopes = self.hook_scopes.clone();
+            // The helper's registrations join the calling scope, so they carry the caller's
+            // control-flow position too: a `registerHooks()` call written under `if (true)`
+            // registers guarded hooks, exactly like one written there directly.
+            child.guards = self.guards.clone();
             child.unresolved_suite_depth = self.unresolved_suite_depth;
             child.mocked_modules = self.mocked_modules.clone();
             child.mocks_unresolved = self.mocks_unresolved;

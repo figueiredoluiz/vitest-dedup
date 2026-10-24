@@ -169,8 +169,8 @@ use crate::config::Config;
 use crate::model::{
     fingerprint_hash, AnalysisResult, BlindFile, BodyDigest, CallbackForm, Context,
     DeclarationKind, EventDigest, Finding, Fingerprints, FixtureBinding, Hook, HookFingerprint,
-    HookKind, IncompleteCauses, Location, MockedModule, ModeSummary, Modifier, Rule, Severity,
-    TestCase, TestFingerprint, Title,
+    HookGuard, HookKind, IncompleteCauses, Location, MockedModule, ModeSummary, Modifier, Rule,
+    Severity, TestCase, TestFingerprint, Title,
 };
 use crate::modes::{self, Baseline};
 use pairs::{group_and_order, group_outcome, GroupOutcome, PairBudget, SPANNING_GROUP_MAX};
@@ -333,10 +333,48 @@ struct ContextKey<'a> {
     /// [`TestFingerprint::context_key`], so what goes in here is a published-record contract, not
     /// a free choice. Equality on the text and equality on its digest agree, so grouping is
     /// unaffected either way.
-    hooks: Vec<(HookKind, &'a str)>,
+    hooks: Vec<ContextHook<'a>>,
+}
+
+/// One hook of [`ContextKey`], in its published form.
+///
+/// Untagged on purpose, and the shape is a record contract: an unguarded hook serializes as the
+/// same `(kind, alpha)` array every `contextKey` already recorded carries, so adding hook guards
+/// moved nothing that exists. A hook written under a control-flow guard serializes the guard list
+/// as well, because two hooks whose guards differ are different ambient facts -- a `beforeEach`
+/// registered under `if (true)` and one under `if (false)` do not run for the same tests, and
+/// grouping their tests together is exactly the error-severity false positive hook guards exist
+/// to refuse (see [`crate::model::HookGuard`]).
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(untagged, rename_all = "camelCase")]
+enum ContextHook<'a> {
+    Plain(HookKind, &'a str),
+    Guarded {
+        kind: HookKind,
+        alpha: &'a str,
+        guards: &'a [HookGuard],
+    },
+}
+
+impl<'a> ContextHook<'a> {
+    /// The published form of one hook: the plain tuple for an unguarded registration, the
+    /// guard-carrying object otherwise (see the enum's own contract).
+    fn of(hook: &'a crate::model::Hook) -> Self {
+        if hook.guards.is_empty() {
+            Self::Plain(hook.kind, &hook.alpha_source)
+        } else {
+            Self::Guarded {
+                kind: hook.kind,
+                alpha: &hook.alpha_source,
+                guards: &hook.guards,
+            }
+        }
+    }
 }
 
 impl<'a> ContextKey<'a> {
+    /// Borrows the published facets of one [`Context`] -- including each hook's guard list, so
+    /// a guarded registration keys differently from its unguarded twin.
     fn new(context: &'a Context) -> Self {
         Self {
             mocked_modules: &context.mocked_modules,
@@ -344,11 +382,7 @@ impl<'a> ContextKey<'a> {
             imports: context.imports.iter().map(|import| &**import).collect(),
             module_setup: &context.module_setup,
             config_scope: context.config_scope.as_deref(),
-            hooks: context
-                .hooks
-                .iter()
-                .map(|hook| (hook.kind, &*hook.alpha_source))
-                .collect(),
+            hooks: context.hooks.iter().map(ContextHook::of).collect(),
         }
     }
 
@@ -1686,6 +1720,9 @@ fn same_kind_observer_between(
         })
 }
 
+/// Pairs same-kind hooks whose bodies agree and whose pairing is not already explained by a
+/// shared observer, and reports the inner one as setup the outer already performs. A guarded
+/// hook never pairs with a differently-guarded one: the two do not register for the same tests.
 fn emit_redundant_hook(
     tests: &[TestCase],
     severity: Severity,
@@ -1709,12 +1746,16 @@ fn emit_redundant_hook(
                 // S5: both bodies must be provably idempotent. Without this the rule told
                 // users to delete a hook whose repetition WAS the behaviour -- 0 of 10 correct,
                 // exhaustively, on the 2026-09-27 scan.
+                // Guards are part of the comparison: a guarded hook and its unguarded twin do
+                // not register for the same tests, so claiming the inner one redundant of the
+                // outer would recommend deleting setup that actually runs.
                 if inner.kind == outer.kind
                     && outer.idempotent
                     && inner.idempotent
                     && !outer.body.trivial
                     && !inner.body.trivial
                     && inner.body.alpha == outer.body.alpha
+                    && inner.guards == outer.guards
                     && outer.location != inner.location
                     && !same_kind_observer_between(hooks, offset, outer, inner)
                 {

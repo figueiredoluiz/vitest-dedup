@@ -196,9 +196,9 @@ generated parent and the analysis root below it.
 
 `minimumRecall` is the measured value rounded down, not the target: a gate that is red on arrival
 gets routed around, after which the number it guards is worse than unmeasured. `recallDestination`
-records the destination. The corpus currently detects 170 of its 171 desired findings (99.4%), so
-`minimumRecall` is 0.99; the one missing is the known miss of the framework cases above, so
-`knownMissBaseline` is 1. Each change that finds one of them moves its entry from `knownMisses` to
+records the destination. The corpus currently detects 170 of the 171 findings its labels desire --
+every `expectedFindings` entry matches; the denominator's one gap is the known miss of the framework
+cases above -- so `minimumRecall` stays 0.99 and `knownMissBaseline` stays 1. Each change that finds one of them moves its entry from `knownMisses` to
 `expectedFindings`, lowers the baseline and raises `minimumRecall` to the new measured value in the
 same commit.
 

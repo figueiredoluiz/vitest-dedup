@@ -25,8 +25,8 @@
 
 use super::*;
 use crate::model::{
-    DeclarationKind, EachRows, EachTable, FixtureBinding, FixtureValue, Hook, Location,
-    MockFactory, MockedModule, Modifier, Position, Span, Title,
+    DeclarationKind, EachRows, EachTable, FixtureBinding, FixtureValue, Hook, HookGuardKind,
+    Location, MockFactory, MockedModule, Modifier, Position, Span, Title,
 };
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -71,7 +71,26 @@ fn non_idempotent_hook(kind: HookKind, alpha: &str, line: u32) -> Hook {
         body: fingerprints(alpha, false),
         idempotent: false,
         alpha_source: std::sync::Arc::from(alpha),
+        guards: Vec::new(),
     }
+}
+
+/// A hook written under one control-flow guard -- the shape a hook registered inside an `if`
+/// branch or a loop body carries. Guard identity is kind plus condition text; see
+/// [`crate::model::HookGuard`].
+fn guarded_hook(
+    kind: HookKind,
+    alpha: &str,
+    line: u32,
+    guard_kind: HookGuardKind,
+    condition: &str,
+) -> Hook {
+    let mut hook = non_idempotent_hook(kind, alpha, line);
+    hook.guards = vec![crate::model::HookGuard {
+        kind: guard_kind,
+        condition: Some(condition.to_owned()),
+    }];
+    hook
 }
 
 /// Build fingerprint fixtures with the requested alpha digest and trivial flag, leaving other
@@ -2683,6 +2702,29 @@ fn the_grouping_key_agrees_with_context_equivalence_on_every_pair() {
     differing_hook_body.hooks = vec![hook(HookKind::BeforeEach, "reset()", 1)];
     let mut differing_hook_kind = base();
     differing_hook_kind.hooks = vec![hook(HookKind::AfterEach, "seed()", 1)];
+    // A guarded hook against its unguarded twin: the same callback under `if (true)` and with no
+    // guard at all do not run for the same tests, so neither the predicate nor the key may call
+    // them equivalent. Same shape as `differing_hook_body`, and the row exists for the same
+    // reason the module_setup/config_scope rows do: a field the matrix leaves at its default is
+    // a field the test proves nothing about.
+    let mut differing_hook_guard = base();
+    differing_hook_guard.hooks = vec![guarded_hook(
+        HookKind::BeforeEach,
+        "seed()",
+        1,
+        HookGuardKind::IfConsequent,
+        "true",
+    )];
+    // Same condition text, other branch: `if (true)` consequent versus alternate. Kind is part
+    // of the guard's identity because only one branch registers at runtime.
+    let mut differing_hook_guard_branch = base();
+    differing_hook_guard_branch.hooks = vec![guarded_hook(
+        HookKind::BeforeEach,
+        "seed()",
+        1,
+        HookGuardKind::IfAlternate,
+        "true",
+    )];
     let mut differing_mock = base();
     differing_mock.mocked_modules = vec![mocked("./db", Some("other"))];
     let mut differing_fixture = base();
@@ -2705,6 +2747,8 @@ fn the_grouping_key_agrees_with_context_equivalence_on_every_pair() {
         ("base", base()),
         ("hook body", differing_hook_body),
         ("hook kind", differing_hook_kind),
+        ("hook guard", differing_hook_guard),
+        ("hook guard branch", differing_hook_guard_branch),
         ("mock factory", differing_mock),
         ("fixture value", differing_fixture),
         ("import", differing_import),
@@ -2725,10 +2769,68 @@ fn the_grouping_key_agrees_with_context_equivalence_on_every_pair() {
         }
     }
 
-    // The pair the whole design exists for: same work, different source position.
+    // The pair the whole design exists for: same work, different source position. Looked up by
+    // name, not index, so adding matrix rows cannot silently re-point it.
+    let at = |name: &str| {
+        contexts
+            .iter()
+            .find(|(label, _)| *label == name)
+            .map(|(_, context)| context)
+            .expect("matrix row")
+    };
     assert!(
-        contexts[0].1.is_equivalent(&contexts[6].1),
+        at("base").is_equivalent(at("hook moved")),
         "a hook that moved is still the same ambient fact"
+    );
+    // And the guard rows really do separate: neither half of the pair the new field exists for
+    // may read as equivalent, in either direction the matrix walks.
+    assert!(
+        !at("base").is_equivalent(at("hook guard")),
+        "a guarded hook is not the ambient fact its unguarded twin is"
+    );
+    assert!(
+        !at("hook guard").is_equivalent(at("hook guard branch")),
+        "the same condition in the other branch of the `if` is a different guard"
+    );
+}
+
+/// A guarded hook and its unguarded twin do not register for the same tests, so the
+/// redundancy claim must not pair them: the guarded one may be the only registration that
+/// actually runs, and recommending the inner one for deletion would delete real setup. The
+/// control fires the rule on the same pair without the guard, so the test cannot pass by
+/// accident of the bodies being trivial or the locations apart.
+#[test]
+fn redundant_hook_never_pairs_a_guarded_hook_with_its_unguarded_twin() {
+    let config = default_config();
+    let guarded = |line: u32| {
+        let mut outer = hook(HookKind::BeforeEach, "state.n = 1", line);
+        outer.guards = vec![crate::model::HookGuard {
+            kind: HookGuardKind::IfConsequent,
+            condition: Some("false".to_owned()),
+        }];
+        outer
+    };
+    let result = analyze_hooked(
+        vec![guarded(4), hook(HookKind::BeforeEach, "state.n = 1", 22)],
+        &config,
+    );
+    assert_eq!(
+        rule_count(&result.findings, Rule::RedundantHook),
+        0,
+        "a guarded hook and its unguarded twin are not the same registration"
+    );
+
+    let result = analyze_hooked(
+        vec![
+            hook(HookKind::BeforeEach, "state.n = 1", 4),
+            hook(HookKind::BeforeEach, "state.n = 1", 22),
+        ],
+        &config,
+    );
+    assert_eq!(
+        rule_count(&result.findings, Rule::RedundantHook),
+        1,
+        "the control: the same pair without the guard does pair"
     );
 }
 
@@ -4081,6 +4183,7 @@ fn redundant_hook_skips_a_pair_whose_hook_bodies_are_trivial() {
         body: fingerprints(alpha, true),
         idempotent: false,
         alpha_source: std::sync::Arc::from(alpha),
+        guards: Vec::new(),
     };
     let result = analyze_hooked(
         vec![
@@ -4515,6 +4618,43 @@ fn an_empty_context_key_omits_the_new_fields_from_its_published_json() {
         ..Context::default()
     }));
     assert!(with_setup.contains("module_setup"), "{with_setup}");
+
+    // Hook guards follow the same contract, in both directions. An unguarded hook serializes as
+    // the `(kind, alpha)` array every recorded `contextKey` predating guards carries -- the
+    // untagged enum's plain variant, not a new shape -- and a guarded hook names its guards.
+    let unguarded = Context {
+        hooks: vec![hook(HookKind::BeforeEach, "seed()", 1)],
+        ..Context::default()
+    };
+    let unguarded_json = canonical_json(&ContextKey::new(&unguarded));
+    assert!(
+        !unguarded_json.contains("guards"),
+        "an unguarded hook must not name the guards field: {unguarded_json}"
+    );
+    assert!(
+        unguarded_json.contains(r#""hooks":[["beforeEach","seed()"]]"#),
+        "an unguarded hook keeps the published array shape: {unguarded_json}"
+    );
+    let guarded = Context {
+        hooks: vec![guarded_hook(
+            HookKind::BeforeEach,
+            "seed()",
+            1,
+            HookGuardKind::IfConsequent,
+            "true",
+        )],
+        ..Context::default()
+    };
+    let guarded_json = canonical_json(&ContextKey::new(&guarded));
+    assert!(
+        guarded_json.contains(r#""guards":[{"kind":"ifConsequent","condition":"true"}]"#),
+        "a guarded hook publishes its guards: {guarded_json}"
+    );
+    assert_ne!(
+        ContextKey::new(&unguarded).digest(),
+        ContextKey::new(&guarded).digest(),
+        "the guard separates the two hooks' grouping keys"
+    );
 
     // The digests must differ from the empty one, which is what makes the fields load-bearing.
     let empty_digest = ContextKey::new(&Context::default()).digest();

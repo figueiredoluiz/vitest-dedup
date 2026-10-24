@@ -45,4 +45,16 @@ For context-compatibility purposes (the `redundant-hook` and context-equivalence
 declaration order, **plus** the corresponding `afterEach`/`afterAll` from each level in reverse,
 this is exactly the ordered set the analyzer needs to compare for "equivalent context."
 
+A registration written under control flow -- inside an `if` branch, a loop body, a
+`try`/`catch`/`finally` arm or a `switch` case (including fallthrough between arms), or after a
+`return`/`throw`/`break`/`continue` among direct siblings of its block -- carries that position
+as part of its identity. The guard is recorded structurally (which position)
+plus, where one exists, the controlling expression's own source text; it is never an evaluation
+of which branch runs. Different guards can both be true for the same tests, and a matching
+`switch` case can fall through to later cases -- the identity is structural, never a claim of
+exclusive execution. Because the runtime registration depends on that unevaluated control flow
+and on the values of the conditions governing it, a scope holding any guarded registration is
+marked unresolved: its tests are excluded from comparison rather than compared on an identity
+that cannot know whether the hook runs.
+
 Back to the [Vitest surface index](../vitest-surface.md).

@@ -71,8 +71,9 @@
 //! waved through as "probably free".
 
 use crate::model::{
-    Context, DeclarationKind, EachRows, EachTable, FixtureBinding, FixtureValue, Hook, HookKind,
-    Location, MockFactory, MockedModule, Modifier, Position, Span, TestCase, Title,
+    Context, DeclarationKind, EachRows, EachTable, FixtureBinding, FixtureValue, Hook, HookGuard,
+    HookGuardKind, HookKind, Location, MockFactory, MockedModule, Modifier, Position, Span,
+    TestCase, Title,
 };
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -262,12 +263,33 @@ impl HeapBytes for Hook {
             body,
             idempotent,
             alpha_source,
+            guards,
         } = self;
         kind.heap_bytes()
             + location.heap_bytes()
             + body.heap_bytes()
             + idempotent.heap_bytes()
             + alpha_source.heap_bytes()
+            + guards.heap_bytes()
+    }
+}
+
+impl HeapBytes for HookGuardKind {
+    /// Guard kinds carry no heap payload.
+    fn heap_bytes(&self) -> usize {
+        0
+    }
+}
+
+impl HeapBytes for HookGuard {
+    /// A guard's condition text is the only heap payload; the kind is none.
+    fn heap_bytes(&self) -> usize {
+        self.kind.heap_bytes()
+            + self
+                .condition
+                .as_ref()
+                .map(|text| text.heap_bytes())
+                .unwrap_or(0)
     }
 }
 
@@ -892,6 +914,8 @@ mod tests {
         assert_eq!(empty_report.retained_bytes, 0);
     }
 
+    /// A hook's retained alpha text lands in the context bucket and nowhere else; a guard's
+    /// condition text is attributable the same way.
     #[test]
     fn the_context_breakdown_attributes_a_hook_chain_to_hooks() {
         let mut test = test_case("a");
@@ -901,6 +925,7 @@ mod tests {
             body: Fingerprints::default(),
             idempotent: false,
             alpha_source: Arc::from("x".repeat(2_000).as_str()),
+            guards: Vec::new(),
         });
         let tests = vec![test];
         let report = MemoryReport::post_extraction(&tests, 1, 1, None);
@@ -916,6 +941,40 @@ mod tests {
         );
     }
 
+    /// A guard's condition text is heap like any other retained string, and the vector holding
+    /// the guards costs its own buffer: a hook with only structural guards (no condition text)
+    /// must still be attributable, or the roof under-counts files that lean on them.
+    #[test]
+    fn a_guarded_hook_accounts_for_its_condition_text_and_guard_vector() {
+        let mut test = test_case("a");
+        test.context.hooks.push(Hook {
+            kind: HookKind::BeforeEach,
+            location: location("a.test.ts"),
+            body: Fingerprints::default(),
+            idempotent: false,
+            alpha_source: Arc::from(""),
+            guards: vec![
+                crate::model::HookGuard {
+                    kind: crate::model::HookGuardKind::IfConsequent,
+                    condition: Some("x".repeat(500)),
+                },
+                crate::model::HookGuard {
+                    kind: crate::model::HookGuardKind::TryBlock,
+                    condition: None,
+                },
+            ],
+        });
+        let tests = vec![test];
+        let report = MemoryReport::post_extraction(&tests, 1, 1, None);
+
+        assert!(
+            report.fields.context.hooks >= 500,
+            "a guard's condition text must be attributable to the hooks bucket: {:?}",
+            report.fields.context
+        );
+    }
+
+    /// The published phase names are consumed by tooling that must not see them drift.
     #[test]
     fn phase_identifiers_are_stable() {
         assert_eq!(MemoryPhase::PostExtraction.id(), "post-extraction");
@@ -1105,6 +1164,7 @@ mod tests {
                 body: Fingerprints::default(),
                 idempotent: false,
                 alpha_source: Arc::from("x".repeat(1_500).as_str()),
+                guards: Vec::new(),
             }],
             mocked_modules: vec![MockedModule {
                 specifier: Arc::from("resolved:/a.ts"),

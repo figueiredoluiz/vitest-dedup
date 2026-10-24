@@ -14,14 +14,16 @@
 use crate::discovery::{ModuleFlavor, SourceFile};
 use crate::model::{
     Context, DeclarationKind, EachRows, EachTable, ExclusionReason, Fingerprints, FixtureBinding,
-    Hook, HookKind, Location, MockFactory, MockedModule, Modifier, Position, TestCase, Title,
+    Hook, HookGuard, HookGuardKind, HookKind, Location, MockFactory, MockedModule, Modifier,
+    Position, TestCase, Title,
 };
 use oxc_allocator::Allocator;
 use oxc_ast::ast::{
     Argument, ArrayExpressionElement, ArrowFunctionBody, AssignmentOperator, AssignmentTarget,
     BindingPattern, CallExpression, Expression, ForOfStatement, ForStatementLeft, FormalParameters,
-    Function, FunctionType, IdentifierReference, ImportDeclarationSpecifier, ObjectExpression,
-    ObjectPropertyKind, Program, Statement, TemplateLiteral, UnaryOperator, VariableDeclarator,
+    Function, FunctionType, IdentifierReference, ImportDeclarationSpecifier, LabelIdentifier,
+    ObjectExpression, ObjectPropertyKind, Program, Statement, TemplateLiteral, UnaryOperator,
+    VariableDeclarator,
 };
 use oxc_ast::AstKind;
 use oxc_ast_visit::{walk, Visit};
@@ -1086,9 +1088,40 @@ struct HelperFrame<'a> {
     bindings: usize,
 }
 
+/// One entry of the walker's [`Walker::guards`] stack: the position kind plus, where the
+/// position has a controlling expression, its raw source text -- resolved when the walk enters
+/// the position, because a `switch` case folds its ordinal in and a plain span slice cannot.
+/// One conditional exit a statement list left open: the branch later statements land in when
+/// the condition does not take the exiting arm, the condition's own text, and whether the exit
+/// can reach past the construct the list belongs to (a function exit, or a labeled jump to an
+/// outer statement) -- which is the only kind a guarded list may taint its scope with.
+#[derive(Clone)]
+struct Fallthrough {
+    kind: HookGuardKind,
+    text: String,
+    escapes: bool,
+}
+
+#[derive(Clone)]
+struct PendingGuard {
+    kind: HookGuardKind,
+    /// The raw source text published as the guard's condition; `None` for the structural
+    /// positions (`try` arms, placement after a terminator) whose identity is the position
+    /// alone.
+    text: Option<String>,
+}
+
 #[derive(Default, Clone)]
 struct ScopeHooks {
     unresolved: bool,
+    /// A guarded list in this scope held an exit the flat guard model cannot express -- an
+    /// unconditional function exit, or a conditional residual that can reach past its guard.
+    /// The flag defers to the next hook registration: a hook recorded after such an exit
+    /// registers under control flow the flat list cannot name, so the scope refuses
+    /// comparison from that registration on. Hook-free scopes stay exactly as comparable as
+    /// they were before hook guards existed -- test-registration reachability is a separate
+    /// question this flag does not touch.
+    exit_unexpressible: bool,
     before_all: Vec<Hook>,
     before_each: Vec<Hook>,
     after_each: Vec<Hook>,
@@ -1130,6 +1163,27 @@ struct Walker<'a> {
     exported_as: HashMap<SymbolId, String>,
     suite_path: Vec<Title>,
     hook_scopes: Vec<ScopeHooks>,
+    /// The control-flow positions the walk is currently inside, outermost first -- an `if`
+    /// branch, a loop body, a `try` arm, a `switch` case, or the statement tail after a
+    /// terminator. [`Walker::record_hook`] copies this into every hook it registers, so two
+    /// registrations that differ only by their guard never read as the same setup. See
+    /// [`crate::model::HookGuard`].
+    guards: Vec<PendingGuard>,
+    /// How many loop or `switch` bodies the walk is currently inside. A `break`/`continue`
+    /// among a list's direct siblings ends that iteration or arm only when one of those is
+    /// above -- anywhere else the statement cannot appear at all -- so the list walk consults
+    /// this before treating one as a terminator. See [`Walker::always_terminates`].
+    break_terminates_depth: usize,
+    /// Conditional exits left open by the statement list that most recently finished walking:
+    /// `{ if (enabled) return; }` leaves `enabled` behind as the implicit alternate, and
+    /// `if (enabled) {} else return;` leaves it behind as the implicit consequent -- the kind
+    /// travels with the text. The enclosing list drains these into its own fallthroughs, which
+    /// is how a conditional exit inside a nested block reaches the hooks after the block.
+    exiting_conditionals: Vec<Fallthrough>,
+    /// The labels of the labeled statements the walk is currently inside, outermost first. A
+    /// labeled `break` ends the labeled statement it names; when that statement is an ancestor,
+    /// the tail of the list the `break` sits in is dead.
+    label_stack: Vec<String>,
     tests: Vec<TestCase>,
     helper_sources: std::collections::BTreeMap<std::path::PathBuf, String>,
     allow_imported: bool,
@@ -1230,6 +1284,8 @@ impl<'a> Walker<'a> {
             .get_or_init(|| registration_free::written_bindings(self.program, self.semantic))
     }
 
+    /// Opens a walker with an empty guard stack, label stack and residual set: the file-level
+    /// list is walked from unguarded, unconditional control flow.
     fn new(
         source: &'a str,
         file: &'a SourceFile,
@@ -1263,6 +1319,10 @@ impl<'a> Walker<'a> {
             exported_as,
             suite_path: Vec::new(),
             hook_scopes: vec![ScopeHooks::default()],
+            guards: Vec::new(),
+            break_terminates_depth: 0,
+            exiting_conditionals: Vec::new(),
+            label_stack: Vec::new(),
             tests: Vec::new(),
             helper_sources: Default::default(),
             allow_imported: true,
@@ -1295,10 +1355,31 @@ impl<'a> Walker<'a> {
     /// was registered before or after that test textually (`fixtures/hooks/hooks-nested-order.
     /// test.ts` registers `afterEach` after the nested `describe` it must still apply to). A
     /// single top-to-bottom pass would only see hooks that happened to come first.
+    /// Records that the statements about to be walked sit under one control-flow position; the
+    /// matching [`Self::pop_guard`] restores the enclosing position. Nesting accumulates: a hook
+    /// inside an `if` inside a loop carries both.
+    fn push_guard(&mut self, kind: HookGuardKind, text: Option<String>) {
+        self.guards.push(PendingGuard { kind, text });
+    }
+
+    /// Restores the control-flow position the enclosing list walks under; the matching
+    /// [`Self::push_guard`] is always its immediate neighbour.
+    fn pop_guard(&mut self) {
+        self.guards.pop();
+    }
+
+    /// The raw source text of one span -- the identity [`crate::model::HookGuard`] carries for
+    /// guards with a controlling expression.
+    fn raw_text(&self, span: Span) -> String {
+        self.source[span.start as usize..span.end as usize].to_owned()
+    }
+
+    /// The prepare pass over one statement list: hooks and bindings register with whatever
+    /// control-flow position the list's walk establishes.
     fn prepare_statements(&mut self, statements: &[Statement<'a>], registry: &mut Registry) {
-        for statement in statements {
-            self.prepare_statement(statement, registry);
-        }
+        self.walk_or_prepare_list(statements, registry, |walker, statement, registry| {
+            walker.prepare_statement(statement, registry)
+        });
     }
 
     /// Pre-register bindings and scope effects from one statement and supported nested
@@ -1321,54 +1402,30 @@ impl<'a> Walker<'a> {
             // hook scope, not a new one -- only a `describe` body pushes a fresh `ScopeHooks`
             // (see `emit_describe`).
             Statement::BlockStatement(block) => self.prepare_statements(&block.body, registry),
-            // A generic `if` recurses into both branches unconditionally, without evaluating the
-            // condition -- this also covers hazard 9's `if (import.meta.vitest) { ... }` idiom as
-            // a special case of the same rule, rather than a separate one.
-            Statement::IfStatement(if_statement) => {
-                self.prepare_body_like_statement(&if_statement.consequent, registry);
-                if let Some(alternate) = &if_statement.alternate {
-                    self.prepare_body_like_statement(alternate, registry);
-                }
-            }
-            Statement::ForStatement(for_statement) => {
-                self.prepare_body_like_statement(&for_statement.body, registry)
-            }
-            Statement::ForInStatement(for_in) => {
-                self.prepare_body_like_statement(&for_in.body, registry)
-            }
             // Unlike `walk_statement`, hook registration does not unroll a literal `for...of`
             // per element -- a `beforeEach` registered once per iteration would run its body
             // once per iteration too, which is not what this scope's hook list should record.
             Statement::ForOfStatement(for_of) => {
-                self.prepare_body_like_statement(&for_of.body, registry)
-            }
-            Statement::WhileStatement(while_statement) => {
-                self.prepare_body_like_statement(&while_statement.body, registry)
-            }
-            Statement::DoWhileStatement(do_while) => {
-                self.prepare_body_like_statement(&do_while.body, registry)
-            }
-            Statement::TryStatement(try_statement) => {
-                self.prepare_statements(&try_statement.block.body, registry);
-                if let Some(handler) = &try_statement.handler {
-                    self.prepare_statements(&handler.body.body, registry);
-                }
-                if let Some(finalizer) = &try_statement.finalizer {
-                    self.prepare_statements(&finalizer.body, registry);
-                }
-            }
-            Statement::SwitchStatement(switch_statement) => {
-                for case in &switch_statement.cases {
-                    self.prepare_statements(&case.consequent, registry);
-                }
+                self.push_guard(
+                    HookGuardKind::ForOfBody,
+                    Some(self.raw_text(for_of.right.span())),
+                );
+                self.break_terminates_depth += 1;
+                self.prepare_body_like_statement(&for_of.body, registry);
+                self.break_terminates_depth -= 1;
+                self.pop_guard();
             }
             Statement::LabeledStatement(labeled) => {
-                self.prepare_body_like_statement(&labeled.body, registry)
+                self.label_stack
+                    .push(labeled.label.name.as_str().to_owned());
+                self.prepare_body_like_statement(&labeled.body, registry);
+                self.label_stack.pop();
             }
             // `with` is deliberately unsupported (see the matching arm in `walk_statement`); the
             // diagnostic it pushes there covers hooks hidden inside one too, so nothing more is
-            // needed here.
-            _ => {}
+            // needed here. Every remaining kind is either a leaf or one of the shared
+            // control-flow constructs, whose reading must not differ between the passes.
+            other => self.guarded_control_flow(other, registry, Self::prepare_statement),
         }
     }
 
@@ -1471,9 +1528,7 @@ impl<'a> Walker<'a> {
     /// [`Self::prepare_statements`], so this pass does not touch them again.
     fn walk_statements(&mut self, statements: &[Statement<'a>], registry: &mut Registry) {
         self.prepare_statements(statements, registry);
-        for statement in statements {
-            self.walk_statement(statement, registry);
-        }
+        self.walk_or_prepare_list(statements, registry, Self::walk_statement);
     }
 
     /// The declaration walk's core dispatch. Every statement form that can hold a nested
@@ -1495,48 +1550,21 @@ impl<'a> Walker<'a> {
             // Already handled by `prepare_statements`.
             Statement::VariableDeclaration(_) => {}
             Statement::BlockStatement(block) => self.walk_statement_list(&block.body, registry),
-            // A generic `if` recurses into both branches unconditionally: the condition's runtime
-            // value is never evaluated, so a declaration reachable through either branch must be
-            // visible regardless of which one a reader expects to run. This also covers hazard
-            // 9's `if (import.meta.vitest) { ... }` idiom as a special case of the same rule,
-            // rather than a separate one -- its body is walked in the same suite/hook context as
-            // the surrounding statements, since in-source tests are module scope, not nested in
-            // any suite.
-            Statement::IfStatement(if_statement) => {
-                self.walk_body_like_statement(&if_statement.consequent, registry);
-                if let Some(alternate) = &if_statement.alternate {
-                    self.walk_body_like_statement(alternate, registry);
-                }
-            }
-            Statement::ForStatement(for_statement) => {
-                self.walk_body_like_statement(&for_statement.body, registry)
-            }
-            Statement::ForInStatement(for_in) => {
-                self.walk_body_like_statement(&for_in.body, registry)
-            }
-            Statement::ForOfStatement(for_of) => self.walk_for_of_statement(for_of, registry),
-            Statement::WhileStatement(while_statement) => {
-                self.walk_body_like_statement(&while_statement.body, registry)
-            }
-            Statement::DoWhileStatement(do_while) => {
-                self.walk_body_like_statement(&do_while.body, registry)
-            }
-            Statement::TryStatement(try_statement) => {
-                self.walk_statement_list(&try_statement.block.body, registry);
-                if let Some(handler) = &try_statement.handler {
-                    self.walk_statement_list(&handler.body.body, registry);
-                }
-                if let Some(finalizer) = &try_statement.finalizer {
-                    self.walk_statement_list(&finalizer.body, registry);
-                }
-            }
-            Statement::SwitchStatement(switch_statement) => {
-                for case in &switch_statement.cases {
-                    self.walk_statement_list(&case.consequent, registry);
-                }
+            Statement::ForOfStatement(for_of) => {
+                self.push_guard(
+                    HookGuardKind::ForOfBody,
+                    Some(self.raw_text(for_of.right.span())),
+                );
+                self.break_terminates_depth += 1;
+                self.walk_for_of_statement(for_of, registry);
+                self.break_terminates_depth -= 1;
+                self.pop_guard();
             }
             Statement::LabeledStatement(labeled) => {
-                self.walk_body_like_statement(&labeled.body, registry)
+                self.label_stack
+                    .push(labeled.label.name.as_str().to_owned());
+                self.walk_body_like_statement(&labeled.body, registry);
+                self.label_stack.pop();
             }
             // Deliberately unsupported: `with` is disallowed in strict-mode/ESM source (which
             // every real Vitest file is) and its dynamic, unresolvable scoping would make any
@@ -1566,16 +1594,429 @@ impl<'a> Walker<'a> {
             // same boundary the "opaque body" hazard (C1) draws for a test body that references a
             // named helper instead of an inline callback. Nothing here needs a diagnostic because
             // nothing here can silently drop a *reachable* declaration the way an unhandled
-            // control-flow construct would.
-            _ => {}
+            // control-flow construct would. The shared control-flow constructs -- the same ones
+            // the prepare pass routes -- are read by one dispatch, so a hook's guard and this
+            // walk's reachability can never disagree about a position
+            // (see `guarded_control_flow`).
+            other => self.guarded_control_flow(other, registry, Self::walk_statement),
         }
     }
 
     /// Walk every statement in source order without preparing the enclosing scope again;
     /// its bindings and hook effects have already been collected.
     fn walk_statement_list(&mut self, statements: &[Statement<'a>], registry: &mut Registry) {
+        self.walk_or_prepare_list(statements, registry, |walker, statement, registry| {
+            walker.walk_statement(statement, registry)
+        });
+    }
+
+    /// The control-flow arms both passes share, because a hook's guard and a declaration's
+    /// reachability must read control flow identically -- two passes that pushed different
+    /// guards over the same statement would disagree about exactly the registrations the guard
+    /// exists to separate. `recurse` is the caller's own statement walk (the prepare pass's or
+    /// the declaration walk's); each arm pushes the position's guard, recurses into the body or
+    /// branch the construct can run, and pops. `for...of` is deliberately NOT here: the prepare
+    /// pass walks its body once while the declaration pass unrolls it, and that difference is
+    /// the point of the two passes. Both passes call this from their own wildcard arm, so the
+    /// arm lists here are the one place the shared constructs are named; a statement kind this
+    /// match does not own is a leaf the caller's wildcard already accounts for.
+    fn guarded_control_flow(
+        &mut self,
+        statement: &Statement<'a>,
+        registry: &mut Registry,
+        recurse: fn(&mut Self, &Statement<'a>, &mut Registry),
+    ) {
+        match statement {
+            // A generic `if` recurses into both branches unconditionally, without evaluating the
+            // condition -- this also covers hazard 9's `if (import.meta.vitest) { ... }` idiom as
+            // a special case of the same rule, rather than a separate one.
+            Statement::IfStatement(if_statement) => {
+                let test = self.raw_text(if_statement.test.span());
+                self.push_guard(HookGuardKind::IfConsequent, Some(test.clone()));
+                recurse(self, &if_statement.consequent, registry);
+                self.pop_guard();
+                if let Some(alternate) = &if_statement.alternate {
+                    self.push_guard(HookGuardKind::IfAlternate, Some(test));
+                    recurse(self, alternate, registry);
+                    self.pop_guard();
+                }
+            }
+            Statement::ForStatement(for_statement) => {
+                // The whole head, not just the test: `for (i = 1; i < 1; ...)` never enters
+                // where `for (i = 0; i < 1; ...)` enters once, and the test alone cannot see it.
+                // Empty slots stay in the text as empty fields: `for (false;;)` and
+                // `for (;false;)` differ in how often the body runs, and a join that dropped
+                // the empties would read both as "false".
+                let head = [
+                    for_statement
+                        .init
+                        .as_ref()
+                        .map(|part| self.raw_text(part.span()))
+                        .unwrap_or_default(),
+                    for_statement
+                        .test
+                        .as_ref()
+                        .map(|part| self.raw_text(part.span()))
+                        .unwrap_or_default(),
+                    for_statement
+                        .update
+                        .as_ref()
+                        .map(|part| self.raw_text(part.span()))
+                        .unwrap_or_default(),
+                ];
+                let text = head.join("; ");
+                self.break_terminates_depth += 1;
+                self.push_guard(HookGuardKind::ForBody, Some(text));
+                recurse(self, &for_statement.body, registry);
+                self.break_terminates_depth -= 1;
+                self.pop_guard();
+            }
+            Statement::ForInStatement(for_in) => {
+                self.push_guard(
+                    HookGuardKind::ForInBody,
+                    Some(self.raw_text(for_in.right.span())),
+                );
+                self.break_terminates_depth += 1;
+                recurse(self, &for_in.body, registry);
+                self.break_terminates_depth -= 1;
+                self.pop_guard();
+            }
+            Statement::WhileStatement(while_statement) => {
+                self.push_guard(
+                    HookGuardKind::WhileBody,
+                    Some(self.raw_text(while_statement.test.span())),
+                );
+                self.break_terminates_depth += 1;
+                recurse(self, &while_statement.body, registry);
+                self.break_terminates_depth -= 1;
+                self.pop_guard();
+            }
+            Statement::DoWhileStatement(do_while) => {
+                self.push_guard(
+                    HookGuardKind::DoWhileBody,
+                    Some(self.raw_text(do_while.test.span())),
+                );
+                self.break_terminates_depth += 1;
+                recurse(self, &do_while.body, registry);
+                self.break_terminates_depth -= 1;
+                self.pop_guard();
+            }
+            Statement::TryStatement(try_statement) => {
+                self.push_guard(HookGuardKind::TryBlock, None);
+                self.walk_try_arm(&try_statement.block.body, registry, recurse);
+                self.pop_guard();
+                if let Some(handler) = &try_statement.handler {
+                    // The whole try statement, not just the arm: the handler runs only when the
+                    // guarded body throws, so whether the body can throw decides this
+                    // registration, and the body's own text is the identity that carries it.
+                    self.push_guard(
+                        HookGuardKind::CatchHandler,
+                        Some(self.raw_text(try_statement.span())),
+                    );
+                    self.walk_try_arm(&handler.body.body, registry, recurse);
+                    self.pop_guard();
+                }
+                if let Some(finalizer) = &try_statement.finalizer {
+                    self.push_guard(HookGuardKind::FinallyBlock, None);
+                    self.walk_try_arm(&finalizer.body, registry, recurse);
+                    self.pop_guard();
+                }
+            }
+            Statement::SwitchStatement(switch_statement) => {
+                // The whole switch, text and all. An arm's reachability is not its label alone:
+                // an earlier arm may fall through into it, and a `default` arm runs only when
+                // no label matched, so the other labels decide its registration too. Modeling
+                // that execution is not attempted -- the identity is the position plus the
+                // entire statement that governs it, which separates every shape that behaves
+                // differently and costs a match only when the switches themselves differ.
+                self.push_guard(
+                    HookGuardKind::SwitchCase,
+                    Some(self.raw_text(switch_statement.span())),
+                );
+                self.break_terminates_depth += 1;
+                for case in &switch_statement.cases {
+                    self.walk_try_arm(&case.consequent, registry, recurse);
+                }
+                self.break_terminates_depth -= 1;
+                self.pop_guard();
+            }
+            // Leaves (`return`, `break`, declarations whose bodies the passes own, ...): the
+            // caller's wildcard comment covers what these must not silently drop, and control
+            // flow that reaches the shared dispatch is handled above.
+            _ => {}
+        }
+    }
+
+    /// A `try` arm's statement list, or the block form's body: `recurse` already handles both
+    /// (the prepare and walk dispatches each route `BlockStatement` to their list walk).
+    fn walk_try_arm(
+        &mut self,
+        statements: &[Statement<'a>],
+        registry: &mut Registry,
+        recurse: fn(&mut Self, &Statement<'a>, &mut Registry),
+    ) {
+        self.walk_or_prepare_list(statements, registry, recurse);
+    }
+
+    /// The statement-list walk both passes share, because a hook's guard and a declaration's
+    /// reachability read the same control flow. Two facts are tracked while the list runs:
+    ///
+    /// - a `return`/`throw` among direct siblings ends the function there, so every later
+    ///   statement sits under [`HookGuardKind::AfterTerminator`] -- the runtime never reaches
+    ///   it;
+    /// - an `if` whose (alternate-less) consequent always returns puts every later statement in
+    ///   the `if`'s implicit alternate: reached only when the condition was false, which is
+    ///   exactly [`HookGuardKind::IfAlternate`] over that condition. `if (!ready) return;`
+    ///   before a hook is a common real shape, and recording the hook as unguarded would read
+    ///   it as the same setup as a file without the early return.
+    fn walk_or_prepare_list(
+        &mut self,
+        statements: &[Statement<'a>],
+        registry: &mut Registry,
+        recurse: fn(&mut Self, &Statement<'a>, &mut Registry),
+    ) {
+        // Residuals left by whatever ran before this list must not leak into its guards: each
+        // list starts from its own control flow.
+        self.exiting_conditionals.clear();
+        let mut terminated = false;
+        // Every conditional terminator seen so far, with the branch a later statement lands in
+        // when the condition does not take the exiting one: a later statement runs under all of
+        // them, not just the last one seen.
+        let mut fallthroughs: Vec<Fallthrough> = Vec::new();
         for statement in statements {
-            self.walk_statement(statement, registry);
+            if terminated {
+                self.push_guard(HookGuardKind::AfterTerminator, None);
+                recurse(self, statement, registry);
+                self.pop_guard();
+                continue;
+            }
+            for exit in &fallthroughs {
+                self.push_guard(exit.kind, Some(exit.text.clone()));
+            }
+            recurse(self, statement, registry);
+            for _ in &fallthroughs {
+                self.pop_guard();
+            }
+            // A nested block's own conditional exits govern the statements after it: drain
+            // them into this list's fallthroughs. A residual only ever arrives here from a
+            // list that ran with an EMPTY guard stack (a guarded list keeps its residuals to
+            // itself, below), and this list sees that same stack, so there is nothing to
+            // refuse here -- the drain only widens the guards on later statements.
+            if !self.exiting_conditionals.is_empty() {
+                fallthroughs.append(&mut self.exiting_conditionals);
+            }
+            if self.always_terminates(statement) {
+                terminated = true;
+            } else if let Statement::IfStatement(if_statement) = statement {
+                // Exactly one branch always leaves: every later statement runs only through the
+                // branch that falls through -- the implicit alternate when the consequent
+                // exits, the implicit consequent when the alternate does. A literal condition
+                // that makes the exiting branch unreachable (`if (false) return; else noop()`)
+                // falls through unconditionally and guards nothing, and one that makes it
+                // certain (`if (true) return;`) kills the tail outright.
+                let test = self.raw_text(if_statement.test.span());
+                let consequent_leaves = self.always_terminates(&if_statement.consequent);
+                let alternate_leaves = if_statement
+                    .alternate
+                    .as_ref()
+                    .is_some_and(|alternate| self.always_terminates(alternate));
+                match test.as_str() {
+                    "true" if consequent_leaves => terminated = true,
+                    "false" if alternate_leaves => terminated = true,
+                    "true" | "false" => {}
+                    _ if consequent_leaves => {
+                        let escapes = self.exit_escapes(&if_statement.consequent);
+                        fallthroughs.push(Fallthrough {
+                            kind: HookGuardKind::IfAlternate,
+                            text: test,
+                            escapes,
+                        });
+                    }
+                    _ if alternate_leaves => {
+                        let alternate = if_statement.alternate.as_ref().expect("checked");
+                        let escapes = self.exit_escapes(alternate);
+                        fallthroughs.push(Fallthrough {
+                            kind: HookGuardKind::IfConsequent,
+                            text: test,
+                            escapes,
+                        });
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if terminated {
+            // An unconditional FUNCTION exit inside a guarded list decides whether every
+            // statement after the guard's construct runs at all (`switch (m) { case 'a':
+            // return; } beforeEach(...)`), and the flat list cannot express that as a
+            // fallthrough condition -- the scope refuses comparison. A `break`/`continue`
+            // does not qualify: it ends an iteration or arm and costs nothing to model.
+            if !self.guards.is_empty()
+                && statements
+                    .iter()
+                    .any(|statement| self.leaves_function(statement))
+            {
+                let scope = self
+                    .hook_scopes
+                    .last_mut()
+                    .expect("root hook scope always present");
+                scope.exit_unexpressible = true;
+            }
+        } else if !self.guards.is_empty() {
+            // The list's own conditional exits govern whatever follows the list, but a list
+            // that ran under a guard keeps them to itself: a residual that can reach past the
+            // guard's construct (a function exit, or a labeled jump to an outer statement)
+            // would need that guard composed into its identity, which the flat list cannot
+            // express -- the scope refuses comparison. An exit that cannot reach past it --
+            // an unlabeled `break`/`continue`, which ends this iteration or arm and nothing
+            // outside -- taints nothing: statements after the construct run regardless.
+            if fallthroughs.iter().any(|exit| exit.escapes) {
+                let scope = self
+                    .hook_scopes
+                    .last_mut()
+                    .expect("root hook scope always present");
+                scope.exit_unexpressible = true;
+            }
+        } else {
+            self.exiting_conditionals = fallthroughs;
+        }
+    }
+
+    /// Whether executing this statement ends the execution its enclosing list was promised,
+    /// with two readings of "ends": the list-termination reading (`function_exit_only =
+    /// false`, where a `break`/`continue` that binds to an enclosing loop or switch counts,
+    /// because the tail of the list is dead either way) and the function-exit reading
+    /// (`function_exit_only = true`, where only a `return`/`throw` -- or a compound whose
+    /// paths all reach one -- counts, because the guard model asks whether the function
+    /// itself stops). Everything after a statement that answers true in the same list is
+    /// dead, and the guard stack says so.
+    fn terminates(&self, statement: &Statement<'a>, function_exit_only: bool) -> bool {
+        match statement {
+            Statement::ReturnStatement(_) | Statement::ThrowStatement(_) => true,
+            // An unlabeled `break` leaves the innermost loop or switch and a labeled one the
+            // statement its label names -- a dead list tail, but the function resumes, so the
+            // function-exit reading does not count it. The same holds for `continue`.
+            Statement::BreakStatement(break_statement) if !function_exit_only => {
+                self.break_terminates(&break_statement.label)
+            }
+            Statement::ContinueStatement(_) if !function_exit_only => {
+                self.break_terminates_depth > 0
+            }
+            // Any direct sibling that ends the promised execution is enough: nothing before
+            // it can jump past it. Checking only the last statement missed
+            // `if (true) { return; void 0; }`, whose tail is dead but whose last statement
+            // is not.
+            Statement::BlockStatement(block) => block
+                .body
+                .iter()
+                .any(|part| self.terminates(part, function_exit_only)),
+            Statement::LabeledStatement(labeled) => {
+                self.terminates(&labeled.body, function_exit_only)
+            }
+            Statement::IfStatement(if_statement) => {
+                // The same rule the list walk applies to its own siblings: a literal
+                // condition selects one arm unconditionally, and only the selected arm has
+                // to end; any other condition requires both arms (an absent alternate falls
+                // through).
+                let consequent = self.terminates(&if_statement.consequent, function_exit_only);
+                let alternate = if_statement
+                    .alternate
+                    .as_ref()
+                    .is_some_and(|alternate| self.terminates(alternate, function_exit_only));
+                match self.raw_text(if_statement.test.span()).as_str() {
+                    "true" => consequent,
+                    "false" => alternate,
+                    _ => consequent && alternate,
+                }
+            }
+            Statement::TryStatement(try_statement) => {
+                let ends = |statements: &[Statement<'a>]| {
+                    statements
+                        .iter()
+                        .any(|part| self.terminates(part, function_exit_only))
+                };
+                // A throw that no handler catches propagates out, which ends the execution
+                // in either reading, so an absent handler reads as ending.
+                let handler_ends = try_statement
+                    .handler
+                    .as_ref()
+                    .map(|handler| ends(&handler.body.body))
+                    .unwrap_or(true);
+                let finalizer_ends = try_statement
+                    .finalizer
+                    .as_ref()
+                    .map(|finalizer| ends(&finalizer.body))
+                    .unwrap_or(false);
+                // A finalizer that always ends decides the statement no matter how the
+                // guarded body or the handler resolve; otherwise the guarded body and -- when
+                // it throws instead of ending -- the handler must both end. An absent
+                // finalizer does not make every path end: `try {} catch {}` falls through.
+                finalizer_ends || (ends(&try_statement.block.body) && handler_ends)
+            }
+            _ => false,
+        }
+    }
+
+    /// The list-termination reading of [`Self::terminates`]: does this statement, whenever it
+    /// runs, end the execution the rest of its list was promised?
+    fn always_terminates(&self, statement: &Statement<'a>) -> bool {
+        self.terminates(statement, false)
+    }
+
+    /// Whether a conditional exit through this arm can reach past the construct the walking
+    /// list belongs to: a function exit certainly can, and a labeled `break`/`continue` can
+    /// (it resumes at the statement its label names, which lies outside the innermost
+    /// construct -- when the label names that innermost construct itself, treating it as
+    /// escaping is the conservative direction: it refuses comparison rather than risking one).
+    /// An unlabeled `break`/`continue` cannot: it ends this iteration or arm, and execution
+    /// resumes inside the same construct.
+    fn exit_escapes(&self, arm: &Statement<'a>) -> bool {
+        self.leaves_function(arm) || self.contains_labeled_jump(arm)
+    }
+
+    /// Whether this statement, or anything it structurally contains, is a labeled
+    /// `break`/`continue`.
+    fn contains_labeled_jump(&self, statement: &Statement<'a>) -> bool {
+        match statement {
+            Statement::BreakStatement(break_statement) => break_statement.label.is_some(),
+            Statement::ContinueStatement(continue_statement) => continue_statement.label.is_some(),
+            Statement::BlockStatement(block) => block
+                .body
+                .iter()
+                .any(|part| self.contains_labeled_jump(part)),
+            Statement::LabeledStatement(labeled) => self.contains_labeled_jump(&labeled.body),
+            Statement::IfStatement(if_statement) => {
+                self.contains_labeled_jump(&if_statement.consequent)
+                    || if_statement
+                        .alternate
+                        .as_ref()
+                        .is_some_and(|alternate| self.contains_labeled_jump(alternate))
+            }
+            _ => false,
+        }
+    }
+
+    /// The function-exit reading of [`Self::terminates`]: does this statement leave the
+    /// enclosing function? A `break`/`continue` does not -- it ends an iteration or arm, and
+    /// execution resumes in the enclosing statement -- which is the distinction the guard
+    /// model needs: an unconditional function exit inside a guarded list decides whether the
+    /// statements after the guard's construct run at all.
+    fn leaves_function(&self, statement: &Statement<'a>) -> bool {
+        self.terminates(statement, true)
+    }
+
+    /// Whether a `break` with this label ends the execution its enclosing list was promised:
+    /// an unlabeled one binds to the innermost loop or switch (which must exist), and a
+    /// labeled one ends the statement its label names -- a dead tail exactly when that
+    /// statement encloses this list, because a label naming a plain block further out would
+    /// resume right where that block ended.
+    fn break_terminates(&self, label: &Option<LabelIdentifier>) -> bool {
+        match label {
+            None => self.break_terminates_depth > 0,
+            Some(label) => self
+                .label_stack
+                .iter()
+                .any(|held| held.as_str() == label.name.as_str()),
         }
     }
 
@@ -1764,6 +2205,18 @@ impl<'a> Walker<'a> {
     /// Fingerprint a readable hook callback and record its kind, location and idempotence in
     /// the current scope.
     fn record_hook(&mut self, call: &CallExpression<'a>, kind: HookKind) {
+        // The refusal below covers every registration under a guard, including one whose
+        // callback is not inline (`beforeEach(reset)`): the early return for a missing
+        // function-like argument must not skip it, or a guarded registration that names its
+        // callback elsewhere would leave the scope comparable while its runtime registration
+        // still depends on the guard.
+        if !self.guards.is_empty() {
+            let scope = self
+                .hook_scopes
+                .last_mut()
+                .expect("root hook scope always present");
+            scope.unresolved = true;
+        }
         let Some(function_like) = call.arguments.first().and_then(as_function_like) else {
             return;
         };
@@ -1789,7 +2242,7 @@ impl<'a> Walker<'a> {
         // `redundant-hook` and the behavior-keyed claims consume, so an incomplete trace fails
         // closed here exactly as a test body's does.
         let body_unresolved = body.class_unresolved || body.behavior_truncated;
-        let hook = Hook {
+        let mut hook = Hook {
             kind,
             location: self.location(call.span),
             idempotent,
@@ -1797,7 +2250,53 @@ impl<'a> Walker<'a> {
             // Kept, not dropped: `analysis`'s `ContextKey` publishes this text's JSON inside
             // `contextKey`. See `Hook::alpha_source`.
             alpha_source: body.into_alpha_source(),
+            guards: Vec::new(),
         };
+        // A guarded list earlier in this scope held an exit the flat guard model cannot
+        // express; this registration sits after it, under control flow it cannot name, so the
+        // scope refuses comparison from here on. Deferred to registration time so hook-free
+        // scopes keep the comparability they had before hook guards existed.
+        if self
+            .hook_scopes
+            .iter()
+            .any(|scope| scope.exit_unexpressible)
+        {
+            let scope = self
+                .hook_scopes
+                .last_mut()
+                .expect("root hook scope always present");
+            scope.unresolved = true;
+        }
+        // The control-flow positions this registration was written under, outermost first.
+        // Empty for an ordinary registration, and serialized only when non-empty -- a hook
+        // recorded before guards existed produces byte-identical JSON.
+        hook.guards = self
+            .guards
+            .iter()
+            .map(|pending| HookGuard {
+                kind: pending.kind,
+                condition: pending.text.clone(),
+            })
+            .collect();
+        // A hook whose registration sits under control flow -- any guard at all -- makes this
+        // scope's contexts incomparable. The guard is still recorded (its kind and text are
+        // part of the hook's identity, and `contextKey` publishes it), but the rules never
+        // compare across it: whether the hook registers at runtime depends on the control flow
+        // around the registration and on the values of whatever conditions govern it, and this
+        // analyzer does not evaluate either. Every attempt to narrow comparability to shapes
+        // whose values seemed provable (const literals, helper-free bodies, non-loop
+        // positions) met another shape that broke it -- conditional exits inside blocks, helper
+        // parameters, destructured initializers, temporal-dead-zone ordering, switch
+        // fallthrough -- so the boundary is drawn at the guard itself. Unobserved across the
+        // pinned reference corpus (2026-10-24 scan: 0 of 819 registrations carry any guard), so
+        // refusing comparison costs nothing measured.
+        if !hook.guards.is_empty() {
+            let scope = self
+                .hook_scopes
+                .last_mut()
+                .expect("root hook scope always present");
+            scope.unresolved = true;
+        }
         let scope = self
             .hook_scopes
             .last_mut()
@@ -2106,7 +2605,23 @@ impl<'a> Walker<'a> {
                         continue;
                     }
                     self.enter_suite_scope(title, title_is_unresolved, &own_behavior_modifiers);
+                    // A suite callback is a new function. The control flow around the
+                    // `describe` call governs whether the suite exists at all -- it decides
+                    // that for the tests and the hooks together -- so relative to the suite's
+                    // own scope its hooks are unconditional. Keeping the outer guard would
+                    // exclude every test of `if (import.meta.vitest) { describe(...) }` from
+                    // comparison (hazard 9's idiom) while saying nothing the suite's own
+                    // identity does not already say.
+                    let outer_guards = std::mem::take(&mut self.guards);
+                    let outer_depth = std::mem::replace(&mut self.break_terminates_depth, 0);
+                    let outer_labels = std::mem::take(&mut self.label_stack);
                     self.walk_statements(statements, registry);
+                    // A `return` in the callback leaves the callback, not the caller's list:
+                    // its conditional exits must not guard the caller's later statements.
+                    self.exiting_conditionals.clear();
+                    self.guards = outer_guards;
+                    self.break_terminates_depth = outer_depth;
+                    self.label_stack = outer_labels;
                     self.exit_suite_scope(&own_behavior_modifiers, title_is_unresolved);
                 }
                 // Concise-body arrow (`describe("x", () => test(...))`): legal Vitest, and a
@@ -2116,6 +2631,7 @@ impl<'a> Walker<'a> {
                 Some(DescribeBody::Concise(expr)) => {
                     self.enter_suite_scope(title, title_is_unresolved, &own_behavior_modifiers);
                     self.walk_concise_body(expr, registry);
+                    self.exiting_conditionals.clear();
                     self.exit_suite_scope(&own_behavior_modifiers, title_is_unresolved);
                 }
             }
@@ -2238,6 +2754,9 @@ impl<'a> Walker<'a> {
         if let Some(body) = &frame.function.body {
             walk(self, &body.statements, registry);
         }
+        // The same boundary as a describe callback: a helper's `return` leaves the helper, and
+        // its conditional exits must not leak into the caller's list.
+        self.exiting_conditionals.clear();
         if outermost {
             self.setup_site = None;
         }
@@ -3865,6 +4384,406 @@ mod tests {
             config_scope: None,
             project_globals: None,
         }
+    }
+
+    /// A hook registered under control flow carries that position in its identity, so two
+    /// same-named tests whose hooks differ -- `if (true)` versus `if (false)`, one loop head
+    /// versus another, a `try` block versus no guard -- never read as the same ambient setup.
+    /// Every arm here exercises the WALKER, not a hand-built `Hook`: the risk this pins is a
+    /// prepare/walk recursion that forgets to push or pop a guard.
+    #[test]
+    fn a_hook_registered_under_control_flow_carries_its_guard() {
+        let hook_guards = |source: &str| {
+            let source =
+                format!("import {{ describe, test, beforeEach, expect }} from 'vitest';\n{source}");
+            let extraction = run(&source, &file("guarded.test.ts"), Globals::Disabled, true);
+            assert!(
+                extraction.diagnostics.is_empty(),
+                "{:?}",
+                extraction.diagnostics
+            );
+            let test = extraction
+                .tests
+                .iter()
+                .find(|case| matches!(case.kind, DeclarationKind::Test))
+                .expect("the inner test extracted");
+            let hook = test.context.hooks.first().expect("one hook in context");
+            hook.guards.clone()
+        };
+        let body = "describe('suite', () => { GUARD beforeEach(() => { s.n = 1 }); test('reads', () => { expect(s.n).toBe(1) }); });";
+
+        let plain = hook_guards(&body.replace("GUARD", ""));
+        assert!(
+            plain.is_empty(),
+            "an ordinary registration carries no guard: {plain:?}"
+        );
+
+        let consequent = hook_guards(&body.replace("GUARD", "if (true)"));
+        assert_eq!(
+            consequent,
+            vec![HookGuard {
+                kind: HookGuardKind::IfConsequent,
+                condition: Some("true".to_owned()),
+            }]
+        );
+
+        let alternate = hook_guards(&body.replace("GUARD", "if (false)"));
+        assert_eq!(
+            alternate,
+            vec![HookGuard {
+                kind: HookGuardKind::IfConsequent,
+                condition: Some("false".to_owned()),
+            }],
+            "same branch arm, different condition text: the identities differ"
+        );
+        assert_ne!(consequent, alternate);
+
+        let else_branch = hook_guards(
+            "describe('suite', () => { if (true) {} else beforeEach(() => { s.n = 1 }); test('reads', () => { expect(s.n).toBe(1) }); });",
+        );
+        assert_eq!(
+            else_branch,
+            vec![HookGuard {
+                kind: HookGuardKind::IfAlternate,
+                condition: Some("true".to_owned()),
+            }]
+        );
+
+        let in_a_loop = hook_guards(&body.replace("GUARD", "for (const x of xs)"));
+        assert_eq!(
+            in_a_loop,
+            vec![HookGuard {
+                kind: HookGuardKind::ForOfBody,
+                condition: Some("xs".to_owned()),
+            }]
+        );
+
+        // `while (false)` never runs its body; a `do...while` runs it once before the test --
+        // the same test text under the two forms is a different registration.
+        let while_body = hook_guards(&body.replace("GUARD", "while (flag)"));
+        assert_eq!(
+            while_body,
+            vec![HookGuard {
+                kind: HookGuardKind::WhileBody,
+                condition: Some("flag".to_owned()),
+            }]
+        );
+        let do_while_body = hook_guards(
+            "describe('suite', () => { do { beforeEach(() => { s.n = 1 }) } while (flag); test('reads', () => { expect(s.n).toBe(1) }); });",
+        );
+        assert_eq!(
+            do_while_body,
+            vec![HookGuard {
+                kind: HookGuardKind::DoWhileBody,
+                condition: Some("flag".to_owned()),
+            }],
+        );
+
+        // A `for` head is the whole head: the same test with a different initializer can run a
+        // different number of times, and the identities must not collapse.
+        let for_head_zero = hook_guards(&body.replace("GUARD", "for (i = 0; i < 1; i++)"));
+        assert_eq!(
+            for_head_zero,
+            vec![HookGuard {
+                kind: HookGuardKind::ForBody,
+                condition: Some("i = 0; i < 1; i++".to_owned()),
+            }]
+        );
+        let for_head_one = hook_guards(&body.replace("GUARD", "for (i = 1; i < 1; i++)"));
+        assert_ne!(for_head_zero, for_head_one);
+
+        // A hook inside a switch carries the whole switch as its guard: reachability is not the
+        // arm's label alone (an earlier arm may fall through; a `default` runs only when no
+        // label matched), so the entire statement is the identity and any behavioural
+        // difference inside it separates the hooks.
+        let case_zero = hook_guards(
+            "describe('suite', () => { switch (0) { case 0: beforeEach(() => { s.n = 1 }) } test('reads', () => { expect(s.n).toBe(1) }); });",
+        );
+        assert_eq!(
+            case_zero,
+            vec![HookGuard {
+                kind: HookGuardKind::SwitchCase,
+                condition: Some("switch (0) { case 0: beforeEach(() => { s.n = 1 }) }".to_owned()),
+            }]
+        );
+        let case_one = hook_guards(
+            "describe('suite', () => { switch (0) { case 1: beforeEach(() => { s.n = 1 }) } test('reads', () => { expect(s.n).toBe(1) }); });",
+        );
+        assert_ne!(case_zero, case_one);
+
+        let in_try = hook_guards(
+            "describe('suite', () => { try { beforeEach(() => { s.n = 1 }) } finally {} test('reads', () => { expect(s.n).toBe(1) }); });",
+        );
+        assert_eq!(
+            in_try,
+            vec![HookGuard {
+                kind: HookGuardKind::TryBlock,
+                condition: None,
+            }]
+        );
+
+        // Nesting accumulates outermost first: an `if` inside a loop carries both.
+        let nested = hook_guards(
+            "describe('suite', () => { for (const x of xs) { if (ready) beforeEach(() => { s.n = 1 }) } test('reads', () => { expect(s.n).toBe(1) }); });",
+        );
+        assert_eq!(
+            nested,
+            vec![
+                HookGuard {
+                    kind: HookGuardKind::ForOfBody,
+                    condition: Some("xs".to_owned()),
+                },
+                HookGuard {
+                    kind: HookGuardKind::IfConsequent,
+                    condition: Some("ready".to_owned()),
+                },
+            ]
+        );
+
+        // After a direct-sibling `return` the runtime never reaches the registration, and the
+        // guard says so.
+        let dead = hook_guards(
+            "describe('suite', () => { return; beforeEach(() => { s.n = 1 }); test('reads', () => { expect(s.n).toBe(1) }); });",
+        );
+        assert_eq!(
+            dead,
+            vec![HookGuard {
+                kind: HookGuardKind::AfterTerminator,
+                condition: None,
+            }]
+        );
+
+        // A conditional early return is not an unreachable tail: the hook runs only when the
+        // condition was false, which is the `if`'s implicit alternate.
+        let gated = hook_guards(
+            "describe('suite', () => { if (ready) return; beforeEach(() => { s.n = 1 }); test('reads', () => { expect(s.n).toBe(1) }); });",
+        );
+        assert_eq!(
+            gated,
+            vec![HookGuard {
+                kind: HookGuardKind::IfAlternate,
+                condition: Some("ready".to_owned()),
+            }]
+        );
+        // Two conditional terminators in a row: the hook runs only when both were false, so
+        // both conditions are its guards -- the last one seen must not erase the first.
+        let two_returns = hook_guards(
+            "describe('suite', () => { if (ready) return; if (set) return; beforeEach(() => { s.n = 1 }); test('reads', () => { expect(s.n).toBe(1) }); });",
+        );
+        assert_eq!(
+            two_returns,
+            vec![
+                HookGuard {
+                    kind: HookGuardKind::IfAlternate,
+                    condition: Some("ready".to_owned()),
+                },
+                HookGuard {
+                    kind: HookGuardKind::IfAlternate,
+                    condition: Some("set".to_owned()),
+                },
+            ]
+        );
+        let gated_block = hook_guards(
+            "describe('suite', () => { if (ready) { return; } beforeEach(() => { s.n = 1 }); test('reads', () => { expect(s.n).toBe(1) }); });",
+        );
+        assert_eq!(
+            gated_block,
+            vec![HookGuard {
+                kind: HookGuardKind::IfAlternate,
+                condition: Some("ready".to_owned()),
+            }],
+            "a block whose last statement returns terminates the same way a bare one does"
+        );
+
+        // `break` ends the iteration, so a hook after it never registers -- but only while a
+        // loop (or switch) is above; the same statement cannot appear elsewhere.
+        let after_break = hook_guards(
+            "describe('suite', () => { for (const x of xs) { break; beforeEach(() => { s.n = 1 }) } test('reads', () => { expect(s.n).toBe(1) }); });",
+        );
+        assert_eq!(
+            after_break,
+            vec![
+                HookGuard {
+                    kind: HookGuardKind::ForOfBody,
+                    condition: Some("xs".to_owned()),
+                },
+                HookGuard {
+                    kind: HookGuardKind::AfterTerminator,
+                    condition: None,
+                }
+            ]
+        );
+        // ... and before the break it is an ordinary registration inside the loop.
+        let before_break = hook_guards(
+            "describe('suite', () => { for (const x of xs) { beforeEach(() => { s.n = 1 }); break; } test('reads', () => { expect(s.n).toBe(1) }); });",
+        );
+        assert_eq!(
+            before_break,
+            vec![HookGuard {
+                kind: HookGuardKind::ForOfBody,
+                condition: Some("xs".to_owned()),
+            }]
+        );
+        // A conditional `break` is the loop body's implicit alternate, same as a `return`.
+        let gated_break = hook_guards(
+            "describe('suite', () => { for (const x of xs) { if (done) break; beforeEach(() => { s.n = 1 }) } test('reads', () => { expect(s.n).toBe(1) }); });",
+        );
+        assert_eq!(
+            gated_break,
+            vec![
+                HookGuard {
+                    kind: HookGuardKind::ForOfBody,
+                    condition: Some("xs".to_owned()),
+                },
+                HookGuard {
+                    kind: HookGuardKind::IfAlternate,
+                    condition: Some("done".to_owned()),
+                },
+            ]
+        );
+        // A labeled break that names an enclosing labeled statement ends that statement, so the
+        // tail of the block it sits in is dead -- no loop required.
+        let labeled_break = hook_guards(
+            "describe('suite', () => { label: { break label; beforeEach(() => { s.n = 1 }) } test('reads', () => { expect(s.n).toBe(1) }); });",
+        );
+        assert_eq!(
+            labeled_break,
+            vec![HookGuard {
+                kind: HookGuardKind::AfterTerminator,
+                condition: None,
+            }]
+        );
+        // ... while a labeled break naming an OUTER statement leaves this block's tail
+        // reachable: execution resumes right where the labeled block ended.
+        let outer_break = hook_guards(
+            "describe('suite', () => { outer: { label: { if (done) break outer; beforeEach(() => { s.n = 1 }) } } test('reads', () => { expect(s.n).toBe(1) }); });",
+        );
+        assert_eq!(
+            outer_break,
+            vec![HookGuard {
+                kind: HookGuardKind::IfAlternate,
+                condition: Some("done".to_owned()),
+            }],
+            "breaking an outer label skips the hook only when `done` -- the implicit alternate of the inner `if` -- even though the label it names is not the innermost one"
+        );
+
+        // A catch handler's reachability depends on the guarded body throwing, so the whole
+        // try statement is the handler's guard.
+        let catch_reachable = hook_guards(
+            "describe('suite', () => { try { } catch { beforeEach(() => { s.n = 1 }) } test('reads', () => { expect(s.n).toBe(1) }); });",
+        );
+        let catch_taken = hook_guards(
+            "describe('suite', () => { try { throw 0; } catch { beforeEach(() => { s.n = 1 }) } test('reads', () => { expect(s.n).toBe(1) }); });",
+        );
+        assert_ne!(catch_reachable, catch_taken);
+
+        // A block whose last statement is dead still terminates when an earlier statement is
+        // an unconditional one: the statements after a `return` change nothing.
+        let return_then_dead = hook_guards(
+            "describe('suite', () => { if (true) { return; void 0; } beforeEach(() => { s.n = 1 }); test('reads', () => { expect(s.n).toBe(1) }); });",
+        );
+        assert_eq!(
+            return_then_dead,
+            vec![HookGuard {
+                kind: HookGuardKind::AfterTerminator,
+                condition: None,
+            }],
+            "the `if` never falls through, so the hook after it is unreachable"
+        );
+
+        // A compound statement whose any sibling leaves terminates the list around it: the
+        // block always returns, so the hook after it is dead.
+        let block_return = hook_guards(
+            "describe('suite', () => { { return; } beforeEach(() => { s.n = 1 }); test('reads', () => { expect(s.n).toBe(1) }); });",
+        );
+        assert_eq!(
+            block_return,
+            vec![HookGuard {
+                kind: HookGuardKind::AfterTerminator,
+                condition: None,
+            }]
+        );
+        // An `if` that always leaves -- the empty `else` never runs behind a literal `true` --
+        // puts the hook after it in the implicit alternate.
+        let if_else_true = hook_guards(
+            "describe('suite', () => { if (true) { return; } else { } beforeEach(() => { s.n = 1 }); test('reads', () => { expect(s.n).toBe(1) }); });",
+        );
+        assert_eq!(
+            if_else_true,
+            vec![HookGuard {
+                kind: HookGuardKind::AfterTerminator,
+                condition: None,
+            }],
+            "the `if` always leaves and its empty `else` never runs, so the hook after it is unreachable, not conditionally placed"
+        );
+
+        // An `if` with an `else` where exactly one branch always leaves: the hook after it
+        // runs only through the branch that falls through, and the guard names that branch.
+        let consequent_exits = hook_guards(
+            "describe('suite', () => { if (ready) return; else noop(); beforeEach(() => { s.n = 1 }); test('reads', () => { expect(s.n).toBe(1) }); });",
+        );
+        assert_eq!(
+            consequent_exits,
+            vec![HookGuard {
+                kind: HookGuardKind::IfAlternate,
+                condition: Some("ready".to_owned()),
+            }],
+            "the hook runs only through the else, so it sits in the implicit alternate"
+        );
+        let alternate_exits = hook_guards(
+            "describe('suite', () => { if (ready) noop(); else return; beforeEach(() => { s.n = 1 }); test('reads', () => { expect(s.n).toBe(1) }); });",
+        );
+        assert_eq!(
+            alternate_exits,
+            vec![HookGuard {
+                kind: HookGuardKind::IfConsequent,
+                condition: Some("ready".to_owned()),
+            }],
+            "the hook runs only through the consequent, so it sits in the implicit consequent"
+        );
+        // A literal condition that makes the exiting branch unreachable falls through
+        // unconditionally: no guard, and the scope stays comparable.
+        let dead_branch = hook_guards(
+            "describe('suite', () => { if (false) return; else noop(); beforeEach(() => { s.n = 1 }); test('reads', () => { expect(s.n).toBe(1) }); });",
+        );
+        assert!(
+            dead_branch.is_empty(),
+            "a literal-false condition makes the exiting branch dead code: {dead_branch:?}"
+        );
+
+        // A literal-true conditional exit inside a block kills the block's tail, and the
+        // block itself then terminates its own list: the two rules agree through the block.
+        let literal_in_block = hook_guards(
+            "describe('suite', () => { { if (true) return; } beforeEach(() => { s.n = 1 }); test('reads', () => { expect(s.n).toBe(1) }); });",
+        );
+        assert_eq!(
+            literal_in_block,
+            vec![HookGuard {
+                kind: HookGuardKind::AfterTerminator,
+                condition: None,
+            }],
+            "the block always leaves, so the hook after it is dead"
+        );
+
+        // A try/catch that can fall through does not terminate anything: the hook after it is
+        // an ordinary registration and the scope stays comparable.
+        let try_catch_falls_through = hook_guards(
+            "describe('suite', () => { try { init(); } catch {} beforeEach(() => { s.n = 1 }); test('reads', () => { expect(s.n).toBe(1) }); });",
+        );
+        assert!(
+            try_catch_falls_through.is_empty(),
+            "a try/catch that can fall through terminates nothing after it: {try_catch_falls_through:?}"
+        );
+
+        // A `return` nested deeper than the block's last statement does not terminate: the
+        // block can fall through, so the hook after it is an ordinary registration.
+        let survives_nested_return = hook_guards(
+            "describe('suite', () => { if (ready) { if (other) { return; } } beforeEach(() => { s.n = 1 }); test('reads', () => { expect(s.n).toBe(1) }); });",
+        );
+        assert!(
+            survives_nested_return.is_empty(),
+            "an `if` without an else can fall through, so nothing after it is guarded: {survives_nested_return:?}"
+        );
     }
 
     /// Extraction reads a file's import origins off its own parse: no extra parse, whatever the
@@ -6649,6 +7568,232 @@ mod tests {
                     "{name}: the hook beside it belongs to the same scope, not a new one"
                 );
             }
+        }
+    }
+
+    /// A guard inside a helper body is written against the helper's parameters, and the call
+    /// site binds them: two calls with different arguments would compare equal under the same
+    /// `if (enabled)` text while registering different hooks. The scope refuses comparison
+    /// instead -- `unresolved`, not a wrong equivalence.
+    #[test]
+    fn a_guarded_hook_inside_a_helper_makes_its_scope_incomparable() {
+        let source = concat!(
+            "import { describe, test, beforeEach, expect } from 'vitest';\n",
+            "function register(enabled: boolean) {\n",
+            "  if (enabled) beforeEach(() => { state.n = 1 });\n",
+            "}\n",
+            "describe('suite-a', () => { register(true); test('reads', () => { expect(state.n).toBe(1) }); });\n",
+            "describe('suite-b', () => { register(false); test('reads', () => { expect(state.n).toBe(1) }); });\n",
+        );
+        let extraction = run(
+            source,
+            &file("helper-guarded.test.ts"),
+            Globals::Disabled,
+            true,
+        );
+        assert!(
+            extraction.diagnostics.is_empty(),
+            "{:?}",
+            extraction.diagnostics
+        );
+        for case in extraction
+            .tests
+            .iter()
+            .filter(|case| matches!(case.kind, crate::model::DeclarationKind::Test))
+        {
+            assert!(
+                case.context.unresolved,
+                "the helper's guarded hook must make its scope incomparable: {:?}",
+                case.context.hooks
+            );
+        }
+    }
+
+    /// A guard makes its scope incomparable whatever the condition's shape -- a literal, a
+    /// `const` binding, a call, a member access. The runtime registration depends on the
+    /// control flow and values around the registration, none of which this analyzer
+    /// evaluates, so the conditions all refuse comparison while keeping their recorded
+    /// identity text.
+    #[test]
+    fn a_guarded_hook_makes_its_scope_incomparable_whatever_its_condition() {
+        let guards_for = |binding: &str| {
+            let source = concat!(
+                    "import { describe, test, beforeEach, expect } from 'vitest';\n",
+                    "const enabled = {binding};\n",
+                    "describe('suite', () => { if (enabled) beforeEach(() => { s.n = 1 }); test('reads', () => { expect(s.n).toBe(1) }); });\n",
+            )
+            .replace("{binding}", binding);
+            let extraction = run(&source, &file("folded.test.ts"), Globals::Disabled, true);
+            let case = extraction
+                .tests
+                .iter()
+                .find(|case| matches!(case.kind, crate::model::DeclarationKind::Test))
+                .expect("the test extracted");
+            let hook = case.context.hooks.first().expect("one hook in context");
+            (hook.guards.clone(), case.context.unresolved)
+        };
+
+        for binding in ["true", "false", "compute()", "settings.enabled"] {
+            let (guards, unresolved) = guards_for(binding);
+            assert_eq!(
+                guards,
+                vec![HookGuard {
+                    kind: HookGuardKind::IfConsequent,
+                    condition: Some("enabled".to_owned()),
+                }],
+                "the recorded identity is the raw condition text: {binding}"
+            );
+            assert!(
+                unresolved,
+                "any guard refuses comparison, whatever its condition's shape: {binding}"
+            );
+        }
+    }
+
+    /// A `describe` under control flow opens a fresh function boundary for its body: the outer
+    /// guard decides whether the suite exists, and the suite's own hooks register unguarded.
+    /// This is hazard 9's `if (import.meta.vitest) { describe(...) }` idiom -- its tests must
+    /// stay comparable, and a hook written under control flow *inside* the body still carries
+    /// its own guard.
+    #[test]
+    fn a_describe_under_control_flow_registers_unguarded_hooks() {
+        let source = concat!(
+            "import { describe, test, beforeEach, expect } from 'vitest';\n",
+            "if (import.meta.vitest) {\n",
+            "  describe('suite', () => {\n",
+            "    beforeEach(() => { s.n = 1 });\n",
+            "    test('reads', () => { expect(s.n).toBe(1) });\n",
+            "  });\n",
+            "}\n",
+        );
+        let extraction = run(source, &file("in-source.test.ts"), Globals::Disabled, true);
+        let case = extraction
+            .tests
+            .iter()
+            .find(|case| matches!(case.kind, crate::model::DeclarationKind::Test))
+            .expect("the test extracted");
+        let hook = case.context.hooks.first().expect("one hook in context");
+        assert!(
+            hook.guards.is_empty(),
+            "the suite's own hook is unconditional relative to the suite: {:?}",
+            hook.guards
+        );
+        assert!(
+            !case.context.unresolved,
+            "hazard 9's in-source idiom must stay comparable"
+        );
+    }
+
+    /// Runs `source` (a describe body per the caller) and answers whether the first extracted
+    /// test declaration's context is unresolved.
+    fn test_unresolved(source: &str, path: &str) -> bool {
+        let source =
+            format!("import {{ describe, test, beforeEach, expect }} from 'vitest';\n{source}");
+        let extraction = run(&source, &file(path), Globals::Disabled, true);
+        extraction
+            .tests
+            .iter()
+            .find(|case| matches!(case.kind, crate::model::DeclarationKind::Test))
+            .expect("the test extracted")
+            .context
+            .unresolved
+    }
+
+    /// An unconditional function exit inside a guarded list decides whether the statements
+    /// after the guard's construct run at all; the flat model cannot express it, so the scope
+    /// refuses comparison. A `break` under the same guard does not: it ends the iteration and
+    /// costs nothing to model.
+    #[test]
+    fn a_function_exit_inside_a_guarded_list_refuses_comparison() {
+        let unresolved_for = |source: &str| test_unresolved(source, "exit.test.ts");
+        assert!(
+            unresolved_for(
+                "describe('s', () => { switch (mode) { case 'a': return; } beforeEach(() => { s.n = 1 }); test('reads', () => { expect(s.n).toBe(1) }); });"
+            ),
+            "the hook registers only when mode is not 'a'"
+        );
+        assert!(
+            unresolved_for(
+                "describe('s', () => { while (c) { return; } beforeEach(() => { s.n = 1 }); test('reads', () => { expect(s.n).toBe(1) }); });"
+            ),
+            "the hook registers only when the loop body never runs"
+        );
+        assert!(
+            unresolved_for(
+                "describe('s', () => { try { init(); return; } catch {} beforeEach(() => { s.n = 1 }); test('reads', () => { expect(s.n).toBe(1) }); });"
+            ),
+            "the hook registers only when init() throws"
+        );
+        // The control: a `break` under the same guard ends the iteration, not the function,
+        // and the model's per-loop guard already covers it.
+        assert!(
+            !unresolved_for(
+                "describe('s', () => { for (const x of xs) { break; } beforeEach(() => { s.n = 1 }); test('reads', () => { expect(s.n).toBe(1) }); });"
+            ),
+            "a break ends the iteration; the loop guard is the whole story"
+        );
+    }
+
+    /// A conditional unlabeled `break`/`continue` inside a loop ends that iteration and
+    /// nothing outside it, so it must not taint the scope: the tests of the enclosing describe
+    /// stay comparable. A conditional exit that CAN reach past the construct -- a labeled
+    /// break out of an inner loop -- taints it.
+    #[test]
+    fn a_conditional_unlabeled_jump_inside_a_loop_does_not_taint_the_scope() {
+        let unresolved_for = |source: &str| test_unresolved(source, "jump.test.ts");
+        assert!(
+            !unresolved_for(
+                "describe('s', () => { for (const c of cs) { if (c.skip) continue; test('in', () => { expect(1).toBe(1) }); } test('after', () => { expect(1).toBe(1) }); });"
+            ),
+            "an unlabeled continue ends the iteration; statements after the loop run regardless"
+        );
+        assert!(
+            !unresolved_for(
+                "describe('s', () => { while (c) { if (done) break; test('in', () => { expect(1).toBe(1) }); } test('after', () => { expect(1).toBe(1) }); });"
+            ),
+            "an unlabeled break resumes right after the loop; nothing outside is skipped"
+        );
+        // A labeled break out of the inner loop reaches past the loop, so a HOOK registered
+        // after it sits under unnameable control flow and the scope refuses comparison -- the
+        // refusal is deferred to the registration, keeping hook-free scopes exactly as
+        // comparable as they were before hook guards existed.
+        assert!(
+            unresolved_for(
+                "describe('s', () => { outer: for (const a of as) { for (const b of bs) { if (x) break outer; } } beforeEach(() => { s.n = 1 }); test('reads', () => { expect(1).toBe(1) }); });"
+            ),
+            "a hook after a labeled break out of the inner loop registers under unnameable control flow"
+        );
+        assert!(
+            !unresolved_for(
+                "describe('s', () => { outer: for (const a of as) { for (const b of bs) { if (x) break outer; } } test('mid', () => { expect(1).toBe(1) }); });"
+            ),
+            "the deferral boundary: no hook registration, no refusal -- test reachability is a separate question"
+        );
+    }
+
+    /// The common table-driven shape -- a loop whose body skips an iteration and then
+    /// declares a test -- stays comparable exactly as it was before hook guards existed, at
+    /// file top level as much as inside a describe: the loop's guard belongs to hooks, and a
+    /// conditional `continue` cannot reach past the loop anyway.
+    #[test]
+    fn a_table_driven_loop_with_a_conditional_continue_stays_comparable() {
+        let source = concat!(
+            "import { test, expect } from 'vitest';\n",
+            "for (const x of xs) { if (x) continue; test('t', () => { expect(1).toBe(1) }); }\n",
+            "test('after', () => { expect(1).toBe(1) });\n",
+        );
+        let extraction = run(source, &file("table.test.ts"), Globals::Disabled, true);
+        assert!(
+            extraction.diagnostics.is_empty(),
+            "{:?}",
+            extraction.diagnostics
+        );
+        for case in &extraction.tests {
+            assert!(
+                !case.context.unresolved,
+                "no hook guard may taint a hook-free scope: {:?}",
+                case.title
+            );
         }
     }
 

@@ -516,6 +516,11 @@ const DELIBERATE_BLIND_FILES = new Set([
   'recall/framework-nuxt-mock-accumulating-hook/count.test.ts',
   // A local overloaded helper reassigned before the call: refused on purpose.
   'recall/local-helper-overloaded-reassigned/run.test.ts',
+  // Hooks registered under control flow make their scope's contexts incomparable by design
+  // (the runtime registration depends on control flow and values the analyzer does not
+  // evaluate), so both files are blind for as long as they carry guarded hooks.
+  'recall/guarded-hook-differing/run.test.ts',
+  'recall/guarded-hook-identical/run.test.ts',
   // A local helper reassigned with no overload signature: refused for the reassignment alone.
   'recall/local-helper-reassigned/run.test.ts',
   // Default exports a runner must keep refusing (a `let`, a reassigned declaration, an imported
