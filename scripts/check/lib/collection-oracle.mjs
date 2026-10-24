@@ -274,10 +274,16 @@ export function compareDirectory(vitestFiles, analyzer) {
   }
 
   const registered = new Set(compared.flatMap((path) => vitestFiles.get(path).hooks))
+  // A helper's hook that only skipped files register is compared on neither side, like their tests.
+  const registeredBySkipped = new Set(
+    [...vitestFiles].filter(([path]) => !comparedSet.has(path)).flatMap(([, vitest]) => vitest.hooks),
+  )
   const recorded = new Set(
     [...analyzer.hooks]
       .filter(([path]) => comparedSet.has(path) || (isModule(path) && !BENCH_FILE.test(path) && !TYPE_TEST_FILE.test(path)))
-      .flatMap(([, sites]) => sites),
+      .flatMap(([path, sites]) =>
+        comparedSet.has(path) ? sites : sites.filter((site) => registered.has(site) || !registeredBySkipped.has(site)),
+      ),
   )
   const pathOf = (site) => site.slice(site.indexOf('@') + 1, site.lastIndexOf(':'))
   for (const site of registered) {

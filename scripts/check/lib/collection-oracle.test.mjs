@@ -108,6 +108,19 @@ test('skipped files are bucketed and their tests and hooks are compared on neith
   assert.deepEqual(result.skipped.get('outside-root').map((e) => e.path), ['../outside/x.test.ts'])
 })
 
+test('a helper hook that only a skipped file registers is compared on neither side', () => {
+  const vitest = new Map([
+    ['stubbed.test.ts', collected({ stubReads: ['./cart#enabled'], hooks: ['beforeEach@helper.ts:3'] })],
+    ['plain.test.ts', collected({ hooks: ['afterEach@shared.ts:7'] })],
+  ])
+  const result = compareDirectory(
+    vitest,
+    analyzed({ hooks: { 'helper.ts': ['beforeEach@helper.ts:3'], 'shared.ts': ['afterEach@shared.ts:7', 'afterAll@shared.ts:9'] } }),
+  )
+  assert.deepEqual(kinds(result), ['extra-hook shared.ts afterAll@shared.ts:9'])
+  assert.equal(result.hooksCompared, 1)
+})
+
 test('benchmarks and type tests are bucketed, not reported as extra tests', () => {
   const vitest = new Map([['types.test-d.ts', collected({ unprobed: true })]])
   const result = compareDirectory(vitest, analyzed({ tests: { 'perf.bench.ts': ['parses'], 'other.test-d.ts': ['types'] } }))
