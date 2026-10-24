@@ -35,8 +35,8 @@ function* nodes(node) {
 }
 
 /**
- * The specifiers a module takes whole, from its ESTree `ast`: namespace imports, `export * from`
- * and literal `import()`. `true` when any stub may be taken whole: a computed `import()`, or no
+ * The specifiers a module takes whole, from its ESTree `ast`: namespace imports, imports with no
+ * specifiers (for their side effects), `export * from` and literal `import()`. `true` when any stub may be taken whole: a computed `import()`, or no
  * AST.
  */
 export function wholeModuleImports(ast) {
@@ -44,8 +44,12 @@ export function wholeModuleImports(ast) {
   const specifiers = new Set()
   for (const node of nodes(ast)) {
     if (node.type === 'ImportDeclaration') {
-      if (node.specifiers.some((s) => s.type === 'ImportNamespaceSpecifier')) specifiers.add(node.source.value)
-    } else if (node.type === 'ExportAllDeclaration') {
+      // No specifiers (`import './x'`, `import {} from './x'`) imports the module for what it does
+      // when it loads, which a stub cannot stand in for.
+      if (node.specifiers.length === 0 || node.specifiers.some((s) => s.type === 'ImportNamespaceSpecifier')) {
+        specifiers.add(node.source.value)
+      }
+    } else if (node.type === 'ExportAllDeclaration' || (node.type === 'ExportNamedDeclaration' && node.source && node.specifiers.length === 0)) {
       specifiers.add(node.source.value)
     } else if (node.type === 'ImportExpression') {
       if (node.source.type !== 'Literal' || typeof node.source.value !== 'string') return true

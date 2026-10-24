@@ -16,7 +16,7 @@
 import { spawnSync } from 'node:child_process'
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { dirname, join, relative, resolve } from 'node:path'
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { runAnalyzerJsonl } from './run-analyzer.mjs'
 
@@ -165,8 +165,13 @@ export function collectWithVitest(root, dir) {
   }
 }
 
-/** The analyzer's records as tests and hook sites per declaring file, and its excluded files. */
-export function analyzerView(records) {
+/**
+ * The analyzer's records as tests and hook sites per declaring file, and its excluded files. Paths
+ * are relative to `absoluteDir`, as Vitest's side writes them: the analyzer reports a file outside
+ * its root by its absolute path.
+ */
+export function analyzerView(records, absoluteDir) {
+  const local = (path) => normalizePath(absoluteDir && isAbsolute(path) ? relative(absoluteDir, path) : path)
   const tests = new Map()
   const hooks = new Map()
   const excluded = new Set()
@@ -175,9 +180,9 @@ export function analyzerView(records) {
     map.get(key).push(value)
   }
   for (const record of records) {
-    const path = record.path === undefined ? undefined : normalizePath(record.path)
+    const path = record.path === undefined ? undefined : local(record.path)
     // A test an imported runner declares belongs to the test file that registered it.
-    if (record.type === 'test') push(tests, normalizePath(record.registrationFile ?? record.path), record.title)
+    if (record.type === 'test') push(tests, local(record.registrationFile ?? record.path), record.title)
     else if (record.type === 'hook') push(hooks, path, hookSite({ ...record, path }))
     else if (record.type === 'excluded-file') excluded.add(path)
   }
@@ -203,7 +208,7 @@ export function collectWithAnalyzer(binary, root, dir) {
     if (!/extracted no tests/.test(String(error.message))) throw error
     records = []
   }
-  return analyzerView(records)
+  return analyzerView(records, resolve(root, dir))
 }
 
 /** Items of `a` not matched one-for-one in `b`, as a multiset difference. */
@@ -244,13 +249,18 @@ function skipReason(path, vitest, analyzerExcluded) {
  */
 export function compareDirectory(vitestFiles, analyzer) {
   const skipped = new Map(
-    ['uncollectable', 'stubbed', 'excluded', 'outside-root', 'overlapping-projects', 'type-test', 'bench', 'probe-error'].map((k) => [k, []]),
+    ['uncollectable', 'stubbed', 'excluded', 'outside-root', 'overlapping-projects', 'type-test', 'bench', 'undetermined-hook', 'probe-error']
+      .map((k) => [k, []]),
   )
   const compared = []
+  // Files whose collection is no evidence of what registers: a stub decided it, it stopped at an
+  // error, or the probe could not account for it. A file the analyzer excluded was collected cleanly.
+  let untrusted = 0
   for (const [path, vitest] of [...vitestFiles].sort(([a], [b]) => a.localeCompare(b))) {
     const reason = skipReason(path, vitest, analyzer.excluded.has(path))
     if (reason === null) compared.push(path)
     else skipped.get(reason).push({ path, detail: vitest.collectErrors[0]?.split('\n')[0] ?? vitest.stubReads[0] })
+    if (['uncollectable', 'stubbed', 'overlapping-projects', 'probe-error'].includes(reason)) untrusted += 1
   }
   const comparedSet = new Set(compared)
   // A module Vitest did not collect: a helper (whose hooks count) or a test file Vitest leaves out.
@@ -279,12 +289,19 @@ export function compareDirectory(vitestFiles, analyzer) {
   const registeredBySkipped = new Set(
     [...vitestFiles].filter(([path]) => !comparedSet.has(path)).flatMap(([, vitest]) => vitest.hooks),
   )
+  // A helper's hook no compared file registers is an extra hook only when every file that could
+  // reach the helper is trusted: which helpers an untrusted file reaches is not known, and whether it
+  // registered one is no evidence either way.
+  const helperSite = (path, site) => {
+    if (registered.has(site) || registeredBySkipped.has(site)) return registered.has(site)
+    if (untrusted === 0) return true
+    skipped.get('undetermined-hook').push({ path, detail: site })
+    return false
+  }
   const recorded = new Set(
     [...analyzer.hooks]
       .filter(([path]) => comparedSet.has(path) || (isModule(path) && !BENCH_FILE.test(path) && !TYPE_TEST_FILE.test(path)))
-      .flatMap(([path, sites]) =>
-        comparedSet.has(path) ? sites : sites.filter((site) => registered.has(site) || !registeredBySkipped.has(site)),
-      ),
+      .flatMap(([path, sites]) => (comparedSet.has(path) ? sites : sites.filter((site) => helperSite(path, site)))),
   )
   const pathOf = (site) => site.slice(site.indexOf('@') + 1, site.lastIndexOf(':'))
   for (const site of registered) {

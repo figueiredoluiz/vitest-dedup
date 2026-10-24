@@ -18,6 +18,12 @@
 // a stub of a missing module (`lib/collection-oracle-stubs.mjs`), files the analyzer excluded,
 // files outside the analysis root, type tests and benchmarks. Agreement does not prove the
 // analyzer right in general: Vitest reports one run in one environment.
+//
+// One assumption is made rather than checked: a missing module a file imports values from
+// registers nothing when it loads. A stub cannot reproduce what the real module would do on load,
+// so a file that imports one only for that (`import './x'`) is not compared; a file that imports
+// named values is, as long as its collection reads none of them. Treating every stub load as a
+// dependency instead halved the comparison on the owned corpus (374 files to 205).
 import { existsSync, readFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -57,6 +63,7 @@ const SELF_CHECK = {
     'stub-namespace.test.ts': { tests: ['always'], hooks: [], stubReads: ['./missing-module#*'] },
     'stub-namespace-comment.test.ts': { tests: ['always'], hooks: [], stubReads: ['./missing-module#*'] },
     'stub-read.test.ts': { tests: ['reads a stub while collecting > always'], hooks: [], stubReads: ['./missing-module#enabled'] },
+    'stub-side-effect.test.ts': { tests: ['always'], hooks: [], stubReads: ['./missing-module#*'] },
     'stub-then.test.ts': { tests: ['always'], hooks: [], stubReads: ['./missing-module#then'] },
     'stub-then-reexport.test.ts': { tests: ['always'], hooks: [], stubReads: ['./missing-module#then'] },
   },

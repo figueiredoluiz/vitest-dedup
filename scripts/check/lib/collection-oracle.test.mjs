@@ -109,16 +109,37 @@ test('skipped files are bucketed and their tests and hooks are compared on neith
 })
 
 test('a helper hook that only a skipped file registers is compared on neither side', () => {
+  // Excluded by the analyzer, so collected cleanly: its registrations are evidence.
   const vitest = new Map([
-    ['stubbed.test.ts', collected({ stubReads: ['./cart#enabled'], hooks: ['beforeEach@helper.ts:3'] })],
+    ['excluded.test.ts', collected({ hooks: ['beforeEach@helper.ts:3'] })],
     ['plain.test.ts', collected({ hooks: ['afterEach@shared.ts:7'] })],
   ])
   const result = compareDirectory(
     vitest,
-    analyzed({ hooks: { 'helper.ts': ['beforeEach@helper.ts:3'], 'shared.ts': ['afterEach@shared.ts:7', 'afterAll@shared.ts:9'] } }),
+    analyzed({
+      hooks: { 'helper.ts': ['beforeEach@helper.ts:3'], 'shared.ts': ['afterEach@shared.ts:7', 'afterAll@shared.ts:9'] },
+      excluded: ['excluded.test.ts'],
+    }),
   )
   assert.deepEqual(kinds(result), ['extra-hook shared.ts afterAll@shared.ts:9'])
   assert.equal(result.hooksCompared, 1)
+})
+
+test('a helper hook is undetermined when a file whose collection is not trusted may have reached it', () => {
+  const analyzer = analyzed({ hooks: { 'helper.ts': ['beforeEach@helper.ts:3'], 'a.test.ts': ['afterEach@a.test.ts:2'] } })
+  // A stub decided whether the helper ran, so registering nothing proves nothing.
+  const stubbed = compareDirectory(
+    new Map([['stubbed.test.ts', collected({ stubReads: ['./flags#enabled'] })], ['a.test.ts', collected()]]),
+    analyzer,
+  )
+  assert.deepEqual(kinds(stubbed), ['extra-hook a.test.ts afterEach@a.test.ts:2'])
+  assert.deepEqual(stubbed.skipped.get('undetermined-hook'), [{ path: 'helper.ts', detail: 'beforeEach@helper.ts:3' }])
+  // With every file trusted, a helper hook nothing registers is an extra hook.
+  const trusted = compareDirectory(new Map([['a.test.ts', collected()]]), analyzer)
+  assert.deepEqual(kinds(trusted).sort(), ['extra-hook a.test.ts afterEach@a.test.ts:2', 'extra-hook helper.ts beforeEach@helper.ts:3'])
+  // An excluded file was collected cleanly: what it registered is known, and what it did not is too.
+  const excluded = compareDirectory(new Map([['b.test.ts', collected()], ['a.test.ts', collected()]]), { ...analyzer, excluded: new Set(['b.test.ts']) })
+  assert.deepEqual(kinds(excluded).sort(), ['extra-hook a.test.ts afterEach@a.test.ts:2', 'extra-hook helper.ts beforeEach@helper.ts:3'])
 })
 
 test('benchmarks and type tests are bucketed, not reported as extra tests', () => {
@@ -377,4 +398,27 @@ test('a sibling directory sharing the root as a prefix is outside it', async () 
   assert.equal(await resolver.resolveId.call(context, './x', '/repo/fixtures-extra/a.test.ts', {}), null)
   assert.match(await resolver.resolveId.call(context, './x', '/repo/fixtures/a.test.ts', {}), /whole:/)
   assert.match(resolver.load('\0vitest-dedup-stub:named:./m'), /includes\("\/repo\/fixtures\/"\)/)
+})
+
+test('an import kept only for what the module does when it loads takes a stub whole', () => {
+  assert.deepEqual(
+    wholeModuleImports(program(importOf('./register'), importOf('./empty'), { type: 'ExportNamedDeclaration', source: source('./reexport'), specifiers: [] })),
+    new Set(['./register', './empty', './reexport']),
+  )
+  assert.deepEqual(wholeModuleImports(program({ type: 'ExportNamedDeclaration', source: null, specifiers: [], declaration: {} })), new Set())
+})
+
+test('an analyzer path outside the directory is made relative to it, as Vitest names it', () => {
+  const view = analyzerView(
+    [
+      { type: 'hook', path: '/repo/helper.ts', kind: 'beforeEach', line: 3 },
+      { type: 'test', path: '/repo/runner.ts', registrationFile: 'a.test.ts', title: 't' },
+      { type: 'test', path: 'b.test.ts', title: 'u' },
+    ],
+    '/repo/dir',
+  )
+  assert.deepEqual(Object.fromEntries(view.hooks), { '../helper.ts': ['beforeEach@../helper.ts:3'] })
+  assert.deepEqual(Object.fromEntries(view.tests), { 'a.test.ts': ['t'], 'b.test.ts': ['u'] })
+  const vitest = new Map([['a.test.ts', collected({ tests: ['t'], hooks: ['beforeEach@../helper.ts:3'] })], ['b.test.ts', collected({ tests: ['u'] })]])
+  assert.deepEqual(compareDirectory(vitest, view).disagreements, [])
 })

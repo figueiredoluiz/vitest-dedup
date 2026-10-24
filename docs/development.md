@@ -38,7 +38,8 @@ enforced contract; `fixtures/recall/README.md` documents the corpus and the comp
 compares the result with what the analyzer extracts: test titles per file, and hook declaration
 sites. Vitest runs as `vitest list --staticParse=false` with a probe runner, so describe callbacks
 run and test and hook bodies do not. An import of a module that does not exist loads as a stub, and
-a file whose collection reads a stub is not compared. Known disagreements are listed with their
+a file whose collection reads a stub, or that imports one only for its side effects, is not
+compared. The gate assumes a missing module registers no tests or hooks when it loads. Known disagreements are listed with their
 reasons in `scripts/check/collection-oracle-known.json`; the gate fails on a disagreement that is not
 listed and on a listed one that no longer occurs, so a fix deletes its entry.
 
