@@ -367,5 +367,14 @@ test('a Windows root matches the forward-slash ids Vite gives importers', async 
   assert.match(await resolver.resolveId.call(context, './flags', importer, {}), /whole:\.\/flags$/)
   assert.match(await resolver.resolveId.call(context, './named', importer, {}), /named:\.\/named$/)
   assert.equal(await resolver.resolveId.call(context, './x', 'C:/elsewhere/a.test.ts', {}), null)
-  assert.match(resolver.load('\0vitest-dedup-stub:named:./m'), /includes\("C:\/repo\/fixtures"\)/)
+  assert.match(resolver.load("\0vitest-dedup-stub:named:./m"), /includes\("C:\/repo\/fixtures\/"\)/)
+})
+
+test('a sibling directory sharing the root as a prefix is outside it', async () => {
+  const [resolver, inspector] = missingModuleStubs('/repo/fixtures')
+  const context = { resolve: async () => null }
+  inspector.transform.call({ parse: (ast) => ast }, program(importOf('./x', { type: 'ImportNamespaceSpecifier' })), '/repo/fixtures-extra/a.test.ts')
+  assert.equal(await resolver.resolveId.call(context, './x', '/repo/fixtures-extra/a.test.ts', {}), null)
+  assert.match(await resolver.resolveId.call(context, './x', '/repo/fixtures/a.test.ts', {}), /whole:/)
+  assert.match(resolver.load('\0vitest-dedup-stub:named:./m'), /includes\("\/repo\/fixtures\/"\)/)
 })

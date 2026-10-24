@@ -73,7 +73,7 @@ function stubSource(specifier, whole, root) {
   const caller = own < 0 ? undefined : frames.slice(own).find((frame) => !frame.includes(${JSON.stringify(PREFIX.slice(1))}))
   // Windows frames print backslashes; \`root\` is compared in forward slashes, as Vite writes ids.
   const location = caller?.replaceAll('\\\\', '/')
-  return location !== undefined && location.includes(${JSON.stringify(root)}) && !/\\/node_modules\\//.test(location)
+  return location !== undefined && location.includes(${JSON.stringify(`${root}/`)}) && !/\\/node_modules\\//.test(location)
 }
 Object.setPrototypeOf(__vite_ssr_exports__, new Proxy(Object.create(null), {
   get(_, key) {
@@ -94,13 +94,15 @@ Object.setPrototypeOf(__vite_ssr_exports__, new Proxy(Object.create(null), {
  */
 export function missingModuleStubs(directory) {
   // Vite ids use forward slashes on every platform; \`path.resolve\` gives backslashes on Windows.
-  const root = slashed(directory)
+  const root = slashed(directory).replace(/\/+$/, '')
+  // Under the root: the root itself or below it, never a sibling that shares its name as a prefix.
+  const inside = (path) => slashed(path) === root || slashed(path).startsWith(`${root}/`)
   const whole = new Map()
   const resolver = {
     name: 'vitest-dedup-missing-module-stubs',
     enforce: 'pre',
     async resolveId(id, importer, options) {
-      if (id.startsWith(PREFIX) || !importer || !slashed(importer).startsWith(root)) return null
+      if (id.startsWith(PREFIX) || !importer || !inside(importer)) return null
       const resolved = await this.resolve(id, importer, { ...options, skipSelf: true })
       if (resolved) return null
       // An importer never inspected (or whose inspection failed) takes every stub whole.
@@ -116,7 +118,7 @@ export function missingModuleStubs(directory) {
   const inspector = {
     name: 'vitest-dedup-whole-module-imports',
     transform(code, id) {
-      if (!slashed(id).startsWith(root)) return null
+      if (!inside(id)) return null
       let ast = null
       try {
         ast = this.parse(code)
