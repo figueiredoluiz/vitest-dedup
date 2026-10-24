@@ -1,0 +1,46 @@
+{
+  "disagreements": [
+    {
+      "dir": "fixtures/recall/duplicate-test-project-dir-outside-root/root",
+      "path": "arith.test.ts",
+      "kind": "extra-test",
+      "item": "adds two numbers",
+      "reason": "With test.projects set, Vitest runs only the projects, so the root's own test files never run; the analyzer still extracts them."
+    },
+    {
+      "dir": "fixtures/recall/duplicate-test-project-dir-outside-root/root",
+      "path": "arith.test.ts",
+      "kind": "extra-test",
+      "item": "sums the same pair again",
+      "reason": "With test.projects set, Vitest runs only the projects, so the root's own test files never run; the analyzer still extracts them."
+    },
+    {
+      "dir": "fixtures/recall/duplicate-test-projects-outside-root/root",
+      "path": "arith.test.ts",
+      "kind": "extra-test",
+      "item": "adds two numbers",
+      "reason": "With test.projects set, Vitest runs only the projects, so the root's own test files never run; the analyzer still extracts them."
+    },
+    {
+      "dir": "fixtures/recall/duplicate-test-projects-outside-root/root",
+      "path": "arith.test.ts",
+      "kind": "extra-test",
+      "item": "sums the same pair again",
+      "reason": "With test.projects set, Vitest runs only the projects, so the root's own test files never run; the analyzer still extracts them."
+    },
+    {
+      "dir": "fixtures/recall/framework-nested-repository-ignore-control",
+      "path": "project/api/orders.test.ts",
+      "kind": "missing-test",
+      "item": "orders: first check",
+      "reason": "Deliberate: the analyzer skips files git ignores; Vitest does not read .gitignore."
+    },
+    {
+      "dir": "fixtures/recall/framework-nested-repository-ignore-control",
+      "path": "project/api/orders.test.ts",
+      "kind": "missing-test",
+      "item": "orders: second check",
+      "reason": "Deliberate: the analyzer skips files git ignores; Vitest does not read .gitignore."
+    }
+  ]
+}

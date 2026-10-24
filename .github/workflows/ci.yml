@@ -169,6 +169,10 @@ jobs:
       - run: npm ci --force --no-audit --no-fund
       - run: cargo build --release --locked
       - run: node scripts/check/verify-titles.mjs
+      # The collection oracle: every fixture directory and recall case collected by the pinned
+      # Vitest and compared with the analyzer's extraction (docs/development.md). It shares this
+      # job because it needs the same npm ci and release build.
+      - run: node scripts/check/check-collection-oracle.mjs
 
   # The prose gate. Findings in code fell to nearly zero over four pull requests while findings
   # in *prose* did not, and two of the last ones were mechanical: a fenced block labelled ```json

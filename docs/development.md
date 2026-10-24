@@ -32,6 +32,16 @@ stopping at the first one, and exits 0 on violations unless `--fail-on-violation
 `--fail-on-regression`, with `--baseline-binary`) is given. `npm run check:recall` stays the
 enforced contract; `fixtures/recall/README.md` documents the corpus and the comparison classes.
 
+### Collection oracle
+
+`npm run check:oracle` collects every fixture directory and recall case with the pinned Vitest and
+compares the result with what the analyzer extracts: test titles per file, and hook declaration
+sites. Vitest runs as `vitest list --staticParse=false` with a probe runner, so describe callbacks
+run and test and hook bodies do not. An import of a module that does not exist loads as a stub, and
+a file whose collection reads a stub is not compared. Known disagreements are listed with their
+reasons in `scripts/check/collection-oracle-known.json`; the gate fails on a disagreement that is not
+listed and on a listed one that no longer occurs, so a fix deletes its entry.
+
 ## Writing documentation
 
 The website syncs these pages, so how they are named shows up there.

@@ -323,6 +323,10 @@ const JS_MODULES = {
   // policy entry. The secret scanner's suite was also omitted from this enumerated run. Register
   // the measured floors rather than leaving every unrelated change behind a red completeness gate.
   'scripts/check/check-secret-scan.mjs': 82,
+  // The collection oracle. Its suite covers the comparison, both record views and the config it
+  // writes; the uncovered lines are the two spawns (Vitest and the analyzer), which the gate runs.
+  'scripts/check/lib/collection-oracle.mjs': 85,
+  'scripts/check/lib/collection-oracle-stubs.mjs': 100,
   'scripts/check/lib/external-corpus-retention.mjs': 98,
   // The attribution-leak gate. A pure reader like the two above, and the floor is 100 because this
   // one has a trap worth recording: its name sweep only runs where the untracked benchmark manifest
@@ -388,7 +392,9 @@ const JS_MODULES = {
 const JS_NOT_MEASURED = {
   'scripts/check/check-agent-skills.mjs': 'gate entry point, run as a process by CI and never imported',
   'scripts/check/check-coverage.mjs': 'this file',
+  'scripts/check/check-collection-oracle.mjs': 'gate entry point; needs a release binary and the pinned Vitest devDependency, and spawns both per directory',
   'scripts/check/check-duplicates-corpus.mjs': 'gate entry point; needs a release binary',
+  'scripts/check/lib/collection-probe-runner.mjs': 'loaded by Vitest as its test runner inside a Vitest worker, never imported by a node --test suite; the collection oracle gate checks it against a self-check directory',
   'scripts/check/check-duplication.mjs': 'gate entry point; needs jscpd',
   'scripts/check/check-fixture-isolation.mjs': 'gate entry point; needs a release binary',
   'scripts/check/check-recall.mjs': 'gate entry point; needs a release binary, and its assertions are over that binary\'s output rather than over in-process state',
