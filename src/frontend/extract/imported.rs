@@ -244,10 +244,24 @@ impl<'a> Walker<'a> {
     /// tried; every unproved binding stays an unresolved cell. A historical file is never proved:
     /// the modules on disk are today's, not the ones it imported.
     pub(super) fn prove_imported_constants(&mut self, allocator: &'a Allocator) {
-        // Unreadable mocks could replace any module, so nothing is tried.
-        if !self.allow_imported || self.mocks_unresolved {
+        // Unreadable mocks, and a mock of a specifier that does not resolve, could replace any
+        // module, so nothing is tried.
+        if !self.allow_imported
+            || self.mocks_unresolved
+            || self
+                .mocked_modules
+                .iter()
+                .any(|mock| mock.specifier.starts_with("unresolved:"))
+        {
             return;
         }
+        // A module namespace in this file can have an export's getter spied before the table is
+        // built (`vi.spyOn(ns, 'X', 'get')`), so no chain may reach a module it names.
+        let Some(namespaces) =
+            imported_constants::namespace_modules(self.semantic, &self.file.path)
+        else {
+            return;
+        };
         let mut candidates: Vec<(SymbolId, &RunnerImport)> = self
             .runner_imports
             .iter()
@@ -277,15 +291,15 @@ impl<'a> Walker<'a> {
                 let Some(start) = &import.origin.resolved else {
                     continue;
                 };
-                if nuxt_mocked(&import.origin.exported) {
-                    continue;
-                }
                 let Ok(chain) = resolve_value_export_chain(start, &import.origin.exported) else {
                     continue;
                 };
                 if chain.exports.iter().any(|name| nuxt_mocked(name))
                     || self.is_mocked(&import.origin, &chain.modules)
-                    || chain.modules.iter().any(|module| canonical(module) == own)
+                    || chain.modules.iter().any(|module| {
+                        let module = canonical(module);
+                        module == own || namespaces.contains(&module)
+                    })
                 {
                     continue;
                 }

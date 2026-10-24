@@ -336,3 +336,40 @@ fn a_nuxt_mock_of_any_name_on_the_chain_is_never_read() {
         assert_eq!(tests[0].1, unresolved, "{mock:?}: {tests:?}");
     }
 }
+
+#[test]
+/// A namespace object of a chain module can have the export's getter spied before the table is
+/// built, and a dynamic import whose module is unknown could be one; neither is read.
+fn namespace_objects_of_a_chain_module_refuse_the_import() {
+    let modules = [
+        ("m.ts", "export const X = 'fast'"),
+        ("other.ts", "export const Y = 1"),
+    ];
+    for (setup, unresolved) in [
+        ("import * as other from './other'", false),
+        ("const later = () => import('./other')", false),
+        ("import * as ns from './m'\nvi.spyOn(ns, 'X', 'get')", true),
+        ("const later = () => import('./m')", true),
+        ("const later = (name: string) => import(name)", true),
+        ("vi.mock('~/nowhere', () => ({}))", true),
+    ] {
+        let tests = ConstantCase::new(
+            &modules,
+            &format!("import {{ test, vi }} from 'vitest'\nimport {{ X }} from './m'\n{setup}\ntest.each([[X]])('t %s', () => {{}})\n"),
+        )
+        .tests();
+        assert_eq!(tests[0].1, unresolved, "{setup:?}: {tests:?}");
+    }
+}
+
+#[test]
+/// A local `const` alias of the import reads the same value whether or not the import is also
+/// written in a table.
+fn a_local_alias_of_the_import_resolves() {
+    let tests = ConstantCase::new(
+        &[("m.ts", "export const X = 'fast'")],
+        "import { test } from 'vitest'\nimport { X } from './m'\nconst L = X\ntest.each([[L]])('t %s', () => {})\n",
+    )
+    .tests();
+    assert_eq!(tests, vec![("t fast".to_owned(), false)]);
+}

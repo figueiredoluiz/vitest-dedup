@@ -54,20 +54,21 @@ value kinds remain distinct row identities. Titles follow their formatter: array
 renders `undefined` as empty, JSON array elements become `null`, and JSON object properties with
 that value are omitted.
 
-**Imported constants**: a cell naming a value import (`import { MODE } from './modes'`) is read
-when the import resolves, through named re-exports, to a first-party module that declares it with
-a module-level `const` whose initializer is a string, number, signed number, boolean, `null`,
-bigint or substitution-free template literal, directly or through an earlier local `const` alias
-(never through a member read). The value then reads exactly like the literal. Everything else
-stays unresolved: `let`/`var` and `declare` exports, computed initializers (`'a' + 'b'`),
-`undefined`/`NaN`/`Infinity`, objects, arrays, calls, enum and object members, default and
-namespace imports, `export *`, declaration files, installed packages, a cell that names a local
-alias of the import, and an import whose chain returns to the test file. An import whose module
-or re-export hop the test file mocks (`vi.mock`, or a `mockNuxtImport` of a name on the chain) is
-not read, and a file whose mocking cannot be fully read (a `vi.doMock`, a nested or unreadable
-`vi.mock`) reads no imported constant at all. Mocks registered outside the test file, in
-`setupFiles` or in a module the test file imports, are not seen: the analyzer then reads the real
-value where Vitest uses the mock.
+**Imported constants**: a cell naming a value import (`import { MODE } from './modes'`), or a
+local `const` alias of one, is read when the import resolves, through named re-exports, to a
+first-party module that declares it with a module-level `const` whose initializer is a string,
+number, signed number, boolean, `null`, bigint or substitution-free template literal, directly or
+through an earlier local `const` alias (never through a member read). The value then reads exactly
+like the literal. Everything else stays unresolved: `let`/`var` and `declare` exports, computed
+initializers (`'a' + 'b'`), `undefined`/`NaN`/`Infinity`, objects, arrays, calls, enum and object
+members, default and namespace imports, `export *`, declaration files, installed packages, and an
+import whose chain returns to the test file. An import is not read when the test file mocks a
+module or re-export hop on its chain (`vi.mock`, or a `mockNuxtImport` of a name on the chain), or
+holds a namespace object of one (`import * as`, `import()`), which `vi.spyOn` can rewrite. A file
+whose mocking cannot be fully read (a `vi.doMock`, a nested or unreadable `vi.mock`, a mocked
+specifier that does not resolve) or that imports a non-literal specifier reads no imported
+constant at all. Mocks registered outside the test file, in `setupFiles` or in a module the test
+file imports, are not seen: the analyzer then reads the real value where Vitest uses the mock.
 
 **Static-analysis fallback rule**: whenever the table itself is not a literal array/object
 expression at the call site (e.g. `test.each(getCases())`), the extractor cannot enumerate rows at

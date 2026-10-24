@@ -11,12 +11,13 @@ use super::{
     const_declarator, peeled, unwrap_transparent, FoldScope, ImportedConstants, MAX_VALUE_HOPS,
 };
 use crate::frontend::helpers::{find_value_export, with_parsed_file, ValueExport};
+use crate::frontend::resolver::{self, Resolved};
 use oxc_allocator::{Allocator, CloneIn};
-use oxc_ast::ast::{Expression, UnaryOperator};
+use oxc_ast::ast::{Expression, ImportDeclarationSpecifier, UnaryOperator};
 use oxc_ast::AstKind;
 use oxc_semantic::{Semantic, SemanticBuilder, SymbolId};
 use oxc_span::{GetSpan, GetSpanMut, Span};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Most import bindings one file tries to prove; each costs a parse of its export chain.
 pub(in crate::frontend) const MAX_IMPORTED_CONSTANTS: usize = 64;
@@ -29,7 +30,8 @@ impl<'a> ImportedConstants<'a> {
 }
 
 /// Whether some reference to `symbol` sits inside the arguments of an `.each`/`.for` call or the
-/// quasi of an `.each`/`.for` tagged template: the only places an imported constant is read.
+/// quasi of an `.each`/`.for` tagged template, or initializes a `const` (a local alias a table may
+/// read): the only places an imported constant is read.
 pub(in crate::frontend) fn referenced_in_table(semantic: &Semantic, symbol: SymbolId) -> bool {
     let scoping = semantic.scoping();
     let nodes = semantic.nodes();
@@ -43,20 +45,61 @@ pub(in crate::frontend) fn referenced_in_table(semantic: &Semantic, symbol: Symb
         .any(|reference_id| {
             let node = scoping.get_reference(*reference_id).node_id();
             let span = nodes.kind(node).span();
-            nodes.ancestor_kinds(node).any(|kind| match kind {
-                AstKind::CallExpression(call) => {
-                    is_table(&call.callee)
-                        && call
-                            .arguments
-                            .iter()
-                            .any(|argument| argument.span().contains_inclusive(span))
-                }
-                AstKind::TaggedTemplateExpression(tagged) => {
-                    is_table(&tagged.tag) && tagged.quasi.span.contains_inclusive(span)
-                }
-                _ => false,
-            })
+            let aliased = matches!(nodes.parent_kind(node), AstKind::VariableDeclarator(declarator)
+                if declarator.init.as_ref().is_some_and(|init| init.span() == span));
+            aliased
+                || nodes.ancestor_kinds(node).any(|kind| match kind {
+                    AstKind::CallExpression(call) => {
+                        is_table(&call.callee)
+                            && call
+                                .arguments
+                                .iter()
+                                .any(|argument| argument.span().contains_inclusive(span))
+                    }
+                    AstKind::TaggedTemplateExpression(tagged) => {
+                        is_table(&tagged.tag) && tagged.quasi.span.contains_inclusive(span)
+                    }
+                    _ => false,
+                })
         })
+}
+
+/// The canonical paths of the modules this file can hold a namespace object of: every
+/// `import * as` and every `import('…')`, resolved. `None` when a dynamic import's specifier is
+/// not a string literal, or does not resolve, since it could name any module.
+pub(in crate::frontend) fn namespace_modules(
+    semantic: &Semantic,
+    file: &Path,
+) -> Option<Vec<PathBuf>> {
+    let canonical = |specifier: &str| match resolver::resolve(file, specifier) {
+        Resolved::Module(path) => Some(path.canonicalize().unwrap_or(path)),
+        Resolved::Unresolved => None,
+    };
+    let mut modules = Vec::new();
+    for node in semantic.nodes().iter() {
+        match node.kind() {
+            AstKind::ImportDeclaration(import) => {
+                let namespace = import.specifiers.iter().flatten().any(|specifier| {
+                    matches!(
+                        specifier,
+                        ImportDeclarationSpecifier::ImportNamespaceSpecifier(_)
+                    )
+                });
+                if namespace {
+                    // An unresolved namespace names no module a chain can reach.
+                    modules.extend(canonical(import.source.value.as_str()));
+                }
+            }
+            AstKind::ImportExpression(import) => {
+                let Expression::StringLiteral(specifier) = &import.source else {
+                    return None;
+                };
+                modules.push(canonical(specifier.value.as_str())?);
+            }
+            _ => {}
+        }
+    }
+    Some(modules)
 }
 
 /// The closed scalar literal the first-party module at `path` exports as `export`, cloned into
@@ -72,14 +115,9 @@ pub(in crate::frontend) fn exported_literal<'a>(
     export: &str,
     span: Span,
 ) -> Option<&'a Expression<'a>> {
-    // A declaration file's values are erased: it describes a module, it is not one.
-    let name = path.file_name()?.to_string_lossy();
-    if [".d.ts", ".d.mts", ".d.cts"]
-        .iter()
-        .any(|suffix| name.ends_with(suffix))
-    {
-        return None;
-    }
+    // A declaration file's values are erased: it describes a module, it is not one. Discovery's
+    // classification is the one place that says which files those are.
+    crate::discovery::classify_source_file(path)?;
     with_parsed_file(path, |program, _| {
         let ValueExport::Declared(local) = find_value_export(program, export)? else {
             return None;
@@ -106,8 +144,14 @@ pub(in crate::frontend) fn exported_literal<'a>(
         }
         let mut cloned = value.clone_in(allocator);
         *cloned.span_mut() = span;
-        if let Expression::UnaryExpression(unary) = &mut cloned {
-            *unary.argument.span_mut() = span;
+        match &mut cloned {
+            Expression::UnaryExpression(unary) => *unary.argument.span_mut() = span,
+            Expression::TemplateLiteral(template) => {
+                for quasi in template.quasis.iter_mut() {
+                    quasi.span = span;
+                }
+            }
+            _ => {}
         }
         Some(&*allocator.alloc(cloned))
     })

@@ -295,9 +295,9 @@ thread_local! {
     static QUIET: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
-/// Runs `body` with confinement refusals unrecorded: for an optional lookup whose failure must
-/// not mark the file incomplete. A refused result is not memoized either, so a later lookup that
-/// does need the module still records its refusal.
+/// Runs `body` with failures unrecorded (confinement refusals and resolution gaps): for an
+/// optional lookup whose failure must not mark the file incomplete or report a prerequisite. A
+/// failed result is not memoized either, so a later lookup that needs the module records it.
 pub(super) fn quietly<T>(body: impl FnOnce() -> T) -> T {
     struct Restore(bool);
     impl Drop for Restore {
@@ -374,19 +374,21 @@ pub(super) fn resolve(importing_file: &Path, specifier: &str) -> Resolved {
     if let Some(cached) = CACHE.with(|cache| cache.borrow().get(&key).cloned()) {
         return cached;
     }
+    let quiet = QUIET.with(std::cell::Cell::get);
     let resolved =
         RESOLVER.with(
             |resolver| match resolver.resolve_file(importing_file, specifier) {
                 Ok(resolution) => Resolved::Module(resolution.into_path_buf()),
                 Err(error) => {
-                    record_failure(importing_file, specifier, &error);
+                    if !quiet {
+                        record_failure(importing_file, specifier, &error);
+                    }
                     Resolved::Unresolved
                 }
             },
         );
-    let unconfined = resolved.clone();
     let resolved = confine_resolution(importing_file, specifier, resolved);
-    if resolved != unconfined && QUIET.with(std::cell::Cell::get) {
+    if quiet && resolved == Resolved::Unresolved {
         return resolved;
     }
     CACHE.with(|cache| {
@@ -748,6 +750,28 @@ mod tests {
         assert_eq!(refusals.len(), 1, "{refusals:?}");
         assert!(refusals[0].contains("`@out/target`") && refusals[0].contains("outside"));
         assert!(take_refusals().is_empty(), "taking drains the list");
+    }
+
+    /// A missing package looked up inside [`quietly`] is no resolution gap; the same lookup outside
+    /// it, not answered from a memo, is.
+    #[test]
+    fn a_quiet_failure_records_no_gap() {
+        let _gaps = GAPS_TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let dir = tempfile::tempdir().unwrap();
+        let importer = dir.path().join("importer.ts");
+        fs::write(&importer, "// importer").unwrap();
+        begin_file(None);
+        let missing = "vitest-dedup-quiet-missing-package";
+        assert_eq!(
+            quietly(|| resolve(&importer, missing)),
+            Resolved::Unresolved
+        );
+        let recorded = |gaps: &ResolutionGaps| gaps.packages_not_found.contains_key(dir.path());
+        assert!(!recorded(&take_resolution_gaps()));
+        assert_eq!(resolve(&importer, missing), Resolved::Unresolved);
+        assert!(recorded(&take_resolution_gaps()));
     }
 
     /// A refusal inside [`quietly`] is not recorded and not memoized, so a later lookup of the
