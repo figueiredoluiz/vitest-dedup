@@ -518,9 +518,18 @@ const DELIBERATE_BLIND_FILES = new Set([
   'recall/local-helper-overloaded-reassigned/run.test.ts',
   // Hooks registered under control flow make their scope's contexts incomparable by design
   // (the runtime registration depends on control flow and values the analyzer does not
-  // evaluate), so both files are blind for as long as they carry guarded hooks.
+  // evaluate), so these files are blind for as long as their hook registrations are guarded.
   'recall/guarded-hook-differing/run.test.ts',
   'recall/guarded-hook-identical/run.test.ts',
+  'recall/guarded-hook-named-exit/run.test.ts',
+  'recall/helper-throw-hook-uncertainty/run.test.ts',
+  'recall/nested-hook-after-exit-uncertainty/run.test.ts',
+  'recall/labeled-return-hook-uncertainty/run.test.ts',
+  'recall/guarded-return-before-break/run.test.ts',
+  'recall/labeled-return-before-break/run.test.ts',
+  'recall/braceless-return-hook-uncertainty/run.test.ts',
+  'recall/helper-plain-throw-uncertainty/run.test.ts',
+  'recall/helper-guarded-hook-uncertainty/run.test.ts',
   // A local helper reassigned with no overload signature: refused for the reassignment alone.
   'recall/local-helper-reassigned/run.test.ts',
   // Default exports a runner must keep refusing (a `let`, a reassigned declaration, an imported

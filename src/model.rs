@@ -335,8 +335,8 @@ pub enum HookGuardKind {
     FinallyBlock,
     /// Registered in a `switch` case body.
     SwitchCase,
-    /// Registered after a `return`/`throw` among direct siblings in the same block: the
-    /// enclosing function stops there, so at runtime the registration is never reached.
+    /// Registered after a `return`, `throw`, `break`, or `continue` among direct siblings in
+    /// the same block: control leaves before the registration can be reached.
     AfterTerminator,
 }
 

@@ -9,6 +9,8 @@
 import { describe, test, expect, beforeEach } from 'vitest'
 
 const state = { n: 0 }
+// Reset for every test so another suite's hook cannot mask an absent registration.
+beforeEach(() => { state.n = 0 })
 
 describe('suite-a', () => {
   if (true) beforeEach(() => {

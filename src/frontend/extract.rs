@@ -1086,11 +1086,11 @@ struct HelperFrame<'a> {
     /// How many entries this frame pushed onto [`Walker::param_bindings`], to truncate back to on
     /// the way out.
     bindings: usize,
+    /// An explicit throw observed while walking this expansion or a nested expansion.
+    /// Unlike a return, it may leave the caller too, so its exit uncertainty must survive.
+    saw_throw: bool,
 }
 
-/// One entry of the walker's [`Walker::guards`] stack: the position kind plus, where the
-/// position has a controlling expression, its raw source text -- resolved when the walk enters
-/// the position, because a `switch` case folds its ordinal in and a plain span slice cannot.
 /// One conditional exit a statement list left open: the branch later statements land in when
 /// the condition does not take the exiting arm, the condition's own text, and whether the exit
 /// can reach past the construct the list belongs to (a function exit, or a labeled jump to an
@@ -1100,8 +1100,11 @@ struct Fallthrough {
     kind: HookGuardKind,
     text: String,
     escapes: bool,
+    /// A single known labeled-jump destination; its residual ends when that label is exited.
+    label_target: Option<String>,
 }
 
+/// One enclosing registration position and its optional raw controlling expression.
 #[derive(Clone)]
 struct PendingGuard {
     kind: HookGuardKind,
@@ -1122,6 +1125,8 @@ struct ScopeHooks {
     /// they were before hook guards existed -- test-registration reachability is a separate
     /// question this flag does not touch.
     exit_unexpressible: bool,
+    /// Known labeled jumps can skip registrations before their target, but expire there.
+    pending_label_exits: HashSet<String>,
     before_all: Vec<Hook>,
     before_each: Vec<Hook>,
     after_each: Vec<Hook>,
@@ -1347,14 +1352,6 @@ impl<'a> Walker<'a> {
         }
     }
 
-    /// Registers every hook (bare or scoped) and `test.extend`/`import.meta.vitest` binding
-    /// declared directly in `statements`, without recursing into nested suites.
-    ///
-    /// This must run to completion for a scope *before* any test in that scope is emitted:
-    /// Vitest hooks apply to every test in their enclosing scope regardless of whether the hook
-    /// was registered before or after that test textually (`fixtures/hooks/hooks-nested-order.
-    /// test.ts` registers `afterEach` after the nested `describe` it must still apply to). A
-    /// single top-to-bottom pass would only see hooks that happened to come first.
     /// Records that the statements about to be walked sit under one control-flow position; the
     /// matching [`Self::pop_guard`] restores the enclosing position. Nesting accumulates: a hook
     /// inside an `if` inside a loop carries both.
@@ -1374,8 +1371,15 @@ impl<'a> Walker<'a> {
         self.source[span.start as usize..span.end as usize].to_owned()
     }
 
-    /// The prepare pass over one statement list: hooks and bindings register with whatever
-    /// control-flow position the list's walk establishes.
+    /// Registers every hook (bare or scoped) and `test.extend`/`import.meta.vitest` binding
+    /// declared directly in `statements`, without recursing into nested suites.
+    ///
+    /// This must run to completion for a scope *before* any test in that scope is emitted:
+    /// Vitest hooks apply to every test in their enclosing scope regardless of whether the hook
+    /// was registered before or after that test textually (`fixtures/hooks/hooks-nested-order.
+    /// test.ts` registers `afterEach` after the nested `describe` it must still apply to). A
+    /// single top-to-bottom pass would only see hooks that happened to come first.
+    /// Hooks and bindings retain the control-flow position established by the list walk.
     fn prepare_statements(&mut self, statements: &[Statement<'a>], registry: &mut Registry) {
         self.walk_or_prepare_list(statements, registry, |walker, statement, registry| {
             walker.prepare_statement(statement, registry)
@@ -1414,12 +1418,6 @@ impl<'a> Walker<'a> {
                 self.prepare_body_like_statement(&for_of.body, registry);
                 self.break_terminates_depth -= 1;
                 self.pop_guard();
-            }
-            Statement::LabeledStatement(labeled) => {
-                self.label_stack
-                    .push(labeled.label.name.as_str().to_owned());
-                self.prepare_body_like_statement(&labeled.body, registry);
-                self.label_stack.pop();
             }
             // `with` is deliberately unsupported (see the matching arm in `walk_statement`); the
             // diagnostic it pushes there covers hooks hidden inside one too, so nothing more is
@@ -1527,7 +1525,28 @@ impl<'a> Walker<'a> {
     /// suites. Hooks and bindings were already registered for this whole scope by
     /// [`Self::prepare_statements`], so this pass does not touch them again.
     fn walk_statements(&mut self, statements: &[Statement<'a>], registry: &mut Registry) {
+        let incoming_exit = self
+            .hook_scopes
+            .last()
+            .expect("root hook scope")
+            .exit_unexpressible;
+        let incoming_labels = self
+            .hook_scopes
+            .last()
+            .expect("root hook scope")
+            .pending_label_exits
+            .clone();
         self.prepare_statements(statements, registry);
+        // Hooks apply to the whole scope, but exits only govern later registrations. Retain
+        // prepared hooks and unresolved status while replaying exit state in source order.
+        self.hook_scopes
+            .last_mut()
+            .expect("root hook scope")
+            .exit_unexpressible = incoming_exit;
+        self.hook_scopes
+            .last_mut()
+            .expect("root hook scope")
+            .pending_label_exits = incoming_labels;
         self.walk_or_prepare_list(statements, registry, Self::walk_statement);
     }
 
@@ -1559,12 +1578,6 @@ impl<'a> Walker<'a> {
                 self.walk_for_of_statement(for_of, registry);
                 self.break_terminates_depth -= 1;
                 self.pop_guard();
-            }
-            Statement::LabeledStatement(labeled) => {
-                self.label_stack
-                    .push(labeled.label.name.as_str().to_owned());
-                self.walk_body_like_statement(&labeled.body, registry);
-                self.label_stack.pop();
             }
             // Deliberately unsupported: `with` is disallowed in strict-mode/ESM source (which
             // every real Vitest file is) and its dynamic, unresolvable scoping would make any
@@ -1627,6 +1640,34 @@ impl<'a> Walker<'a> {
         recurse: fn(&mut Self, &Statement<'a>, &mut Registry),
     ) {
         match statement {
+            Statement::LabeledStatement(labeled) => {
+                let label = labeled.label.name.as_str();
+                let already_pending = self
+                    .hook_scopes
+                    .last()
+                    .expect("root hook scope")
+                    .pending_label_exits
+                    .contains(label);
+                self.label_stack.push(label.to_owned());
+                recurse(self, &labeled.body, registry);
+                self.exiting_conditionals
+                    .retain(|exit| exit.label_target.as_deref() != Some(label));
+                if !already_pending {
+                    self.hook_scopes
+                        .last_mut()
+                        .expect("root hook scope")
+                        .pending_label_exits
+                        .remove(label);
+                }
+                self.label_stack.pop();
+            }
+            Statement::ThrowStatement(_) => {
+                if !self.guards_prove_unreachable() {
+                    for frame in &mut self.helper_frames {
+                        frame.saw_throw = true;
+                    }
+                }
+            }
             // A generic `if` recurses into both branches unconditionally, without evaluating the
             // condition -- this also covers hazard 9's `if (import.meta.vitest) { ... }` idiom as
             // a special case of the same rule, rather than a separate one.
@@ -1779,6 +1820,7 @@ impl<'a> Walker<'a> {
         // list starts from its own control flow.
         self.exiting_conditionals.clear();
         let mut terminated = false;
+        let mut terminal_exit = None;
         // Every conditional terminator seen so far, with the branch a later statement lands in
         // when the condition does not take the exiting one: a later statement runs under all of
         // them, not just the last one seen.
@@ -1797,6 +1839,15 @@ impl<'a> Walker<'a> {
             for _ in &fallthroughs {
                 self.pop_guard();
             }
+            // A possible exit need not terminate every path or own a braced statement list.
+            // Consume the same summary for a loop's single body, an else-if chain and a
+            // helper's top-level throw; function and label boundaries own its lifetime.
+            if !self.guards_prove_unreachable() {
+                let (target, escapes) = self.residual_exit_targets(statement);
+                if escapes {
+                    self.record_exit_target(target);
+                }
+            }
             // A nested block's own conditional exits govern the statements after it: drain
             // them into this list's fallthroughs. A residual only ever arrives here from a
             // list that ran with an EMPTY guard stack (a guarded list keeps its residuals to
@@ -1807,6 +1858,9 @@ impl<'a> Walker<'a> {
             }
             if self.always_terminates(statement) {
                 terminated = true;
+                terminal_exit = self
+                    .exit_escapes(statement)
+                    .then(|| self.residual_exit_targets(statement).0);
             } else if let Statement::IfStatement(if_statement) = statement {
                 // Exactly one branch always leaves: every later statement runs only through the
                 // branch that falls through -- the implicit alternate when the consequent
@@ -1821,65 +1875,171 @@ impl<'a> Walker<'a> {
                     .as_ref()
                     .is_some_and(|alternate| self.always_terminates(alternate));
                 match test.as_str() {
-                    "true" if consequent_leaves => terminated = true,
-                    "false" if alternate_leaves => terminated = true,
+                    "true" if consequent_leaves => {
+                        terminated = true;
+                        terminal_exit = self
+                            .exit_escapes(statement)
+                            .then(|| self.residual_exit_targets(statement).0);
+                    }
+                    "false" if alternate_leaves => {
+                        terminated = true;
+                        terminal_exit = self
+                            .exit_escapes(statement)
+                            .then(|| self.residual_exit_targets(statement).0);
+                    }
                     "true" | "false" => {}
                     _ if consequent_leaves => {
-                        let escapes = self.exit_escapes(&if_statement.consequent);
+                        let (label_target, escapes) =
+                            self.residual_exit_targets(&if_statement.consequent);
                         fallthroughs.push(Fallthrough {
                             kind: HookGuardKind::IfAlternate,
                             text: test,
                             escapes,
+                            label_target,
                         });
                     }
                     _ if alternate_leaves => {
                         let alternate = if_statement.alternate.as_ref().expect("checked");
-                        let escapes = self.exit_escapes(alternate);
+                        let (label_target, escapes) = self.residual_exit_targets(alternate);
                         fallthroughs.push(Fallthrough {
                             kind: HookGuardKind::IfConsequent,
                             text: test,
                             escapes,
+                            label_target,
                         });
                     }
                     _ => {}
                 }
             }
         }
-        if terminated {
-            // An unconditional FUNCTION exit inside a guarded list decides whether every
-            // statement after the guard's construct runs at all (`switch (m) { case 'a':
-            // return; } beforeEach(...)`), and the flat list cannot express that as a
-            // fallthrough condition -- the scope refuses comparison. A `break`/`continue`
-            // does not qualify: it ends an iteration or arm and costs nothing to model.
-            if !self.guards.is_empty()
-                && statements
-                    .iter()
-                    .any(|statement| self.leaves_function(statement))
-            {
-                let scope = self
-                    .hook_scopes
-                    .last_mut()
-                    .expect("root hook scope always present");
-                scope.exit_unexpressible = true;
+        // A final local jump does not cancel earlier escaping paths. Guarded lists cannot
+        // compose those paths into a flat condition; unguarded lists pass every residual to
+        // their caller, including through a labeled block that ends in a local break.
+        if !self.guards.is_empty() {
+            if self.guards_prove_unreachable() {
+                return;
             }
-        } else if !self.guards.is_empty() {
-            // The list's own conditional exits govern whatever follows the list, but a list
-            // that ran under a guard keeps them to itself: a residual that can reach past the
-            // guard's construct (a function exit, or a labeled jump to an outer statement)
-            // would need that guard composed into its identity, which the flat list cannot
-            // express -- the scope refuses comparison. An exit that cannot reach past it --
-            // an unlabeled `break`/`continue`, which ends this iteration or arm and nothing
-            // outside -- taints nothing: statements after the construct run regardless.
-            if fallthroughs.iter().any(|exit| exit.escapes) {
-                let scope = self
-                    .hook_scopes
-                    .last_mut()
-                    .expect("root hook scope always present");
-                scope.exit_unexpressible = true;
+            let mut exits: Vec<_> = fallthroughs
+                .iter()
+                .filter(|exit| exit.escapes)
+                .map(|exit| exit.label_target.clone())
+                .collect();
+            if let Some(target) = terminal_exit {
+                exits.push(target);
+            }
+            for target in exits {
+                self.record_exit_target(target);
             }
         } else {
             self.exiting_conditionals = fallthroughs;
         }
+    }
+
+    /// Record an observed escaping path until its known label or function boundary ends.
+    fn record_exit_target(&mut self, target: Option<String>) {
+        let scope = self.hook_scopes.last_mut().expect("root hook scope");
+        if let Some(label) = target {
+            scope.pending_label_exits.insert(label);
+        } else {
+            scope.exit_unexpressible = true;
+        }
+    }
+
+    /// These recorded positions are already known unreachable; no general condition folding
+    /// is attempted. Hook registrations still retain their guards and conservative refusal.
+    fn guards_prove_unreachable(&self) -> bool {
+        self.guards.iter().any(|guard| match guard.kind {
+            HookGuardKind::AfterTerminator => true,
+            HookGuardKind::IfConsequent => guard.text.as_deref() == Some("false"),
+            HookGuardKind::IfAlternate => guard.text.as_deref() == Some("true"),
+            _ => false,
+        })
+    }
+
+    /// Summarize possible exits once: their common label target, if known, and whether any
+    /// can escape the current construct. Literal-unreachable branches and nested functions
+    /// contribute no exits; unknown conditions retain both paths.
+    fn residual_exit_targets(&self, statement: &Statement<'a>) -> (Option<String>, bool) {
+        #[derive(Default)]
+        struct Destinations<'s> {
+            source: &'s str,
+            local_labels: Vec<String>,
+            label: Option<String>,
+            mixed: bool,
+            escapes: bool,
+        }
+        impl Destinations<'_> {
+            /// Local destinations stay inside this statement; external names share one target
+            /// only when every observed jump agrees. Unlabeled jumps have no named destination.
+            fn record_jump(&mut self, label: &Option<LabelIdentifier<'_>>) {
+                if let Some(label) = label {
+                    let target = label.name.as_str();
+                    if self.local_labels.iter().any(|local| local == target) {
+                        return;
+                    }
+                    self.escapes = true;
+                    if self.label.as_deref().is_some_and(|prior| prior != target) {
+                        self.mixed = true;
+                    } else {
+                        self.label = Some(target.to_owned());
+                    }
+                } else {
+                    self.mixed = true;
+                }
+            }
+        }
+        impl<'a> Visit<'a> for Destinations<'_> {
+            fn visit_statement(&mut self, statement: &Statement<'a>) {
+                match statement {
+                    Statement::BreakStatement(jump) => self.record_jump(&jump.label),
+                    Statement::ReturnStatement(_) | Statement::ThrowStatement(_) => {
+                        self.mixed = true;
+                        self.escapes = true;
+                    }
+                    Statement::ContinueStatement(jump) => self.record_jump(&jump.label),
+                    Statement::LabeledStatement(labeled) => {
+                        self.local_labels
+                            .push(labeled.label.name.as_str().to_owned());
+                        self.visit_statement(&labeled.body);
+                        self.local_labels.pop();
+                    }
+                    Statement::IfStatement(branch) => {
+                        let span = branch.test.span();
+                        match self.source.get(span.start as usize..span.end as usize) {
+                            Some("true") => self.visit_statement(&branch.consequent),
+                            Some("false") => {
+                                if let Some(alternate) = &branch.alternate {
+                                    self.visit_statement(alternate);
+                                }
+                            }
+                            _ => walk::walk_statement(self, statement),
+                        }
+                    }
+                    _ => walk::walk_statement(self, statement),
+                }
+            }
+
+            fn visit_function(&mut self, _function: &Function<'a>, _flags: ScopeFlags) {}
+
+            fn visit_arrow_function_expression(
+                &mut self,
+                _arrow: &oxc_ast::ast::ArrowFunctionExpression<'a>,
+            ) {
+            }
+        }
+        let mut destinations = Destinations {
+            source: self.source,
+            ..Destinations::default()
+        };
+        destinations.visit_statement(statement);
+        (
+            if destinations.mixed {
+                None
+            } else {
+                destinations.label
+            },
+            destinations.escapes,
+        )
     }
 
     /// Whether executing this statement ends the execution its enclosing list was promised,
@@ -1971,29 +2131,7 @@ impl<'a> Walker<'a> {
     /// An unlabeled `break`/`continue` cannot: it ends this iteration or arm, and execution
     /// resumes inside the same construct.
     fn exit_escapes(&self, arm: &Statement<'a>) -> bool {
-        self.leaves_function(arm) || self.contains_labeled_jump(arm)
-    }
-
-    /// Whether this statement, or anything it structurally contains, is a labeled
-    /// `break`/`continue`.
-    fn contains_labeled_jump(&self, statement: &Statement<'a>) -> bool {
-        match statement {
-            Statement::BreakStatement(break_statement) => break_statement.label.is_some(),
-            Statement::ContinueStatement(continue_statement) => continue_statement.label.is_some(),
-            Statement::BlockStatement(block) => block
-                .body
-                .iter()
-                .any(|part| self.contains_labeled_jump(part)),
-            Statement::LabeledStatement(labeled) => self.contains_labeled_jump(&labeled.body),
-            Statement::IfStatement(if_statement) => {
-                self.contains_labeled_jump(&if_statement.consequent)
-                    || if_statement
-                        .alternate
-                        .as_ref()
-                        .is_some_and(|alternate| self.contains_labeled_jump(alternate))
-            }
-            _ => false,
-        }
+        self.leaves_function(arm) || self.residual_exit_targets(arm).1
     }
 
     /// The function-exit reading of [`Self::terminates`]: does this statement leave the
@@ -2217,6 +2355,21 @@ impl<'a> Walker<'a> {
                 .expect("root hook scope always present");
             scope.unresolved = true;
         }
+        // A guarded list earlier in this scope held an exit the flat guard model cannot
+        // express; this registration sits after it, under control flow it cannot name, so the
+        // scope refuses comparison from here on. Deferred to registration time so hook-free
+        // scopes keep the comparability they had before hook guards existed.
+        if self
+            .hook_scopes
+            .iter()
+            .any(|scope| scope.exit_unexpressible || !scope.pending_label_exits.is_empty())
+        {
+            let scope = self
+                .hook_scopes
+                .last_mut()
+                .expect("root hook scope always present");
+            scope.unresolved = true;
+        }
         let Some(function_like) = call.arguments.first().and_then(as_function_like) else {
             return;
         };
@@ -2252,21 +2405,6 @@ impl<'a> Walker<'a> {
             alpha_source: body.into_alpha_source(),
             guards: Vec::new(),
         };
-        // A guarded list earlier in this scope held an exit the flat guard model cannot
-        // express; this registration sits after it, under control flow it cannot name, so the
-        // scope refuses comparison from here on. Deferred to registration time so hook-free
-        // scopes keep the comparability they had before hook guards existed.
-        if self
-            .hook_scopes
-            .iter()
-            .any(|scope| scope.exit_unexpressible)
-        {
-            let scope = self
-                .hook_scopes
-                .last_mut()
-                .expect("root hook scope always present");
-            scope.unresolved = true;
-        }
         // The control-flow positions this registration was written under, outermost first.
         // Empty for an ordinary registration, and serialized only when non-empty -- a hook
         // recorded before guards existed produces byte-identical JSON.
@@ -2287,9 +2425,8 @@ impl<'a> Walker<'a> {
         // whose values seemed provable (const literals, helper-free bodies, non-loop
         // positions) met another shape that broke it -- conditional exits inside blocks, helper
         // parameters, destructured initializers, temporal-dead-zone ordering, switch
-        // fallthrough -- so the boundary is drawn at the guard itself. Unobserved across the
-        // pinned reference corpus (2026-10-24 scan: 0 of 819 registrations carry any guard), so
-        // refusing comparison costs nothing measured.
+        // fallthrough -- so the boundary is drawn at the guard itself. Retention and excluded
+        // scope must be measured separately; a syntax inventory cannot establish recall cost.
         if !hook.guards.is_empty() {
             let scope = self
                 .hook_scopes
@@ -2751,8 +2888,27 @@ impl<'a> Walker<'a> {
         if outermost {
             self.setup_site = Some(call.span.start);
         }
+        let caller_exit = self
+            .hook_scopes
+            .last()
+            .expect("root hook scope")
+            .exit_unexpressible;
         if let Some(body) = &frame.function.body {
             walk(self, &body.statements, registry);
+        }
+        // A local return cannot skip caller registrations. Keep the guards and any unresolved
+        // hooks recorded in the helper, but end its local exit state at the function boundary.
+        // A traversed throw may escape this boundary, including through nested helpers.
+        if !self
+            .helper_frames
+            .last()
+            .expect("active helper frame")
+            .saw_throw
+        {
+            self.hook_scopes
+                .last_mut()
+                .expect("root hook scope")
+                .exit_unexpressible = caller_exit;
         }
         // The same boundary as a describe callback: a helper's `return` leaves the helper, and
         // its conditional exits must not leak into the caller's list.
@@ -2788,6 +2944,7 @@ impl<'a> Walker<'a> {
         let frame = HelperFrame {
             function,
             bindings: self.param_bindings.len() - before,
+            saw_throw: false,
         };
         self.helper_frames.push(frame);
         Some(frame)
@@ -7609,6 +7766,295 @@ mod tests {
         }
     }
 
+    /// Extract an owned two-test hook fixture, checking counts before its context assertions.
+    fn hook_fixture_tests(source: &str, declarations: usize) -> Vec<crate::model::TestCase> {
+        let extraction = run(
+            source,
+            &file("hook-fixture.test.ts"),
+            Globals::Disabled,
+            true,
+        );
+        assert_eq!(extraction.tests.len(), declarations, "{source}");
+        assert!(
+            extraction.diagnostics.is_empty(),
+            "{:?}",
+            extraction.diagnostics
+        );
+        let tests: Vec<_> = extraction
+            .tests
+            .into_iter()
+            .filter(|case| matches!(case.kind, crate::model::DeclarationKind::Test))
+            .collect();
+        assert_eq!(tests.len(), 2, "{source}");
+        tests
+    }
+
+    /// A helper's local return does not govern later caller hooks; guarded registrations and
+    /// throws still refuse comparison. The same sources run in the owned runtime corpus.
+    #[test]
+    fn helper_exit_hook_boundaries() {
+        for (source, unresolved) in [
+            (
+                include_str!("../../fixtures/recall/helper-return-hook-retention/run.test.ts"),
+                false,
+            ),
+            (
+                include_str!("../../fixtures/recall/helper-throw-hook-uncertainty/run.test.ts"),
+                true,
+            ),
+            (
+                include_str!("../../fixtures/recall/helper-guarded-hook-uncertainty/run.test.ts"),
+                true,
+            ),
+        ] {
+            let tests = hook_fixture_tests(source, 4);
+            for case in tests {
+                assert_eq!(case.context.unresolved, unresolved, "{}", source);
+                assert!(!case.context.hooks.is_empty());
+            }
+        }
+    }
+
+    /// Local exit state ends at every expanded helper frame, independent of caller placement.
+    #[test]
+    fn helper_return_boundary_matrix() {
+        let source = include_str!("../../fixtures/recall/helper-return-hook-retention/run.test.ts");
+        for placement in [
+            "if (true) finish(true)",
+            "for (const skip of [true]) finish(skip)",
+            "while (true) { finish(true); break }",
+            "do { finish(true) } while (false)",
+            "switch (true) { case true: finish(true); break }",
+            "try { finish(true) } catch {}",
+        ] {
+            for body in [
+                "return",
+                "if (skip) return",
+                "switch (skip) { case true: return }",
+                "try { if (skip) return } catch {}",
+            ] {
+                let source = source
+                    .replace("if (skip) return", body)
+                    .replace("for (const skip of [true]) finish(skip)", placement);
+                let extraction = run(
+                    &source,
+                    &file("helper-return-matrix.test.ts"),
+                    Globals::Disabled,
+                    true,
+                );
+                assert_eq!(extraction.tests.len(), 4, "{source}");
+                assert!(
+                    extraction.diagnostics.is_empty(),
+                    "{:?}",
+                    extraction.diagnostics
+                );
+                assert!(
+                    extraction.tests.iter().all(|case| !case.context.unresolved),
+                    "{source}"
+                );
+            }
+        }
+        for (helper, unresolved) in [
+            ("function inner(skip) { if (skip) return }\nfunction finish(skip) { inner(skip); return }", false),
+            ("function inner(skip) { if (skip) throw new Error('stop') }\nfunction finish(skip) { inner(skip); return }", true),
+            ("function finish(skip) { if (skip) return; beforeEach(() => { state.n = 1 }) }", true),
+        ] {
+            let source = source.replace("function finish(skip) {\n  if (skip) return\n}", helper);
+            let tests = hook_fixture_tests(&source, 4);
+            assert!(tests.iter().all(|case| case.context.unresolved == unresolved), "{source}");
+        }
+        let source = source.replace("for (const skip of [true]) finish(skip)\n", "")
+            .replace("  beforeEach(() => {", "  switch (false) { case true: return }\n  if (true) finish(true)\n  beforeEach(() => {");
+        let tests = hook_fixture_tests(&source, 4);
+        assert!(tests.iter().all(|case| case.context.unresolved));
+    }
+
+    /// A pre-scan may collect scope-wide hooks, but later exits cannot govern earlier suites.
+    #[test]
+    fn nested_hook_exit_order() {
+        for (source, unresolved) in [
+            (
+                include_str!("../../fixtures/recall/nested-hook-before-exit-retention/run.test.ts"),
+                false,
+            ),
+            (
+                include_str!(
+                    "../../fixtures/recall/nested-hook-after-exit-uncertainty/run.test.ts"
+                ),
+                true,
+            ),
+        ] {
+            for late_parent_hook in [false, true] {
+                let source = if late_parent_hook {
+                    source.replace(
+                        "switch (false) { case true: return }",
+                        "switch (false) { case true: return }\n  beforeEach(() => { state.n = 1 })",
+                    )
+                } else {
+                    source.to_owned()
+                };
+                let tests = hook_fixture_tests(&source, 5);
+                for case in tests {
+                    assert_eq!(
+                        case.context.unresolved,
+                        unresolved || late_parent_hook,
+                        "{source}"
+                    );
+                    assert!(!case.context.hooks.is_empty());
+                }
+            }
+        }
+    }
+
+    /// A break ends at its label; function exits and hooks inside the label remain guarded.
+    #[test]
+    fn labeled_hook_exit_boundaries() {
+        for (source, unresolved) in [
+            (
+                include_str!("../../fixtures/recall/labeled-break-hook-retention/run.test.ts"),
+                false,
+            ),
+            (
+                include_str!("../../fixtures/recall/labeled-return-hook-uncertainty/run.test.ts"),
+                true,
+            ),
+        ] {
+            let tests = hook_fixture_tests(source, 4);
+            for case in tests {
+                assert_eq!(case.context.unresolved, unresolved, "{source}");
+                assert!(!case.context.hooks.is_empty());
+                if !unresolved {
+                    assert!(case.context.hooks.iter().all(|hook| hook.guards.is_empty()));
+                }
+            }
+        }
+    }
+
+    /// Destination discharge preserves hooks before the target and all nonlocal exit kinds.
+    #[test]
+    fn labeled_hook_destination_matrix() {
+        let source = include_str!("../../fixtures/recall/labeled-break-hook-retention/run.test.ts");
+        for (statement, unresolved) in [
+            ("stop: { if (enabled) { function nested() { return } const f = () => { return }; break stop } }", false),
+            ("stop: { if (enabled) { if (enabled) break stop; else break stop } }", false),
+            ("stop: { if (enabled) { try { break stop } finally {} } }", false),
+            ("stop: { if (enabled) {} else break stop }", false),
+            ("stop: { if (enabled) break stop; beforeEach(() => { state.n = 1 }) }", true),
+            ("outer: { stop: { if (enabled) break outer } beforeEach(() => { state.n = 1 }) }", true),
+            ("stop: { if (enabled) { if (enabled) return; break stop } }", true),
+            ("stop: { if (enabled) { if (enabled) throw new Error('stop'); break stop } }", true),
+            ("outer: { stop: { if (enabled) { if (enabled) break outer; break stop } } }", true),
+            ("stop: { if (enabled) { for (;;) { break } break stop } }", true),
+            ("stop: { if (enabled) { for (const x of []) { continue } break stop } }", true),
+        ] {
+            let source = source.replace("stop: for (const a of [1]) { inner: for (const b of [1]) { continue inner } for (const c of [1]) { if (enabled) break stop } }", statement)
+                .replace("stop: { if (enabled) break stop }", statement);
+            let tests = hook_fixture_tests(&source, 4);
+            assert!(tests.iter().all(|case| case.context.unresolved == unresolved), "{source}");
+        }
+    }
+
+    /// A local tail terminator cannot erase an earlier conditional function exit.
+    #[test]
+    fn hook_exits_before_tail_jumps() {
+        for (source, unresolved) in [
+            (
+                include_str!("../../fixtures/recall/guarded-return-before-break/run.test.ts"),
+                true,
+            ),
+            (
+                include_str!("../../fixtures/recall/labeled-return-before-break/run.test.ts"),
+                true,
+            ),
+            (
+                include_str!("../../fixtures/recall/local-break-hook-retention/run.test.ts"),
+                false,
+            ),
+        ] {
+            let tests = hook_fixture_tests(source, 4);
+            for case in tests {
+                assert_eq!(case.context.unresolved, unresolved, "{source}");
+                assert!(!case.context.hooks.is_empty());
+            }
+        }
+    }
+
+    /// Every possible escaping path survives mixed terminal arms and nested statement forms.
+    #[test]
+    fn hook_tail_jump_matrix() {
+        let source = include_str!("../../fixtures/recall/unguarded-hook-retention/run.test.ts");
+        let hook = "  beforeEach(() => {\n    state.n = 1\n  })";
+        for (prefix, suffix, unresolved) in [
+            ("for (const n of [1]) { if (enabled) return; break }", "", true),
+            ("for (const n of [1]) { if (enabled) return; continue }", "", true),
+            ("switch (true) { case true: if (enabled) return; else break }", "", true),
+            ("switch (true) { case true: if (enabled) break; else return }", "", true),
+            ("switch (true) { case true: if (enabled) throw new Error('stop'); break }", "", true),
+            ("stop: { for (const n of [1]) { if (enabled) { try { break stop } finally {} } }", "}", true),
+            ("stop: { for (const n of [1]) { break stop }", "}", true),
+            ("outer: for (const n of [1]) { for (const m of [1]) { if (enabled) { try { continue outer } finally {} } }", "}", true),
+            ("for (const n of [1]) { if (false) return; break }", "", false),
+            ("for (const n of [1]) { if (true) break; else return }", "", false),
+            ("for (const n of [1]) { if (false) break; else return }", "", true),
+            ("stop: { if (false) return; break stop }", "", false),
+            ("while (enabled) return", "", true),
+            ("for (const n of [true]) if (n) return", "", true),
+            ("if (enabled) if (enabled) return", "", true),
+            ("if (enabled) void 0; else if (enabled) return", "", true),
+            ("stop: if (enabled) return", "", true),
+            ("if (false) if (enabled) return", "", false),
+            ("if (false) { return }", "", false),
+            ("function finish() { if (false) throw new Error('stop'); return } finish()", "", false),
+            ("function finish() { return; throw new Error('stop') } finish()", "", false),
+            ("function finish() { if (true) return; else throw new Error('stop') } finish()", "", false),
+            ("function finish() { if (false) return; else throw new Error('stop') } finish()", "", true),
+            ("for (const n of [1]) { inner: { break inner } break }", "", false),
+            ("for (const n of [1]) { inner: for (const m of [1]) { continue inner } break }", "", false),
+            ("if (enabled) { stop: { if (enabled) break stop } }", "", false),
+            ("function finish() { if (enabled) return } stop: { for (const n of [1]) { finish(); break stop } }", "", false),
+            ("function fail() { if (enabled) throw new Error('stop') } stop: { for (const n of [1]) { fail(); break stop } }", "", true),
+            ("function finish() { stop: {} } stop: { for (const n of [1]) { if (enabled) break stop } finish();", "}", true),
+        ] {
+            for named in [false, true] {
+                let hook = if named { "  beforeEach(reset)" } else { hook };
+                let replacement = format!("{prefix}\n{hook}\n{suffix}");
+                let source = source.replace("const state = { n: 0 }", "const state = { n: 0 }; const enabled = true; function reset() { state.n = 1 }")
+                    .replace("  beforeEach(() => {\n    state.n = 1\n  })", &replacement);
+                let tests = hook_fixture_tests(&source, 4);
+                assert!(tests.iter().all(|case| case.context.unresolved == unresolved), "{source}");
+            }
+        }
+    }
+
+    /// Braces and a helper call's placement cannot hide a possible function exit.
+    #[test]
+    fn hook_body_and_plain_helper_exits() {
+        for (source, unresolved) in [
+            (
+                include_str!("../../fixtures/recall/braceless-return-hook-uncertainty/run.test.ts"),
+                true,
+            ),
+            (
+                include_str!("../../fixtures/recall/braceless-hook-retention/run.test.ts"),
+                false,
+            ),
+            (
+                include_str!("../../fixtures/recall/helper-plain-throw-uncertainty/run.test.ts"),
+                true,
+            ),
+            (
+                include_str!("../../fixtures/recall/helper-plain-return-retention/run.test.ts"),
+                false,
+            ),
+        ] {
+            let tests = hook_fixture_tests(source, 4);
+            for case in tests {
+                assert_eq!(case.context.unresolved, unresolved, "{source}");
+                assert!(!case.context.hooks.is_empty());
+            }
+        }
+    }
+
     /// A guard makes its scope incomparable whatever the condition's shape -- a literal, a
     /// `const` binding, a call, a member access. The runtime registration depends on the
     /// control flow and values around the registration, none of which this analyzer
@@ -7737,7 +8183,7 @@ mod tests {
     /// A conditional unlabeled `break`/`continue` inside a loop ends that iteration and
     /// nothing outside it, so it must not taint the scope: the tests of the enclosing describe
     /// stay comparable. A conditional exit that CAN reach past the construct -- a labeled
-    /// break out of an inner loop -- taints it.
+    /// break out of an inner loop -- taints registrations only until its target ends.
     #[test]
     fn a_conditional_unlabeled_jump_inside_a_loop_does_not_taint_the_scope() {
         let unresolved_for = |source: &str| test_unresolved(source, "jump.test.ts");
@@ -7753,15 +8199,13 @@ mod tests {
             ),
             "an unlabeled break resumes right after the loop; nothing outside is skipped"
         );
-        // A labeled break out of the inner loop reaches past the loop, so a HOOK registered
-        // after it sits under unnameable control flow and the scope refuses comparison -- the
-        // refusal is deferred to the registration, keeping hook-free scopes exactly as
-        // comparable as they were before hook guards existed.
+        // A break to outer resumes after that labeled loop, before this hook. Uncertainty
+        // applies within the target, not to unconditional registrations after it finishes.
         assert!(
-            unresolved_for(
+            !unresolved_for(
                 "describe('s', () => { outer: for (const a of as) { for (const b of bs) { if (x) break outer; } } beforeEach(() => { s.n = 1 }); test('reads', () => { expect(1).toBe(1) }); });"
             ),
-            "a hook after a labeled break out of the inner loop registers under unnameable control flow"
+            "a hook after the completed labeled loop registers unconditionally"
         );
         assert!(
             !unresolved_for(
@@ -7795,6 +8239,22 @@ mod tests {
                 case.title
             );
         }
+    }
+
+    /// Named callbacks must take the same exit-derived refusal as inline callbacks. The
+    /// owned corpus registers both tests before the conditional exit, so each is extracted.
+    #[test]
+    fn named_hooks_after_unmodelled_exits_refuse_comparison() {
+        let source = include_str!("../../fixtures/recall/guarded-hook-named-exit/run.test.ts");
+        let extraction = run(source, &file("named-exit.test.ts"), Globals::Disabled, true);
+        assert_eq!(extraction.tests.len(), 4, "two suites and two tests");
+        let tests: Vec<_> = extraction
+            .tests
+            .iter()
+            .filter(|case| matches!(case.kind, crate::model::DeclarationKind::Test))
+            .collect();
+        assert_eq!(tests.len(), 2);
+        assert!(tests.iter().all(|case| case.context.unresolved));
     }
 
     /// `with` is the one construct deliberately left unwalked, and it must say so rather than

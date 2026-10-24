@@ -57,4 +57,22 @@ and on the values of the conditions governing it, a scope holding any guarded re
 marked unresolved: its tests are excluded from comparison rather than compared on an identity
 that cannot know whether the hook runs.
 
+Exit tracking applies equally to braced blocks and single-statement bodies.
+
+A local `break` or `continue` at the end of a block does not erase an earlier possible return or
+throw. Hooks after the enclosing construct remain uncertain when any such path can skip them.
+
+A conditional break stops guarding later registrations once its known label destination has
+finished. A return or throw inside a labeled block can still skip hooks after that block; mixed
+or unknown exit destinations retain their uncertainty.
+
+An exit after a nested suite registration does not make that suite's hooks conditional. A parent
+hook registered after an uncertain exit still affects every descendant test, regardless of where
+the child suite was registered.
+
+A return inside an expanded local helper ends that helper, so it does not make later caller
+hooks conditional. Hooks registered under control flow inside the helper remain unresolved.
+An explicit throw encountered during expansion can escape to the caller, including from an unguarded call, so its exit
+uncertainty is retained; exception handlers are not evaluated to prove that it is caught.
+
 Back to the [Vitest surface index](../vitest-surface.md).
