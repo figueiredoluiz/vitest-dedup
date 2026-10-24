@@ -10,10 +10,12 @@
 use super::{
     const_declarator, peeled, unwrap_transparent, FoldScope, ImportedConstants, MAX_VALUE_HOPS,
 };
-use crate::frontend::helpers::{find_value_export, with_parsed_file, ValueExport};
+use crate::frontend::helpers::{self, find_value_export, with_parsed_file, ValueExport};
 use crate::frontend::resolver::{self, Resolved};
 use oxc_allocator::{Allocator, CloneIn};
-use oxc_ast::ast::{Expression, ImportDeclarationSpecifier, UnaryOperator};
+use oxc_ast::ast::{
+    Argument, Expression, ImportDeclarationSpecifier, ImportOrExportKind, UnaryOperator,
+};
 use oxc_ast::AstKind;
 use oxc_semantic::{Semantic, SemanticBuilder, SymbolId};
 use oxc_span::{GetSpan, GetSpanMut, Span};
@@ -45,8 +47,21 @@ pub(in crate::frontend) fn referenced_in_table(semantic: &Semantic, symbol: Symb
         .any(|reference_id| {
             let node = scoping.get_reference(*reference_id).node_id();
             let span = nodes.kind(node).span();
-            let aliased = matches!(nodes.parent_kind(node), AstKind::VariableDeclarator(declarator)
-                if declarator.init.as_ref().is_some_and(|init| init.span() == span));
+            // `const L = X`, also through the wrappers the fold looks through (`X as const`).
+            let mut wrapper = node;
+            while matches!(
+                nodes.parent_kind(wrapper),
+                AstKind::ParenthesizedExpression(_)
+                    | AstKind::TSAsExpression(_)
+                    | AstKind::TSSatisfiesExpression(_)
+                    | AstKind::TSNonNullExpression(_)
+                    | AstKind::TSTypeAssertion(_)
+            ) {
+                wrapper = nodes.parent_id(wrapper);
+            }
+            let wrapped = nodes.kind(wrapper).span();
+            let aliased = matches!(nodes.parent_kind(wrapper), AstKind::VariableDeclarator(declarator)
+                if declarator.init.as_ref().is_some_and(|init| init.span() == wrapped));
             aliased
                 || nodes.ancestor_kinds(node).any(|kind| match kind {
                     AstKind::CallExpression(call) => {
@@ -64,21 +79,29 @@ pub(in crate::frontend) fn referenced_in_table(semantic: &Semantic, symbol: Symb
         })
 }
 
-/// The canonical paths of the modules this file can hold a namespace object of: every
-/// `import * as` and every `import('…')`, resolved. `None` when a dynamic import's specifier is
-/// not a string literal, or does not resolve, since it could name any module.
+/// The canonical paths of the modules this file can hold a namespace object of: every value
+/// `import * as`, `import('…')`, `vi.importActual('…')` and `vi.importMock('…')`, resolved.
+/// `None` when a dynamic specifier is not a string literal, or does not resolve, since it could
+/// name any module.
 pub(in crate::frontend) fn namespace_modules(
     semantic: &Semantic,
     file: &Path,
 ) -> Option<Vec<PathBuf>> {
     let canonical = |specifier: &str| match resolver::resolve(file, specifier) {
-        Resolved::Module(path) => Some(path.canonicalize().unwrap_or(path)),
+        Resolved::Module(path) => Some(helpers::canonical(&path)),
         Resolved::Unresolved => None,
+    };
+    let dynamic = |source: Option<&Expression>| match source {
+        Some(Expression::StringLiteral(specifier)) => canonical(specifier.value.as_str()),
+        _ => None,
     };
     let mut modules = Vec::new();
     for node in semantic.nodes().iter() {
         match node.kind() {
             AstKind::ImportDeclaration(import) => {
+                if import.import_kind == ImportOrExportKind::Type {
+                    continue;
+                }
                 let namespace = import.specifiers.iter().flatten().any(|specifier| {
                     matches!(
                         specifier,
@@ -90,11 +113,15 @@ pub(in crate::frontend) fn namespace_modules(
                     modules.extend(canonical(import.source.value.as_str()));
                 }
             }
-            AstKind::ImportExpression(import) => {
-                let Expression::StringLiteral(specifier) = &import.source else {
-                    return None;
-                };
-                modules.push(canonical(specifier.value.as_str())?);
+            AstKind::ImportExpression(import) => modules.push(dynamic(Some(&import.source))?),
+            // The actual module is the instance the import binds, so spying it rewrites the import.
+            AstKind::CallExpression(call)
+                if matches!(&call.callee, Expression::StaticMemberExpression(member)
+                    if matches!(member.property.name.as_str(), "importActual" | "importMock")) =>
+            {
+                modules.push(dynamic(
+                    call.arguments.first().and_then(Argument::as_expression),
+                )?);
             }
             _ => {}
         }

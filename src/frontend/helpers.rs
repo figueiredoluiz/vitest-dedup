@@ -273,8 +273,8 @@ fn walk_locate(
 /// than inventing them inline.
 pub(in crate::frontend) mod export_contract {
     use super::{
-        find_export, find_value_export, is_dependency, resolve_hop, with_parsed_file, Export,
-        ValueExport, MAX_REEXPORT_HOPS,
+        canonical, find_export, find_value_export, is_dependency, resolve_hop, with_parsed_file,
+        Export, ValueExport, MAX_REEXPORT_HOPS,
     };
     use oxc_ast::ast::Program;
     use std::collections::HashSet;
@@ -399,7 +399,7 @@ pub(in crate::frontend) mod export_contract {
             // missed for one lap -- and a cycle long enough that the extra lap crosses the hop
             // budget would surface as the hop limit instead of the cycle reason (review-found;
             // pinned by `a_misspelled_start_still_names_a_cycle_at_the_hop_boundary`).
-            let identity = path.canonicalize().unwrap_or_else(|_| path.clone());
+            let identity = canonical(&path);
             if !visited.insert((identity, export.clone())) {
                 return Err(ExportRefusal::ReexportCycle);
             }
@@ -530,6 +530,12 @@ fn render_from(
             }
         }
     })
+}
+
+/// `path` with symlinks followed, or as given when it cannot be resolved: the identity two paths
+/// naming one file share.
+pub(super) fn canonical(path: &Path) -> PathBuf {
+    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
 }
 
 /// Resolves one re-export hop's `specifier` against the file that wrote it.

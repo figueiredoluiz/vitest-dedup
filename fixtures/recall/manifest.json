@@ -5052,9 +5052,9 @@
       "origin": "synthetic",
       "verdict": "generated",
       "classifiedAt": "2026-10-25",
-      "expectedTests": 10,
+      "expectedTests": 12,
       "expectedIncomplete": true,
-      "expectedUnresolved": 4,
+      "expectedUnresolved": 5,
       "expectedFindings": [],
       "expectedAbsent": [
         {
@@ -5090,6 +5090,13 @@
           "titles": [
             "spied slow",
             "spied fast"
+          ]
+        },
+        {
+          "rule": "duplicate-each-row",
+          "titles": [
+            "actual slow",
+            "actual fast"
           ]
         }
       ]

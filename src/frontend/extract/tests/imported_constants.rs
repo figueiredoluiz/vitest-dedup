@@ -162,7 +162,6 @@ fn mocked_modules_are_never_read() {
         "vi.mock('./values', () => ({ X: 'slow' }))",
         "vi.mock('./values')",
         "mockNuxtImport('X', () => 'slow')",
-        "vi.doMock('./other', () => ({}))",
     ] {
         let tests = ConstantCase::new(
             &modules,
@@ -279,6 +278,21 @@ fn a_member_read_in_the_declaring_module_is_refused() {
 /// A hop that leaves the analysis root leaves the cell unresolved without marking the file
 /// incomplete: the lookup is optional.
 fn a_hop_outside_the_root_does_not_mark_the_file_incomplete() {
+    for (barrel, test_tail) in [
+        ("export { X } from '@shared/consts'", ""),
+        // The namespace scan's own lookups are optional too.
+        (
+            "export const X = 'a'",
+            "const later = () => import('@shared/consts')\n",
+        ),
+    ] {
+        outside_root_case(barrel, test_tail);
+    }
+}
+
+/// One `t.test.ts` under `root/src` reading `X` from `./barrel`, beside a tsconfig alias that
+/// leaves the root; asserts the file stays complete.
+fn outside_root_case(barrel: &str, test_tail: &str) {
     let outer = tempfile::tempdir().unwrap();
     let root = outer.path().join("root");
     std::fs::create_dir_all(root.join("src")).unwrap();
@@ -293,21 +307,18 @@ fn a_hop_outside_the_root_does_not_mark_the_file_incomplete() {
         r#"{ "compilerOptions": { "baseUrl": ".", "paths": { "@shared/*": ["../shared/*"] } } }"#,
     )
     .unwrap();
-    std::fs::write(
-        root.join("src/barrel.ts"),
-        "export { X } from '@shared/consts'",
-    )
-    .unwrap();
+    std::fs::write(root.join("src/barrel.ts"), barrel).unwrap();
     let path = root.join("src/t.test.ts");
-    let source =
-        "import { test } from 'vitest'\nimport { X } from './barrel'\ntest.each([[X]])('t %s', () => {})\n";
-    std::fs::write(&path, source).unwrap();
+    let source = format!(
+        "import {{ test }} from 'vitest'\nimport {{ X }} from './barrel'\n{test_tail}test.each([[X]])('t %s', () => {{}})\n"
+    );
+    std::fs::write(&path, &source).unwrap();
     let file = SourceFile::without_project_context(
         path,
         crate::discovery::SourceLanguage::TypeScript,
         ModuleFlavor::Ambiguous,
     );
-    let extraction = extract_within(source, &file, Globals::Disabled, &root);
+    let extraction = extract_within(&source, &file, Globals::Disabled, &root);
     assert_eq!(extraction.tests.len(), 1);
     assert!(extraction.tests[0].context.unresolved);
     assert!(
@@ -352,6 +363,13 @@ fn namespace_objects_of_a_chain_module_refuse_the_import() {
         ("const later = () => import('./m')", true),
         ("const later = (name: string) => import(name)", true),
         ("vi.mock('~/nowhere', () => ({}))", true),
+        ("import type * as types from './m'", false),
+        ("const actual = () => vi.importActual('./m')", true),
+        ("const mocked = () => vi.importMock('./other')", false),
+        (
+            "const actual = (name: string) => vi.importActual(name)",
+            true,
+        ),
     ] {
         let tests = ConstantCase::new(
             &modules,
@@ -369,6 +387,17 @@ fn a_local_alias_of_the_import_resolves() {
     let tests = ConstantCase::new(
         &[("m.ts", "export const X = 'fast'")],
         "import { test } from 'vitest'\nimport { X } from './m'\nconst L = X\ntest.each([[L]])('t %s', () => {})\n",
+    )
+    .tests();
+    assert_eq!(tests, vec![("t fast".to_owned(), false)]);
+}
+
+#[test]
+/// An alias through a type wrapper is an alias.
+fn a_wrapped_local_alias_of_the_import_resolves() {
+    let tests = ConstantCase::new(
+        &[("m.ts", "export const X = 'fast'")],
+        "import { test } from 'vitest'\nimport { X } from './m'\nconst L = (X as string)!\ntest.each([[L]])('t %s', () => {})\n",
     )
     .tests();
     assert_eq!(tests, vec![("t fast".to_owned(), false)]);

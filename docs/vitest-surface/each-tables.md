@@ -64,7 +64,8 @@ initializers (`'a' + 'b'`), `undefined`/`NaN`/`Infinity`, objects, arrays, calls
 members, default and namespace imports, `export *`, declaration files, installed packages, and an
 import whose chain returns to the test file. An import is not read when the test file mocks a
 module or re-export hop on its chain (`vi.mock`, or a `mockNuxtImport` of a name on the chain), or
-holds a namespace object of one (`import * as`, `import()`), which `vi.spyOn` can rewrite. A file
+holds a namespace object of one (a value `import * as`, `import()`, `vi.importActual()` or
+`vi.importMock()`), which `vi.spyOn` can rewrite. A file
 whose mocking cannot be fully read (a `vi.doMock`, a nested or unreadable `vi.mock`, a mocked
 specifier that does not resolve) or that imports a non-literal specifier reads no imported
 constant at all. Mocks registered outside the test file, in `setupFiles` or in a module the test

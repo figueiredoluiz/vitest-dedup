@@ -9,11 +9,6 @@ use crate::frontend::resolver::{self, Resolved};
 use oxc_ast::ast::{Declaration, ExportDefaultDeclarationKind, ImportOrExportKind};
 use std::path::{Path, PathBuf};
 
-/// `path` with symlinks followed, or as given when it cannot be resolved.
-fn canonical(path: &Path) -> PathBuf {
-    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
-}
-
 #[derive(Clone)]
 pub(super) struct RunnerImport {
     pub(super) origin: ImportOrigin,
@@ -255,13 +250,6 @@ impl<'a> Walker<'a> {
         {
             return;
         }
-        // A module namespace in this file can have an export's getter spied before the table is
-        // built (`vi.spyOn(ns, 'X', 'get')`), so no chain may reach a module it names.
-        let Some(namespaces) =
-            imported_constants::namespace_modules(self.semantic, &self.file.path)
-        else {
-            return;
-        };
         let mut candidates: Vec<(SymbolId, &RunnerImport)> = self
             .runner_imports
             .iter()
@@ -273,8 +261,11 @@ impl<'a> Walker<'a> {
             })
             .map(|(symbol, import)| (*symbol, import))
             .collect();
+        if candidates.is_empty() {
+            return;
+        }
         candidates.sort_by_key(|(symbol, _)| *symbol);
-        let own = canonical(&self.file.path);
+        let own = helpers::canonical(&self.file.path);
         let nuxt_mocked = |name: &str| {
             self.mocked_modules
                 .iter()
@@ -284,6 +275,13 @@ impl<'a> Walker<'a> {
         // An optional lookup: a hop that leaves the analysis root leaves the cell unresolved
         // without marking the file incomplete.
         resolver::quietly(|| {
+            // A module namespace in this file can have an export's getter spied before the table
+            // is built (`vi.spyOn(ns, 'X', 'get')`), so no chain may reach a module it names.
+            let Some(namespaces) =
+                imported_constants::namespace_modules(self.semantic, &self.file.path)
+            else {
+                return;
+            };
             for (symbol, import) in candidates
                 .into_iter()
                 .take(imported_constants::MAX_IMPORTED_CONSTANTS)
@@ -297,7 +295,7 @@ impl<'a> Walker<'a> {
                 if chain.exports.iter().any(|name| nuxt_mocked(name))
                     || self.is_mocked(&import.origin, &chain.modules)
                     || chain.modules.iter().any(|module| {
-                        let module = canonical(module);
+                        let module = helpers::canonical(module);
                         module == own || namespaces.contains(&module)
                     })
                 {
