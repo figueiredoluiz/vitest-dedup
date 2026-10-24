@@ -84,50 +84,79 @@ pub(in crate::frontend) fn referenced_in_table(semantic: &Semantic, symbol: Symb
         })
 }
 
-/// Whether this file can redefine a property accessor: the one way an export's value changes
-/// under its importers. Vitest's module objects reject assignment and `vi.spyOn` of a non-function
-/// value, but `vi.spyOn(module, 'X', 'get')` and `Object.defineProperty(module, 'X', …)` rewrite
-/// the binding, whichever route reached the module object (`import * as`, `vi.importActual`, a
-/// re-exported namespace). The target is not placed, and the names are read from the source
-/// text, so renaming, destructuring or a computed key does not hide them: any mention of
-/// `defineProperty`, `defineProperties`, `__defineGetter__` or `__defineSetter__` counts, and so
-/// does every mention of `spyOn` that is not a direct call with at most two plain arguments.
-/// A unicode escape anywhere counts too, since it can spell any of these names without their
-/// text. Only a name built at runtime (`'spy' + 'On'`) is not seen.
-pub(in crate::frontend) fn redefines_accessors(semantic: &Semantic, source: &str) -> bool {
-    if source.contains("\\u")
-        || [
-            "defineProperty",
-            "defineProperties",
-            "__defineGetter__",
-            "__defineSetter__",
-        ]
-        .iter()
-        .any(|name| source.contains(name))
-    {
-        return true;
+/// Names whose mention lets a file redefine or remove a property of a module object.
+const REDEFINING_NAMES: [&str; 5] = [
+    "defineProperty",
+    "defineProperties",
+    "__defineGetter__",
+    "__defineSetter__",
+    "deleteProperty",
+];
+
+/// Whether this file can redefine or remove a property of a module object: the way an export's
+/// value changes under its importers. Vitest's module objects reject assignment and `vi.spyOn` of a
+/// non-function value, but `vi.spyOn(module, 'X', 'get')`, `Object.defineProperty(module, 'X', …)`
+/// and `delete module.X` rewrite the binding, whichever route reached the module object
+/// (`import * as`, `vi.importActual`, a re-exported namespace). The target is not placed.
+///
+/// Every name the file spells is read decoded (identifiers, property keys, strings and template
+/// text, so an escape, a rename or a computed key does not hide one): any of
+/// [`REDEFINING_NAMES`] counts, and so does a `spyOn` that is not the callee of a direct call with
+/// at most two plain arguments. So does `delete` of any property but `process.env`'s. Only a name
+/// assembled at runtime (`'spy' + 'On'`) is not seen.
+pub(in crate::frontend) fn redefines_accessors(semantic: &Semantic) -> bool {
+    let mut spy_mentions = 0;
+    let mut plain_spies = 0;
+    for node in semantic.nodes().iter() {
+        let name = match node.kind() {
+            AstKind::IdentifierName(name) => Some(name.name.as_str()),
+            AstKind::IdentifierReference(ident) => Some(ident.name.as_str()),
+            AstKind::BindingIdentifier(binding) => Some(binding.name.as_str()),
+            AstKind::StringLiteral(literal) => Some(literal.value.as_str()),
+            AstKind::TemplateElement(element) => element.value.cooked.as_ref().map(|c| c.as_str()),
+            AstKind::UnaryExpression(unary)
+                if unary.operator == UnaryOperator::Delete && !deletes_env(&unary.argument) =>
+            {
+                return true;
+            }
+            AstKind::CallExpression(call) => {
+                let spy_callee = match &call.callee {
+                    Expression::Identifier(ident) => ident.name == "spyOn",
+                    Expression::StaticMemberExpression(member) => member.property.name == "spyOn",
+                    _ => false,
+                };
+                if spy_callee
+                    && call.arguments.len() < 3
+                    && !call
+                        .arguments
+                        .iter()
+                        .any(|argument| matches!(argument, Argument::SpreadElement(_)))
+                {
+                    plain_spies += 1;
+                }
+                None
+            }
+            _ => None,
+        };
+        match name {
+            Some(name) if REDEFINING_NAMES.contains(&name) => return true,
+            Some("spyOn") => spy_mentions += 1,
+            _ => {}
+        }
     }
-    let nodes = semantic.nodes();
-    let plain_spies = nodes
-        .iter()
-        .filter(|node| {
-            let AstKind::CallExpression(call) = node.kind() else {
-                return false;
-            };
-            let callee_is_spy_on = match &call.callee {
-                Expression::Identifier(ident) => ident.name == "spyOn",
-                Expression::StaticMemberExpression(member) => member.property.name == "spyOn",
-                _ => false,
-            };
-            callee_is_spy_on
-                && call.arguments.len() < 3
-                && !call
-                    .arguments
-                    .iter()
-                    .any(|argument| matches!(argument, Argument::SpreadElement(_)))
-        })
-        .count();
-    source.matches("spyOn").count() > plain_spies
+    spy_mentions > plain_spies
+}
+
+/// Whether a `delete` operand is a property of `process.env`, a plain object no module is.
+fn deletes_env(argument: &Expression) -> bool {
+    let object = match unwrap_transparent(argument) {
+        Expression::StaticMemberExpression(member) => &member.object,
+        Expression::ComputedMemberExpression(member) => &member.object,
+        _ => return false,
+    };
+    matches!(unwrap_transparent(object), Expression::StaticMemberExpression(env)
+        if env.property.name == "env"
+            && matches!(&env.object, Expression::Identifier(process) if process.name == "process"))
 }
 
 /// The closed scalar literal the first-party module at `path` exports as `export`, cloned into

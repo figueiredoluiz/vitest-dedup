@@ -409,6 +409,18 @@ fn accessor_redefinitions_refuse_imported_constants() {
         ("vi.mock('vitest-dedup-not-installed', () => ({}))", true),
         ("vi.mock('@app/modes', () => ({}))", true),
         ("vi.mock('node:fs')", false),
+        // Names are compared decoded and whole, so escapes count and look-alikes do not.
+        ("vi['\\x73pyOn'](globalThis, 'Y', 'get')", true),
+        ("Object['define\\x50roperty'](globalThis, 'Y', {})", true),
+        (
+            "// spyOn and defineProperty in a comment\nconst spyOnce = 1",
+            false,
+        ),
+        ("const label = 'caf\\u00e9'", false),
+        // Deleting a module object's property rewrites the import to `undefined`.
+        ("import * as ns from './m'\ndelete (ns as any).X", true),
+        ("Reflect.deleteProperty(globalThis, 'Y')", true),
+        ("delete process.env.MODE", false),
     ] {
         let tests = ConstantCase::new(
             &modules,

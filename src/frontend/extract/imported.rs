@@ -247,7 +247,7 @@ impl<'a> Walker<'a> {
             || self.mocked_modules.iter().any(|mock| {
                 mock.specifier
                     .strip_prefix("unresolved:")
-                    .is_some_and(resolver::may_name_first_party)
+                    .is_some_and(|specifier| !resolver::is_node_builtin(specifier))
             })
         {
             return;
@@ -264,9 +264,7 @@ impl<'a> Walker<'a> {
             .map(|(symbol, import)| (*symbol, import))
             .collect();
         // An accessor this file can redefine may be any import's (`vi.spyOn(ns, 'X', 'get')`).
-        if candidates.is_empty()
-            || imported_constants::redefines_accessors(self.semantic, self.source)
-        {
+        if candidates.is_empty() || imported_constants::redefines_accessors(self.semantic) {
             return;
         }
         candidates.sort_by_key(|(symbol, _)| *symbol);

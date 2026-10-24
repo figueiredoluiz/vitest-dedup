@@ -220,12 +220,6 @@ fn has_package_syntax(specifier: &str) -> bool {
     }
 }
 
-/// Whether an unresolved `specifier` could still name a first-party module: anything but a Node
-/// core module, since a bundler alias can be spelled like a package (`@app/x`, `src/x`).
-pub(super) fn may_name_first_party(specifier: &str) -> bool {
-    !is_node_builtin(specifier)
-}
-
 /// Whether `specifier` is a Node core module (prefixed, or one of the unprefixed names).
 pub(super) fn is_node_builtin(specifier: &str) -> bool {
     specifier.starts_with("node:") || NODE_BUILTINS.contains(&specifier)

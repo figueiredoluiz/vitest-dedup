@@ -69,14 +69,14 @@ module or re-export hop on its chain (`vi.mock`, or a `mockNuxtImport` of a name
 file reads no imported constant at all when its mocking cannot be fully read (a `vi.doMock`, a
 nested or unreadable `vi.mock`, a mocked specifier that does not resolve, since a bundler alias
 can be spelled like a package; only a Node builtin does not count), or when it can
-redefine a property accessor, which is how a module object's export is rewritten however the
-object was reached. The names are read from the source text: any mention of `defineProperty`,
-`defineProperties`, `__defineGetter__` or `__defineSetter__` counts, and so does any mention of
-`spyOn` other than a direct call with at most two plain arguments (`vi.spyOn(ns, 'X', 'get')`
-counts, `vi.spyOn(console, 'log')` does not), and any unicode escape. A name assembled at runtime
-is not seen. Mocks and accessor redefinitions outside the test file, in `setupFiles` or in a module
-the test file imports, are not seen: the analyzer then reads the real value where Vitest uses the
-replacement.
+redefine or remove a property of a module object, which is how an export is rewritten however the
+object was reached. Names are read decoded from identifiers, property keys, strings and template
+text: any `defineProperty`, `defineProperties`, `__defineGetter__`, `__defineSetter__` or
+`deleteProperty` counts, as does a `spyOn` other than a direct call with at most two plain
+arguments (`vi.spyOn(ns, 'X', 'get')` counts, `vi.spyOn(console, 'log')` does not), and a
+`delete` of any property but `process.env`'s. A name assembled at runtime is not seen. Mocks and
+property rewrites outside the test file, in `setupFiles` or in a module the test file imports, are
+not seen: the analyzer then reads the real value where Vitest uses the replacement.
 
 **Static-analysis fallback rule**: whenever the table itself is not a literal array/object
 expression at the call site (e.g. `test.each(getCases())`), the extractor cannot enumerate rows at
