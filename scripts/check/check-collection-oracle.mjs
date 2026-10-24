@@ -60,18 +60,28 @@ const SELF_CHECK = {
     'stub-then.test.ts': { tests: ['always'], hooks: [], stubReads: ['./missing-module#then'] },
     'stub-then-reexport.test.ts': { tests: ['always'], hooks: [], stubReads: ['./missing-module#then'] },
   },
+}
+// Without isolation a later file inherits every stub read made earlier in its worker, so which reads
+// a file lists depends on collection order; what must hold is that every file counts as reading one.
+const SHARED_SELF_CHECK = {
   'scripts/check/collection-oracle-self-check-shared': {
-    'first.test.ts': { tests: ['first'], hooks: [], stubReads: ['./missing-module#*'] },
-    'second.test.ts': { tests: ['second'], hooks: [], stubReads: ['./missing-module#*'] },
+    'first.test.ts': { tests: ['first'], hooks: [], readsStub: true },
+    'second.test.ts': { tests: ['second'], hooks: [], readsStub: true },
+  },
+  'scripts/check/collection-oracle-self-check-shared-named': {
+    'fourth.test.ts': { tests: ['fourth'], hooks: [], readsStub: true },
+    'third.test.ts': { tests: ['third'], hooks: [], readsStub: true },
   },
 }
 
 /** The probe's report on the self-check directories, as failure messages (none when it matches). */
 function selfCheck() {
-  return Object.entries(SELF_CHECK).flatMap(([dir, want]) => {
-    const actual = Object.fromEntries(
-      [...collectWithVitest(ROOT, dir)].map(([path, file]) => [path, { tests: file.tests, hooks: file.hooks, stubReads: file.stubReads }]),
-    )
+  const checks = [
+    ...Object.entries(SELF_CHECK).map(([dir, want]) => [dir, want, (file) => ({ tests: file.tests, hooks: file.hooks, stubReads: file.stubReads })]),
+    ...Object.entries(SHARED_SELF_CHECK).map(([dir, want]) => [dir, want, (file) => ({ tests: file.tests, hooks: file.hooks, readsStub: file.stubReads.length > 0 })]),
+  ]
+  return checks.flatMap(([dir, want, view]) => {
+    const actual = Object.fromEntries([...collectWithVitest(ROOT, dir)].map(([path, file]) => [path, view(file)]))
     return isDeepStrictEqual(actual, want)
       ? []
       : [`probe self-check ${dir}: expected ${JSON.stringify(want)}\n    got ${JSON.stringify(actual)}`]

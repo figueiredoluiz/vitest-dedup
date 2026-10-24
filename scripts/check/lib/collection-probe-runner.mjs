@@ -92,20 +92,21 @@ export default class CollectionProbeRunner extends TestRunner {
   registrations = new Map()
   current = null
   restore = null
-  wholeStubs = new Set()
+  workerStubReads = new Set()
 
   // Describe callbacks run after `importFile` returns, so registrations are observed from the
   // start of a file's collection to the end of the whole collection, attributed to the file whose
   // collection started last: a worker collects its files one after another.
   onCollectStart(file) {
-    // Without isolation a module loads once per worker, so a stub taken whole reports only to the
-    // first file; every later file may share it and counts as having read it.
-    const shared = this.config.isolate === false ? [...this.wholeStubs].map((specifier) => `${specifier}#*`) : []
+    // Without isolation a module loads once per worker and every later file shares it, so a stub
+    // read once (whole, or a value a helper keeps) may reach a later file without a read of its own:
+    // every later file counts as having made every read made before it in the worker.
+    const shared = this.config.isolate === false ? [...this.workerStubReads] : []
     this.current = { file: file.filepath, sink: [], stubReads: shared }
     this.registrations.set(file, this.current)
     globalThis.__vitestDedupStubRead = (specifier, key) => {
       this.current.stubReads.push(`${specifier}#${key}`)
-      if (key === '*') this.wholeStubs.add(specifier)
+      this.workerStubReads.add(`${specifier}#${key}`)
     }
     this.restore ??= observeRegistrationErrors((stack) => {
       const found = registration(stack)
