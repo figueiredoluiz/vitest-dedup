@@ -1,3 +1,6 @@
+// RECALL positive: matching literal spy registrations retain cross-file-duplicate findings.
+// Both files must be comparable; the distinct-mode and unreadable-option cases cannot
+// prove that two supported spy contexts still match.
 import { test, expect, vi } from 'vitest'
 import { read } from './value'
 vi.mock('./value', { spy: true })
