@@ -105,7 +105,8 @@ fn unproved_declarations_leave_the_cell_unresolved() {
 }
 
 #[test]
-/// Named re-export hops are followed; an import the declaring module itself re-exports is not.
+/// Named re-export hops are followed, including an import the module exports again; a local
+/// alias of an import in a barrel, `export *` and type-only exports are not.
 fn reexport_hops_are_followed_to_the_declaring_module() {
     let read = |barrel: &str| {
         ConstantCase::new(
@@ -117,12 +118,16 @@ fn reexport_hops_are_followed_to_the_declaring_module() {
         )
         .tests()
     };
-    assert_eq!(
-        read("export { MODE as X } from './values'"),
-        vec![("t fast".to_owned(), false)]
-    );
     for barrel in [
+        "export { MODE as X } from './values'",
         "import { MODE } from './values'\nexport { MODE as X }",
+        "import { MODE as X } from './values'\nexport { X }",
+    ] {
+        assert_eq!(read(barrel), vec![("t fast".to_owned(), false)], "{barrel}");
+    }
+    for barrel in [
+        "import type { MODE } from './values'\nexport { MODE as X }",
+        "import { MODE } from './values'\nconst X = MODE\nexport { X }",
         "export * from './values'\nexport {}",
         "export type { MODE as X } from './values'",
     ] {
@@ -382,6 +387,20 @@ fn accessor_redefinitions_refuse_imported_constants() {
         ("Reflect.defineProperty(globalThis, 'Y', {})", true),
         ("({}).__defineGetter__('X', () => 1)", true),
         ("vi.mock('~/nowhere', () => ({}))", true),
+        (
+            "const { defineProperty: def } = Object\ndef(globalThis, 'Y', {})",
+            true,
+        ),
+        ("Object[`defineProperty`](globalThis, 'Y', {})", true),
+        (
+            "const args = [globalThis, 'Y', 'get'] as const\nvi.spyOn(...args)",
+            true,
+        ),
+        ("const { spyOn: s } = vi\ns(globalThis, 'Y', 'get')", true),
+        (
+            "vi.spyOn(console, 'log')\nvi.spyOn(console, 'error')",
+            false,
+        ),
     ] {
         let tests = ConstantCase::new(
             &modules,
@@ -414,5 +433,25 @@ fn a_wrapped_or_computed_local_alias_of_the_import_resolves() {
         )
         .tests();
         assert_eq!(tests, vec![(title.to_owned(), false)], "{alias}");
+    }
+}
+
+#[test]
+/// A mock of the module an `import … export` barrel imports from is a mock of the chain.
+fn a_mock_of_the_module_behind_an_import_export_barrel_is_seen() {
+    let modules = [
+        ("values.ts", "export const X = 'fast'"),
+        ("barrel.ts", "import { X } from './values'\nexport { X }"),
+    ];
+    for (mock, unresolved) in [
+        ("", false),
+        ("vi.mock('./values', () => ({ X: 'slow' }))", true),
+    ] {
+        let tests = ConstantCase::new(
+            &modules,
+            &format!("import {{ test, vi }} from 'vitest'\nimport {{ X }} from './barrel'\n{mock}\ntest.each([[X]])('t %s', () => {{}})\n"),
+        )
+        .tests();
+        assert_eq!(tests[0].1, unresolved, "{mock:?}: {tests:?}");
     }
 }

@@ -4965,7 +4965,7 @@
       "origin": "synthetic",
       "verdict": "generated",
       "classifiedAt": "2026-10-25",
-      "expectedTests": 18,
+      "expectedTests": 20,
       "expectedIncomplete": false,
       "expectedUnresolved": 0,
       "expectedFindings": [
@@ -5007,6 +5007,14 @@
           "titles": [
             "reads true",
             "reads true"
+          ]
+        },
+        {
+          "rule": "duplicate-each-row",
+          "severity": "warning",
+          "titles": [
+            "reads false",
+            "reads false"
           ]
         },
         {

@@ -55,7 +55,8 @@ renders `undefined` as empty, JSON array elements become `null`, and JSON object
 that value are omitted.
 
 **Imported constants**: a cell naming a value import (`import { MODE } from './modes'`), or a
-local `const` alias of one, is read when the import resolves, through named re-exports, to a
+local `const` alias of one, is read when the import resolves, through named re-exports
+(`export { X } from`, or `import { X }` then `export { X }`), to a
 first-party module that declares it with a module-level `const` whose initializer is a string,
 number, signed number, boolean, `null`, bigint or substitution-free template literal, directly or
 through an earlier local `const` alias (never through a member read). The value then reads exactly
@@ -67,9 +68,10 @@ module or re-export hop on its chain (`vi.mock`, or a `mockNuxtImport` of a name
 file reads no imported constant at all when its mocking cannot be fully read (a `vi.doMock`, a
 nested or unreadable `vi.mock`, a mocked specifier that does not resolve), or when it can redefine
 a property accessor, which is how a module object's export is rewritten however the object was
-reached: a `spyOn` given an access type (`vi.spyOn(ns, 'X', 'get')`) or used other than as a
-direct call, or any `defineProperty`, `defineProperties`, `__defineGetter__` or
-`__defineSetter__`. Mocks and accessor redefinitions outside the test file, in `setupFiles` or in a
+reached. The names are read from the source text: any mention of `defineProperty`,
+`defineProperties`, `__defineGetter__` or `__defineSetter__` counts, and so does any mention of
+`spyOn` other than a direct call with at most two plain arguments (`vi.spyOn(ns, 'X', 'get')`
+counts, `vi.spyOn(console, 'log')` does not). A name assembled at runtime is not seen. Mocks and accessor redefinitions outside the test file, in `setupFiles` or in a
 module the test file imports, are not seen: the analyzer then reads the real value where Vitest
 uses the replacement.
 

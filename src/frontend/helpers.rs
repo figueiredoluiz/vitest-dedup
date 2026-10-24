@@ -871,7 +871,11 @@ pub(super) fn find_value_export(program: &Program, export: &str) -> Option<Value
                     continue;
                 }
                 if let Some(local) = specifier_local(&it.specifiers, export) {
-                    return Some(ValueExport::Declared(local));
+                    // `import { X } from './a'; export { X }` is a re-export hop too.
+                    return Some(match imported_binding(program, &local) {
+                        Some((specifier, local)) => ValueExport::Reexport { specifier, local },
+                        None => ValueExport::Declared(local),
+                    });
                 }
             }
             Statement::ExportFromDeclaration(it) => {
@@ -883,6 +887,37 @@ pub(super) fn find_value_export(program: &Program, export: &str) -> Option<Value
         }
     }
     None
+}
+
+/// The `(specifier, imported name)` of the named value import that binds `local` in `program`.
+fn imported_binding(program: &Program, local: &str) -> Option<(String, String)> {
+    program.body.iter().find_map(|statement| {
+        let Statement::ImportDeclaration(import) = statement else {
+            return None;
+        };
+        if matches!(import.import_kind, oxc_ast::ast::ImportOrExportKind::Type) {
+            return None;
+        }
+        import
+            .specifiers
+            .iter()
+            .flatten()
+            .find_map(|specifier| match specifier {
+                oxc_ast::ast::ImportDeclarationSpecifier::ImportSpecifier(specifier)
+                    if specifier.local.name == local
+                        && !matches!(
+                            specifier.import_kind,
+                            oxc_ast::ast::ImportOrExportKind::Type
+                        ) =>
+                {
+                    Some((
+                        import.source.value.as_str().to_owned(),
+                        module_export_name(&specifier.imported),
+                    ))
+                }
+                _ => None,
+            })
+    })
 }
 
 /// What [`find_value_export`] found.

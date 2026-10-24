@@ -262,7 +262,9 @@ impl<'a> Walker<'a> {
             .map(|(symbol, import)| (*symbol, import))
             .collect();
         // An accessor this file can redefine may be any import's (`vi.spyOn(ns, 'X', 'get')`).
-        if candidates.is_empty() || imported_constants::redefines_accessors(self.semantic) {
+        if candidates.is_empty()
+            || imported_constants::redefines_accessors(self.semantic, self.source)
+        {
             return;
         }
         candidates.sort_by_key(|(symbol, _)| *symbol);

@@ -6,6 +6,7 @@ export const SPEED = 'quick'
 export const COUNT = -2
 export const BIG = 10n
 export const ON = true
+export const OFF = false
 export const NONE = null
 export const TEMPLATE = `tpl`
 export const ALIAS = LOCAL

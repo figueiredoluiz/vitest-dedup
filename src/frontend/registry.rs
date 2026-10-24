@@ -1386,7 +1386,8 @@ const MAX_VALUE_HOPS: u32 = 8;
 /// Resolution is by symbol identity, never by name -- the same discipline [`resolve_identifier`]
 /// applies to callees -- so two sibling scopes that each declare their own `MODE` resolve to
 /// their own values and never collide. An imported binding (whose declaration is an import
-/// statement, not a `const`) resolves only when [`ImportedConstants`] proved it for this file.
+/// statement, not a `const`) is refused here; [`resolved_binding`] reads it only when
+/// [`ImportedConstants`] proved it for this file.
 /// The one `const` declarator that declares `symbol_id`, when the binding is a plain
 /// `const name = ...` with a single declaration.
 ///
