@@ -259,3 +259,80 @@ fn historical_files_never_read_present_day_constants() {
     assert_eq!(case.tests_with(true), vec![("t fast".to_owned(), false)]);
     assert!(case.tests_with(false)[0].1);
 }
+
+#[test]
+/// An exported object's member can be written by an importer before the initializer reads it.
+fn a_member_read_in_the_declaring_module_is_refused() {
+    for module in [
+        "const O = { a: 'x' }\nexport const X = O.a",
+        "const O = { a: 'x' }\nconst A = O.a\nexport const X = A",
+    ] {
+        assert!(single_row(module)[0].1, "{module}");
+    }
+    assert_eq!(
+        single_row("const A = 'x'\nconst B = A\nexport const X = B"),
+        vec![("t x".to_owned(), false)]
+    );
+}
+
+#[test]
+/// A hop that leaves the analysis root leaves the cell unresolved without marking the file
+/// incomplete: the lookup is optional.
+fn a_hop_outside_the_root_does_not_mark_the_file_incomplete() {
+    let outer = tempfile::tempdir().unwrap();
+    let root = outer.path().join("root");
+    std::fs::create_dir_all(root.join("src")).unwrap();
+    std::fs::create_dir_all(outer.path().join("shared")).unwrap();
+    std::fs::write(
+        outer.path().join("shared/consts.ts"),
+        "export const X = 'a'",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("tsconfig.json"),
+        r#"{ "compilerOptions": { "baseUrl": ".", "paths": { "@shared/*": ["../shared/*"] } } }"#,
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("src/barrel.ts"),
+        "export { X } from '@shared/consts'",
+    )
+    .unwrap();
+    let path = root.join("src/t.test.ts");
+    let source =
+        "import { test } from 'vitest'\nimport { X } from './barrel'\ntest.each([[X]])('t %s', () => {})\n";
+    std::fs::write(&path, source).unwrap();
+    let file = SourceFile::without_project_context(
+        path,
+        crate::discovery::SourceLanguage::TypeScript,
+        ModuleFlavor::Ambiguous,
+    );
+    let extraction = extract_within(source, &file, Globals::Disabled, &root);
+    assert_eq!(extraction.tests.len(), 1);
+    assert!(extraction.tests[0].context.unresolved);
+    assert!(
+        !extraction
+            .reasons
+            .contains(&ExclusionReason::ImportOutsideRoot),
+        "{:?}",
+        extraction.diagnostics
+    );
+}
+
+#[test]
+/// A Nuxt mock of a name renamed at an intermediate hop still replaces the value.
+fn a_nuxt_mock_of_any_name_on_the_chain_is_never_read() {
+    let modules = [
+        ("values.ts", "export const Z = 'a'"),
+        ("barrel2.ts", "export { Z as Y } from './values'"),
+        ("barrel1.ts", "export { Y as X } from './barrel2'"),
+    ];
+    for (mock, unresolved) in [("", false), ("mockNuxtImport('Y', () => 'b')", true)] {
+        let tests = ConstantCase::new(
+            &modules,
+            &format!("import {{ test }} from 'vitest'\nimport {{ mockNuxtImport }} from '@nuxt/test-utils/runtime'\nimport {{ X }} from './barrel1'\n{mock}\ntest.each([[X]])('t %s', () => {{}})\n"),
+        )
+        .tests();
+        assert_eq!(tests[0].1, unresolved, "{mock:?}: {tests:?}");
+    }
+}

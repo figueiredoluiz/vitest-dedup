@@ -290,6 +290,24 @@ thread_local! {
     /// why this is the mechanism that keeps resolution from being paid for on every test body
     /// rather than once per specifier actually written in a file.
     static CACHE: RefCell<HashMap<(PathBuf, String), Resolved>> = RefCell::new(HashMap::new());
+
+    /// Set inside [`quietly`]: a confinement refusal is neither recorded nor memoized.
+    static QUIET: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Runs `body` with confinement refusals unrecorded: for an optional lookup whose failure must
+/// not mark the file incomplete. A refused result is not memoized either, so a later lookup that
+/// does need the module still records its refusal.
+pub(super) fn quietly<T>(body: impl FnOnce() -> T) -> T {
+    struct Restore(bool);
+    impl Drop for Restore {
+        /// Restores the enclosing setting, also when `body` panics.
+        fn drop(&mut self) {
+            QUIET.with(|quiet| quiet.set(self.0));
+        }
+    }
+    let _restore = Restore(QUIET.with(|quiet| quiet.replace(true)));
+    body()
 }
 
 /// Builds a worker resolver with parser-supported extensions, `module`/`import` conditions,
@@ -366,7 +384,11 @@ pub(super) fn resolve(importing_file: &Path, specifier: &str) -> Resolved {
                 }
             },
         );
+    let unconfined = resolved.clone();
     let resolved = confine_resolution(importing_file, specifier, resolved);
+    if resolved != unconfined && QUIET.with(std::cell::Cell::get) {
+        return resolved;
+    }
     CACHE.with(|cache| {
         cache.borrow_mut().insert(key, resolved.clone());
     });
@@ -409,12 +431,14 @@ fn confine_resolution(importing_file: &Path, specifier: &str, resolved: Resolved
         "import `{specifier}` resolves outside the analysis root through the tsconfig and was \
          not read"
     );
-    REFUSALS.with(|refusals| {
-        let mut refusals = refusals.borrow_mut();
-        if !refusals.contains(&message) {
-            refusals.push(message);
-        }
-    });
+    if !QUIET.with(std::cell::Cell::get) {
+        REFUSALS.with(|refusals| {
+            let mut refusals = refusals.borrow_mut();
+            if !refusals.contains(&message) {
+                refusals.push(message);
+            }
+        });
+    }
     Resolved::Unresolved
 }
 
@@ -724,6 +748,21 @@ mod tests {
         assert_eq!(refusals.len(), 1, "{refusals:?}");
         assert!(refusals[0].contains("`@out/target`") && refusals[0].contains("outside"));
         assert!(take_refusals().is_empty(), "taking drains the list");
+    }
+
+    /// A refusal inside [`quietly`] is not recorded and not memoized, so a later lookup of the
+    /// same specifier that needs the module still records it.
+    #[test]
+    fn a_quiet_refusal_is_neither_recorded_nor_memoized() {
+        let (_guard, root, importer) = escaping_alias();
+        begin_file(Some(&root));
+        assert_eq!(
+            quietly(|| resolve(&importer, "@out/target")),
+            Resolved::Unresolved
+        );
+        assert!(take_refusals().is_empty());
+        assert_eq!(resolve(&importer, "@out/target"), Resolved::Unresolved);
+        assert_eq!(take_refusals().len(), 1);
     }
 
     /// The analyzer canonicalizes its root, which on Windows yields a verbatim `\\?\` path, and

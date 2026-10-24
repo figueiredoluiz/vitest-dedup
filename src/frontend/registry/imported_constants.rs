@@ -7,7 +7,9 @@
 //! into the importing file's arena, so every renderer reads it through [`super::peeled`] exactly
 //! as it reads a local `const` alias. Mocks and which bindings to try are the caller's question.
 
-use super::{const_declarator, peeled, unwrap_transparent, FoldScope, ImportedConstants};
+use super::{
+    const_declarator, peeled, unwrap_transparent, FoldScope, ImportedConstants, MAX_VALUE_HOPS,
+};
 use crate::frontend::helpers::{find_value_export, with_parsed_file, ValueExport};
 use oxc_allocator::{Allocator, CloneIn};
 use oxc_ast::ast::{Expression, UnaryOperator};
@@ -47,19 +49,14 @@ pub(in crate::frontend) fn referenced_in_table(semantic: &Semantic, symbol: Symb
                         && call
                             .arguments
                             .iter()
-                            .any(|argument| contains(argument.span(), span))
+                            .any(|argument| argument.span().contains_inclusive(span))
                 }
                 AstKind::TaggedTemplateExpression(tagged) => {
-                    is_table(&tagged.tag) && contains(tagged.quasi.span, span)
+                    is_table(&tagged.tag) && tagged.quasi.span.contains_inclusive(span)
                 }
                 _ => false,
             })
         })
-}
-
-/// Whether `outer` covers `inner`.
-fn contains(outer: Span, inner: Span) -> bool {
-    outer.start <= inner.start && inner.end <= outer.end
 }
 
 /// The closed scalar literal the first-party module at `path` exports as `export`, cloned into
@@ -93,10 +90,16 @@ pub(in crate::frontend) fn exported_literal<'a>(
         }
         let semantic = &semantic_return.semantic;
         let symbol = semantic.scoping().get_root_binding(local.as_str().into())?;
-        if semantic.scoping().symbol_flags(symbol).is_ambient() || is_declared(semantic, symbol) {
+        // `declare const` emits nothing; the binder marks it ambient.
+        if semantic.scoping().symbol_flags(symbol).is_ambient() {
             return None;
         }
         let init = const_declarator(semantic, symbol)?.init.as_ref()?;
+        // Another module can write a member of an exported object before this initializer runs
+        // (an import cycle), so only `const` names are followed, never a member read.
+        if reads_a_member(init, semantic, 0) {
+            return None;
+        }
         let value = unwrap_transparent(peeled(init, Some(FoldScope::local(semantic))));
         if !is_closed_literal(value) {
             return None;
@@ -110,13 +113,25 @@ pub(in crate::frontend) fn exported_literal<'a>(
     })
 }
 
-/// Whether the declaration of `symbol` is a TypeScript `declare const`, which emits nothing.
-fn is_declared(semantic: &Semantic, symbol: SymbolId) -> bool {
-    let nodes = semantic.nodes();
-    let node = semantic.scoping().symbol_declaration(symbol);
-    [nodes.kind(node), nodes.parent_kind(node)].into_iter().any(
-        |kind| matches!(kind, AstKind::VariableDeclaration(declaration) if declaration.declare),
-    )
+/// Whether following `expr` through `const` names reaches a member expression, or more names than
+/// the fold would follow.
+fn reads_a_member(expr: &Expression, semantic: &Semantic, hops: u32) -> bool {
+    match unwrap_transparent(expr) {
+        Expression::StaticMemberExpression(_) | Expression::ComputedMemberExpression(_) => true,
+        Expression::Identifier(ident) => {
+            if hops >= MAX_VALUE_HOPS {
+                return true;
+            }
+            let init = ident
+                .reference_id
+                .get()
+                .and_then(|reference| semantic.scoping().get_reference(reference).symbol_id())
+                .and_then(|symbol| const_declarator(semantic, symbol))
+                .and_then(|declarator| declarator.init.as_ref());
+            init.is_some_and(|init| reads_a_member(init, semantic, hops + 1))
+        }
+        _ => false,
+    }
 }
 
 /// A literal whose value names nothing: a string, number, boolean, `null`, bigint, a template

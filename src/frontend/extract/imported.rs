@@ -244,7 +244,8 @@ impl<'a> Walker<'a> {
     /// tried; every unproved binding stays an unresolved cell. A historical file is never proved:
     /// the modules on disk are today's, not the ones it imported.
     pub(super) fn prove_imported_constants(&mut self, allocator: &'a Allocator) {
-        if !self.allow_imported {
+        // Unreadable mocks could replace any module, so nothing is tried.
+        if !self.allow_imported || self.mocks_unresolved {
             return;
         }
         let mut candidates: Vec<(SymbolId, &RunnerImport)> = self
@@ -260,38 +261,45 @@ impl<'a> Walker<'a> {
             .collect();
         candidates.sort_by_key(|(symbol, _)| *symbol);
         let own = canonical(&self.file.path);
+        let nuxt_mocked = |name: &str| {
+            self.mocked_modules
+                .iter()
+                .any(|mock| mock.specifier.as_ref() == format!("nuxt-import:{name}"))
+        };
         let mut constants = ImportedConstants::default();
-        for (symbol, import) in candidates
-            .into_iter()
-            .take(imported_constants::MAX_IMPORTED_CONSTANTS)
-        {
-            let Some(start) = &import.origin.resolved else {
-                continue;
-            };
-            let Ok(chain) = resolve_value_export_chain(start, &import.origin.exported) else {
-                continue;
-            };
-            let nuxt_mocked = self.mocked_modules.iter().any(|mock| {
-                [&import.origin.exported, &chain.terminal.export]
-                    .iter()
-                    .any(|name| mock.specifier.as_ref() == format!("nuxt-import:{name}"))
-            });
-            if nuxt_mocked
-                || self.is_mocked(&import.origin, &chain.modules)
-                || chain.modules.iter().any(|module| canonical(module) == own)
+        // An optional lookup: a hop that leaves the analysis root leaves the cell unresolved
+        // without marking the file incomplete.
+        resolver::quietly(|| {
+            for (symbol, import) in candidates
+                .into_iter()
+                .take(imported_constants::MAX_IMPORTED_CONSTANTS)
             {
-                continue;
+                let Some(start) = &import.origin.resolved else {
+                    continue;
+                };
+                if nuxt_mocked(&import.origin.exported) {
+                    continue;
+                }
+                let Ok(chain) = resolve_value_export_chain(start, &import.origin.exported) else {
+                    continue;
+                };
+                if chain.exports.iter().any(|name| nuxt_mocked(name))
+                    || self.is_mocked(&import.origin, &chain.modules)
+                    || chain.modules.iter().any(|module| canonical(module) == own)
+                {
+                    continue;
+                }
+                let span = self.semantic.scoping().symbol_span(symbol);
+                if let Some(value) = imported_constants::exported_literal(
+                    allocator,
+                    &chain.terminal.path,
+                    &chain.terminal.export,
+                    span,
+                ) {
+                    constants.insert(symbol, value);
+                }
             }
-            let span = self.semantic.scoping().symbol_span(symbol);
-            if let Some(value) = imported_constants::exported_literal(
-                allocator,
-                &chain.terminal.path,
-                &chain.terminal.export,
-                span,
-            ) {
-                constants.insert(symbol, value);
-            }
-        }
+        });
         self.imported_constants = constants;
     }
 

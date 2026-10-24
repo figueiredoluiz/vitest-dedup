@@ -328,6 +328,8 @@ pub(in crate::frontend) mod export_contract {
     pub(in crate::frontend) struct ResolvedExportChain {
         pub(in crate::frontend) terminal: ResolvedExport,
         pub(in crate::frontend) modules: Vec<PathBuf>,
+        /// The export name looked up in each of `modules`, index-parallel.
+        pub(in crate::frontend) exports: Vec<String>,
     }
 
     /// One step's outcome, owned: `with_parsed_file`'s closure cannot return arena-borrowed
@@ -389,6 +391,7 @@ pub(in crate::frontend) mod export_contract {
         let mut export = export.to_owned();
         let mut visited = HashSet::new();
         let mut modules = Vec::new();
+        let mut exports = Vec::new();
         for hop in 0..=MAX_REEXPORT_HOPS {
             // The visited identity is the canonical spelling: `start` arrives verbatim while
             // `resolve_hop` returns symlink-followed paths (macOS /var vs /private/var, Windows
@@ -406,6 +409,7 @@ pub(in crate::frontend) mod export_contract {
             // `Some(None)` keeps a missing export distinct from a file that cannot be read or
             // parsed; `with_parsed_file` flattens both to `None` otherwise.
             modules.push(path.clone());
+            exports.push(export.clone());
             let step = with_parsed_file(&path, |program, _| Some(find(program, &export)))
                 .ok_or(ExportRefusal::UnreadableOrUnparseable)?;
             match step {
@@ -413,6 +417,7 @@ pub(in crate::frontend) mod export_contract {
                     return Ok(ResolvedExportChain {
                         terminal: ResolvedExport { path, export },
                         modules,
+                        exports,
                     })
                 }
                 Some(Step::Hop { specifier, local }) => {
