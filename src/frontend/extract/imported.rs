@@ -248,8 +248,9 @@ impl<'a> Walker<'a> {
     /// run when a table cell first reaches one (see `registry::imported_constants`). A file whose
     /// mocks or property rewrites could reach any module proves nothing; an import on a mocked
     /// chain, or whose chain reaches this file (read in its temporal dead zone), is refused. A
-    /// historical file proves nothing and opens no module (the modules on disk are today's, not
-    /// the ones it imported): a cell reading a first-party import makes it partial.
+    /// historical file reads no value (the modules on disk are today's, not the ones it
+    /// imported): a cell the current tree would read, or one reading an import gone from today's
+    /// tree, makes it partial. Its proof runs under the same analysis-root confinement.
     pub(super) fn prepare_imported_constants(&mut self, allocator: &'a Allocator) {
         let historical = !self.allow_imported;
         // Decided from this file's own text, so both trees agree: unreadable mocks could replace
@@ -270,39 +271,16 @@ impl<'a> Walker<'a> {
                     None => historical && !resolver::is_node_builtin(&import.origin.specifier),
                 }
         };
-        // A revision baseline reads no present-day module, and what its mocks name depends on
-        // its own revision's tree: a cell reading one of these imports makes it partial, unless
-        // its own text can rewrite module properties, which the current tree refuses too.
-        if historical {
-            let imports: HashSet<SymbolId> = self
-                .runner_imports
-                .iter()
-                .filter(|(_, import)| eligible(import))
-                .map(|(symbol, _)| *symbol)
-                .collect();
-            if imports.is_empty() {
-                return;
-            }
-            let semantic = self.semantic;
-            let rewrites = std::cell::OnceCell::new();
-            self.imported_constants = ImportedConstants::lazy(Box::new(move |symbol| {
-                if !imports.contains(&symbol)
-                    || *rewrites.get_or_init(|| imported_constants::redefines_accessors(semantic))
-                {
-                    Proof::Refused
-                } else {
-                    Proof::Unavailable
-                }
-            }));
-            return;
-        }
         // A mock that does not resolve could replace any first-party module (a package-shaped
-        // name may be a bundler alias). A Node builtin cannot be one.
-        if self.mocked_modules.iter().any(|mock| {
-            mock.specifier
-                .strip_prefix("unresolved:")
-                .is_some_and(|specifier| !resolver::is_node_builtin(specifier))
-        }) {
+        // name may be a bundler alias). A Node builtin cannot be one. A historical file's mocks
+        // resolved in its own revision, so they do not decide its reads.
+        if !historical
+            && self.mocked_modules.iter().any(|mock| {
+                mock.specifier
+                    .strip_prefix("unresolved:")
+                    .is_some_and(|specifier| !resolver::is_node_builtin(specifier))
+            })
+        {
             return;
         }
         let imports: HashMap<SymbolId, (ImportOrigin, Span)> = self
@@ -337,6 +315,11 @@ impl<'a> Walker<'a> {
             if *rewrites.get_or_init(|| imported_constants::redefines_accessors(semantic)) {
                 return Proof::Refused;
             }
+            // A historical import gone from today's tree (a renamed module) may have held a
+            // constant in its own revision.
+            if origin.resolved.is_none() {
+                return Proof::Unavailable;
+            }
             // An optional lookup: a hop that leaves the analysis root leaves the cell unresolved
             // without marking the file incomplete.
             let value = resolver::quietly(|| {
@@ -364,6 +347,9 @@ impl<'a> Walker<'a> {
             });
             match value {
                 None => Proof::Refused,
+                // A revision baseline cannot use today's value, only learn that the current tree
+                // reads one here.
+                Some(_) if historical => Proof::Unavailable,
                 Some(value) => Proof::Value(value),
             }
         }));

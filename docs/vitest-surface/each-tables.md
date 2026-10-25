@@ -61,7 +61,7 @@ directly or through a local `const` (`const L = MODE`, `` `${MODE}-1` ``, a memb
 whose initializer is a string, number, signed number, boolean, `null`, bigint or
 substitution-free template literal, possibly through that module's own earlier `const` aliases.
 Anything else stays unresolved: `let`/`var`/`declare` exports, computed initializers,
-`undefined`/`NaN`/`Infinity`, composites, calls, member reads, default and namespace imports,
+`undefined`/`NaN`/`Infinity`, composites, calls, member reads, default (`import X from`) and namespace imports,
 `export *`, declaration files, installed packages, and a chain back to the test file.
 
 The test file must not be able to replace the value. An import is not read when the file mocks

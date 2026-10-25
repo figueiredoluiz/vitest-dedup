@@ -408,10 +408,11 @@ fn run_with_rss(args: ParsedArgs, mut resident: impl FnMut() -> Option<u64>) -> 
                         language,
                         module_flavor,
                     );
-                    let mut extraction = frontend::extract_from_revision(
+                    let mut extraction = frontend::extract_from_revision_within(
                         &source.content,
                         &base_file,
                         resolved_globals,
+                        &config.root,
                     );
                     if extraction.incomplete {
                         base_causes.files_partially_read += 1;

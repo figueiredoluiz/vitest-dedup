@@ -637,12 +637,6 @@ thread_local! {
     static HELPER_PARSES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-/// Test-only: how many helper files this thread has parsed.
-#[cfg(test)]
-pub(super) fn parse_count() -> usize {
-    HELPER_PARSES.with(std::cell::Cell::get)
-}
-
 /// Returns `path`'s source when it is admitted for parsing (readable, within the size bound and
 /// the raw syntax budget), or `None` for a refusal. Each distinct file version is read and
 /// checked once; later calls reuse the answer while the file's length and modification time are

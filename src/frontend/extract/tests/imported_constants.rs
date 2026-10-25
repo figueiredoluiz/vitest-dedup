@@ -309,31 +309,7 @@ fn a_hop_outside_the_root_does_not_mark_the_file_incomplete() {
 /// One `t.test.ts` under `root/src` reading `X` from `./barrel`, beside a tsconfig alias that
 /// leaves the root; asserts the file stays complete and whether the cell resolves.
 fn outside_root_case(barrel: &str, test_tail: &str, unresolved: bool) {
-    let outer = tempfile::tempdir().unwrap();
-    let root = outer.path().join("root");
-    std::fs::create_dir_all(root.join("src")).unwrap();
-    std::fs::create_dir_all(outer.path().join("shared")).unwrap();
-    std::fs::write(
-        outer.path().join("shared/consts.ts"),
-        "export const X = 'a'",
-    )
-    .unwrap();
-    std::fs::write(
-        root.join("tsconfig.json"),
-        r#"{ "compilerOptions": { "baseUrl": ".", "paths": { "@shared/*": ["../shared/*"] } } }"#,
-    )
-    .unwrap();
-    std::fs::write(root.join("src/barrel.ts"), barrel).unwrap();
-    let path = root.join("src/t.test.ts");
-    let source = format!(
-        "import {{ test }} from 'vitest'\nimport {{ X }} from './barrel'\n{test_tail}test.each([[X]])('t %s', () => {{}})\n"
-    );
-    std::fs::write(&path, &source).unwrap();
-    let file = SourceFile::without_project_context(
-        path,
-        crate::discovery::SourceLanguage::TypeScript,
-        ModuleFlavor::Ambiguous,
-    );
+    let (_outer, root, file, source) = outside_root_tree(barrel, test_tail);
     let extraction = extract_within(&source, &file, Globals::Disabled, &root);
     assert_eq!(extraction.tests.len(), 1);
     assert_eq!(extraction.tests[0].context.unresolved, unresolved);
@@ -546,17 +522,16 @@ fn non_cell_table_references_are_not_candidates() {
 }
 
 #[test]
-/// A historical file is partial when a table cell reads a first-party import, and it opens no
-/// present-day module to decide that.
-fn a_historical_file_is_partial_only_for_cells_reading_an_import() {
+/// A historical file is partial only when the current tree would read one of its cells.
+fn a_historical_file_is_partial_only_for_cells_the_tree_reads() {
     let modules = [(
         "m.ts",
-        "export const cases = [[1]]\nexport let LET = 'a'\nexport const X = 'fast'",
+        "export const cases = [[1]]\nexport let LET = 'a'\nexport const X = 'fast'\nexport function parse() {}",
     )];
     for (body, partial) in [
         ("test.each(cases)('t %s', () => {})", false),
-        // The base opens no module, so any cell reading a first-party import counts.
-        ("test.each([[LET]])('t %s', () => {})", true),
+        ("test.each([[LET]])('t %s', () => {})", false),
+        ("test.each([[parse, '1']])('t %s', () => {})", false),
         ("test.each([[X]])('t %s', () => {})", true),
         // Read by no table: an alias in a test body, and a table the reader cannot open.
         ("test('t', () => { const doubled = `${X}${X}` })", false),
@@ -565,16 +540,10 @@ fn a_historical_file_is_partial_only_for_cells_reading_an_import() {
         let case = ConstantCase::new(
             &modules,
             &format!(
-                "import {{ test }} from 'vitest'\nimport {{ cases, LET, X }} from './m'\n{body}\n"
+                "import {{ test }} from 'vitest'\nimport {{ cases, LET, X, parse }} from './m'\n{body}\n"
             ),
         );
-        let parses = crate::frontend::helpers::parse_count();
         let historical = extract_with_imports(&case.source, &case.file, Globals::Disabled, false);
-        assert_eq!(
-            crate::frontend::helpers::parse_count(),
-            parses,
-            "{body}: a revision baseline opens no present-day module"
-        );
         assert_eq!(
             historical
                 .reasons
@@ -773,4 +742,52 @@ fn unavailable_sources_are_reported_once_after_another_helper_refusal() {
         .filter(|reason| **reason == ExclusionReason::HelperSourcesUnavailable)
         .count();
     assert_eq!(recorded, 1);
+}
+
+#[test]
+/// A revision baseline's proof is confined like the current tree's: a hop leaving the root is
+/// neither read nor reported, and the base is not partial for it.
+fn a_historical_proof_stays_inside_the_root() {
+    let (_outer, root, file, source) = outside_root_tree("export { X } from '@shared/consts'", "");
+    let historical = extract_historical_within(&source, &file, Globals::Disabled, &root);
+    assert!(
+        historical.reasons.is_empty(),
+        "{:?}",
+        historical.diagnostics
+    );
+}
+
+/// A root with `src/barrel.ts` (`barrel`) and `src/t.test.ts` reading `X` from it after
+/// `test_tail`, beside a tsconfig alias `@shared/*` that leaves the root for a module holding
+/// `X = 'a'`. Returns the temporary tree's guard, the root, the test file and its source.
+fn outside_root_tree(
+    barrel: &str,
+    test_tail: &str,
+) -> (tempfile::TempDir, PathBuf, SourceFile, String) {
+    let outer = tempfile::tempdir().unwrap();
+    let root = outer.path().join("root");
+    std::fs::create_dir_all(root.join("src")).unwrap();
+    std::fs::create_dir_all(outer.path().join("shared")).unwrap();
+    std::fs::write(
+        outer.path().join("shared/consts.ts"),
+        "export const X = 'a'",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("tsconfig.json"),
+        r#"{ "compilerOptions": { "baseUrl": ".", "paths": { "@shared/*": ["../shared/*"] } } }"#,
+    )
+    .unwrap();
+    std::fs::write(root.join("src/barrel.ts"), barrel).unwrap();
+    let path = root.join("src/t.test.ts");
+    let source = format!(
+        "import {{ test }} from 'vitest'\nimport {{ X }} from './barrel'\n{test_tail}test.each([[X]])('t %s', () => {{}})\n"
+    );
+    std::fs::write(&path, &source).unwrap();
+    let file = SourceFile::without_project_context(
+        path,
+        crate::discovery::SourceLanguage::TypeScript,
+        ModuleFlavor::Ambiguous,
+    );
+    (outer, root, file, source)
 }

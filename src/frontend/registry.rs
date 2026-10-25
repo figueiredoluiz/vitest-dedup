@@ -1334,7 +1334,8 @@ fn cell_refusal_cause<'a>(expr: &Expression<'a>, resolve: Resolve<'_, 'a>) -> St
     }
 }
 
-/// The file's semantic, when a fold is running somewhere that has one.
+/// What names resolve against ([`FoldScope`]: the file's semantic and its imported constants),
+/// when a fold is running somewhere that has one.
 ///
 /// `None` everywhere a fold runs without a file behind it (unit tests, and -- deliberately --
 /// [`const_fold_tagged`]'s fixture values, whose contract treats an identifier as `Unresolved`
@@ -1486,8 +1487,8 @@ fn declaration_precedes(declarator: &VariableDeclarator, use_span: oxc_span::Spa
     declarator.span().start <= use_span.start
 }
 
-/// Follow supported earlier const bindings within the value-hop limit, declining unavailable or
-/// unsafe references.
+/// Follow supported earlier const bindings, and imports the scope proves, within the value-hop
+/// limit, declining unavailable or unsafe references.
 fn resolved_binding<'e, 'a: 'e>(
     expr: &'e Expression<'a>,
     scope: FoldScope<'_, 'a>,

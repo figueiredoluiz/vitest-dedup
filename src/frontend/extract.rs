@@ -83,6 +83,16 @@ pub(super) fn extract_within(
     extract_confined(source, file, globals, true, Some(root))
 }
 
+/// [`extract_with_imports`] for a historical file, with resolution confined to `root`.
+pub(super) fn extract_historical_within(
+    source: &str,
+    file: &SourceFile,
+    globals: Globals,
+    root: &Path,
+) -> FileExtraction {
+    extract_confined(source, file, globals, false, Some(root))
+}
+
 /// Extracts owned declarations under an explicit current-tree or historical import policy.
 pub(super) fn extract_with_imports(
     source: &str,

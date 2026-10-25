@@ -82,3 +82,15 @@ pub fn extract_within(
 pub fn extract_from_revision(source: &str, file: &SourceFile, globals: Globals) -> FileExtraction {
     extract::extract_with_imports(source, file, globals, false)
 }
+
+/// [`extract_from_revision`], refusing tsconfig-derived import resolutions that leave `root`.
+/// Present-day modules are consulted only to decide whether a table cell's imported constant
+/// leaves the baseline partial.
+pub fn extract_from_revision_within(
+    source: &str,
+    file: &SourceFile,
+    globals: Globals,
+    root: &Path,
+) -> FileExtraction {
+    extract::extract_historical_within(source, file, globals, root)
+}
