@@ -67,10 +67,10 @@ fn reports_the_pair(report: &str) -> bool {
     report.contains("\"duplicate-test\"") && report.contains("\"type\":\"finding\"")
 }
 
-/// A flat bundle past the old size budget is read, and found to register nothing.
+/// A flat bundle past the size budget is read by the unguarded worker and registers nothing.
 #[test]
 fn a_large_flat_bundle_is_admitted_as_setup() {
-    let entry = format!("{}exports.install = () => {{}}\n", "x();\n".repeat(10_000));
+    let entry = format!("{}exports.install = () => {{}}\n", "x();\n".repeat(40_000));
     let directory = project(&entry);
     let (code, report) = analyze(directory.path());
     assert_eq!(code, Some(1), "{report}");
@@ -83,7 +83,7 @@ fn a_large_flat_bundle_is_admitted_as_setup() {
 fn a_large_bundle_that_registers_a_test_is_refused() {
     let entry = format!(
         "{}exports.install = () => describe('a', () => {{}})\n",
-        "x();\n".repeat(10_000)
+        "x();\n".repeat(40_000)
     );
     let directory = project(&entry);
     let (code, report) = analyze(directory.path());
