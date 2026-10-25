@@ -12,106 +12,63 @@ use super::{
 };
 use crate::frontend::helpers::{find_value_export, with_parsed_file, ValueExport};
 use oxc_allocator::{Allocator, CloneIn};
-use oxc_ast::ast::{Argument, Expression, UnaryExpression, UnaryOperator, VariableDeclarationKind};
+use oxc_ast::ast::{Argument, Expression, UnaryOperator};
 use oxc_ast::AstKind;
 use oxc_semantic::{Semantic, SemanticBuilder, SymbolId};
-use oxc_span::{GetSpan, GetSpanMut, Span};
+use oxc_span::{GetSpanMut, Span};
 use std::path::Path;
 
-/// Most import bindings one file tries to prove; each costs a parse of its export chain.
+/// Most import bindings one file proves; each costs a parse of its export chain.
 pub(in crate::frontend) const MAX_IMPORTED_CONSTANTS: usize = 64;
 
-impl<'a> ImportedConstants<'a> {
-    /// Records that the import binding `symbol` holds `value`.
-    pub(in crate::frontend) fn insert(&mut self, symbol: SymbolId, value: &'a Expression<'a>) {
-        self.values.insert(symbol, value);
-    }
-
-    /// Whether no import was proved.
-    pub(in crate::frontend) fn is_empty(&self) -> bool {
-        self.values.is_empty()
-    }
+/// What proving one import binding gave.
+pub(in crate::frontend) enum Proof<'a> {
+    /// The binding holds this closed literal.
+    Value(&'a Expression<'a>),
+    /// The binding would hold a literal, but this file cannot use it (a revision baseline).
+    Unavailable,
+    /// Not proved.
+    Refused,
 }
 
-/// Whether some reference to `symbol` is a cell of an `.each`/`.for` table (inside a row literal
-/// of its first argument, or a substitution of its tagged template), or a `const` initializer that
-/// is a value over it (a local alias a table may read): the places an imported constant is read.
-/// Values pass through templates, arithmetic, signs, parentheses and type wrappers; a call,
-/// function or member read in between is not a cell. A filter on which imports are worth a proof,
-/// so a miss costs recall only.
-pub(in crate::frontend) fn referenced_in_table(semantic: &Semantic, symbol: SymbolId) -> bool {
-    let scoping = semantic.scoping();
-    let nodes = semantic.nodes();
-    let is_table = |callee: &Expression| {
-        matches!(unwrap_transparent(callee), Expression::StaticMemberExpression(member)
-            if matches!(member.property.name.as_str(), "each" | "for"))
-    };
-    let is_value = |kind: AstKind| {
-        matches!(
-            kind,
-            AstKind::TemplateLiteral(_)
-                | AstKind::BinaryExpression(_)
-                | AstKind::UnaryExpression(UnaryExpression {
-                    operator: UnaryOperator::UnaryNegation | UnaryOperator::UnaryPlus,
-                    ..
-                })
-                | AstKind::ParenthesizedExpression(_)
-                | AstKind::TSAsExpression(_)
-                | AstKind::TSSatisfiesExpression(_)
-                | AstKind::TSNonNullExpression(_)
-                | AstKind::TSTypeAssertion(_)
-        )
-    };
-    let is_row = |kind: AstKind| {
-        matches!(
-            kind,
-            AstKind::ArrayExpression(_) | AstKind::ObjectExpression(_) | AstKind::ObjectProperty(_)
-        )
-    };
-    scoping
-        .get_resolved_reference_ids(symbol)
-        .iter()
-        .any(|reference_id| {
-            let mut value = scoping.get_reference(*reference_id).node_id();
-            while is_value(nodes.parent_kind(value)) {
-                value = nodes.parent_id(value);
-            }
-            let value_span = nodes.kind(value).span();
-            let declarator = nodes.parent_id(value);
-            let aliased = matches!(nodes.kind(declarator), AstKind::VariableDeclarator(declarator)
-                if declarator.init.as_ref().is_some_and(|init| init.span() == value_span))
-                && matches!(nodes.parent_kind(declarator), AstKind::VariableDeclaration(declaration)
-                    if declaration.kind == VariableDeclarationKind::Const);
-            if aliased {
-                return true;
-            }
-            let mut cell = value;
-            let mut in_row = false;
-            loop {
-                let parent = nodes.parent_kind(cell);
-                if is_row(parent) {
-                    in_row = true;
-                } else if !is_value(parent) {
-                    break;
+impl<'a> ImportedConstants<'a> {
+    /// Constants proved on demand by `prove`, at most [`MAX_IMPORTED_CONSTANTS`] bindings a file.
+    pub(in crate::frontend) fn lazy(prove: Box<dyn Fn(SymbolId) -> Proof<'a> + 'a>) -> Self {
+        let left = std::cell::Cell::new(MAX_IMPORTED_CONSTANTS);
+        Self {
+            prove: Some(Box::new(move |symbol| {
+                if left.get() == 0 {
+                    return Proof::Refused;
                 }
-                cell = nodes.parent_id(cell);
+                left.set(left.get() - 1);
+                prove(symbol)
+            })),
+            ..Self::default()
+        }
+    }
+
+    /// The literal the import binding `symbol` holds, proved on its first read.
+    pub(super) fn lookup(&self, symbol: SymbolId) -> Option<&'a Expression<'a>> {
+        let prove = self.prove.as_ref()?;
+        if let Some(outcome) = self.proved.borrow().get(&symbol) {
+            return *outcome;
+        }
+        let outcome = match prove(symbol) {
+            Proof::Value(value) => Some(value),
+            Proof::Unavailable => {
+                self.unavailable.set(true);
+                None
             }
-            let cell_span = nodes.kind(cell).span();
-            match nodes.parent_kind(cell) {
-                AstKind::CallExpression(call) => {
-                    in_row
-                        && is_table(&call.callee)
-                        && call
-                            .arguments
-                            .first()
-                            .is_some_and(|table| table.span() == cell_span)
-                }
-                AstKind::TaggedTemplateExpression(tagged) => {
-                    is_table(&tagged.tag) && tagged.quasi.span == cell_span
-                }
-                _ => false,
-            }
-        })
+            Proof::Refused => None,
+        };
+        self.proved.borrow_mut().insert(symbol, outcome);
+        outcome
+    }
+
+    /// Whether a table read a value this file could not use.
+    pub(in crate::frontend) fn read_unavailable(&self) -> bool {
+        self.unavailable.get()
+    }
 }
 
 /// Names whose mention lets a file redefine or remove a property of a module object.

@@ -546,6 +546,9 @@ fn a_historical_file_is_partial_only_for_cells_the_tree_reads() {
         ("test.each(cases)('t %s', () => {})", false),
         ("test.each([[LET]])('t %s', () => {})", false),
         ("test.each([[X]])('t %s', () => {})", true),
+        // Read by no table: an alias in a test body, and a table the reader cannot open.
+        ("test('t', () => { const doubled = `${X}${X}` })", false),
+        ("test.each([[X]] as const)('t %s', () => {})", false),
     ] {
         let case = ConstantCase::new(
             &modules,
@@ -576,4 +579,16 @@ fn bound_filling_module() -> (Vec<String>, String) {
         .chain(std::iter::once("export const X = 'fast'\n".to_owned()))
         .collect();
     (names, module)
+}
+
+#[test]
+/// The proof follows whatever the reader reaches, so a member of a local object literal built
+/// from the import reads it too.
+fn a_member_of_a_local_object_over_the_import_resolves() {
+    let tests = ConstantCase::new(
+        &[("m.ts", "export const X = 'fast'")],
+        "import { test } from 'vitest'\nimport { X } from './m'\nconst O = { a: X }\ntest.each([[O.a]])('t %s', () => {})\n",
+    )
+    .tests();
+    assert_eq!(tests, vec![("t fast".to_owned(), false)]);
 }

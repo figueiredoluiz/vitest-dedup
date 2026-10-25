@@ -55,8 +55,8 @@ renders `undefined` as empty, JSON array elements become `null`, and JSON object
 that value are omitted.
 
 **Imported constants**: a cell naming a value import (`import { MODE } from './modes'`), or a
-local `const` whose initializer is a value over one (`const L = MODE`, `` const L = `${MODE}-1` ``),
-is read when the import resolves, through named re-exports (`export { X } from`, or `import { X }`
+local `const` the cell reads it through (`const L = MODE`, `` const L = `${MODE}-1` ``, a member of
+`const O = { a: MODE }`), is read when the import resolves, through named re-exports (`export { X } from`, or `import { X }`
 then `export { X }`), to a first-party module that declares it with a module-level `const` whose
 initializer is a string,
 number, signed number, boolean, `null`, bigint or substitution-free template literal, directly or

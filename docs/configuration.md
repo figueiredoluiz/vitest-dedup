@@ -72,7 +72,8 @@ Every path a configuration names must resolve inside the analyzed directory, aft
 `mergeConfig` base import, a project's `root` or `dir`, and tsconfig `paths`. A path that leaves it
 is not read. The run reports which one and is incomplete: the entry is an unresolved project, or the
 tsconfig import is unresolved. The one exception is a re-export hop followed only to read an
-imported constant in a `.each` table: that cell stays unresolved and nothing is reported. Paths that stay inside are not refused, including `..` that folds
+imported constant in a `.each` table: that cell stays unresolved and nothing is reported, neither
+the refusal nor a missing package or tsconfig on that chain. Paths that stay inside are not refused, including `..` that folds
 back and symlinks that point within the tree. The root's own `vitest.config.*` or
 `vitest.workspace.*` is held to the same rule, so a symlink to a file outside the directory is
 refused. A refused `extends` or `mergeConfig` base is reported whatever the project sets for

@@ -496,8 +496,9 @@ fn run(source: &str, file: &SourceFile, globals: Globals, allow_imported: bool) 
         let mut registry = Registry::new(program, globals);
         let mut walker = Walker::new(source, file, program, semantic, globals);
         walker.allow_imported = allow_imported;
-        walker.prove_imported_constants(&allocator);
+        walker.prepare_imported_constants(&allocator);
         walker.walk_statements(&program.body, &mut registry);
+        walker.finish_imported_constants();
         if !walker.helper_setup.is_empty() {
             for case in &mut walker.tests {
                 case.context
@@ -1286,8 +1287,8 @@ struct Walker<'a> {
     /// zero-test outcome, so `main.rs`'s "extracted no tests" guard can name the real cause
     /// instead of always blaming `test.globals`.
     proven_empty_tables: usize,
-    /// Value imports proved to hold a scalar literal, read by this file's table cells; see
-    /// [`Walker::prove_imported_constants`]. Empty in an imported helper's frame.
+    /// Value imports proved to hold a scalar literal when this file's table cells read them; see
+    /// [`Walker::prepare_imported_constants`]. Proves nothing in an imported helper's frame.
     imported_constants: ImportedConstants<'a>,
 }
 

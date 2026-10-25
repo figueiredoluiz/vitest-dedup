@@ -4,7 +4,7 @@ use super::*;
 use crate::frontend::fingerprint::ImportOrigin;
 use crate::frontend::helpers::export_contract::{resolve_export_chain, resolve_value_export_chain};
 use crate::frontend::helpers::{self, Callable, Export};
-use crate::frontend::registry::imported_constants;
+use crate::frontend::registry::imported_constants::{self, Proof};
 use crate::frontend::resolver::{self, Resolved};
 use oxc_ast::ast::{Declaration, ExportDefaultDeclarationKind, ImportOrExportKind};
 use std::path::{Path, PathBuf};
@@ -173,6 +173,17 @@ impl ExpansionState {
     }
 }
 
+/// Whether one of `mocked` names the imported module or any module on its re-export chain.
+fn chain_is_mocked(mocked: &[MockedModule], origin: &ImportOrigin, modules: &[PathBuf]) -> bool {
+    mocked.iter().any(|mock| {
+        mock.specifier.as_ref() == origin.component
+            || modules.iter().any(|path| {
+                mock.specifier.as_ref()
+                    == super::super::fingerprint::specifier_identity(path, &path.to_string_lossy())
+            })
+    })
+}
+
 /// Maps caller symbols to imported export provenance.
 /// Retains erased bindings solely so attempted runtime calls are explicitly refused.
 pub(super) fn collect_imports(program: &Program, file: &Path) -> HashMap<SymbolId, RunnerImport> {
@@ -233,16 +244,15 @@ pub(super) fn collect_imports(program: &Program, file: &Path) -> HashMap<SymbolI
 }
 
 impl<'a> Walker<'a> {
-    /// Proves which value imports read by this file's tables hold a scalar literal, cloning each
-    /// into `allocator` (see `registry::imported_constants`). An import on a mocked chain, under
-    /// unreadable mocks, or whose chain reaches this file (read in its temporal dead zone) is not
-    /// tried; every unproved binding stays an unresolved cell. A historical file never reads a proof
-    /// (the modules on disk are today's, not the ones it imported); one the current tree would
-    /// read is partial.
-    pub(super) fn prove_imported_constants(&mut self, allocator: &'a Allocator) {
+    /// Sets up the proof of which value imports read by this file's tables hold a scalar literal,
+    /// run when a table cell first reaches one (see `registry::imported_constants`). A file whose
+    /// mocks or property rewrites could reach any module proves nothing; an import on a mocked
+    /// chain, or whose chain reaches this file (read in its temporal dead zone), is refused. A
+    /// historical file never reads a proof (the modules on disk are today's, not the ones it
+    /// imported); one that would read one is partial.
+    pub(super) fn prepare_imported_constants(&mut self, allocator: &'a Allocator) {
         // Unreadable mocks, and a mock that does not resolve, could replace any first-party module
-        // (a package-shaped name may be a bundler alias), so nothing is tried. A Node builtin
-        // cannot be one.
+        // (a package-shaped name may be a bundler alias). A Node builtin cannot be one.
         if self.mocks_unresolved
             || self.mocked_modules.iter().any(|mock| {
                 mock.specifier
@@ -252,67 +262,74 @@ impl<'a> Walker<'a> {
         {
             return;
         }
-        let mut candidates: Vec<(SymbolId, &RunnerImport)> = self
+        let imports: HashMap<SymbolId, (ImportOrigin, Span)> = self
             .runner_imports
             .iter()
-            .filter(|(symbol, import)| {
+            .filter(|(_, import)| {
                 !import.erased
                     && !matches!(import.origin.exported.as_str(), "*" | "default")
                     && import.origin.resolved.is_some()
-                    && imported_constants::referenced_in_table(self.semantic, **symbol)
             })
-            .map(|(symbol, import)| (*symbol, import))
+            .map(|(symbol, import)| {
+                let span = self.semantic.scoping().symbol_span(*symbol);
+                (*symbol, (import.origin.clone(), span))
+            })
             .collect();
-        // An accessor this file can redefine may be any import's (`vi.spyOn(ns, 'X', 'get')`).
-        if candidates.is_empty() || imported_constants::redefines_accessors(self.semantic) {
+        if imports.is_empty() {
             return;
         }
-        candidates.sort_by_key(|(symbol, _)| *symbol);
+        let semantic = self.semantic;
+        let mocked = self.mocked_modules.clone();
         let own = helpers::canonical(&self.file.path);
-        let nuxt_mocked = |name: &str| {
-            self.mocked_modules
-                .iter()
-                .any(|mock| mock.specifier.strip_prefix("nuxt-import:") == Some(name))
-        };
-        let mut constants = ImportedConstants::default();
-        // An optional lookup: a hop that leaves the analysis root leaves the cell unresolved
-        // without marking the file incomplete.
-        resolver::quietly(|| {
-            for (symbol, import) in candidates
-                .into_iter()
-                .take(imported_constants::MAX_IMPORTED_CONSTANTS)
-            {
-                let Some(start) = &import.origin.resolved else {
-                    continue;
-                };
-                let Ok(chain) = resolve_value_export_chain(start, &import.origin.exported) else {
-                    continue;
-                };
-                if chain.exports.iter().any(|name| nuxt_mocked(name))
-                    || self.is_mocked(&import.origin, &chain.modules)
+        let historical = !self.allow_imported;
+        // A property this file can rewrite may be any import's (`vi.spyOn(ns, 'X', 'get')`);
+        // decided once, on the first read.
+        let rewrites = std::cell::OnceCell::new();
+        self.imported_constants = ImportedConstants::lazy(Box::new(move |symbol| {
+            let Some((origin, span)) = imports.get(&symbol) else {
+                return Proof::Refused;
+            };
+            if *rewrites.get_or_init(|| imported_constants::redefines_accessors(semantic)) {
+                return Proof::Refused;
+            }
+            // An optional lookup: a hop that leaves the analysis root leaves the cell unresolved
+            // without marking the file incomplete.
+            let value = resolver::quietly(|| {
+                let chain =
+                    resolve_value_export_chain(origin.resolved.as_ref()?, &origin.exported).ok()?;
+                let nuxt_mocked = mocked.iter().any(|mock| {
+                    mock.specifier
+                        .strip_prefix("nuxt-import:")
+                        .is_some_and(|name| chain.exports.iter().any(|export| export == name))
+                });
+                if nuxt_mocked
+                    || chain_is_mocked(&mocked, origin, &chain.modules)
                     || chain
                         .modules
                         .iter()
                         .any(|module| helpers::canonical(module) == own)
                 {
-                    continue;
+                    return None;
                 }
-                let span = self.semantic.scoping().symbol_span(symbol);
-                if let Some(value) = imported_constants::exported_literal(
+                imported_constants::exported_literal(
                     allocator,
                     &chain.terminal.path,
                     &chain.terminal.export,
-                    span,
-                ) {
-                    constants.insert(symbol, value);
-                }
+                    *span,
+                )
+            });
+            match value {
+                None => Proof::Refused,
+                Some(_) if historical => Proof::Unavailable,
+                Some(value) => Proof::Value(value),
             }
-        });
-        if self.allow_imported {
-            self.imported_constants = constants;
-        } else if !constants.is_empty() {
-            // The current tree reads these cells and a revision baseline cannot, so the base is
-            // partial, as for a historical helper call. The proof only decides that.
+        }));
+    }
+
+    /// Records a revision baseline as partial when its tables read an imported constant it could
+    /// not use, as for a historical helper call.
+    pub(super) fn finish_imported_constants(&mut self) {
+        if self.imported_constants.read_unavailable() {
             self.reasons.push(ExclusionReason::HelperSourcesUnavailable);
             self.diagnostics.push(
                 "historical imported sources are unavailable; table cells naming an imported constant cannot populate a revision baseline"
@@ -465,17 +482,7 @@ impl<'a> Walker<'a> {
     /// Whether the imported module, or any module on its re-export chain, is mocked in the
     /// calling file, or mocking in it could not be read.
     fn is_mocked(&self, origin: &ImportOrigin, modules: &[PathBuf]) -> bool {
-        self.mocks_unresolved
-            || self.mocked_modules.iter().any(|mock| {
-                mock.specifier.as_ref() == origin.component
-                    || modules.iter().any(|path| {
-                        mock.specifier.as_ref()
-                            == super::super::fingerprint::specifier_identity(
-                                path,
-                                &path.to_string_lossy(),
-                            )
-                    })
-            })
+        self.mocks_unresolved || chain_is_mocked(&self.mocked_modules, origin, modules)
     }
 
     /// How many framework setup statements (`vi.stubGlobal(...)`, awaited calls) the file runs
@@ -635,7 +642,10 @@ impl<'a> Walker<'a> {
             let file =
                 SourceFile::without_project_context(terminal.path.clone(), language, module_flavor);
             let semantic = &semantic_return.semantic;
-            let mut child = Walker::new(source, &file, program, semantic, self.globals);
+            // Configuration is owned by the caller, while source and lexical symbols stay local.
+            let mut child_file = file.clone();
+            child_file.config_scope = self.file.config_scope.clone();
+            let mut child = Walker::new(source, &child_file, program, semantic, self.globals);
             if child.mocks_unresolved {
                 self.hook_scopes[0].unresolved = true;
                 for case in &mut self.tests {
@@ -832,10 +842,6 @@ impl<'a> Walker<'a> {
                     .unwrap_or(&self.file.path)
                     .clone(),
             );
-            // Configuration is owned by the caller, while source and lexical symbols stay local.
-            let mut child_file = file.clone();
-            child_file.config_scope = self.file.config_scope.clone();
-            child.file = &child_file;
             let hooks_before = hook_count(child.hook_scopes.last());
             if prepare {
                 // Hooks join the calling scope, which the declaration walk then already holds.
