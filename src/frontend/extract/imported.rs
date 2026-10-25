@@ -248,8 +248,8 @@ impl<'a> Walker<'a> {
     /// run when a table cell first reaches one (see `registry::imported_constants`). A file whose
     /// mocks or property rewrites could reach any module proves nothing; an import on a mocked
     /// chain, or whose chain reaches this file (read in its temporal dead zone), is refused. A
-    /// historical file never reads a proof (the modules on disk are today's, not the ones it
-    /// imported); one that would read one is partial.
+    /// historical file proves nothing and opens no module (the modules on disk are today's, not
+    /// the ones it imported): a cell reading a first-party import makes it partial.
     pub(super) fn prepare_imported_constants(&mut self, allocator: &'a Allocator) {
         // Unreadable mocks, and a mock that does not resolve, could replace any first-party module
         // (a package-shaped name may be a bundler alias). A Node builtin cannot be one.
@@ -275,8 +275,8 @@ impl<'a> Walker<'a> {
                             !helpers::is_dependency(path)
                                 && crate::discovery::classify_source_file(path).is_some()
                         }
-                        // A path a historical file imports may have existed in its revision.
-                        None => historical && resolver::names_a_path(&import.origin.specifier),
+                        // A historical file's import may have resolved in its own revision.
+                        None => historical && !resolver::is_node_builtin(&import.origin.specifier),
                     }
             })
             .map(|(symbol, import)| {
@@ -285,6 +285,18 @@ impl<'a> Walker<'a> {
             })
             .collect();
         if imports.is_empty() {
+            return;
+        }
+        // A revision baseline reads no present-day module: a cell reading one of these imports
+        // makes it partial, whatever today's module holds.
+        if historical {
+            self.imported_constants = ImportedConstants::lazy(Box::new(move |symbol| {
+                if imports.contains_key(&symbol) {
+                    Proof::Unavailable
+                } else {
+                    Proof::Refused
+                }
+            }));
             return;
         }
         let semantic = self.semantic;
@@ -305,9 +317,6 @@ impl<'a> Walker<'a> {
             left.set(left.get() - 1);
             if *rewrites.get_or_init(|| imported_constants::redefines_accessors(semantic)) {
                 return Proof::Refused;
-            }
-            if origin.resolved.is_none() {
-                return Proof::Unavailable;
             }
             // An optional lookup: a hop that leaves the analysis root leaves the cell unresolved
             // without marking the file incomplete.
@@ -337,7 +346,6 @@ impl<'a> Walker<'a> {
             });
             match value {
                 None => Proof::Refused,
-                Some(_) if historical => Proof::Unavailable,
                 Some(value) => Proof::Value(value),
             }
         }));

@@ -536,15 +536,17 @@ fn non_cell_table_references_are_not_candidates() {
 }
 
 #[test]
-/// A historical file is partial only when the current tree would read one of its cells.
-fn a_historical_file_is_partial_only_for_cells_the_tree_reads() {
+/// A historical file is partial when a table cell reads a first-party import, and it opens no
+/// present-day module to decide that.
+fn a_historical_file_is_partial_only_for_cells_reading_an_import() {
     let modules = [(
         "m.ts",
         "export const cases = [[1]]\nexport let LET = 'a'\nexport const X = 'fast'",
     )];
     for (body, partial) in [
         ("test.each(cases)('t %s', () => {})", false),
-        ("test.each([[LET]])('t %s', () => {})", false),
+        // The base opens no module, so any cell reading a first-party import counts.
+        ("test.each([[LET]])('t %s', () => {})", true),
         ("test.each([[X]])('t %s', () => {})", true),
         // Read by no table: an alias in a test body, and a table the reader cannot open.
         ("test('t', () => { const doubled = `${X}${X}` })", false),
@@ -556,7 +558,13 @@ fn a_historical_file_is_partial_only_for_cells_the_tree_reads() {
                 "import {{ test }} from 'vitest'\nimport {{ cases, LET, X }} from './m'\n{body}\n"
             ),
         );
+        let parses = crate::frontend::helpers::parse_count();
         let historical = extract_with_imports(&case.source, &case.file, Globals::Disabled, false);
+        assert_eq!(
+            crate::frontend::helpers::parse_count(),
+            parses,
+            "{body}: a revision baseline opens no present-day module"
+        );
         assert_eq!(
             historical
                 .reasons
@@ -610,12 +618,14 @@ fn local_bindings_do_not_spend_the_bound() {
 }
 
 #[test]
-/// A path a historical file reads that is gone today (a renamed module) may have held a constant
-/// in the base, so the base is partial; an uninstalled package could not have, so it is not.
+/// An import a historical file reads that is gone today (a renamed module) may have held a
+/// constant in the base, so the base is partial; a Node builtin could not have.
 fn a_historical_read_of_a_vanished_path_is_partial() {
     for (import, partial) in [
         ("import { X } from './gone'", true),
-        ("import { X } from 'vitest-dedup-not-installed'", false),
+        // An unresolved package-shaped name may be an alias in the base's revision.
+        ("import { X } from '@app/gone'", true),
+        ("import { X } from 'node:os'", false),
     ] {
         let case = ConstantCase::new(
             &[],

@@ -220,12 +220,6 @@ fn has_package_syntax(specifier: &str) -> bool {
     }
 }
 
-/// Whether `specifier` names a file path or a path alias (`./x`, `~/x`, `@/x`): neither a package
-/// name nor a Node core module.
-pub(super) fn names_a_path(specifier: &str) -> bool {
-    !has_package_syntax(specifier) && !is_node_builtin(specifier)
-}
-
 /// Whether `specifier` is a Node core module (prefixed, or one of the unprefixed names).
 pub(super) fn is_node_builtin(specifier: &str) -> bool {
     specifier.starts_with("node:") || NODE_BUILTINS.contains(&specifier)
