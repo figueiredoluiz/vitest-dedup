@@ -194,8 +194,9 @@ generated parent and the analysis root below it.
 
 The `mock-spy-options-*` cases cover literal `vi.mock(specifier, { spy: true })` registrations:
 matching spies retain a cross-file duplicate, different mock modes remain comparable but distinct,
-and dynamic options remain excluded. These owned sources also run under the pinned Vitest runtime;
-the positive pair asserts both the original return value and the recorded spy call.
+and dynamic options remain excluded. The positive pair asserts both the original return value and
+the recorded spy call, but no gate runs those assertions: the collection oracle only collects
+these files.
 
 ## The floor
 

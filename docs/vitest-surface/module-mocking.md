@@ -120,8 +120,9 @@ recording a mock state that may be wrong:
 
 - **`vi.doMock` / `vi.doUnmock`**, because they are not hoisted: they take effect where they run,
   for dynamic imports evaluated after that point, so there is no file-wide answer to fold.
-- **A specifier that is not a readable string literal**, or a `vi.mock` factory that is present but
-  not an inline arrow/function, recording nothing would be indistinguishable from no mock at all.
+- **A specifier that is not a readable string literal**, or a `vi.mock` second argument that is
+  neither an inline arrow/function nor the literal `{ spy: true }` options object described above:
+  recording nothing would be indistinguishable from no mock at all.
 - **`vi.mock` / `vi.unmock` called outside module top level**, in a `describe`, a test body, an
   `if` (the non-hoisted `vi.doMock` / `vi.doUnmock` are covered by the first bullet wherever they
   appear).

@@ -7,7 +7,7 @@ use vitest_dedup::discovery::discover;
 use vitest_dedup::frontend::{extract, Globals};
 use vitest_dedup::model::{IncompleteCauses, Rule};
 
-/// Analyze the exact permanent corpus sources also exercised by the Vitest runtime oracle.
+/// Analyze the permanent corpus sources that the collection oracle also collects with Vitest.
 fn check_case(name: &str, expected_tests: usize, unresolved: usize, findings: usize) {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("fixtures/recall")
