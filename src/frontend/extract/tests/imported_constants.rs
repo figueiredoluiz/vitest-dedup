@@ -278,6 +278,8 @@ fn a_member_read_in_the_declaring_module_is_refused() {
     for module in [
         "const O = { a: 'x' }\nexport const X = O.a",
         "const O = { a: 'x' }\nconst A = O.a\nexport const X = A",
+        // An erased alias reads whatever the runtime binds to the name.
+        "(globalThis as any).A = 'slow'\ndeclare const A = 'x'\nexport const X = A",
     ] {
         assert!(single_row(module)[0].1, "{module}");
     }

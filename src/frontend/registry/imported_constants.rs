@@ -195,8 +195,9 @@ pub(in crate::frontend) fn exported_literal<'a>(
         }
         let init = const_declarator(semantic, symbol)?.init.as_ref()?;
         // Another module can write a member of an exported object before this initializer runs
-        // (an import cycle), so only `const` names are followed, never a member read.
-        if reads_a_member(init, semantic, 0) {
+        // (an import cycle), and an ambient name reads whatever the runtime holds, so only
+        // emitted `const` names are followed.
+        if reads_beyond_constants(init, semantic, 0) {
             return None;
         }
         let value = unwrap_transparent(peeled(init, Some(FoldScope::local(semantic))));
@@ -218,22 +219,29 @@ pub(in crate::frontend) fn exported_literal<'a>(
     })
 }
 
-/// Whether following `expr` through `const` names reaches a member expression, or more names than
-/// the fold would follow.
-fn reads_a_member(expr: &Expression, semantic: &Semantic, hops: u32) -> bool {
+/// Whether following `expr` through `const` names reaches a member expression, an ambient
+/// (`declare`) binding, which emits nothing so the name reads whatever the runtime holds, or more
+/// names than the fold would follow.
+fn reads_beyond_constants(expr: &Expression, semantic: &Semantic, hops: u32) -> bool {
     match unwrap_transparent(expr) {
         Expression::StaticMemberExpression(_) | Expression::ComputedMemberExpression(_) => true,
         Expression::Identifier(ident) => {
             if hops >= MAX_VALUE_HOPS {
                 return true;
             }
-            let init = ident
+            let Some(symbol) = ident
                 .reference_id
                 .get()
                 .and_then(|reference| semantic.scoping().get_reference(reference).symbol_id())
-                .and_then(|symbol| const_declarator(semantic, symbol))
-                .and_then(|declarator| declarator.init.as_ref());
-            init.is_some_and(|init| reads_a_member(init, semantic, hops + 1))
+            else {
+                return false;
+            };
+            if semantic.scoping().symbol_flags(symbol).is_ambient() {
+                return true;
+            }
+            const_declarator(semantic, symbol)
+                .and_then(|declarator| declarator.init.as_ref())
+                .is_some_and(|init| reads_beyond_constants(init, semantic, hops + 1))
         }
         _ => false,
     }
