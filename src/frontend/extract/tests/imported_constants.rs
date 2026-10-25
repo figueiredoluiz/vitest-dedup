@@ -200,16 +200,10 @@ fn a_chain_back_to_the_importing_file_is_refused() {
 /// Past the per-file bound, further imports are not tried and their rows stay unresolved.
 fn the_number_of_proved_imports_is_bounded() {
     let count = crate::frontend::registry::imported_constants::MAX_IMPORTED_CONSTANTS + 1;
-    let names: Vec<String> = (0..count).map(|index| format!("C{index}")).collect();
-    let module: String = names
-        .iter()
-        .map(|name| format!("export const {name} = '{name}'\n"))
-        .collect();
-    let rows: Vec<String> = names.iter().map(|name| format!("[{name}]")).collect();
+    let (names, module, rows) = numbered_constants("C", count);
     let source = format!(
-        "import {{ test }} from 'vitest'\nimport {{ {} }} from './m'\ntest.each([{}])('t %s', () => {{}})\n",
+        "import {{ test }} from 'vitest'\nimport {{ {} }} from './m'\ntest.each([{rows}])('t %s', () => {{}})\n",
         names.join(", "),
-        rows.join(", ")
     );
     let tests = ConstantCase::new(&[("m.ts", &module)], &source).tests();
     assert_eq!(tests.len(), count);
@@ -585,13 +579,23 @@ fn a_historical_file_is_partial_only_for_cells_reading_an_import() {
 /// `X = 'fast'`: imports that would use up the bound before `X` if they were tried.
 fn bound_filling_module() -> (Vec<String>, String) {
     let count = crate::frontend::registry::imported_constants::MAX_IMPORTED_CONSTANTS;
-    let names: Vec<String> = (0..count).map(|index| format!("C{index}")).collect();
+    let (names, module, _) = numbered_constants("C", count);
+    (names, module + "export const X = 'fast'\n")
+}
+
+/// `count` names `{prefix}0..`, a module exporting each as its own name, and one table row each.
+fn numbered_constants(prefix: &str, count: usize) -> (Vec<String>, String, String) {
+    let names: Vec<String> = (0..count).map(|index| format!("{prefix}{index}")).collect();
     let module = names
         .iter()
         .map(|name| format!("export const {name} = '{name}'\n"))
-        .chain(std::iter::once("export const X = 'fast'\n".to_owned()))
         .collect();
-    (names, module)
+    let rows = names
+        .iter()
+        .map(|name| format!("[{name}]"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    (names, module, rows)
 }
 
 #[test]
@@ -653,16 +657,10 @@ fn a_historical_read_of_a_vanished_path_is_partial() {
 /// An import from an installed package can never be proved, so reading it spends no bound.
 fn package_imports_do_not_spend_the_bound() {
     let count = crate::frontend::registry::imported_constants::MAX_IMPORTED_CONSTANTS;
-    let names: Vec<String> = (0..count).map(|index| format!("P{index}")).collect();
-    let package: String = names
-        .iter()
-        .map(|name| format!("export const {name} = '{name}'\n"))
-        .collect();
-    let rows: Vec<String> = names.iter().map(|name| format!("[{name}]")).collect();
+    let (names, package, rows) = numbered_constants("P", count);
     let source = format!(
-        "import {{ test }} from 'vitest'\nimport {{ {} }} from 'consts'\nimport {{ X }} from './m'\ntest.each([{}])('u %s', () => {{}})\ntest.each([[X]])('t %s', () => {{}})\n",
+        "import {{ test }} from 'vitest'\nimport {{ {} }} from 'consts'\nimport {{ X }} from './m'\ntest.each([{rows}])('u %s', () => {{}})\ntest.each([[X]])('t %s', () => {{}})\n",
         names.join(", "),
-        rows.join(", ")
     );
     let tests = ConstantCase::new(
         &[
@@ -699,4 +697,69 @@ fn unavailable_sources_are_reported_once_per_file() {
         .filter(|reason| **reason == ExclusionReason::HelperSourcesUnavailable)
         .count();
     assert_eq!(unavailable, 1, "{:?}", historical.diagnostics);
+}
+
+#[test]
+/// A historical file's own text decides: a vanished mock path still leaves the base partial,
+/// while a property rewrite the current tree also refuses does not.
+fn a_historical_file_decides_from_its_own_text() {
+    for (setup, partial) in [
+        ("vi.mock('./old-name', () => ({}))", true),
+        ("import * as ns from './m'\nvi.spyOn(ns, 'X', 'get')", false),
+    ] {
+        let case = ConstantCase::new(
+            &[("m.ts", "export const X = 'fast'")],
+            &format!("import {{ test, vi }} from 'vitest'\nimport {{ X }} from './m'\n{setup}\ntest.each([[X]])('t %s', () => {{}})\n"),
+        );
+        let historical = extract_with_imports(&case.source, &case.file, Globals::Disabled, false);
+        assert_eq!(
+            historical
+                .reasons
+                .contains(&ExclusionReason::HelperSourcesUnavailable),
+            partial,
+            "{setup}: {:?}",
+            historical.diagnostics
+        );
+    }
+}
+
+#[test]
+/// Unavailable sources a helper refusal already recorded, even after another reason, are not
+/// recorded again for imported cells.
+fn unavailable_sources_are_reported_once_after_another_helper_refusal() {
+    use crate::frontend::registry::imported_constants::Proof;
+    let source = "import { X } from './m'; X;";
+    let file = SourceFile::without_project_context(
+        PathBuf::from("t.test.ts"),
+        crate::discovery::SourceLanguage::TypeScript,
+        ModuleFlavor::Ambiguous,
+    );
+    let allocator = Allocator::default();
+    let parsed = Parser::new(&allocator, source, SourceType::ts()).parse();
+    let semantic = SemanticBuilder::new()
+        .with_build_nodes(true)
+        .build(&parsed.program);
+    let mut walker = Walker::new(
+        source,
+        &file,
+        &parsed.program,
+        &semantic.semantic,
+        Globals::Disabled,
+    );
+    walker.refuse_helper_expansion(refusal(ExclusionReason::HelperLimit, "budget"));
+    walker.refuse_helper_expansion(refusal(
+        ExclusionReason::HelperSourcesUnavailable,
+        "historical",
+    ));
+    walker.imported_constants = ImportedConstants::lazy(Box::new(|_| Proof::Unavailable));
+    let symbol = semantic.semantic.scoping().symbol_ids().next().unwrap();
+    assert!(walker.imported_constants.lookup(symbol).is_none());
+    walker.finish_imported_constants();
+    let recorded = walker
+        .reasons
+        .iter()
+        .chain(walker.further_refusals.iter().map(|(reason, _)| reason))
+        .filter(|reason| **reason == ExclusionReason::HelperSourcesUnavailable)
+        .count();
+    assert_eq!(recorded, 1);
 }

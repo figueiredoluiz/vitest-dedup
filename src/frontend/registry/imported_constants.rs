@@ -18,7 +18,8 @@ use oxc_semantic::{Semantic, SemanticBuilder, SymbolId};
 use oxc_span::{GetSpanMut, Span};
 use std::path::Path;
 
-/// Most import bindings one file proves; each costs a parse of its export chain.
+/// Most import reads one file tries to prove, refused ones included; each costs a parse of its
+/// export chain.
 pub(in crate::frontend) const MAX_IMPORTED_CONSTANTS: usize = 64;
 
 /// What proving one import binding gave.
@@ -41,7 +42,7 @@ impl<'a> ImportedConstants<'a> {
     }
 
     /// The literal the import binding `symbol` holds, proved on its first read.
-    pub(super) fn lookup(&self, symbol: SymbolId) -> Option<&'a Expression<'a>> {
+    pub(in crate::frontend) fn lookup(&self, symbol: SymbolId) -> Option<&'a Expression<'a>> {
         let prove = self.prove.as_ref()?;
         if let Some(outcome) = self.proved.borrow().get(&symbol) {
             return *outcome;

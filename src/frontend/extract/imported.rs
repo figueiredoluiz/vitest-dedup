@@ -251,52 +251,70 @@ impl<'a> Walker<'a> {
     /// historical file proves nothing and opens no module (the modules on disk are today's, not
     /// the ones it imported): a cell reading a first-party import makes it partial.
     pub(super) fn prepare_imported_constants(&mut self, allocator: &'a Allocator) {
-        // Unreadable mocks, and a mock that does not resolve, could replace any first-party module
-        // (a package-shaped name may be a bundler alias). A Node builtin cannot be one.
         let historical = !self.allow_imported;
-        if self.mocks_unresolved
-            || self.mocked_modules.iter().any(|mock| {
-                mock.specifier
-                    .strip_prefix("unresolved:")
-                    .is_some_and(|specifier| !resolver::is_node_builtin(specifier))
-            })
-        {
+        // Decided from this file's own text, so both trees agree: unreadable mocks could replace
+        // any module.
+        if self.mocks_unresolved {
+            return;
+        }
+        let eligible = |import: &RunnerImport| {
+            !import.erased
+                && !matches!(import.origin.exported.as_str(), "*" | "default")
+                && match &import.origin.resolved {
+                    // Only first-party source can declare a provable constant.
+                    Some(path) => {
+                        !helpers::is_dependency(path)
+                            && crate::discovery::classify_source_file(path).is_some()
+                    }
+                    // A historical file's import may have resolved in its own revision.
+                    None => historical && !resolver::is_node_builtin(&import.origin.specifier),
+                }
+        };
+        // A revision baseline reads no present-day module, and what its mocks name depends on
+        // its own revision's tree: a cell reading one of these imports makes it partial, unless
+        // its own text can rewrite module properties, which the current tree refuses too.
+        if historical {
+            let imports: HashSet<SymbolId> = self
+                .runner_imports
+                .iter()
+                .filter(|(_, import)| eligible(import))
+                .map(|(symbol, _)| *symbol)
+                .collect();
+            if imports.is_empty() {
+                return;
+            }
+            let semantic = self.semantic;
+            let rewrites = std::cell::OnceCell::new();
+            self.imported_constants = ImportedConstants::lazy(Box::new(move |symbol| {
+                if !imports.contains(&symbol)
+                    || *rewrites.get_or_init(|| imported_constants::redefines_accessors(semantic))
+                {
+                    Proof::Refused
+                } else {
+                    Proof::Unavailable
+                }
+            }));
+            return;
+        }
+        // A mock that does not resolve could replace any first-party module (a package-shaped
+        // name may be a bundler alias). A Node builtin cannot be one.
+        if self.mocked_modules.iter().any(|mock| {
+            mock.specifier
+                .strip_prefix("unresolved:")
+                .is_some_and(|specifier| !resolver::is_node_builtin(specifier))
+        }) {
             return;
         }
         let imports: HashMap<SymbolId, (ImportOrigin, Span)> = self
             .runner_imports
             .iter()
-            .filter(|(_, import)| {
-                !import.erased
-                    && !matches!(import.origin.exported.as_str(), "*" | "default")
-                    && match &import.origin.resolved {
-                        // Only first-party source can declare a provable constant.
-                        Some(path) => {
-                            !helpers::is_dependency(path)
-                                && crate::discovery::classify_source_file(path).is_some()
-                        }
-                        // A historical file's import may have resolved in its own revision.
-                        None => historical && !resolver::is_node_builtin(&import.origin.specifier),
-                    }
-            })
+            .filter(|(_, import)| eligible(import))
             .map(|(symbol, import)| {
                 let span = self.semantic.scoping().symbol_span(*symbol);
                 (*symbol, (import.origin.clone(), span))
             })
             .collect();
         if imports.is_empty() {
-            return;
-        }
-        // A revision baseline reads no present-day module: a cell reading one of these imports
-        // makes it partial, whatever today's module holds.
-        if historical {
-            self.imported_constants = ImportedConstants::lazy(Box::new(move |symbol| {
-                if imports.contains_key(&symbol) {
-                    Proof::Unavailable
-                } else {
-                    Proof::Refused
-                }
-            }));
             return;
         }
         let semantic = self.semantic;
@@ -355,10 +373,12 @@ impl<'a> Walker<'a> {
     /// not use, as for a historical helper call.
     pub(super) fn finish_imported_constants(&mut self) {
         // One reason per file: a historical helper call may already have recorded it.
+        let reported = |reasons: &[ExclusionReason]| {
+            reasons.contains(&ExclusionReason::HelperSourcesUnavailable)
+        };
         if self.imported_constants.read_unavailable()
-            && !self
-                .reasons
-                .contains(&ExclusionReason::HelperSourcesUnavailable)
+            && !reported(&self.reasons)
+            && !reported(&self.helper_refusal_reasons)
         {
             self.reasons.push(ExclusionReason::HelperSourcesUnavailable);
             self.diagnostics.push(
