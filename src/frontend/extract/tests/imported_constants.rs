@@ -436,6 +436,11 @@ fn accessor_redefinitions_refuse_imported_constants() {
         ("Reflect.deleteProperty(globalThis, 'Y')", true),
         ("delete process.env.MODE", false),
         ("let spy: ReturnType<typeof vi.spyOn> | undefined", false),
+        // A call in a type runs nothing, so it cannot cancel a real accessor spy.
+        (
+            "type K = { [vi.spyOn(console, 'log')]: 1 }\nvi.spyOn(globalThis, 'Y', 'get')",
+            true,
+        ),
     ] {
         let tests = ConstantCase::new(
             &modules,
@@ -672,4 +677,26 @@ fn package_imports_do_not_spend_the_bound() {
     )
     .tests();
     assert_eq!(tests.last(), Some(&("t fast".to_owned(), false)));
+}
+
+#[test]
+/// A historical file whose helper call already recorded unavailable sources gets the reason once.
+fn unavailable_sources_are_reported_once_per_file() {
+    let case = ConstantCase::new(
+        &[
+            ("m.ts", "export const X = 'fast'"),
+            (
+                "runner.ts",
+                "import { test } from 'vitest'\nexport function run() { test('r', () => {}) }",
+            ),
+        ],
+        "import { test } from 'vitest'\nimport { X } from './m'\nimport { run } from './runner'\nrun()\ntest.each([[X]])('t %s', () => {})\n",
+    );
+    let historical = extract_with_imports(&case.source, &case.file, Globals::Disabled, false);
+    let unavailable = historical
+        .reasons
+        .iter()
+        .filter(|reason| **reason == ExclusionReason::HelperSourcesUnavailable)
+        .count();
+    assert_eq!(unavailable, 1, "{:?}", historical.diagnostics);
 }

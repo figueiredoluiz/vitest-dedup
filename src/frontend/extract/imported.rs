@@ -301,7 +301,8 @@ impl<'a> Walker<'a> {
         }
         let semantic = self.semantic;
         let mocked = self.mocked_modules.clone();
-        let own = helpers::canonical(&self.file.path);
+        let path = self.file.path.clone();
+        let own = std::cell::OnceCell::new();
         // A property this file can rewrite may be any import's (`vi.spyOn(ns, 'X', 'get')`);
         // decided once, on the first read.
         let rewrites = std::cell::OnceCell::new();
@@ -330,10 +331,9 @@ impl<'a> Walker<'a> {
                 });
                 if nuxt_mocked
                     || chain_is_mocked(&mocked, origin, &chain.modules)
-                    || chain
-                        .modules
-                        .iter()
-                        .any(|module| helpers::canonical(module) == own)
+                    || chain.modules.iter().any(|module| {
+                        helpers::canonical(module) == *own.get_or_init(|| helpers::canonical(&path))
+                    })
                 {
                     return None;
                 }
@@ -354,7 +354,12 @@ impl<'a> Walker<'a> {
     /// Records a revision baseline as partial when its tables read an imported constant it could
     /// not use, as for a historical helper call.
     pub(super) fn finish_imported_constants(&mut self) {
-        if self.imported_constants.read_unavailable() {
+        // One reason per file: a historical helper call may already have recorded it.
+        if self.imported_constants.read_unavailable()
+            && !self
+                .reasons
+                .contains(&ExclusionReason::HelperSourcesUnavailable)
+        {
             self.reasons.push(ExclusionReason::HelperSourcesUnavailable);
             self.diagnostics.push(
                 "historical imported sources are unavailable; table cells naming an imported constant cannot populate a revision baseline"

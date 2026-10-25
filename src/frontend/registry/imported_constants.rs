@@ -106,6 +106,7 @@ pub(in crate::frontend) fn redefines_accessors(semantic: &Semantic) -> bool {
                     _ => false,
                 };
                 if spy_callee
+                    && !in_type(semantic, node.id())
                     && call.arguments.len() < 3
                     && !call
                         .arguments
