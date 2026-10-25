@@ -435,6 +435,7 @@ fn accessor_redefinitions_refuse_imported_constants() {
         ("import * as ns from './m'\ndelete (ns as any).X", true),
         ("Reflect.deleteProperty(globalThis, 'Y')", true),
         ("delete process.env.MODE", false),
+        ("let spy: ReturnType<typeof vi.spyOn> | undefined", false),
     ] {
         let tests = ConstantCase::new(
             &modules,
@@ -494,13 +495,7 @@ fn a_mock_of_the_module_behind_an_import_export_barrel_is_seen() {
 /// Only a value over the import is an alias: imports read inside calls or composites are not
 /// candidates, so they cannot push a table's own import past the bound.
 fn only_value_aliases_make_an_import_a_candidate() {
-    let count = crate::frontend::registry::imported_constants::MAX_IMPORTED_CONSTANTS;
-    let names: Vec<String> = (0..count).map(|index| format!("C{index}")).collect();
-    let module: String = names
-        .iter()
-        .map(|name| format!("export const {name} = '{name}'\n"))
-        .chain(std::iter::once("export const X = 'fast'\n".to_owned()))
-        .collect();
+    let (names, module) = bound_filling_module();
     let typeofs: String = names
         .iter()
         .map(|name| format!("const is{name} = typeof {name}\n"))
@@ -516,4 +511,69 @@ fn only_value_aliases_make_an_import_a_candidate() {
         let tests = ConstantCase::new(&[("m.ts", &module)], &source).tests();
         assert_eq!(tests, vec![("t fast".to_owned(), false)], "{readers}");
     }
+}
+
+#[test]
+/// An import used as a whole table, or inside a callback that builds one, is not a cell: it
+/// spends no proof, so the bound is left to the table's real cells.
+fn non_cell_table_references_are_not_candidates() {
+    let (names, module) = bound_filling_module();
+    for table in ["[1].map(() => [{name}])", "{name}"] {
+        let tables: String = names
+            .iter()
+            .map(|name| {
+                let table = table.replace("{name}", name);
+                format!("test.each({table})('u %s', () => {{}})\n")
+            })
+            .collect();
+        let source = format!(
+            "import {{ test }} from 'vitest'\nimport {{ {}, X }} from './m'\n{tables}test.each([[X]])('t %s', () => {{}})\n",
+            names.join(", "),
+        );
+        let tests = ConstantCase::new(&[("m.ts", &module)], &source).tests();
+        assert_eq!(tests.last(), Some(&("t fast".to_owned(), false)), "{table}");
+    }
+}
+
+#[test]
+/// A historical file is partial only when the current tree would read one of its cells.
+fn a_historical_file_is_partial_only_for_cells_the_tree_reads() {
+    let modules = [(
+        "m.ts",
+        "export const cases = [[1]]\nexport let LET = 'a'\nexport const X = 'fast'",
+    )];
+    for (body, partial) in [
+        ("test.each(cases)('t %s', () => {})", false),
+        ("test.each([[LET]])('t %s', () => {})", false),
+        ("test.each([[X]])('t %s', () => {})", true),
+    ] {
+        let case = ConstantCase::new(
+            &modules,
+            &format!(
+                "import {{ test }} from 'vitest'\nimport {{ cases, LET, X }} from './m'\n{body}\n"
+            ),
+        );
+        let historical = extract_with_imports(&case.source, &case.file, Globals::Disabled, false);
+        assert_eq!(
+            historical
+                .reasons
+                .contains(&ExclusionReason::HelperSourcesUnavailable),
+            partial,
+            "{body}: {:?}",
+            historical.diagnostics
+        );
+    }
+}
+
+/// `MAX_IMPORTED_CONSTANTS` provable names `C0..`, and the module exporting them followed by
+/// `X = 'fast'`: imports that would use up the bound before `X` if they were tried.
+fn bound_filling_module() -> (Vec<String>, String) {
+    let count = crate::frontend::registry::imported_constants::MAX_IMPORTED_CONSTANTS;
+    let names: Vec<String> = (0..count).map(|index| format!("C{index}")).collect();
+    let module = names
+        .iter()
+        .map(|name| format!("export const {name} = '{name}'\n"))
+        .chain(std::iter::once("export const X = 'fast'\n".to_owned()))
+        .collect();
+    (names, module)
 }

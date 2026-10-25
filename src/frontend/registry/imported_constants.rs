@@ -26,12 +26,19 @@ impl<'a> ImportedConstants<'a> {
     pub(in crate::frontend) fn insert(&mut self, symbol: SymbolId, value: &'a Expression<'a>) {
         self.values.insert(symbol, value);
     }
+
+    /// Whether no import was proved.
+    pub(in crate::frontend) fn is_empty(&self) -> bool {
+        self.values.is_empty()
+    }
 }
 
-/// Whether some reference to `symbol` sits inside the arguments of an `.each`/`.for` call or the
-/// quasi of an `.each`/`.for` tagged template, or in a `const` initializer that is a value over it
-/// (a local alias a table may read): the only places an imported constant is read. A filter on which imports are
-/// worth a proof, so a miss costs recall only.
+/// Whether some reference to `symbol` is a cell of an `.each`/`.for` table (inside a row literal
+/// of its first argument, or a substitution of its tagged template), or a `const` initializer that
+/// is a value over it (a local alias a table may read): the places an imported constant is read.
+/// Values pass through templates, arithmetic, signs, parentheses and type wrappers; a call,
+/// function or member read in between is not a cell. A filter on which imports are worth a proof,
+/// so a miss costs recall only.
 pub(in crate::frontend) fn referenced_in_table(semantic: &Semantic, symbol: SymbolId) -> bool {
     let scoping = semantic.scoping();
     let nodes = semantic.nodes();
@@ -39,51 +46,71 @@ pub(in crate::frontend) fn referenced_in_table(semantic: &Semantic, symbol: Symb
         matches!(unwrap_transparent(callee), Expression::StaticMemberExpression(member)
             if matches!(member.property.name.as_str(), "each" | "for"))
     };
+    let is_value = |kind: AstKind| {
+        matches!(
+            kind,
+            AstKind::TemplateLiteral(_)
+                | AstKind::BinaryExpression(_)
+                | AstKind::UnaryExpression(UnaryExpression {
+                    operator: UnaryOperator::UnaryNegation | UnaryOperator::UnaryPlus,
+                    ..
+                })
+                | AstKind::ParenthesizedExpression(_)
+                | AstKind::TSAsExpression(_)
+                | AstKind::TSSatisfiesExpression(_)
+                | AstKind::TSNonNullExpression(_)
+                | AstKind::TSTypeAssertion(_)
+        )
+    };
+    let is_row = |kind: AstKind| {
+        matches!(
+            kind,
+            AstKind::ArrayExpression(_) | AstKind::ObjectExpression(_) | AstKind::ObjectProperty(_)
+        )
+    };
     scoping
         .get_resolved_reference_ids(symbol)
         .iter()
         .any(|reference_id| {
-            let node = scoping.get_reference(*reference_id).node_id();
-            let span = nodes.kind(node).span();
-            // A `const` initializer that is a value over the import (`const L = X`,
-            // `const L = `${X}-1``) is a local alias a table may read; a call, function or
-            // composite in between is not.
-            let mut value = node;
-            while matches!(
-                nodes.parent_kind(value),
-                AstKind::TemplateLiteral(_)
-                    | AstKind::BinaryExpression(_)
-                    | AstKind::UnaryExpression(UnaryExpression {
-                        operator: UnaryOperator::UnaryNegation | UnaryOperator::UnaryPlus,
-                        ..
-                    })
-                    | AstKind::ParenthesizedExpression(_)
-                    | AstKind::TSAsExpression(_)
-                    | AstKind::TSSatisfiesExpression(_)
-                    | AstKind::TSNonNullExpression(_)
-                    | AstKind::TSTypeAssertion(_)
-            ) {
+            let mut value = scoping.get_reference(*reference_id).node_id();
+            while is_value(nodes.parent_kind(value)) {
                 value = nodes.parent_id(value);
             }
+            let value_span = nodes.kind(value).span();
             let declarator = nodes.parent_id(value);
             let aliased = matches!(nodes.kind(declarator), AstKind::VariableDeclarator(declarator)
-                if declarator.init.as_ref().is_some_and(|init| init.span() == nodes.kind(value).span()))
+                if declarator.init.as_ref().is_some_and(|init| init.span() == value_span))
                 && matches!(nodes.parent_kind(declarator), AstKind::VariableDeclaration(declaration)
                     if declaration.kind == VariableDeclarationKind::Const);
-            aliased
-                || nodes.ancestor_kinds(node).any(|kind| match kind {
-                    AstKind::CallExpression(call) => {
-                        is_table(&call.callee)
-                            && call
-                                .arguments
-                                .iter()
-                                .any(|argument| argument.span().contains_inclusive(span))
-                    }
-                    AstKind::TaggedTemplateExpression(tagged) => {
-                        is_table(&tagged.tag) && tagged.quasi.span.contains_inclusive(span)
-                    }
-                    _ => false,
-                })
+            if aliased {
+                return true;
+            }
+            let mut cell = value;
+            let mut in_row = false;
+            loop {
+                let parent = nodes.parent_kind(cell);
+                if is_row(parent) {
+                    in_row = true;
+                } else if !is_value(parent) {
+                    break;
+                }
+                cell = nodes.parent_id(cell);
+            }
+            let cell_span = nodes.kind(cell).span();
+            match nodes.parent_kind(cell) {
+                AstKind::CallExpression(call) => {
+                    in_row
+                        && is_table(&call.callee)
+                        && call
+                            .arguments
+                            .first()
+                            .is_some_and(|table| table.span() == cell_span)
+                }
+                AstKind::TaggedTemplateExpression(tagged) => {
+                    is_table(&tagged.tag) && tagged.quasi.span == cell_span
+                }
+                _ => false,
+            }
         })
 }
 
@@ -143,11 +170,27 @@ pub(in crate::frontend) fn redefines_accessors(semantic: &Semantic) -> bool {
         };
         match name {
             Some(name) if REDEFINING_NAMES.contains(&name) => return true,
-            Some("spyOn") => spy_mentions += 1,
+            // A type (`ReturnType<typeof vi.spyOn>`) runs nothing.
+            Some("spyOn") if !in_type(semantic, node.id()) => spy_mentions += 1,
             _ => {}
         }
     }
     spy_mentions > plain_spies
+}
+
+/// Whether `node` sits inside a TypeScript type, which is erased.
+fn in_type(semantic: &Semantic, node: oxc_semantic::NodeId) -> bool {
+    semantic.nodes().ancestor_kinds(node).any(|kind| {
+        matches!(
+            kind,
+            AstKind::TSTypeAnnotation(_)
+                | AstKind::TSTypeQuery(_)
+                | AstKind::TSTypeReference(_)
+                | AstKind::TSQualifiedName(_)
+                | AstKind::TSTypeAliasDeclaration(_)
+                | AstKind::TSInterfaceDeclaration(_)
+        )
+    })
 }
 
 /// Whether a `delete` operand is a property of `process.env`, a plain object no module is.
