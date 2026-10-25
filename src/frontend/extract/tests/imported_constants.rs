@@ -430,7 +430,12 @@ fn accessor_redefinitions_refuse_imported_constants() {
         // Deleting a module object's property rewrites the import to `undefined`.
         ("import * as ns from './m'\ndelete (ns as any).X", true),
         ("Reflect.deleteProperty(globalThis, 'Y')", true),
-        ("delete process.env.MODE", false),
+        // `process.env` itself can be reassigned to a module object first.
+        ("delete process.env.MODE", true),
+        (
+            "import * as ns from './m'\nconst saved = process.env\nprocess.env = ns as any\ndelete process.env.X\nprocess.env = saved",
+            true,
+        ),
         (
             "import * as ns from './m'\nconst process = { env: ns }\ndelete (process.env as any).X",
             true,
