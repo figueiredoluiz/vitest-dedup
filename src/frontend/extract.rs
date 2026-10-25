@@ -80,7 +80,7 @@ pub(super) fn extract_within(
     globals: Globals,
     root: &Path,
 ) -> FileExtraction {
-    extract_confined(source, file, globals, true, Some(root))
+    extract_confined(source, file, globals, true, Confinement::All(root))
 }
 
 /// [`extract_with_imports`] for a historical file, with resolution confined to `root`.
@@ -90,7 +90,7 @@ pub(super) fn extract_historical_within(
     globals: Globals,
     root: &Path,
 ) -> FileExtraction {
-    extract_confined(source, file, globals, false, Some(root))
+    extract_confined(source, file, globals, false, Confinement::Proofs(root))
 }
 
 /// Extracts owned declarations under an explicit current-tree or historical import policy.
@@ -100,16 +100,29 @@ pub(super) fn extract_with_imports(
     globals: Globals,
     allow_imported: bool,
 ) -> FileExtraction {
-    extract_confined(source, file, globals, allow_imported, None)
+    extract_confined(source, file, globals, allow_imported, Confinement::None)
 }
 
-/// Shared body of the extraction entry points; `root` confines import resolution when given.
+/// Which resolutions an extraction confines to an analysis root.
+#[derive(Clone, Copy)]
+enum Confinement<'r> {
+    /// None: the library default.
+    None,
+    /// Every resolution.
+    All(&'r Path),
+    /// Only the optional imported-constant proofs: a revision baseline, whose own resolutions
+    /// stay as they were.
+    Proofs(&'r Path),
+}
+
+/// Shared body of the extraction entry points; `confinement` says which resolutions stay inside
+/// the analysis root.
 fn extract_confined(
     source: &str,
     file: &SourceFile,
     globals: Globals,
     allow_imported: bool,
-    root: Option<&Path>,
+    confinement: Confinement,
 ) -> FileExtraction {
     if let Some(reason) = parse_refusal(source) {
         return refused_extraction(ExclusionReason::SourceLimit, reason);
@@ -130,7 +143,13 @@ fn extract_confined(
                 #[cfg(test)]
                 imported::EMISSION_LIMIT_OVERRIDE.with(|limit| limit.set(emission_limit));
                 super::registry::reset_cell_census_file_scope();
-                super::resolver::begin_file(root);
+                match confinement {
+                    Confinement::None => super::resolver::begin_file(None),
+                    Confinement::All(root) => super::resolver::begin_file(Some(root)),
+                    Confinement::Proofs(root) => {
+                        super::resolver::begin_file_with_proof_root(None, Some(root))
+                    }
+                }
                 registration_free::begin_file(globals == Globals::Enabled);
                 let extraction = run(source, file, globals, allow_imported);
                 #[cfg(test)]

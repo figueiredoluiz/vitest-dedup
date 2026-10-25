@@ -283,6 +283,10 @@ thread_local! {
     /// The analysis root the current extraction confines tsconfig-derived resolutions to.
     static ANALYSIS_ROOT: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
 
+    /// The root [`quietly`] lookups are confined to: the analysis root, or for a revision
+    /// baseline, which resolves unconfined, the root its optional proofs must stay inside.
+    static PROOF_ROOT: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
+
     /// Resolutions refused by confinement during the current extraction.
     static REFUSALS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
 
@@ -371,10 +375,16 @@ pub(super) enum Resolved {
 /// operational degradation stays visible as an under-match, never a crash.
 pub(super) fn resolve(importing_file: &Path, specifier: &str) -> Resolved {
     let key = (importing_file.to_path_buf(), specifier.to_owned());
-    if let Some(cached) = CACHE.with(|cache| cache.borrow().get(&key).cloned()) {
-        return cached;
-    }
     let quiet = QUIET.with(std::cell::Cell::get);
+    if let Some(cached) = CACHE.with(|cache| cache.borrow().get(&key).cloned()) {
+        // A memo made unconfined (a revision baseline's own lookups) still answers a quiet
+        // lookup only inside the proof root.
+        return if quiet {
+            confine_resolution(importing_file, specifier, cached)
+        } else {
+            cached
+        };
+    }
     let resolved =
         RESOLVER.with(
             |resolver| match resolver.resolve_file(importing_file, specifier) {
@@ -401,6 +411,13 @@ pub(super) fn resolve(importing_file: &Path, specifier: &str) -> Resolved {
 /// earlier file's memoized results and refusals. Each extraction runs on its own worker thread,
 /// so in production there is nothing to forget; the reset keeps direct callers honest.
 pub(super) fn begin_file(root: Option<&Path>) {
+    begin_file_with_proof_root(root, root);
+}
+
+/// [`begin_file`] for a file whose own resolutions are confined to `root` while its [`quietly`]
+/// lookups are confined to `proof_root`.
+pub(super) fn begin_file_with_proof_root(root: Option<&Path>, proof_root: Option<&Path>) {
+    PROOF_ROOT.with(|slot| *slot.borrow_mut() = proof_root.map(Path::to_path_buf));
     ANALYSIS_ROOT.with(|slot| *slot.borrow_mut() = root.map(Path::to_path_buf));
     REFUSALS.with(|refusals| refusals.borrow_mut().clear());
     CACHE.with(|cache| cache.borrow_mut().clear());
@@ -416,7 +433,12 @@ fn confine_resolution(importing_file: &Path, specifier: &str, resolved: Resolved
     let Resolved::Module(path) = &resolved else {
         return resolved;
     };
-    let Some(root) = ANALYSIS_ROOT.with(|slot| slot.borrow().clone()) else {
+    let confining = if QUIET.with(std::cell::Cell::get) {
+        &PROOF_ROOT
+    } else {
+        &ANALYSIS_ROOT
+    };
+    let Some(root) = confining.with(|slot| slot.borrow().clone()) else {
         return resolved;
     };
     if crate::confine::contains(&root, path) {

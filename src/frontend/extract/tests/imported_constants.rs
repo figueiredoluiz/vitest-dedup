@@ -403,6 +403,8 @@ fn accessor_redefinitions_refuse_imported_constants() {
             false,
         ),
         ("const label = 'caf\\u00e9'", false),
+        ("test('spyOn', () => {})\nconst text = `spyOn`", false),
+        ("const { 'spyOn': s } = vi\ns(globalThis, 'Y', 'get')", true),
         // Deleting a module object's property rewrites the import to `undefined`.
         ("import * as ns from './m'\ndelete (ns as any).X", true),
         ("Reflect.deleteProperty(globalThis, 'Y')", true),
@@ -607,13 +609,14 @@ fn local_bindings_do_not_spend_the_bound() {
 }
 
 #[test]
-/// An import a historical file reads that is gone today (a renamed module) may have held a
-/// constant in the base, so the base is partial; a Node builtin could not have.
+/// A relative import a historical file reads that is gone today (a renamed module) may have held
+/// a constant in the base, so the base is partial; a specifier that may never resolve is not.
 fn a_historical_read_of_a_vanished_path_is_partial() {
     for (import, partial) in [
         ("import { X } from './gone'", true),
-        // An unresolved package-shaped name may be an alias in the base's revision.
-        ("import { X } from '@app/gone'", true),
+        // An alias or virtual specifier may never resolve, in any revision.
+        ("import { X } from '@app/gone'", false),
+        ("import { X } from 'virtual:consts'", false),
         ("import { X } from 'node:os'", false),
     ] {
         let case = ConstantCase::new(
@@ -750,6 +753,16 @@ fn unavailable_sources_are_reported_once_after_another_helper_refusal() {
 fn a_historical_proof_stays_inside_the_root() {
     let (_outer, root, file, source) = outside_root_tree("export { X } from '@shared/consts'", "");
     let historical = extract_historical_within(&source, &file, Globals::Disabled, &root);
+    assert!(
+        historical.reasons.is_empty(),
+        "{:?}",
+        historical.diagnostics
+    );
+    // A direct import across the alias: the base's own resolution stays unconfined, as before,
+    // while the proof starting from it is confined, so nothing is reported either way.
+    let direct = "import { test } from 'vitest'\nimport { X } from '@shared/consts'\ntest.each([[X]])('t %s', () => {})\n";
+    std::fs::write(&file.path, direct).unwrap();
+    let historical = extract_historical_within(direct, &file, Globals::Disabled, &root);
     assert!(
         historical.reasons.is_empty(),
         "{:?}",

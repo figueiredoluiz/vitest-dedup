@@ -90,12 +90,21 @@ pub(in crate::frontend) fn redefines_accessors(semantic: &Semantic) -> bool {
     let mut spy_mentions = 0;
     let mut plain_spies = 0;
     for node in semantic.nodes().iter() {
+        // Strings spell a name only as a key (`vi['spyOn']`, `{ 'spyOn': spy } = vi`); a title
+        // that reads `spyOn` names nothing.
+        let mut text = false;
         let name = match node.kind() {
             AstKind::IdentifierName(name) => Some(name.name.as_str()),
             AstKind::IdentifierReference(ident) => Some(ident.name.as_str()),
             AstKind::BindingIdentifier(binding) => Some(binding.name.as_str()),
-            AstKind::StringLiteral(literal) => Some(literal.value.as_str()),
-            AstKind::TemplateElement(element) => element.value.cooked.as_ref().map(|c| c.as_str()),
+            AstKind::StringLiteral(literal) => {
+                text = true;
+                Some(literal.value.as_str())
+            }
+            AstKind::TemplateElement(element) => {
+                text = true;
+                element.value.cooked.as_ref().map(|c| c.as_str())
+            }
             AstKind::UnaryExpression(unary) if unary.operator == UnaryOperator::Delete => {
                 return true;
             }
@@ -122,11 +131,31 @@ pub(in crate::frontend) fn redefines_accessors(semantic: &Semantic) -> bool {
         match name {
             Some(name) if REDEFINING_NAMES.contains(&name) => return true,
             // A type (`ReturnType<typeof vi.spyOn>`) runs nothing.
-            Some("spyOn") if !in_type(semantic, node.id()) => spy_mentions += 1,
+            Some("spyOn")
+                if !in_type(semantic, node.id()) && (!text || is_key(semantic, node.id())) =>
+            {
+                spy_mentions += 1;
+            }
             _ => {}
         }
     }
     spy_mentions > plain_spies
+}
+
+/// Whether the string `node` (or the template it is part of) is a computed member key or a
+/// property key.
+fn is_key(semantic: &Semantic, node: oxc_semantic::NodeId) -> bool {
+    let nodes = semantic.nodes();
+    let mut key = node;
+    if matches!(nodes.kind(node), AstKind::TemplateElement(_)) {
+        key = nodes.parent_id(node);
+    }
+    matches!(
+        nodes.parent_kind(key),
+        AstKind::ComputedMemberExpression(_)
+            | AstKind::ObjectProperty(_)
+            | AstKind::BindingProperty(_)
+    )
 }
 
 /// Whether `node` sits inside a TypeScript type, which is erased.

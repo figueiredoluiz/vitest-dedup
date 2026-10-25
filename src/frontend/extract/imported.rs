@@ -267,8 +267,9 @@ impl<'a> Walker<'a> {
                         !helpers::is_dependency(path)
                             && crate::discovery::classify_source_file(path).is_some()
                     }
-                    // A historical file's import may have resolved in its own revision.
-                    None => historical && !resolver::is_node_builtin(&import.origin.specifier),
+                    // A historical file's relative import may name a module since renamed. An
+                    // alias or virtual specifier may never resolve, so it does not count.
+                    None => historical && import.origin.specifier.starts_with('.'),
                 }
         };
         // A mock that does not resolve could replace any first-party module (a package-shaped
@@ -323,8 +324,13 @@ impl<'a> Walker<'a> {
             // An optional lookup: a hop that leaves the analysis root leaves the cell unresolved
             // without marking the file incomplete.
             let value = resolver::quietly(|| {
-                let chain =
-                    resolve_value_export_chain(origin.resolved.as_ref()?, &origin.exported).ok()?;
+                // Resolved again under the proof's confinement: a revision baseline's own
+                // resolution of the import is unconfined.
+                let resolver::Resolved::Module(start) = resolver::resolve(&path, &origin.specifier)
+                else {
+                    return None;
+                };
+                let chain = resolve_value_export_chain(&start, &origin.exported).ok()?;
                 let nuxt_mocked = mocked.iter().any(|mock| {
                     mock.specifier
                         .strip_prefix("nuxt-import:")
