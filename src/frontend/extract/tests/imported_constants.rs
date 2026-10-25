@@ -262,6 +262,20 @@ fn historical_files_never_read_present_day_constants() {
     );
     assert_eq!(case.tests_with(true), vec![("t fast".to_owned(), false)]);
     assert!(case.tests_with(false)[0].1);
+    // The base cannot read what the current tree reads, so it is partial; a historical file with
+    // nothing to prove is not.
+    let historical = extract_with_imports(&case.source, &case.file, Globals::Disabled, false);
+    assert!(historical.incomplete);
+    assert_eq!(
+        historical.reasons,
+        vec![ExclusionReason::HelperSourcesUnavailable]
+    );
+    let plain = ConstantCase::new(
+        &[("m.ts", "export const X = 'fast'")],
+        "import { test } from 'vitest'\nimport { X } from './m'\ntest('t', () => { X })\n",
+    );
+    let historical = extract_with_imports(&plain.source, &plain.file, Globals::Disabled, false);
+    assert!(!historical.incomplete, "{:?}", historical.diagnostics);
 }
 
 #[test]
@@ -487,11 +501,19 @@ fn only_value_aliases_make_an_import_a_candidate() {
         .map(|name| format!("export const {name} = '{name}'\n"))
         .chain(std::iter::once("export const X = 'fast'\n".to_owned()))
         .collect();
-    let source = format!(
-        "import {{ test }} from 'vitest'\nimport {{ {}, X }} from './m'\nconst props = make({{ {} }})\ntest.each([[X]])('t %s', () => {{}})\n",
-        names.join(", "),
-        names.join(", ")
-    );
-    let tests = ConstantCase::new(&[("m.ts", &module)], &source).tests();
-    assert_eq!(tests, vec![("t fast".to_owned(), false)]);
+    let typeofs: String = names
+        .iter()
+        .map(|name| format!("const is{name} = typeof {name}\n"))
+        .collect();
+    for readers in [
+        format!("const props = make({{ {} }})\n", names.join(", ")),
+        typeofs,
+    ] {
+        let source = format!(
+            "import {{ test }} from 'vitest'\nimport {{ {}, X }} from './m'\n{readers}test.each([[X]])('t %s', () => {{}})\n",
+            names.join(", "),
+        );
+        let tests = ConstantCase::new(&[("m.ts", &module)], &source).tests();
+        assert_eq!(tests, vec![("t fast".to_owned(), false)], "{readers}");
+    }
 }

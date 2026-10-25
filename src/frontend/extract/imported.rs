@@ -236,14 +236,13 @@ impl<'a> Walker<'a> {
     /// Proves which value imports read by this file's tables hold a scalar literal, cloning each
     /// into `allocator` (see `registry::imported_constants`). An import on a mocked chain, under
     /// unreadable mocks, or whose chain reaches this file (read in its temporal dead zone) is not
-    /// tried; every unproved binding stays an unresolved cell. A historical file is never proved:
-    /// the modules on disk are today's, not the ones it imported.
+    /// tried; every unproved binding stays an unresolved cell. A historical file is never proved
+    /// (the modules on disk are today's, not the ones it imported); one that would be is partial.
     pub(super) fn prove_imported_constants(&mut self, allocator: &'a Allocator) {
         // Unreadable mocks, and a mock that does not resolve, could replace any first-party module
         // (a package-shaped name may be a bundler alias), so nothing is tried. A Node builtin
         // cannot be one.
-        if !self.allow_imported
-            || self.mocks_unresolved
+        if self.mocks_unresolved
             || self.mocked_modules.iter().any(|mock| {
                 mock.specifier
                     .strip_prefix("unresolved:")
@@ -265,6 +264,16 @@ impl<'a> Walker<'a> {
             .collect();
         // An accessor this file can redefine may be any import's (`vi.spyOn(ns, 'X', 'get')`).
         if candidates.is_empty() || imported_constants::redefines_accessors(self.semantic) {
+            return;
+        }
+        // The current tree would read these cells and a revision baseline cannot, so the base is
+        // partial, as for a historical helper call.
+        if !self.allow_imported {
+            self.reasons.push(ExclusionReason::HelperSourcesUnavailable);
+            self.diagnostics.push(
+                "historical imported sources are unavailable; table cells naming an imported constant cannot populate a revision baseline"
+                    .to_owned(),
+            );
             return;
         }
         candidates.sort_by_key(|(symbol, _)| *symbol);

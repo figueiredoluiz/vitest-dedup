@@ -12,7 +12,7 @@ use super::{
 };
 use crate::frontend::helpers::{find_value_export, with_parsed_file, ValueExport};
 use oxc_allocator::{Allocator, CloneIn};
-use oxc_ast::ast::{Argument, Expression, UnaryOperator, VariableDeclarationKind};
+use oxc_ast::ast::{Argument, Expression, UnaryExpression, UnaryOperator, VariableDeclarationKind};
 use oxc_ast::AstKind;
 use oxc_semantic::{Semantic, SemanticBuilder, SymbolId};
 use oxc_span::{GetSpan, GetSpanMut, Span};
@@ -53,7 +53,10 @@ pub(in crate::frontend) fn referenced_in_table(semantic: &Semantic, symbol: Symb
                 nodes.parent_kind(value),
                 AstKind::TemplateLiteral(_)
                     | AstKind::BinaryExpression(_)
-                    | AstKind::UnaryExpression(_)
+                    | AstKind::UnaryExpression(UnaryExpression {
+                        operator: UnaryOperator::UnaryNegation | UnaryOperator::UnaryPlus,
+                        ..
+                    })
                     | AstKind::ParenthesizedExpression(_)
                     | AstKind::TSAsExpression(_)
                     | AstKind::TSSatisfiesExpression(_)
