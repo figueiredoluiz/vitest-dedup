@@ -96,7 +96,8 @@ pub(in crate::frontend) fn redefines_accessors(semantic: &Semantic) -> bool {
             AstKind::StringLiteral(literal) => Some(literal.value.as_str()),
             AstKind::TemplateElement(element) => element.value.cooked.as_ref().map(|c| c.as_str()),
             AstKind::UnaryExpression(unary)
-                if unary.operator == UnaryOperator::Delete && !deletes_env(&unary.argument) =>
+                if unary.operator == UnaryOperator::Delete
+                    && !deletes_env(&unary.argument, semantic) =>
             {
                 return true;
             }
@@ -145,16 +146,21 @@ fn in_type(semantic: &Semantic, node: oxc_semantic::NodeId) -> bool {
     })
 }
 
-/// Whether a `delete` operand is a property of `process.env`, a plain object no module is.
-fn deletes_env(argument: &Expression) -> bool {
+/// Whether a `delete` operand is a property of the global `process.env`, a plain object no module
+/// is.
+fn deletes_env(argument: &Expression, semantic: &Semantic) -> bool {
     let object = match unwrap_transparent(argument) {
         Expression::StaticMemberExpression(member) => &member.object,
         Expression::ComputedMemberExpression(member) => &member.object,
         _ => return false,
     };
     matches!(unwrap_transparent(object), Expression::StaticMemberExpression(env)
-        if env.property.name == "env"
-            && matches!(&env.object, Expression::Identifier(process) if process.name == "process"))
+    if env.property.name == "env"
+        && matches!(&env.object, Expression::Identifier(process) if process.name == "process"
+            // The global itself: a local `process` can hold a module object.
+            && process.reference_id.get().is_some_and(|reference| {
+                semantic.scoping().get_reference(reference).symbol_id().is_none()
+            })))
 }
 
 /// The closed scalar literal the first-party module at `path` exports as `export`, cloned into

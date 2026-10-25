@@ -429,6 +429,10 @@ fn accessor_redefinitions_refuse_imported_constants() {
         ("import * as ns from './m'\ndelete (ns as any).X", true),
         ("Reflect.deleteProperty(globalThis, 'Y')", true),
         ("delete process.env.MODE", false),
+        (
+            "import * as ns from './m'\nconst process = { env: ns }\ndelete (process.env as any).X",
+            true,
+        ),
         ("let spy: ReturnType<typeof vi.spyOn> | undefined", false),
         // A call in a type runs nothing, so it cannot cancel a real accessor spy.
         (
