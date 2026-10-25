@@ -842,7 +842,8 @@ fn is_nuxt_mock_call(
 ///   `vi.mock` is modelled -- the original defect this arm exists to stop repeating -- put one
 ///   test's runtime-only mock into every other test's `Context`.
 /// - **A specifier that is not a readable string literal** (A3), or **a `vi.mock` factory that is
-///   present but is not an inline arrow/function** (A4): recording nothing would be
+///   present but is neither an inline arrow/function nor the bounded `{ spy: true }` options
+///   object** (A4): recording nothing would be
 ///   indistinguishable from a file with no mock at all.
 /// - **A hoisted member called somewhere other than module top level** -- inside a `describe`, a
 ///   test body, an `if`. Vitest 5 refuses to run such a file at all: its `vitest:mocks` plugin
@@ -885,6 +886,23 @@ fn collect_mocked_modules(
     ) -> Option<MockFactory> {
         let body = fingerprint(as_function_like(argument)?, semantic, source, file, None);
         (!body.class_unresolved).then(|| MockFactory::Factory(body.into_alpha_source()))
+    }
+
+    /// Prove that an options value selects spying without evaluating user code or admitting
+    /// overrides: one own, noncomputed data property named `spy`, whose value is literal true.
+    fn is_spy_options(argument: &Argument<'_>) -> bool {
+        let Argument::ObjectExpression(options) = argument else {
+            return false;
+        };
+        let [ObjectPropertyKind::ObjectProperty(property)] = options.properties.as_slice() else {
+            return false;
+        };
+        !property.computed
+            && !property.method
+            && !property.shorthand
+            && property.kind == oxc_ast::ast::PropertyKind::Init
+            && property_key_name(&property.key).as_deref() == Some("spy")
+            && matches!(&property.value, Expression::BooleanLiteral(literal) if literal.value)
     }
 
     /// The member name of a `vi.<mock|unmock|doMock|doUnmock>(...)` call, or `None` for any other
@@ -945,6 +963,10 @@ fn collect_mocked_modules(
                     let factory = match call.arguments.get(1) {
                         // No second argument at all: a real automock.
                         None => MockFactory::Automock,
+                        // Options are a distinct mode, never a function factory or automock.
+                        Some(argument) if call.arguments.len() == 2 && is_spy_options(argument) => {
+                            MockFactory::Spy
+                        }
                         // A4: an imported or computed factory (identifier, call, member
                         // expression, ...) is not automock and must never be treated as one.
                         Some(argument) => read_factory(argument, semantic, source, file)
@@ -9404,6 +9426,72 @@ mod tests {
         assert_eq!(extraction.tests.len(), 1, "expected one declaration");
         let test = extraction.tests.into_iter().next().expect("one");
         (test.context.mocked_modules, test.context.unresolved)
+    }
+
+    /// Spy options select an explicit mode, survive last-wins folding and serialize distinctly.
+    #[test]
+    fn spy_options_identity_and_registration_order() {
+        for (setup, expected) in [
+            ("vi.mock('./m', { spy: true });", Some(MockFactory::Spy)),
+            ("vi.mock('./m', { 'spy': true });", Some(MockFactory::Spy)),
+            (
+                "vi.mock('./m'); vi.mock('./m', { spy: true });",
+                Some(MockFactory::Spy),
+            ),
+            (
+                "vi.mock('./m', { spy: true }); vi.mock('./m');",
+                Some(MockFactory::Automock),
+            ),
+            ("vi.mock('./m', { spy: true }); vi.unmock('./m');", None),
+        ] {
+            let (modules, unresolved) = mock_context(&format!(
+                "import {{ vi }} from 'vitest'; {setup} test('x', () => {{}});"
+            ));
+            assert!(!unresolved, "{setup}");
+            assert_eq!(modules.len(), usize::from(expected.is_some()), "{setup}");
+            assert_eq!(
+                modules.first().map(|module| &module.factory),
+                expected.as_ref(),
+                "{setup}"
+            );
+        }
+        assert_eq!(
+            serde_json::to_string(&MockFactory::Spy).unwrap(),
+            r#""Spy""#
+        );
+        assert_eq!(
+            serde_json::from_str::<MockFactory>(r#""Spy""#).unwrap(),
+            MockFactory::Spy
+        );
+    }
+
+    /// Unsupported options and registration positions cannot become eligible spy contexts.
+    #[test]
+    fn spy_options_reject_unproved_values_and_unsupported_sites() {
+        for setup in [
+            "vi.mock('./m', { spy: false });",
+            "vi.mock('./m', {});",
+            "vi.mock('./m', { spy: Boolean(true) });",
+            "vi.mock('./m', { ['spy']: true });",
+            "vi.mock('./m', { spy: true, ...more });",
+            "vi.mock('./m', { ...more, spy: true });",
+            "vi.mock('./m', { spy: true, extra: touch() });",
+            "vi.mock('./m', { spy: true, spy: false });",
+            "vi.mock('./m', { get spy() { return true } });",
+            "vi.mock('./m', { spy() { return true } });",
+            "vi.mock('./m', { spy });",
+            "vi.mock('./m', options);",
+            "vi.mock('./m', { spy: true }, extra);",
+            "vi.mock('./m', { spy: true }, ...extra);",
+            "vi.mock(specifier, { spy: true });",
+            "vi.doMock('./m', { spy: true });",
+            "if (true) vi.mock('./m', { spy: true });",
+        ] {
+            let (_, unresolved) = mock_context(&format!(
+                "import {{ vi }} from 'vitest'; {setup} test('x', () => {{}});"
+            ));
+            assert!(unresolved, "{setup}");
+        }
     }
 
     /// Check declaration extraction: a mocking call this extractor cannot read taints the whole

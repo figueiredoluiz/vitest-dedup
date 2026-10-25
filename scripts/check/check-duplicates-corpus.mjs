@@ -514,6 +514,8 @@ const DELIBERATE_BLIND_FILES = new Set([
   // and a counter a hook increments (identical tests that observe different values).
   'recall/framework-nuxt-mock-redeclared-binding/run.test.ts',
   'recall/framework-nuxt-mock-accumulating-hook/count.test.ts',
+  // Deliberately dynamic spy options remain unreadable; the recall case pins both excluded tests.
+  'recall/mock-spy-options-unreadable/unknown.test.ts',
   // A local overloaded helper reassigned before the call: refused on purpose.
   'recall/local-helper-overloaded-reassigned/run.test.ts',
   // Hooks registered under control flow make their scope's contexts incomparable by design

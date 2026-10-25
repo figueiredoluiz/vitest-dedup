@@ -25,6 +25,13 @@ the way `vi.doMock` does. The distinction is easy to miss because the call shape
 - **Scope:** File-wide; affects every `import` of `path` in the file
 - **Notes:** The primitive, covered by `fixtures/edge/vi-mock-hoisting.test.ts`. Factory runs once, cached. `{ spy: true }` automocks while preserving original implementations. **Modelled** when written as a module-top-level statement with a string-literal specifier: it becomes a registration event in the fold described below. Written anywhere else, inside a function, a hook, an `if`, it taints the file instead; see the fold's third bullet.
 
+The options form is supported only for exactly two arguments and a literal object containing
+one plain, noncomputed `spy: true` property (a quoted `'spy'` key is also accepted). It records
+an explicit spy mode, distinct from an automock, an inline factory, and an unmocked module.
+Other options, spreads, accessors, computed keys and dynamic values remain unresolved. The same
+top-level, provenance and string-specifier requirements apply; this does not add `vi.doMock`
+or wrapped-factory support.
+
 ### `vi.doMock(path, factory?)`
 
 - **Hoisted:** **No**

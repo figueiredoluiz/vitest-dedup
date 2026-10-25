@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "minimumCases": 185,
+  "minimumCases": 188,
   "knownMissBaseline": 1,
   "minimumRecall": 0.99,
   "recallDestination": 1,
@@ -5567,6 +5567,73 @@
           "titles": [
             "suite-a > reads",
             "suite-b > reads"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "mock-spy-options-positive",
+      "path": "mock-spy-options-positive",
+      "rule": "cross-file-duplicate",
+      "role": "positive",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-10-25",
+      "expectedTests": 2,
+      "expectedIncomplete": false,
+      "expectedUnresolved": 0,
+      "expectedFindings": [
+        {
+          "rule": "cross-file-duplicate",
+          "severity": "warning",
+          "titles": [
+            "reads the original value",
+            "reads the original value"
+          ]
+        }
+      ],
+      "expectedAbsent": []
+    },
+    {
+      "name": "mock-spy-options-context-negative",
+      "path": "mock-spy-options-context-negative",
+      "rule": "cross-file-duplicate",
+      "role": "negative",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-10-25",
+      "expectedTests": 4,
+      "expectedIncomplete": false,
+      "expectedUnresolved": 0,
+      "expectedFindings": [],
+      "expectedAbsent": [
+        {
+          "rule": "cross-file-duplicate",
+          "titles": [
+            "accepts the exported function",
+            "accepts the exported function"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "mock-spy-options-unreadable",
+      "path": "mock-spy-options-unreadable",
+      "rule": "duplicate-test",
+      "role": "negative",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-10-25",
+      "expectedTests": 2,
+      "expectedIncomplete": true,
+      "expectedUnresolved": 2,
+      "expectedFindings": [],
+      "expectedAbsent": [
+        {
+          "rule": "duplicate-test",
+          "titles": [
+            "first unknown observer",
+            "second unknown observer"
           ]
         }
       ]

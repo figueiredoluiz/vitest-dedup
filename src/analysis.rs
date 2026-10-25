@@ -270,7 +270,7 @@ pub const MAX_FINDINGS: usize = 10_000;
 /// enforced by an up-front filter rather than by a field that compares unequal to itself, which
 /// would break the `Eq` this key's `BTreeMap` grouping relies on.
 ///
-/// `MockFactory::Unresolved` and `FixtureValue::Unresolved` are both tri-state variants, not an
+/// `MockFactory::Unresolved` and `FixtureValue::Unresolved` are explicit variants, not an
 /// `Option::None` reused as a wildcard (`model.rs` documents this: a prior `Option<String>` shape
 /// conflated "automocked"/"a plain literal" with "we could not read this" -- the same class of bug
 /// `EachTable::rows` used to have before its `Unreadable` variant was anchored to the table

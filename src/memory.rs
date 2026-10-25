@@ -303,11 +303,11 @@ impl HeapBytes for HookGuard {
 }
 
 impl HeapBytes for MockFactory {
-    /// Count explicit factory source text; automock and unresolved markers allocate no heap
+    /// Count explicit factory source text; automock, spy and unresolved markers allocate no heap
     /// payload.
     fn heap_bytes(&self) -> usize {
         match self {
-            Self::Automock | Self::Unresolved => 0,
+            Self::Automock | Self::Spy | Self::Unresolved => 0,
             Self::Factory(source) => source.heap_bytes(),
         }
     }
@@ -1121,6 +1121,7 @@ mod tests {
     #[test]
     fn mock_factory_and_mocked_module_attribute_the_specifier_and_the_factory_source() {
         assert_eq!(MockFactory::Automock.heap_bytes(), 0);
+        assert_eq!(MockFactory::Spy.heap_bytes(), 0);
         assert_eq!(MockFactory::Unresolved.heap_bytes(), 0);
 
         let text = "x".repeat(3_000);
