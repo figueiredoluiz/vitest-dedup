@@ -54,29 +54,27 @@ value kinds remain distinct row identities. Titles follow their formatter: array
 renders `undefined` as empty, JSON array elements become `null`, and JSON object properties with
 that value are omitted.
 
-**Imported constants**: a cell naming a value import (`import { MODE } from './modes'`), or a
-local `const` the cell reads it through (`const L = MODE`, `` const L = `${MODE}-1` ``, a member of
-`const O = { a: MODE }`), is read when the import resolves, through named re-exports (`export { X } from`, or `import { X }`
-then `export { X }`), to a first-party module that declares it with a module-level `const` whose
-initializer is a string,
-number, signed number, boolean, `null`, bigint or substitution-free template literal, directly or
-through an earlier local `const` alias (never through a member read). The value then reads exactly
-like the literal. Everything else stays unresolved: `let`/`var` and `declare` exports, computed
-initializers (`'a' + 'b'`), `undefined`/`NaN`/`Infinity`, objects, arrays, calls, enum and object
-members, default and namespace imports, `export *`, declaration files, installed packages, and an
-import whose chain returns to the test file. An import is not read when the test file mocks a
-module or re-export hop on its chain (`vi.mock`, or a `mockNuxtImport` of a name on the chain). A
-file reads no imported constant at all when its mocking cannot be fully read (a `vi.doMock`, a
-nested or unreadable `vi.mock`, a mocked specifier that does not resolve, since a bundler alias
-can be spelled like a package; only a Node builtin does not count), or when it can
-redefine or remove a property of a module object, which is how an export is rewritten however the
-object was reached. Names are read decoded from identifiers, property keys, strings and template
-text: any `defineProperty`, `defineProperties`, `__defineGetter__`, `__defineSetter__` or
-`deleteProperty` counts, as does a `spyOn` other than a direct call with at most two plain
-arguments (`vi.spyOn(ns, 'X', 'get')` counts, `vi.spyOn(console, 'log')` does not), and a
-`delete` of any property but `process.env`'s. A name assembled at runtime is not seen. Mocks and
-property rewrites outside the test file, in `setupFiles` or in a module the test file imports, are
-not seen: the analyzer then reads the real value where Vitest uses the replacement.
+**Imported constants**: a cell that reads a value import (`import { MODE } from './modes'`),
+directly or through a local `const` (`const L = MODE`, `` `${MODE}-1` ``, a member of
+`{ a: MODE }`), reads its value when the import resolves through named re-exports
+(`export { X } from`, or `import { X }` then `export { X }`) to a first-party module-level `const`
+whose initializer is a string, number, signed number, boolean, `null`, bigint or
+substitution-free template literal, possibly through that module's own earlier `const` aliases.
+Anything else stays unresolved: `let`/`var`/`declare` exports, computed initializers,
+`undefined`/`NaN`/`Infinity`, composites, calls, member reads, default and namespace imports,
+`export *`, declaration files, installed packages, and a chain back to the test file.
+
+The test file must not be able to replace the value. An import is not read when the file mocks
+a module or re-export hop on its chain (`vi.mock`, or `mockNuxtImport` of a name on the chain).
+No imported constant is read in a file whose mocking cannot be fully read (`vi.doMock`, a nested
+or unreadable `vi.mock`, or a mocked specifier other than a Node builtin that does not resolve),
+or that can rewrite a module object's property, however the object was reached. That covers any
+`defineProperty`, `defineProperties`, `__defineGetter__`, `__defineSetter__` or `deleteProperty`,
+a `spyOn` other than a direct call with at most two plain arguments (`vi.spyOn(ns, 'X', 'get')`
+counts, `vi.spyOn(console, 'log')` does not), and a `delete` of any property but `process.env`'s.
+Names are compared decoded (escapes, renames and computed keys count); one assembled at runtime
+is not seen. Mocks and rewrites outside the test file, in `setupFiles` or in a module it imports,
+are not seen either: the analyzer then reads the real value where Vitest uses the replacement.
 
 **Static-analysis fallback rule**: whenever the table itself is not a literal array/object
 expression at the call site (e.g. `test.each(getCases())`), the extractor cannot enumerate rows at

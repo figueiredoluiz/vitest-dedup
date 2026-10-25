@@ -253,6 +253,7 @@ impl<'a> Walker<'a> {
     pub(super) fn prepare_imported_constants(&mut self, allocator: &'a Allocator) {
         // Unreadable mocks, and a mock that does not resolve, could replace any first-party module
         // (a package-shaped name may be a bundler alias). A Node builtin cannot be one.
+        let historical = !self.allow_imported;
         if self.mocks_unresolved
             || self.mocked_modules.iter().any(|mock| {
                 mock.specifier
@@ -268,7 +269,15 @@ impl<'a> Walker<'a> {
             .filter(|(_, import)| {
                 !import.erased
                     && !matches!(import.origin.exported.as_str(), "*" | "default")
-                    && import.origin.resolved.is_some()
+                    && match &import.origin.resolved {
+                        // Only first-party source can declare a provable constant.
+                        Some(path) => {
+                            !helpers::is_dependency(path)
+                                && crate::discovery::classify_source_file(path).is_some()
+                        }
+                        // A path a historical file imports may have existed in its revision.
+                        None => historical && resolver::names_a_path(&import.origin.specifier),
+                    }
             })
             .map(|(symbol, import)| {
                 let span = self.semantic.scoping().symbol_span(*symbol);
@@ -281,7 +290,6 @@ impl<'a> Walker<'a> {
         let semantic = self.semantic;
         let mocked = self.mocked_modules.clone();
         let own = helpers::canonical(&self.file.path);
-        let historical = !self.allow_imported;
         // A property this file can rewrite may be any import's (`vi.spyOn(ns, 'X', 'get')`);
         // decided once, on the first read.
         let rewrites = std::cell::OnceCell::new();
@@ -297,6 +305,9 @@ impl<'a> Walker<'a> {
             left.set(left.get() - 1);
             if *rewrites.get_or_init(|| imported_constants::redefines_accessors(semantic)) {
                 return Proof::Refused;
+            }
+            if origin.resolved.is_none() {
+                return Proof::Unavailable;
             }
             // An optional lookup: a hop that leaves the analysis root leaves the cell unresolved
             // without marking the file incomplete.
@@ -814,13 +825,7 @@ impl<'a> Walker<'a> {
                 }
             }
 
-            let identity = (
-                terminal
-                    .path
-                    .canonicalize()
-                    .unwrap_or_else(|_| terminal.path.clone()),
-                start,
-            );
+            let identity = (helpers::canonical(&terminal.path), start);
             if let Err(reason) = self.expansion.borrow_mut().enter(identity) {
                 return Some(Err(reason));
             }

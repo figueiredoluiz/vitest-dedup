@@ -608,3 +608,58 @@ fn local_bindings_do_not_spend_the_bound() {
     let tests = ConstantCase::new(&[("m.ts", "export const X = 'fast'")], &source).tests();
     assert_eq!(tests.last(), Some(&("t fast".to_owned(), false)));
 }
+
+#[test]
+/// A path a historical file reads that is gone today (a renamed module) may have held a constant
+/// in the base, so the base is partial; an uninstalled package could not have, so it is not.
+fn a_historical_read_of_a_vanished_path_is_partial() {
+    for (import, partial) in [
+        ("import { X } from './gone'", true),
+        ("import { X } from 'vitest-dedup-not-installed'", false),
+    ] {
+        let case = ConstantCase::new(
+            &[],
+            &format!(
+                "import {{ test }} from 'vitest'\n{import}\ntest.each([[X]])('t %s', () => {{}})\n"
+            ),
+        );
+        let historical = extract_with_imports(&case.source, &case.file, Globals::Disabled, false);
+        assert_eq!(
+            historical
+                .reasons
+                .contains(&ExclusionReason::HelperSourcesUnavailable),
+            partial,
+            "{import}"
+        );
+    }
+}
+
+#[test]
+/// An import from an installed package can never be proved, so reading it spends no bound.
+fn package_imports_do_not_spend_the_bound() {
+    let count = crate::frontend::registry::imported_constants::MAX_IMPORTED_CONSTANTS;
+    let names: Vec<String> = (0..count).map(|index| format!("P{index}")).collect();
+    let package: String = names
+        .iter()
+        .map(|name| format!("export const {name} = '{name}'\n"))
+        .collect();
+    let rows: Vec<String> = names.iter().map(|name| format!("[{name}]")).collect();
+    let source = format!(
+        "import {{ test }} from 'vitest'\nimport {{ {} }} from 'consts'\nimport {{ X }} from './m'\ntest.each([{}])('u %s', () => {{}})\ntest.each([[X]])('t %s', () => {{}})\n",
+        names.join(", "),
+        rows.join(", ")
+    );
+    let tests = ConstantCase::new(
+        &[
+            ("m.ts", "export const X = 'fast'"),
+            (
+                "node_modules/consts/package.json",
+                r#"{ "name": "consts", "main": "index.js" }"#,
+            ),
+            ("node_modules/consts/index.js", &package),
+        ],
+        &source,
+    )
+    .tests();
+    assert_eq!(tests.last(), Some(&("t fast".to_owned(), false)));
+}
