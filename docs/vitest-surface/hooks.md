@@ -59,11 +59,12 @@ that cannot know whether the hook runs.
 
 Exit tracking applies equally to braced blocks and single-statement bodies.
 
-A local `break` or `continue` at the end of a block does not erase an earlier possible return or
-throw. Hooks after the enclosing construct remain uncertain when any such path can skip them.
+A local `break` or `continue` at the end of a block does not erase an earlier possible return, or
+a throw under a `try` arm (see below for throws nothing catches). Hooks after the enclosing construct remain uncertain when any such path can skip them.
 
 A conditional break stops guarding later registrations once its known label destination has
-finished. A return or throw inside a labeled block can still skip hooks after that block; mixed
+finished. A return, or a throw under a `try` arm, inside a labeled block can still skip hooks
+after that block; mixed
 or unknown exit destinations retain their uncertainty.
 
 An exit after a nested suite registration does not make that suite's hooks conditional. A parent
@@ -72,7 +73,13 @@ the child suite was registered.
 
 A return inside an expanded local helper ends that helper, so it does not make later caller
 hooks conditional. Hooks registered under control flow inside the helper remain unresolved.
-An explicit throw encountered during expansion can escape to the caller, including from an unguarded call, so its exit
-uncertainty is retained; exception handlers are not evaluated to prove that it is caught.
+
+A throw that nothing catches during collection fails the whole file in Vitest: no test runs, so
+it cannot skip a hook for a test that does. A conditional exit that can only throw therefore
+guards nothing when no `try` arm encloses it -- in the module, a suite callback, or an expanded
+helper and its callers up to the nearest suite callback. A `try` around `describe(...)` does not
+catch its callback's throw, because the callback runs later. Under any `try` arm, a throw that can
+escape to later hooks keeps its uncertainty, as does a `return`; handlers are not evaluated to
+prove what they catch.
 
 Back to the [Vitest surface index](../vitest-surface.md).

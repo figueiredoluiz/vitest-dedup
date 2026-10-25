@@ -1169,6 +1169,88 @@ struct Fallthrough {
     label_target: Option<String>,
 }
 
+/// The exits one statement can take, outside nested functions and literal-dead branches.
+#[derive(Default)]
+struct ExitDestinations<'s> {
+    source: &'s str,
+    /// See [`Walker::throw_fails_file`]: such a throw skips no registration a test could
+    /// observe, so it is no exit here.
+    ignore_throws: bool,
+    local_labels: Vec<String>,
+    label: Option<String>,
+    mixed: bool,
+    escapes: bool,
+    /// Any reachable `return`, `break` or `continue`, local or not.
+    jumped: bool,
+}
+
+impl ExitDestinations<'_> {
+    /// Local destinations stay inside this statement; external names share one target only
+    /// when every observed jump agrees. Unlabeled jumps have no named destination.
+    fn record_jump(&mut self, label: &Option<LabelIdentifier<'_>>) {
+        self.jumped = true;
+        if let Some(label) = label {
+            let target = label.name.as_str();
+            if self.local_labels.iter().any(|local| local == target) {
+                return;
+            }
+            self.escapes = true;
+            if self.label.as_deref().is_some_and(|prior| prior != target) {
+                self.mixed = true;
+            } else {
+                self.label = Some(target.to_owned());
+            }
+        } else {
+            self.mixed = true;
+        }
+    }
+}
+
+impl<'a> Visit<'a> for ExitDestinations<'_> {
+    /// Records jumps and exits; a literal condition visits only the arm it selects.
+    fn visit_statement(&mut self, statement: &Statement<'a>) {
+        match statement {
+            Statement::BreakStatement(jump) => self.record_jump(&jump.label),
+            Statement::ThrowStatement(_) if self.ignore_throws => {}
+            Statement::ReturnStatement(_) | Statement::ThrowStatement(_) => {
+                self.jumped |= matches!(statement, Statement::ReturnStatement(_));
+                self.mixed = true;
+                self.escapes = true;
+            }
+            Statement::ContinueStatement(jump) => self.record_jump(&jump.label),
+            Statement::LabeledStatement(labeled) => {
+                self.local_labels
+                    .push(labeled.label.name.as_str().to_owned());
+                self.visit_statement(&labeled.body);
+                self.local_labels.pop();
+            }
+            Statement::IfStatement(branch) => {
+                let span = branch.test.span();
+                match self.source.get(span.start as usize..span.end as usize) {
+                    Some("true") => self.visit_statement(&branch.consequent),
+                    Some("false") => {
+                        if let Some(alternate) = &branch.alternate {
+                            self.visit_statement(alternate);
+                        }
+                    }
+                    _ => walk::walk_statement(self, statement),
+                }
+            }
+            _ => walk::walk_statement(self, statement),
+        }
+    }
+
+    /// A nested function's exits leave that function, not this statement.
+    fn visit_function(&mut self, _function: &Function<'a>, _flags: ScopeFlags) {}
+
+    /// A nested arrow's exits leave that arrow, not this statement.
+    fn visit_arrow_function_expression(
+        &mut self,
+        _arrow: &oxc_ast::ast::ArrowFunctionExpression<'a>,
+    ) {
+    }
+}
+
 /// One enclosing registration position and its optional raw controlling expression.
 #[derive(Clone)]
 struct PendingGuard {
@@ -1732,7 +1814,7 @@ impl<'a> Walker<'a> {
                 self.label_stack.pop();
             }
             Statement::ThrowStatement(_) => {
-                if !self.guards_prove_unreachable() {
+                if !self.guards_prove_unreachable() && !self.throw_fails_file() {
                     for frame in &mut self.helper_frames {
                         frame.saw_throw = true;
                     }
@@ -1928,9 +2010,7 @@ impl<'a> Walker<'a> {
             }
             if self.always_terminates(statement) {
                 terminated = true;
-                terminal_exit = self
-                    .exit_escapes(statement)
-                    .then(|| self.residual_exit_targets(statement).0);
+                terminal_exit = self.terminal_exit(statement);
             } else if let Statement::IfStatement(if_statement) = statement {
                 // Exactly one branch always leaves: every later statement runs only through the
                 // branch that falls through -- the implicit alternate when the consequent
@@ -1947,17 +2027,19 @@ impl<'a> Walker<'a> {
                 match test.as_str() {
                     "true" if consequent_leaves => {
                         terminated = true;
-                        terminal_exit = self
-                            .exit_escapes(statement)
-                            .then(|| self.residual_exit_targets(statement).0);
+                        terminal_exit = self.terminal_exit(statement);
                     }
                     "false" if alternate_leaves => {
                         terminated = true;
-                        terminal_exit = self
-                            .exit_escapes(statement)
-                            .then(|| self.residual_exit_targets(statement).0);
+                        terminal_exit = self.terminal_exit(statement);
                     }
                     "true" | "false" => {}
+                    _ if consequent_leaves && self.only_throws(&if_statement.consequent) => {}
+                    _ if alternate_leaves
+                        && if_statement
+                            .alternate
+                            .as_ref()
+                            .is_some_and(|alternate| self.only_throws(alternate)) => {}
                     _ if consequent_leaves => {
                         let (label_target, escapes) =
                             self.residual_exit_targets(&if_statement.consequent);
@@ -2005,6 +2087,14 @@ impl<'a> Walker<'a> {
         }
     }
 
+    /// The exit an unconditional terminator leaves its list through: its label target, if
+    /// known, when it can escape the current construct. `None` when it cannot escape, or when it
+    /// only throws an exception that fails the file (see [`Self::only_throws`]).
+    fn terminal_exit(&self, statement: &Statement<'a>) -> Option<Option<String>> {
+        (self.exit_escapes(statement) && !self.only_throws(statement))
+            .then(|| self.residual_exit_targets(statement).0)
+    }
+
     /// Record an observed escaping path until its known label or function boundary ends.
     fn record_exit_target(&mut self, target: Option<String>) {
         let scope = self.hook_scopes.last_mut().expect("root hook scope");
@@ -2013,6 +2103,55 @@ impl<'a> Walker<'a> {
         } else {
             scope.exit_unexpressible = true;
         }
+    }
+
+    /// Whether a `throw` at the current position fails the whole file. Vitest 5 fails a file on
+    /// any collection-time throw nothing catches -- no test runs, earlier or later -- so such a
+    /// throw cannot leave a test running without a hook and guards nothing. Uncaught means no
+    /// `try` position on the guard stack: the stack continues through helper expansion and
+    /// imported runners, where a caller's `try` does catch, and restarts at each suite callback,
+    /// which Vitest runs after the enclosing `try` has finished. A `finally`-only `try` counts
+    /// as catching, which refuses more than needed.
+    fn throw_fails_file(&self) -> bool {
+        !self.guards.iter().any(|guard| {
+            matches!(
+                guard.kind,
+                HookGuardKind::TryBlock | HookGuardKind::CatchHandler | HookGuardKind::FinallyBlock
+            )
+        })
+    }
+
+    /// Whether an arm that always terminates ends only by a throw that fails the file: no
+    /// reachable `return`, `break` or `continue` outside nested functions, so taking it runs no
+    /// test.
+    fn only_throws(&self, arm: &Statement<'a>) -> bool {
+        self.throw_fails_file() && !self.exit_destinations(arm).jumped
+    }
+
+    /// Summarize possible exits once: their common label target, if known, and whether any
+    /// can escape the current construct. Literal-unreachable branches and nested functions
+    /// contribute no exits; unknown conditions retain both paths.
+    fn residual_exit_targets(&self, statement: &Statement<'a>) -> (Option<String>, bool) {
+        let destinations = self.exit_destinations(statement);
+        (
+            if destinations.mixed {
+                None
+            } else {
+                destinations.label
+            },
+            destinations.escapes,
+        )
+    }
+
+    /// Walks one statement's reachable exits; see [`ExitDestinations`].
+    fn exit_destinations(&self, statement: &Statement<'a>) -> ExitDestinations<'a> {
+        let mut destinations = ExitDestinations {
+            source: self.source,
+            ignore_throws: self.throw_fails_file(),
+            ..ExitDestinations::default()
+        };
+        destinations.visit_statement(statement);
+        destinations
     }
 
     /// These recorded positions are already known unreachable; no general condition folding
@@ -2024,92 +2163,6 @@ impl<'a> Walker<'a> {
             HookGuardKind::IfAlternate => guard.text.as_deref() == Some("true"),
             _ => false,
         })
-    }
-
-    /// Summarize possible exits once: their common label target, if known, and whether any
-    /// can escape the current construct. Literal-unreachable branches and nested functions
-    /// contribute no exits; unknown conditions retain both paths.
-    fn residual_exit_targets(&self, statement: &Statement<'a>) -> (Option<String>, bool) {
-        #[derive(Default)]
-        struct Destinations<'s> {
-            source: &'s str,
-            local_labels: Vec<String>,
-            label: Option<String>,
-            mixed: bool,
-            escapes: bool,
-        }
-        impl Destinations<'_> {
-            /// Local destinations stay inside this statement; external names share one target
-            /// only when every observed jump agrees. Unlabeled jumps have no named destination.
-            fn record_jump(&mut self, label: &Option<LabelIdentifier<'_>>) {
-                if let Some(label) = label {
-                    let target = label.name.as_str();
-                    if self.local_labels.iter().any(|local| local == target) {
-                        return;
-                    }
-                    self.escapes = true;
-                    if self.label.as_deref().is_some_and(|prior| prior != target) {
-                        self.mixed = true;
-                    } else {
-                        self.label = Some(target.to_owned());
-                    }
-                } else {
-                    self.mixed = true;
-                }
-            }
-        }
-        impl<'a> Visit<'a> for Destinations<'_> {
-            fn visit_statement(&mut self, statement: &Statement<'a>) {
-                match statement {
-                    Statement::BreakStatement(jump) => self.record_jump(&jump.label),
-                    Statement::ReturnStatement(_) | Statement::ThrowStatement(_) => {
-                        self.mixed = true;
-                        self.escapes = true;
-                    }
-                    Statement::ContinueStatement(jump) => self.record_jump(&jump.label),
-                    Statement::LabeledStatement(labeled) => {
-                        self.local_labels
-                            .push(labeled.label.name.as_str().to_owned());
-                        self.visit_statement(&labeled.body);
-                        self.local_labels.pop();
-                    }
-                    Statement::IfStatement(branch) => {
-                        let span = branch.test.span();
-                        match self.source.get(span.start as usize..span.end as usize) {
-                            Some("true") => self.visit_statement(&branch.consequent),
-                            Some("false") => {
-                                if let Some(alternate) = &branch.alternate {
-                                    self.visit_statement(alternate);
-                                }
-                            }
-                            _ => walk::walk_statement(self, statement),
-                        }
-                    }
-                    _ => walk::walk_statement(self, statement),
-                }
-            }
-
-            fn visit_function(&mut self, _function: &Function<'a>, _flags: ScopeFlags) {}
-
-            fn visit_arrow_function_expression(
-                &mut self,
-                _arrow: &oxc_ast::ast::ArrowFunctionExpression<'a>,
-            ) {
-            }
-        }
-        let mut destinations = Destinations {
-            source: self.source,
-            ..Destinations::default()
-        };
-        destinations.visit_statement(statement);
-        (
-            if destinations.mixed {
-                None
-            } else {
-                destinations.label
-            },
-            destinations.escapes,
-        )
     }
 
     /// Whether executing this statement ends the execution its enclosing list was promised,
@@ -7842,8 +7895,9 @@ mod tests {
         tests
     }
 
-    /// A helper's local return does not govern later caller hooks; guarded registrations and
-    /// throws still refuse comparison. The same sources run in the owned runtime corpus.
+    /// A helper's local return, or a throw nothing catches, does not govern later caller hooks;
+    /// guarded registrations and a throw under the caller's `try` still refuse comparison. The
+    /// same sources run in the owned runtime corpus.
     #[test]
     fn helper_exit_hook_boundaries() {
         for (source, unresolved) in [
@@ -7852,7 +7906,17 @@ mod tests {
                 false,
             ),
             (
-                include_str!("../../fixtures/recall/helper-throw-hook-uncertainty/run.test.ts"),
+                include_str!("../../fixtures/recall/helper-throw-hook-retention/run.test.ts"),
+                false,
+            ),
+            (
+                include_str!("../../fixtures/recall/collection-throw-hook-retention/run.test.ts"),
+                false,
+            ),
+            (
+                include_str!(
+                    "../../fixtures/recall/caught-helper-throw-hook-uncertainty/run.test.ts"
+                ),
                 true,
             ),
             (
@@ -7909,7 +7973,8 @@ mod tests {
         }
         for (helper, unresolved) in [
             ("function inner(skip) { if (skip) return }\nfunction finish(skip) { inner(skip); return }", false),
-            ("function inner(skip) { if (skip) throw new Error('stop') }\nfunction finish(skip) { inner(skip); return }", true),
+            ("function inner(skip) { if (skip) throw new Error('stop') }\nfunction finish(skip) { inner(skip); return }", false),
+            ("function inner(skip) { if (skip) throw new Error('stop') }\nfunction finish(skip) { try { inner(skip) } finally {} return }", true),
             ("function finish(skip) { if (skip) return; beforeEach(() => { state.n = 1 }) }", true),
         ] {
             let source = source.replace("function finish(skip) {\n  if (skip) return\n}", helper);
@@ -7995,7 +8060,8 @@ mod tests {
             ("stop: { if (enabled) break stop; beforeEach(() => { state.n = 1 }) }", true),
             ("outer: { stop: { if (enabled) break outer } beforeEach(() => { state.n = 1 }) }", true),
             ("stop: { if (enabled) { if (enabled) return; break stop } }", true),
-            ("stop: { if (enabled) { if (enabled) throw new Error('stop'); break stop } }", true),
+            ("stop: { if (enabled) { if (enabled) throw new Error('stop'); break stop } }", false),
+            ("stop: { if (enabled) { try { if (enabled) throw new Error('stop') } finally {} break stop } }", true),
             ("outer: { stop: { if (enabled) { if (enabled) break outer; break stop } } }", true),
             ("stop: { if (enabled) { for (;;) { break } break stop } }", true),
             ("stop: { if (enabled) { for (const x of []) { continue } break stop } }", true),
@@ -8042,7 +8108,8 @@ mod tests {
             ("for (const n of [1]) { if (enabled) return; continue }", "", true),
             ("switch (true) { case true: if (enabled) return; else break }", "", true),
             ("switch (true) { case true: if (enabled) break; else return }", "", true),
-            ("switch (true) { case true: if (enabled) throw new Error('stop'); break }", "", true),
+            ("switch (true) { case true: if (enabled) throw new Error('stop'); break }", "", false),
+            ("switch (true) { case true: try { if (enabled) throw new Error('stop') } finally {} break }", "", true),
             ("stop: { for (const n of [1]) { if (enabled) { try { break stop } finally {} } }", "}", true),
             ("stop: { for (const n of [1]) { break stop }", "}", true),
             ("outer: for (const n of [1]) { for (const m of [1]) { if (enabled) { try { continue outer } finally {} } }", "}", true),
@@ -8060,12 +8127,14 @@ mod tests {
             ("function finish() { if (false) throw new Error('stop'); return } finish()", "", false),
             ("function finish() { return; throw new Error('stop') } finish()", "", false),
             ("function finish() { if (true) return; else throw new Error('stop') } finish()", "", false),
-            ("function finish() { if (false) return; else throw new Error('stop') } finish()", "", true),
+            ("function finish() { if (false) return; else throw new Error('stop') } finish()", "", false),
+            ("function finish() { if (false) return; else throw new Error('stop') } try { finish() } finally {}", "", true),
             ("for (const n of [1]) { inner: { break inner } break }", "", false),
             ("for (const n of [1]) { inner: for (const m of [1]) { continue inner } break }", "", false),
             ("if (enabled) { stop: { if (enabled) break stop } }", "", false),
             ("function finish() { if (enabled) return } stop: { for (const n of [1]) { finish(); break stop } }", "", false),
-            ("function fail() { if (enabled) throw new Error('stop') } stop: { for (const n of [1]) { fail(); break stop } }", "", true),
+            ("function fail() { if (enabled) throw new Error('stop') } stop: { for (const n of [1]) { fail(); break stop } }", "", false),
+            ("function fail() { if (enabled) throw new Error('stop') } stop: { for (const n of [1]) { try { fail() } finally {} break stop } }", "", true),
             ("function finish() { stop: {} } stop: { for (const n of [1]) { if (enabled) break stop } finish();", "}", true),
         ] {
             for named in [false, true] {
@@ -8092,8 +8161,8 @@ mod tests {
                 false,
             ),
             (
-                include_str!("../../fixtures/recall/helper-plain-throw-uncertainty/run.test.ts"),
-                true,
+                include_str!("../../fixtures/recall/helper-plain-throw-retention/run.test.ts"),
+                false,
             ),
             (
                 include_str!("../../fixtures/recall/helper-plain-return-retention/run.test.ts"),

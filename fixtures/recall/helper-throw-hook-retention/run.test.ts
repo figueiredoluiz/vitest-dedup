@@ -1,10 +1,11 @@
-// An explicit helper throw can escape into its caller; keep that uncertainty.
+// A helper throw nothing catches fails the whole file, so it cannot skip later hooks.
 import { describe, test, expect, beforeEach } from 'vitest'
 
 const state = { n: 0 }
 // Reset for every test so another suite's hook cannot mask an absent registration.
 beforeEach(() => { state.n = 0 })
 
+/** Throws when asked to stop. */
 function finish(skip) {
   if (skip) throw new Error("stop")
 }

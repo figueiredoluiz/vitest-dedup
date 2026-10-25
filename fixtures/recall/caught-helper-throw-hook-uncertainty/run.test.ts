@@ -1,14 +1,18 @@
-// A possible helper throw affects later hooks even when the call is unguarded.
+// A helper throw the caller catches lets collection continue without the later hooks; keep that
+// uncertainty.
 import { describe, test, expect, beforeEach } from 'vitest'
 
 const state = { n: 0 }
 // Reset for every test so another suite's hook cannot mask an absent registration.
 beforeEach(() => { state.n = 0 })
 
+/** Throws when asked to stop. */
 function finish(skip) {
-  if (skip) throw new Error("stop")
+  if (skip) throw new Error('stop')
 }
-finish(false)
+try {
+  finish(false)
+} catch {}
 
 describe('suite-a', () => {
   test('reads', () => {
