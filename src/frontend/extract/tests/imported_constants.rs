@@ -213,7 +213,7 @@ fn the_number_of_proved_imports_is_bounded() {
     );
     let tests = ConstantCase::new(&[("m.ts", &module)], &source).tests();
     assert_eq!(tests.len(), count);
-    // Imports are tried in declaration order, so only the last row is past the bound.
+    // Imports are proved in the order cells first read them, so only the last row is past it.
     let unresolved: Vec<usize> = tests
         .iter()
         .enumerate()
@@ -591,4 +591,20 @@ fn a_member_of_a_local_object_over_the_import_resolves() {
     )
     .tests();
     assert_eq!(tests, vec![("t fast".to_owned(), false)]);
+}
+
+#[test]
+/// Only import reads spend the bound: cells naming local bindings do not.
+fn local_bindings_do_not_spend_the_bound() {
+    let count = crate::frontend::registry::imported_constants::MAX_IMPORTED_CONSTANTS;
+    let locals: String = (0..count)
+        .map(|index| format!("const L{index} = 'l{index}'\n"))
+        .collect();
+    let rows: Vec<String> = (0..count).map(|index| format!("[L{index}]")).collect();
+    let source = format!(
+        "import {{ test }} from 'vitest'\nimport {{ X }} from './m'\n{locals}test.each([{}])('u %s', () => {{}})\ntest.each([[X]])('t %s', () => {{}})\n",
+        rows.join(", ")
+    );
+    let tests = ConstantCase::new(&[("m.ts", "export const X = 'fast'")], &source).tests();
+    assert_eq!(tests.last(), Some(&("t fast".to_owned(), false)));
 }

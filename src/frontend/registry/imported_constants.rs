@@ -32,17 +32,10 @@ pub(in crate::frontend) enum Proof<'a> {
 }
 
 impl<'a> ImportedConstants<'a> {
-    /// Constants proved on demand by `prove`, at most [`MAX_IMPORTED_CONSTANTS`] bindings a file.
+    /// Constants proved on demand by `prove`, which also bounds how many imports it proves.
     pub(in crate::frontend) fn lazy(prove: Box<dyn Fn(SymbolId) -> Proof<'a> + 'a>) -> Self {
-        let left = std::cell::Cell::new(MAX_IMPORTED_CONSTANTS);
         Self {
-            prove: Some(Box::new(move |symbol| {
-                if left.get() == 0 {
-                    return Proof::Refused;
-                }
-                left.set(left.get() - 1);
-                prove(symbol)
-            })),
+            prove: Some(prove),
             ..Self::default()
         }
     }

@@ -285,10 +285,16 @@ impl<'a> Walker<'a> {
         // A property this file can rewrite may be any import's (`vi.spyOn(ns, 'X', 'get')`);
         // decided once, on the first read.
         let rewrites = std::cell::OnceCell::new();
+        // Counted per import read: a local binding a cell names spends nothing.
+        let left = std::cell::Cell::new(imported_constants::MAX_IMPORTED_CONSTANTS);
         self.imported_constants = ImportedConstants::lazy(Box::new(move |symbol| {
             let Some((origin, span)) = imports.get(&symbol) else {
                 return Proof::Refused;
             };
+            if left.get() == 0 {
+                return Proof::Refused;
+            }
+            left.set(left.get() - 1);
             if *rewrites.get_or_init(|| imported_constants::redefines_accessors(semantic)) {
                 return Proof::Refused;
             }
