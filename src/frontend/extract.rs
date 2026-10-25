@@ -200,7 +200,12 @@ pub(super) const MAX_NESTING_DEPTH: usize = 256;
 /// Independent upper bound on recursion-bearing raw syntax units. It deliberately also counts
 /// text in strings/comments/regexes, so lexical ambiguity cannot hide recursive syntax. Wide or
 /// punctuation-heavy generated inputs may be refused even when their actual syntax is shallow.
-const MAX_RAW_SYNTAX_UNITS: usize = 8_192;
+///
+/// Set three times below the shallowest chain that overflows [`EXTRACTION_STACK_BYTES`] on a debug
+/// build, the larger frames of the two: an assignment chain overflows from about 114,800 units
+/// (release from about 245,000). At this value every chain class completes, and the slowest, a
+/// call chain, which the parser handles in quadratic time, takes a few seconds.
+const MAX_RAW_SYNTAX_UNITS: usize = 36_864;
 
 /// Checks every production parser entry before Oxc sees source. No JS tokenization or recursion.
 /// Keywords cover bracket-free unary/control/type chains; punctuation covers calls, member and

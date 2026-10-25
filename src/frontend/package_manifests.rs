@@ -736,7 +736,7 @@ const WORKER_STACK: usize = 64 * 1024 * 1024;
 ///
 /// A parser stack overflow aborts the whole process and `oxc_parser` has no recursion limit, so
 /// by default (library callers, tests) a script that trips the parser's raw syntax size
-/// budget (8,192 units) is refused unread. The command-line tool calls this instead: the scan then runs
+/// budget (36,864 units) is refused unread. The command-line tool calls this instead: the scan then runs
 /// in a worker started from the current executable, without the budget, and a worker that
 /// crashes, times out, cannot be started or answers anything but a complete verdict refuses the
 /// package. There is no in-process fallback once this is on. The embedding executable must call
@@ -1239,7 +1239,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let package = install(directory.path(), "bundle", r#"{"name":"bundle"}"#);
         let entry = package.join("index.js");
-        let flat = "x();\n".repeat(10_000);
+        let flat = "x();\n".repeat(40_000);
         fs::write(&entry, &flat).unwrap();
         assert!(reached_files_register(&entry, true, true));
         assert!(!reached_files_register(&entry, true, false));

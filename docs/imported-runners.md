@@ -205,7 +205,7 @@ generated list are not read.
   and a 64 MiB parser stack, so a large bundle is read and a script that crashes or hangs the parser
   refuses only its package; a worker that cannot be started, times out, crashes or answers anything but
   a complete verdict refuses it too. A program that embeds the library gets an in-process scan instead,
-  which refuses a script past the parser's syntax size budget (8,192 units) unread, unless it calls
+  which refuses a script past the parser's syntax size budget (36,864 units) unread, unless it calls
   `frontend::use_package_worker` and runs `frontend::run_package_worker` first in `main`.
 - Worker stdout is read within the same deadline as its exit, with at most 256 bytes accepted.
   A descendant holding stdout open cannot extend that deadline. On Unix a failed read kills the

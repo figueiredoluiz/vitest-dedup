@@ -17,16 +17,16 @@ fn hostile_sources() -> Vec<(&'static str, String)> {
         ("unary", format!("const x={}1;", "!".repeat(200_000))),
         (
             "escaped-keyword",
-            format!("const x={}0;", r"\u0076oid ".repeat(20_000)),
+            format!("const x={}0;", r"\u0076oid ".repeat(40_000)),
         ),
         ("control", format!("{}{{}}", "if(a)".repeat(200_000))),
-        ("member", format!("x{};", ".a".repeat(20_000))),
-        ("call", format!("f{};", "()".repeat(20_000))),
+        ("member", format!("x{};", ".a".repeat(40_000))),
+        ("call", format!("f{};", "()".repeat(40_000))),
         (
             "label",
             format!(
                 "{}{{}}",
-                (0..20_000).map(|i| format!("l{i}:")).collect::<String>()
+                (0..40_000).map(|i| format!("l{i}:")).collect::<String>()
             ),
         ),
         ("arrow", format!("const f={}1;", "x=>".repeat(20_000))),
@@ -38,7 +38,7 @@ fn hostile_sources() -> Vec<(&'static str, String)> {
                 "</a>".repeat(20_000)
             ),
         ),
-        ("type", format!("type T={}X;", "keyof ".repeat(20_000))),
+        ("type", format!("type T={}X;", "keyof ".repeat(40_000))),
     ]
 }
 
@@ -209,38 +209,41 @@ fn current_and_revision_extraction_share_the_same_refusal_contract() {
 }
 
 /// Exercise admitted deep syntax on the worker stack without aborting, losing the test or reporting findings.
+/// Each chain sits just under the raw syntax budget; a call chain that long takes seconds on a debug build.
 #[test]
 fn admitted_bracket_free_chains_use_the_bounded_worker_stack() {
     let cases = [
-        ("member", format!("external{}();", ".member".repeat(8_000))),
+        ("member", format!("external{}();", ".member".repeat(36_000))),
         (
             "masked-parentheses",
             format!(
                 "const re=/a\\/*/;const x={}1{};",
-                "(".repeat(8_000),
-                ")".repeat(8_000)
+                "(".repeat(36_000),
+                ")".repeat(36_000)
             ),
         ),
-        ("unary", format!("const x={}1;", "void ".repeat(8_000))),
-        ("control", format!("{}{{}}", "if(a)".repeat(4_000))),
+        ("unary", format!("const x={}1;", "void ".repeat(36_000))),
+        ("control", format!("{}{{}}", "if(a)".repeat(18_000))),
         (
             "label",
             format!(
                 "{}{{}}",
-                (0..8_000).map(|i| format!("l{i}:")).collect::<String>()
+                (0..36_000).map(|i| format!("l{i}:")).collect::<String>()
             ),
         ),
-        ("arrow", format!("const f={}1;", "x=>".repeat(4_000))),
+        ("arrow", format!("const f={}1;", "x=>".repeat(18_000))),
+        ("assign", format!("let a;{}=1;", "a=".repeat(36_000))),
+        ("call", format!("f{};", "()".repeat(36_000))),
         (
             "jsx",
             format!(
                 "const x={}text{};",
-                "<a>".repeat(1_500),
-                "</a>".repeat(1_500)
+                "<a>".repeat(7_000),
+                "</a>".repeat(7_000)
             ),
         ),
-        ("tagged", format!("const x=tag{};", "`text`".repeat(4_000))),
-        ("type", format!("type T={}X;", "keyof ".repeat(8_000))),
+        ("tagged", format!("const x=tag{};", "`text`".repeat(18_000))),
+        ("type", format!("type T={}X;", "keyof ".repeat(36_000))),
     ];
     for (name, body) in cases {
         let dir = tempfile::tempdir().unwrap();
@@ -257,7 +260,7 @@ fn admitted_bracket_free_chains_use_the_bounded_worker_stack() {
         let prefix = dir.path().join("report");
         let output = Command::cargo_bin("vitest-dedup")
             .unwrap()
-            .timeout(Duration::from_secs(15))
+            .timeout(Duration::from_secs(60))
             .arg(dir.path())
             .args(["--reporters", "json", "--output"])
             .arg(&prefix)

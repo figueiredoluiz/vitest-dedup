@@ -134,7 +134,7 @@ alone. Past the cap the files with the fewest excluded tests are left out of the
 ## Source limits
 
 Source files are limited to 8 MiB. Before parsing, the frontend also refuses lexical bracket
-nesting deeper than 256 and more than 8,192 raw syntax units.
+nesting deeper than 256 and more than 36,864 raw syntax units.
 
 - The units count opening brackets, operator, member, label and escape punctuation, and recursive
   control and type keywords, including occurrences in strings, comments and regexes.

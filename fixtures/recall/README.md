@@ -201,7 +201,7 @@ the positive pair asserts both the original return value and the recorded spy ca
 
 `minimumRecall` is the measured value rounded down, not the target: a gate that is red on arrival
 gets routed around, after which the number it guards is worse than unmeasured. `recallDestination`
-records the destination. The corpus currently detects 189 of the 190 findings its labels desire --
+records the destination. The corpus currently detects 190 of the 191 findings its labels desire --
 every `expectedFindings` entry matches; the denominator's one gap is the known miss of the framework
 cases above -- so `minimumRecall` stays 0.99 and `knownMissBaseline` stays 1. Each change that finds
 one of them moves its entry from `knownMisses` to
