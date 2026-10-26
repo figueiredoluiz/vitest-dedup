@@ -90,6 +90,7 @@ use super::fingerprint::{
     HelperRendering, ImportOrigin, Mode,
 };
 use super::resolver::{self, Resolved};
+use crate::frontend::js_text::string_text;
 use oxc_allocator::Allocator;
 use oxc_ast::ast::{
     ArrowFunctionExpression, BindingPattern, Declaration, ExportDefaultDeclarationKind,
@@ -846,7 +847,7 @@ fn reexport_hop(it: &ExportFromDeclaration, export: &str) -> Option<(String, Str
         return None;
     }
     specifier_local(&it.specifiers, export)
-        .map(|local| (it.source.value.as_str().to_owned(), local))
+        .map(|local| (string_text(&it.source).into_owned(), local))
 }
 
 /// What a named export of a value is in `program`: declared by a module-level binding (its local
@@ -911,7 +912,7 @@ fn imported_binding(program: &Program, local: &str) -> Option<(String, String)> 
                         ) =>
                 {
                     Some((
-                        import.source.value.as_str().to_owned(),
+                        string_text(&import.source).into_owned(),
                         module_export_name(&specifier.imported),
                     ))
                 }

@@ -11,11 +11,13 @@ use super::{
     const_declarator, peeled, unwrap_transparent, FoldScope, ImportedConstants, MAX_VALUE_HOPS,
 };
 use crate::frontend::helpers::{find_value_export, with_parsed_file, ValueExport};
+use crate::frontend::js_text::{cooked_text, string_text};
 use oxc_allocator::{Allocator, CloneIn};
 use oxc_ast::ast::{Argument, Expression, UnaryOperator};
 use oxc_ast::AstKind;
 use oxc_semantic::{Semantic, SemanticBuilder, SymbolId};
 use oxc_span::{GetSpanMut, Span};
+use std::borrow::Cow;
 use std::path::Path;
 
 /// Most import reads one file tries to prove, refused ones included; each costs a parse of its
@@ -94,16 +96,16 @@ pub(in crate::frontend) fn redefines_accessors(semantic: &Semantic) -> bool {
         // that reads `spyOn` names nothing.
         let mut text = false;
         let name = match node.kind() {
-            AstKind::IdentifierName(name) => Some(name.name.as_str()),
-            AstKind::IdentifierReference(ident) => Some(ident.name.as_str()),
-            AstKind::BindingIdentifier(binding) => Some(binding.name.as_str()),
+            AstKind::IdentifierName(name) => Some(Cow::Borrowed(name.name.as_str())),
+            AstKind::IdentifierReference(ident) => Some(Cow::Borrowed(ident.name.as_str())),
+            AstKind::BindingIdentifier(binding) => Some(Cow::Borrowed(binding.name.as_str())),
             AstKind::StringLiteral(literal) => {
                 text = true;
-                Some(literal.value.as_str())
+                Some(string_text(literal))
             }
             AstKind::TemplateElement(element) => {
                 text = true;
-                element.value.cooked.as_ref().map(|c| c.as_str())
+                cooked_text(&element.value)
             }
             AstKind::UnaryExpression(unary) if unary.operator == UnaryOperator::Delete => {
                 return true;
@@ -128,7 +130,7 @@ pub(in crate::frontend) fn redefines_accessors(semantic: &Semantic) -> bool {
             }
             _ => None,
         };
-        match name {
+        match name.as_deref() {
             Some(name) if REDEFINING_NAMES.contains(&name) => return true,
             // A type (`ReturnType<typeof vi.spyOn>`) runs nothing.
             Some("spyOn")

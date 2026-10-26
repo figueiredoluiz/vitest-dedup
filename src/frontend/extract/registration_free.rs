@@ -24,6 +24,7 @@
 
 use crate::frontend::auto_imports;
 use crate::frontend::helpers;
+use crate::frontend::js_text::string_text;
 use crate::frontend::resolver::{self, Resolved};
 use oxc_allocator::Allocator;
 use oxc_ast::ast::{
@@ -823,7 +824,7 @@ impl<'s, 'a> Scanner<'s, 'a> {
             let Statement::ImportDeclaration(import) = statement else {
                 continue;
             };
-            let source = import.source.value.as_str();
+            let source: &str = &string_text(&import.source);
             for specifier in import.specifiers.iter().flatten() {
                 let (local, imported) = import_binding(specifier);
                 if let Some(symbol) = local.symbol_id.get() {
@@ -958,7 +959,7 @@ impl<'s, 'a> Scanner<'s, 'a> {
     /// is erased by the TypeScript transform, so one that names no module on disk (a package
     /// that ships only types) costs nothing; a resolvable one is still loaded.
     fn import_edge(&mut self, import: &'a oxc_ast::ast::ImportDeclaration<'a>) {
-        let specifier = import.source.value.as_str();
+        let specifier: &str = &string_text(&import.source);
         let unread = import.specifiers.as_ref().is_some_and(|specifiers| {
             !specifiers.is_empty()
                 && specifiers.iter().all(|specifier| {
@@ -996,12 +997,12 @@ impl<'s, 'a> Scanner<'s, 'a> {
                 Statement::ExportFromDeclaration(export)
                     if !matches!(export.export_kind, ImportOrExportKind::Type) =>
                 {
-                    self.module_edge(self.file, export.source.value.as_str(), Root::ImportTime);
+                    self.module_edge(self.file, &string_text(&export.source), Root::ImportTime);
                 }
                 Statement::ExportAllDeclaration(export)
                     if !matches!(export.export_kind, ImportOrExportKind::Type) =>
                 {
-                    self.module_edge(self.file, export.source.value.as_str(), Root::ImportTime);
+                    self.module_edge(self.file, &string_text(&export.source), Root::ImportTime);
                 }
                 Statement::ClassDeclaration(class) => self.seed_class(class),
                 Statement::ExpressionStatement(statement) => {
@@ -1101,7 +1102,7 @@ impl<'s, 'a> Scanner<'s, 'a> {
                             found = true;
                             self.module_edge(
                                 self.file,
-                                export.source.value.as_str(),
+                                string_text(&export.source).as_ref(),
                                 Root::Reexport(specifier.local.name().to_string()),
                             );
                         }
@@ -1110,14 +1111,14 @@ impl<'s, 'a> Scanner<'s, 'a> {
                 Statement::ExportAllDeclaration(export) => match &export.exported {
                     Some(exported) if exported.name() == name => {
                         found = true;
-                        self.module_edge(self.file, export.source.value.as_str(), Root::Whole);
+                        self.module_edge(self.file, &string_text(&export.source), Root::Whole);
                     }
                     Some(_) => {}
                     None => {
                         stars = true;
                         self.module_edge(
                             self.file,
-                            export.source.value.as_str(),
+                            string_text(&export.source).as_ref(),
                             Root::ExportIfPresent(name.to_owned()),
                         );
                     }
@@ -1210,7 +1211,7 @@ impl<'s, 'a> Scanner<'s, 'a> {
                     } else {
                         Root::Export(imported)
                     };
-                    self.module_edge(self.file, import.source.value.as_str(), root);
+                    self.module_edge(self.file, string_text(&import.source).as_ref(), root);
                 }
             }
         }
@@ -1485,10 +1486,12 @@ impl<'a> Visit<'a> for Scanner<'_, 'a> {
         self.failed = true;
     }
 
+    /// A dynamic `import('...')` with a literal specifier loads that whole module when it runs;
+    /// any other specifier could load anything.
     fn visit_import_expression(&mut self, import: &ImportExpression<'a>) {
         match &import.source {
             Expression::StringLiteral(literal) => {
-                let specifier = literal.value.to_string();
+                let specifier = string_text(literal);
                 self.module_edge(self.file, &specifier, Root::Whole);
             }
             _ => self.failed = true,

@@ -8,6 +8,7 @@ mod auto_imports;
 mod extract;
 mod fingerprint;
 mod helpers;
+mod js_text;
 mod package_manifests;
 mod package_supervisor;
 mod registry;

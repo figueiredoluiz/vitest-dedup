@@ -12,6 +12,7 @@
 
 use super::extract::registration_free::REGISTRATION;
 use super::package_supervisor::supervise;
+use crate::frontend::js_text::string_text;
 use crate::model::PackageWorkerFailure;
 use oxc_allocator::Allocator;
 use oxc_ast::ast::{
@@ -264,7 +265,9 @@ fn scan_script(
         /// The first argument of a load: a string, or a template with no substitution.
         fn argument(&mut self, expression: Option<&Expression<'_>>) {
             match expression {
-                Some(Expression::StringLiteral(literal)) => self.specifier(literal.value.as_str()),
+                Some(Expression::StringLiteral(literal)) => {
+                    self.specifier(string_text(literal).as_ref())
+                }
                 Some(Expression::TemplateLiteral(template)) if template.expressions.is_empty() => {
                     match template.quasis.first() {
                         Some(quasi) => self.specifier(quasi.value.raw.as_str()),
@@ -287,20 +290,20 @@ fn scan_script(
             &mut self,
             it: &oxc_ast::ast::TSExternalModuleReference<'a>,
         ) {
-            self.specifier(it.expression.value.as_str());
+            self.specifier(string_text(&it.expression).as_ref());
         }
         /// `import ... from 'x'`.
         fn visit_import_declaration(&mut self, it: &oxc_ast::ast::ImportDeclaration<'a>) {
-            self.specifier(it.source.value.as_str());
+            self.specifier(string_text(&it.source).as_ref());
             walk::walk_import_declaration(self, it);
         }
         /// `export { a } from 'x'`.
         fn visit_export_from_declaration(&mut self, it: &oxc_ast::ast::ExportFromDeclaration<'a>) {
-            self.specifier(it.source.value.as_str());
+            self.specifier(string_text(&it.source).as_ref());
         }
         /// `export * from 'x'`.
         fn visit_export_all_declaration(&mut self, it: &oxc_ast::ast::ExportAllDeclaration<'a>) {
-            self.specifier(it.source.value.as_str());
+            self.specifier(string_text(&it.source).as_ref());
         }
         /// `import('x')`.
         fn visit_import_expression(&mut self, it: &oxc_ast::ast::ImportExpression<'a>) {
@@ -498,12 +501,13 @@ fn reads_registration_global(program: &oxc_ast::ast::Program<'_>) -> bool {
                     if unary.operator == oxc_ast::ast::UnaryOperator::Typeof)
             } else {
                 let (property, span) = match user {
-                    AstKind::StaticMemberExpression(member) => {
-                        (Some(member.property.name.as_str()), member.span)
-                    }
+                    AstKind::StaticMemberExpression(member) => (
+                        Some(std::borrow::Cow::Borrowed(member.property.name.as_str())),
+                        member.span,
+                    ),
                     AstKind::ComputedMemberExpression(member) => match &member.expression {
                         Expression::StringLiteral(literal) => {
-                            (Some(literal.value.as_str()), member.span)
+                            (Some(string_text(literal)), member.span)
                         }
                         _ => (None, member.span),
                     },
@@ -517,7 +521,8 @@ fn reads_registration_global(program: &oxc_ast::ast::Program<'_>) -> bool {
                             if assign.operator == oxc_ast::ast::AssignmentOperator::Assign
                                 && assign.left.span() == span
                     );
-                !assigned && property.is_some_and(|property| REGISTRATION.contains(&property))
+                !assigned
+                    && property.is_some_and(|property| REGISTRATION.contains(&property.as_ref()))
             };
             if counts {
                 return true;

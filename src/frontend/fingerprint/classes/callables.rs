@@ -1,5 +1,6 @@
 //! Owned callable resolution and the metadata that keeps reflections distinct.
 use super::*;
+use crate::frontend::js_text::string_text;
 
 impl<'a, 'b, 's, 'm> Serializer<'a, 'b, 's, 'm> {
     /// Classify constructor provenance before point-sensitive instance writes can degrade it.
@@ -468,7 +469,7 @@ impl<'a, 'b, 's, 'm> Serializer<'a, 'b, 's, 'm> {
             return None;
         }
         match key {
-            Expression::StringLiteral(key) => Some(key.value.to_string()),
+            Expression::StringLiteral(key) => Some(string_text(key).into_owned()),
             Expression::Identifier(ident) => {
                 let symbol = self.class_symbol(ident)?;
                 if self.ctx.semantic.scoping().symbol_is_mutated(symbol) {

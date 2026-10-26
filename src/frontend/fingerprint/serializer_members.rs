@@ -1,4 +1,5 @@
 use super::*;
+use crate::frontend::js_text::string_text;
 
 impl<'a, 'b, 's, 'm> Serializer<'a, 'b, 's, 'm> {
     /// Render a named member access with the receiver and optional-chain distinction.
@@ -238,7 +239,7 @@ impl<'a, 'b, 's, 'm> Serializer<'a, 'b, 's, 'm> {
             // blind: routed through `literal`, so `alpha` keeps the value (`variant="primary"` vs
             // `variant="secondary"` differ) while `structural` collapses to the kind.
             JSXAttributeValue::StringLiteral(literal) => {
-                self.literal("string", literal.value.as_str())
+                self.literal("string", string_text(literal).as_ref())
             }
             JSXAttributeValue::ExpressionContainer(container) => {
                 match container.expression.as_expression() {
@@ -687,7 +688,9 @@ impl<'a, 'b, 's, 'm> Serializer<'a, 'b, 's, 'm> {
                     .map(|raw| raw.as_str())
                     .unwrap_or_default(),
             ),
-            Expression::StringLiteral(literal) => self.literal("string", literal.value.as_str()),
+            Expression::StringLiteral(literal) => {
+                self.literal("string", string_text(literal).as_ref())
+            }
             Expression::TemplateLiteral(template) => self.ser_template(template, depth + 1),
             Expression::Identifier(ident) => self.reference_or_literal(ident, depth),
             Expression::Super(_) => "super".to_owned(),
@@ -832,7 +835,7 @@ impl<'a, 'b, 's, 'm> Serializer<'a, 'b, 's, 'm> {
             Expression::ImportExpression(import) => match &import.source {
                 Expression::StringLiteral(specifier) => format!(
                     "(import {})",
-                    specifier_identity(&self.ctx.file, specifier.value.as_str())
+                    specifier_identity(&self.ctx.file, string_text(specifier).as_ref())
                 ),
                 _ => self.opaque(expr.span()),
             },

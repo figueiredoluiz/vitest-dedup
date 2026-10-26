@@ -10,6 +10,7 @@
 //! prepared has none, so nothing resolves -- the missing-prerequisite notice already tells the
 //! user to run `nuxt prepare`.
 
+use crate::frontend::js_text::string_text;
 use oxc_allocator::Allocator;
 use oxc_ast::ast::{ImportOrExportKind, Statement};
 use oxc_parser::Parser;
@@ -59,7 +60,7 @@ fn read_table(file: &Path) -> Option<Table> {
                 specifier.exported.name().to_string(),
                 AutoImport {
                     importer: file.to_path_buf(),
-                    specifier: export.source.value.as_str().to_owned(),
+                    specifier: string_text(&export.source).into_owned(),
                     imported: specifier.local.name().to_string(),
                 },
             );

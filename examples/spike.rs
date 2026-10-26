@@ -28,12 +28,14 @@ fn callee_path(expression: &Expression<'_>) -> Option<String> {
 /// Recovers a statically known string argument.
 fn static_string(argument: &Argument<'_>) -> Option<String> {
     match argument {
-        Argument::StringLiteral(literal) => Some(literal.value.as_str().to_owned()),
+        // A value holding a lone surrogate has no UTF-8 text; the spike treats it as unknown.
+        Argument::StringLiteral(literal) => literal.value.as_str().map(str::to_owned),
         Argument::TemplateLiteral(template) if template.expressions.is_empty() => template
             .quasis
             .first()
-            .and_then(|quasi| quasi.value.cooked.as_ref())
-            .map(|cooked| cooked.as_str().to_owned()),
+            .and_then(|quasi| quasi.value.cooked)
+            .and_then(|cooked| cooked.as_str())
+            .map(str::to_owned),
         _ => None,
     }
 }

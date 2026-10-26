@@ -1,4 +1,5 @@
 use super::*;
+use crate::frontend::js_text::string_text;
 
 /// Extracts, from a file's full source text, each top-level import's local binding name mapped to
 /// `(identity component, name on the exporting side)`. `file` is the path of the file being
@@ -67,7 +68,7 @@ pub(crate) fn import_origins_from_program(
         let Some(specifiers) = &import.specifiers else {
             continue;
         };
-        let module = import.source.value.as_str();
+        let module: &str = &string_text(&import.source);
         let origin = specifier_origin(file, module);
         for specifier in specifiers {
             let (local, exported) = match specifier {
@@ -249,7 +250,7 @@ pub(crate) fn module_export_name(name: &ModuleExportName<'_>) -> String {
     match name {
         ModuleExportName::IdentifierName(id) => id.name.as_str().to_owned(),
         ModuleExportName::IdentifierReference(id) => id.name.as_str().to_owned(),
-        ModuleExportName::StringLiteral(literal) => literal.value.as_str().to_owned(),
+        ModuleExportName::StringLiteral(literal) => string_text(literal).into_owned(),
     }
 }
 

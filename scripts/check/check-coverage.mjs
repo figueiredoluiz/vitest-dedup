@@ -208,6 +208,9 @@ const RUST_MODULES = {
   // after an `is_none` check, and a default-export function-expression arm the parser's
   // paren handling never produces.
   'src/frontend/helpers.rs': 98,
+  // JavaScript string text: measured at 91.94% (57/62); the 5 uncovered lines are the `panic!`
+  // arms of this file's own test helpers, reached only by a malformed test input.
+  'src/frontend/js_text.rs': 91,
   'src/frontend/registry.rs': 97,
   // Imported table constants: measured at 94.57% (87/92 instrumented lines).
   'src/frontend/registry/imported_constants.rs': 94,

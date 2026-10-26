@@ -4,6 +4,7 @@ use super::*;
 use crate::frontend::fingerprint::ImportOrigin;
 use crate::frontend::helpers::export_contract::{resolve_export_chain, resolve_value_export_chain};
 use crate::frontend::helpers::{self, Callable, Export};
+use crate::frontend::js_text::string_text;
 use crate::frontend::registry::imported_constants::{self, Proof};
 use crate::frontend::resolver::{self, Resolved};
 use oxc_ast::ast::{Declaration, ExportDefaultDeclarationKind, ImportOrExportKind};
@@ -192,7 +193,7 @@ pub(super) fn collect_imports(program: &Program, file: &Path) -> HashMap<SymbolI
         let Statement::ImportDeclaration(import) = statement else {
             continue;
         };
-        let specifier = import.source.value.as_str();
+        let specifier: &str = &string_text(&import.source);
         for binding in import.specifiers.iter().flatten() {
             let (local, exported) = match binding {
                 ImportDeclarationSpecifier::ImportSpecifier(binding) => {
@@ -1423,8 +1424,8 @@ fn module_is_inert(
                                 if matches!(specifier.import_kind, ImportOrExportKind::Type))
                         })
                 })
-                || import.source.value.as_str() == "vitest"
-                || imports_inert(file, import.source.value.as_str())
+                || string_text(&import.source).as_ref() == "vitest"
+                || imports_inert(file, string_text(&import.source).as_ref())
         }
         Statement::ExportFromDeclaration(export) => {
             matches!(export.export_kind, ImportOrExportKind::Type)
@@ -1433,11 +1434,21 @@ fn module_is_inert(
                         .specifiers
                         .iter()
                         .all(|specifier| matches!(specifier.export_kind, ImportOrExportKind::Type)))
-                || reexport_is_inert(file, export.source.value.as_str(), modules, imports_inert)
+                || reexport_is_inert(
+                    file,
+                    string_text(&export.source).as_ref(),
+                    modules,
+                    imports_inert,
+                )
         }
         Statement::ExportAllDeclaration(export) => {
             matches!(export.export_kind, ImportOrExportKind::Type)
-                || reexport_is_inert(file, export.source.value.as_str(), modules, imports_inert)
+                || reexport_is_inert(
+                    file,
+                    string_text(&export.source).as_ref(),
+                    modules,
+                    imports_inert,
+                )
         }
         Statement::ClassDeclaration(class) => class_defines_only_values(class, creates_value),
         Statement::FunctionDeclaration(_)

@@ -33,6 +33,7 @@ use std::path::Path;
 use std::sync::{Mutex, OnceLock};
 
 use super::fingerprint::{escape_literal_delimiters, fingerprint, path_key, FunctionLike};
+use crate::frontend::js_text::{cooked_text, string_text};
 
 /// Whether bare, unimported `test`/`describe`/`it`/hook identifiers should be treated as
 /// Vitest's ambient globals for this file.
@@ -122,7 +123,7 @@ impl Registry {
     /// Registers runtime Vitest import symbols and skips type-only declarations/specifiers.
     fn register_import(&mut self, import: &ImportDeclaration) {
         if matches!(import.import_kind, oxc_ast::ast::ImportOrExportKind::Type)
-            || import.source.value.as_str() != "vitest"
+            || string_text(&import.source).as_ref() != "vitest"
         {
             return;
         }
@@ -139,13 +140,18 @@ impl Registry {
                         continue;
                     }
                     let imported_name = match &specifier.imported {
-                        ModuleExportName::IdentifierName(id) => id.name.as_str(),
-                        ModuleExportName::IdentifierReference(id) => id.name.as_str(),
-                        ModuleExportName::StringLiteral(literal) => literal.value.as_str(),
+                        ModuleExportName::IdentifierName(id) => {
+                            std::borrow::Cow::Borrowed(id.name.as_str())
+                        }
+                        ModuleExportName::IdentifierReference(id) => {
+                            std::borrow::Cow::Borrowed(id.name.as_str())
+                        }
+                        ModuleExportName::StringLiteral(literal) => string_text(literal),
                     };
-                    if let (Some(canonical), Some(symbol_id)) =
-                        (canonicalize(imported_name), specifier.local.symbol_id.get())
-                    {
+                    if let (Some(canonical), Some(symbol_id)) = (
+                        canonicalize(&imported_name),
+                        specifier.local.symbol_id.get(),
+                    ) {
                         self.bindings.insert(
                             symbol_id,
                             Binding::Local {
@@ -732,7 +738,7 @@ fn extend_fixture_bindings(
         }
         // Builder-syntax (v4.1+): `.extend('name', async (deps, { onCleanup }) => value)`.
         Some(Argument::StringLiteral(literal)) => {
-            let name = literal.value.as_str().to_owned();
+            let name = string_text(literal).into_owned();
             let body = arguments
                 .get(1)
                 .and_then(Argument::as_expression)
@@ -997,7 +1003,7 @@ fn table_rows<'a>(
 pub(super) fn property_key_name(key: &PropertyKey) -> Option<String> {
     match key {
         PropertyKey::StaticIdentifier(id) => Some(id.name.as_str().to_owned()),
-        PropertyKey::StringLiteral(literal) => Some(literal.value.as_str().to_owned()),
+        PropertyKey::StringLiteral(literal) => Some(string_text(literal).into_owned()),
         // A computed key (`[expr]: fn`) defeats static naming -- report it as unresolved rather
         // than guess, per `docs/vitest-surface.md`'s "Fixtures (`test.extend`)" section.
         _ => None,
@@ -2104,8 +2110,7 @@ fn tagged_template_rows<'a>(
     let Some(header_text) = quasi
         .quasis
         .first()
-        .and_then(|quasi| quasi.value.cooked.as_ref())
-        .map(|cooked| cooked.as_str())
+        .and_then(|quasi| cooked_text(&quasi.value))
     else {
         return Err(tagged_template_identity(quasi, source));
     };
@@ -2234,7 +2239,9 @@ fn assembled_object_within_budget<'a>(
 /// tagging here mirrors `Serializer::literal`'s `<kind:raw>` form on purpose, so the two agree.
 pub(super) fn const_fold_tagged(expr: &Expression) -> Option<String> {
     match unwrap_transparent(expr) {
-        Expression::StringLiteral(literal) => Some(format!("<string:{}>", literal.value.as_str())),
+        Expression::StringLiteral(literal) => {
+            Some(format!("<string:{}>", string_text(literal).as_ref()))
+        }
         Expression::NumericLiteral(literal) => {
             Some(format!("<number:{}>", format_number(literal.value)))
         }
@@ -2315,7 +2322,7 @@ fn const_fold_kind_scalar<'a>(
         return Some((kind, value.to_owned()));
     }
     match unwrap_transparent(expr) {
-        Expression::StringLiteral(literal) => Some(("string", literal.value.as_str().to_owned())),
+        Expression::StringLiteral(literal) => Some(("string", string_text(literal).into_owned())),
         Expression::NumericLiteral(literal) => Some(("number", format_number(literal.value))),
         Expression::BooleanLiteral(literal) => Some(("boolean", literal.value.to_string())),
         Expression::NullLiteral(_) => Some(("null", "null".to_owned())),
@@ -2351,7 +2358,7 @@ pub(super) fn const_fold<'a>(expr: &Expression<'a>, resolve: Resolve<'_, 'a>) ->
         return Some(value.to_owned());
     }
     match unwrap_transparent(expr) {
-        Expression::StringLiteral(literal) => Some(literal.value.as_str().to_owned()),
+        Expression::StringLiteral(literal) => Some(string_text(literal).into_owned()),
         Expression::NumericLiteral(literal) => Some(format_number(literal.value)),
         Expression::BooleanLiteral(literal) => Some(literal.value.to_string()),
         Expression::NullLiteral(_) => Some("null".to_owned()),
@@ -2477,7 +2484,7 @@ fn fold_composite<'a>(
                     PropertyKey::StaticIdentifier(identifier) => {
                         identifier.name.as_str().to_owned()
                     }
-                    PropertyKey::StringLiteral(literal) => literal.value.as_str().to_owned(),
+                    PropertyKey::StringLiteral(literal) => string_text(literal).into_owned(),
                     PropertyKey::NumericLiteral(literal) => format_number(literal.value),
                     _ => return None,
                 };
@@ -2629,7 +2636,7 @@ pub(super) fn render_js_to_string<'a>(
             }
             Some(parts.join(","))
         }
-        Expression::StringLiteral(literal) => Some(literal.value.as_str().to_owned()),
+        Expression::StringLiteral(literal) => Some(string_text(literal).into_owned()),
         Expression::TemplateLiteral(template) => fold_template(template, depth + 1, resolve),
         Expression::BooleanLiteral(literal) => Some(literal.value.to_string()),
         Expression::NullLiteral(_) => Some("null".to_owned()),
@@ -2684,13 +2691,15 @@ fn inherits_default_string_coercion(expr: &Expression) -> bool {
             return false;
         }
         let name = match &property.key {
-            PropertyKey::StaticIdentifier(identifier) => identifier.name.as_str(),
-            PropertyKey::StringLiteral(literal) => literal.value.as_str(),
+            PropertyKey::StaticIdentifier(identifier) => {
+                std::borrow::Cow::Borrowed(identifier.name.as_str())
+            }
+            PropertyKey::StringLiteral(literal) => string_text(literal),
             // A numeric key cannot spell any of the names below.
             PropertyKey::NumericLiteral(_) => return true,
             _ => return false,
         };
-        !matches!(name, "toString" | "valueOf" | "__proto__")
+        !matches!(&*name, "toString" | "valueOf" | "__proto__")
     })
 }
 
@@ -2985,7 +2994,7 @@ fn render_inspect<'a>(
 ) -> Option<String> {
     let expr = peeled_unwrapped(expr, resolve, depth)?;
     match expr {
-        Expression::StringLiteral(literal) => Some(format!("'{}'", literal.value.as_str())),
+        Expression::StringLiteral(literal) => Some(format!("'{}'", string_text(literal).as_ref())),
         Expression::TemplateLiteral(template) => {
             template_without_substitutions(template, resolve).map(|value| format!("'{value}'"))
         }
@@ -3065,7 +3074,7 @@ fn render_json<'a>(expr: &Expression<'a>, depth: u32, resolve: Resolve<'_, 'a>) 
         return (value != "undefined").then(|| "null".to_owned());
     }
     match expr {
-        Expression::StringLiteral(literal) => Some(json_string(literal.value.as_str())),
+        Expression::StringLiteral(literal) => Some(json_string(string_text(literal).as_ref())),
         Expression::TemplateLiteral(template) => {
             template_without_substitutions(template, resolve).map(|value| json_string(&value))
         }
@@ -3185,7 +3194,7 @@ fn object_fields<'e, 'a>(expr: &'e Expression<'a>) -> Option<Vec<(String, &'e Ex
         }
         let name = match &property.key {
             PropertyKey::StaticIdentifier(identifier) => identifier.name.as_str().to_owned(),
-            PropertyKey::StringLiteral(literal) => literal.value.as_str().to_owned(),
+            PropertyKey::StringLiteral(literal) => string_text(literal).into_owned(),
             PropertyKey::NumericLiteral(literal) => format_number(literal.value),
             _ => return None,
         };
@@ -3315,7 +3324,7 @@ fn fold_template<'a>(
     for (index, quasi) in template.quasis.iter().enumerate() {
         // `cooked` is `None` only for an invalid escape sequence, where there is no string value
         // to speak of -- exactly the case to refuse rather than guess at.
-        out.push_str(quasi.value.cooked.as_ref()?.as_str());
+        out.push_str(&cooked_text(&quasi.value)?);
         if let Some(expression) = template.expressions.get(index) {
             // A template substitution is ToString too, so `` `${1n}` `` is `1` and not `1n`.
             out.push_str(&render_js_to_string(expression, depth + 1, resolve)?);

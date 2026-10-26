@@ -12,6 +12,7 @@
 //! read later.
 
 use crate::discovery::{ModuleFlavor, SourceFile};
+use crate::frontend::js_text::{cooked_text, string_text};
 use crate::model::{
     Context, DeclarationKind, EachRows, EachTable, ExclusionReason, Fingerprints, FixtureBinding,
     Hook, HookGuard, HookGuardKind, HookKind, Location, MockFactory, MockedModule, Modifier,
@@ -734,11 +735,11 @@ fn collect_import_specifiers(
     // however many declarations, and every test that references one of them, holds an `Arc` to
     // this same text. Keyed by the specifier as written; `file` is fixed, so the same text always
     // resolves to the same identity and a repeat declaration skips the resolution too.
-    let mut identities: HashMap<&str, Arc<str>> = HashMap::new();
+    let mut identities: HashMap<std::borrow::Cow<str>, Arc<str>> = HashMap::new();
     for import in super::fingerprint::value_import_declarations(program) {
-        let source = import.source.value.as_str();
-        let identity = Arc::clone(identities.entry(source).or_insert_with(|| {
-            Arc::from(super::fingerprint::specifier_identity(file, source).as_str())
+        let source = string_text(&import.source);
+        let identity = Arc::clone(identities.entry(source.clone()).or_insert_with(|| {
+            Arc::from(super::fingerprint::specifier_identity(file, &source).as_str())
         }));
         let Some(specifiers) = &import.specifiers else {
             continue;
@@ -774,7 +775,7 @@ fn collect_import_specifiers(
 fn nuxt_mock_import_symbols(program: &Program) -> HashSet<SymbolId> {
     let mut symbols = HashSet::new();
     for import in super::fingerprint::value_import_declarations(program) {
-        if import.source.value.as_str() != "@nuxt/test-utils/runtime" {
+        if string_text(&import.source).as_ref() != "@nuxt/test-utils/runtime" {
             continue;
         }
         for specifier in import.specifiers.iter().flatten() {
@@ -992,8 +993,11 @@ fn collect_mocked_modules(
                     // never match the `mock` it is meant to cancel.
                     events.push(MockEvent::Mock(MockedModule {
                         specifier: std::sync::Arc::from(
-                            super::fingerprint::specifier_identity(file, literal.value.as_str())
-                                .as_str(),
+                            super::fingerprint::specifier_identity(
+                                file,
+                                string_text(literal).as_ref(),
+                            )
+                            .as_str(),
                         ),
                         factory,
                     }));
@@ -1008,7 +1012,7 @@ fn collect_mocked_modules(
                 Some(Argument::StringLiteral(literal)) => {
                     events.push(MockEvent::Unmock(super::fingerprint::specifier_identity(
                         file,
-                        literal.value.as_str(),
+                        string_text(literal).as_ref(),
                     )));
                 }
                 // A3 again, and for the same reason in reverse: an `unmock` whose target cannot
@@ -1054,7 +1058,7 @@ fn collect_mocked_modules(
                 match read_factory(factory, semantic, source, file).filter(|_| harmless) {
                     Some(factory) => events.push(MockEvent::Mock(MockedModule {
                         specifier: std::sync::Arc::from(
-                            format!("nuxt-import:{}", name.value).as_str(),
+                            format!("nuxt-import:{}", string_text(name)).as_str(),
                         ),
                         factory,
                     })),
@@ -3746,7 +3750,7 @@ struct TitlePattern {
 fn raw_title_pattern(title_arg: Option<&Argument>, source: &str) -> TitlePattern {
     match title_arg {
         Some(Argument::StringLiteral(literal)) => TitlePattern {
-            text: literal.value.as_str().to_owned(),
+            text: string_text(literal).into_owned(),
             resolved: true,
         },
         Some(Argument::TemplateLiteral(template)) if template.is_no_substitution_template() => {
@@ -3754,8 +3758,8 @@ fn raw_title_pattern(title_arg: Option<&Argument>, source: &str) -> TitlePattern
                 text: template
                     .quasis
                     .first()
-                    .and_then(|quasi| quasi.value.cooked.as_ref())
-                    .map(|cooked| cooked.as_str().to_owned())
+                    .and_then(|quasi| cooked_text(&quasi.value))
+                    .map(std::borrow::Cow::into_owned)
                     .unwrap_or_default(),
                 resolved: true,
             }
@@ -3784,15 +3788,15 @@ impl<'a> Walker<'a> {
     fn extract_title(&self, title_arg: Option<&Argument>) -> Title {
         match title_arg {
             Some(Argument::StringLiteral(literal)) => {
-                Title::Static(literal.value.as_str().to_owned())
+                Title::Static(string_text(literal).into_owned())
             }
             Some(Argument::TemplateLiteral(template)) => {
                 if template.is_no_substitution_template() {
                     let text = template
                         .quasis
                         .first()
-                        .and_then(|quasi| quasi.value.cooked.as_ref())
-                        .map(|cooked| cooked.as_str().to_owned())
+                        .and_then(|quasi| cooked_text(&quasi.value))
+                        .map(std::borrow::Cow::into_owned)
                         .unwrap_or_default();
                     Title::Static(text)
                 } else {
@@ -3827,14 +3831,7 @@ impl<'a> Walker<'a> {
         if folded.iter().all(Option::is_some) {
             let mut rendered = String::new();
             for (index, quasi) in template.quasis.iter().enumerate() {
-                rendered.push_str(
-                    quasi
-                        .value
-                        .cooked
-                        .as_ref()
-                        .map(|cooked| cooked.as_str())
-                        .unwrap_or(""),
-                );
+                rendered.push_str(cooked_text(&quasi.value).as_deref().unwrap_or(""));
                 if let Some(Some(value)) = folded.get(index) {
                     rendered.push_str(value);
                 }
@@ -3843,14 +3840,7 @@ impl<'a> Walker<'a> {
         } else {
             let mut shape = String::new();
             for (index, quasi) in template.quasis.iter().enumerate() {
-                shape.push_str(
-                    quasi
-                        .value
-                        .cooked
-                        .as_ref()
-                        .map(|cooked| cooked.as_str())
-                        .unwrap_or(""),
-                );
+                shape.push_str(cooked_text(&quasi.value).as_deref().unwrap_or(""));
                 if index < template.expressions.len() {
                     shape.push_str("${_}");
                 }
