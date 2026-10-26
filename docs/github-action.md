@@ -20,6 +20,7 @@ the workflow only), and only then runs it.
 
 - `version` is required and exact, so the workflow pins the code it runs.
 - `token` (default `github.token`) is passed to `gh` alone.
+- Install `gh` and `tar` on the runner's PATH outside the checked-out repository.
 - When `gh` is missing, or has no credentials at all, the attestation check is skipped with a
   warning. A failed verification, including a rejected token, always fails the step.
 

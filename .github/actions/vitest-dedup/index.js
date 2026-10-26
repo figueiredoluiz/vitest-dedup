@@ -10,17 +10,21 @@
 // shell around those functions: reading inputs, downloading and verifying the release, running it,
 // and publishing results.
 import {
+  accessSync,
   appendFileSync,
   chmodSync,
+  constants,
   createWriteStream,
   existsSync,
   mkdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
+  statSync,
 } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { delimiter, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { pipeline } from "node:stream/promises";
 import { spawnSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
@@ -380,8 +384,9 @@ export function attestationIdentity(repository, version) {
  *
  * @returns {"verified" | "unavailable" } — throws on an actual verification failure.
  */
-export function verifyAttestation(archivePath, repository, version, runner = spawnSync, token = "") {
-  const probe = runner("gh", ["--version"], { stdio: "ignore" });
+export function verifyAttestation(archivePath, repository, version, runner, token = "", env = process.env) {
+  runner ??= createToolRunner({ env, cwd: dirname(archivePath) });
+  const probe = runner("gh", ["--version"], { stdio: "ignore", env: toolEnvironment(env) });
   if (probe.error || probe.status !== 0) {
     warningAnnotation(
       `build-provenance attestation not verified: the \`gh\` CLI is unavailable on this runner. ` +
@@ -395,7 +400,7 @@ export function verifyAttestation(archivePath, repository, version, runner = spa
     {
       stdio: "pipe",
       encoding: "utf8",
-      env: token ? { ...withoutVariables(process.env, ["GH_TOKEN"]), GH_TOKEN: token } : process.env,
+      env: toolEnvironment(env, token),
     },
   );
   // Advisory only when no token was supplied: with one, "authentication required" means the token
@@ -513,7 +518,7 @@ export function isValidReleaseVersion(version) {
  * before touching it any further, extracts it, and returns the executable binary's path with the
  * attestation verdict.
  */
-async function installRelease(rawVersion, target, env) {
+async function installRelease(rawVersion, target, env, workspace) {
   const version = rawVersion.replace(/^v/, "");
   if (!isValidReleaseVersion(version)) {
     throw new Error(`invalid release version: ${rawVersion}`);
@@ -543,9 +548,10 @@ async function installRelease(rawVersion, target, env) {
   // integrity; the attestation below proves origin. Neither alone is sufficient, and both run
   // before a single byte is executed.
   verifyChecksum(archive, checksum);
-  const attestation = verifyAttestation(archive, REPO, version, spawnSync, readInput(env, "token", ""));
+  const runTool = createToolRunner({ env, cwd: installDirectory, workspace });
+  const attestation = verifyAttestation(archive, REPO, version, runTool, readInput(env, "token", ""), env);
 
-  const extracted = spawnSync("tar", ["-xf", archive, "-C", installDirectory], { stdio: "inherit" });
+  const extracted = runTool("tar", ["-xf", archive, "-C", installDirectory], { stdio: "inherit" });
   if (extracted.error || extracted.status !== 0) {
     throw new Error(`failed to extract ${assetStem}.tar.gz`);
   }
@@ -588,6 +594,101 @@ export function withoutVariables(env, names) {
 /** Returns the analyzer's environment: the given one without any credential variable. */
 export function analyzerEnvironment(env) {
   return withoutVariables(env, ANALYZER_DENIED_VARIABLES);
+}
+
+const TOOL_ENVIRONMENT = new Set([
+  "PATH", "SYSTEMROOT", "SYSTEMDRIVE", "WINDIR", "COMSPEC", "TEMP", "TMP", "TMPDIR",
+  "HOME", "USERPROFILE", "HOMEDRIVE", "HOMEPATH", "APPDATA", "LOCALAPPDATA",
+  "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "GH_CONFIG_DIR", "GH_HOST",
+  "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "SSL_CERT_FILE", "SSL_CERT_DIR",
+  "LANG", "LC_ALL", "LC_CTYPE", "TZ",
+]);
+const GH_AUTHENTICATION = new Set([
+  "GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN",
+  "DBUS_SESSION_BUS_ADDRESS",
+]);
+
+/** Selects tool runtime settings, with optional explicit or preconfigured gh authentication. */
+export function toolEnvironment(env, token = null) {
+  const selected = Object.fromEntries(Object.entries(env).filter(([name]) =>
+    TOOL_ENVIRONMENT.has(name.toUpperCase()) || (token === "" && GH_AUTHENTICATION.has(name.toUpperCase())),
+  ));
+  if (token) selected.GH_TOKEN = token;
+  return selected;
+}
+
+/** Reads a runner environment key using Windows-compatible casing. */
+function environmentValue(env, name) {
+  if (Object.hasOwn(env, name)) return env[name];
+  return Object.entries(env).find(([key]) => key.toUpperCase() === name)?.[1];
+}
+
+/** Returns whether a path is the directory itself or one of its descendants. */
+function withinDirectory(directory, path) {
+  const suffix = relative(directory, path);
+  return suffix === "" || (suffix !== ".." && !suffix.startsWith(`..${sep}`) && !isAbsolute(suffix));
+}
+
+/** Retains a lexical boundary when its directory has not been created yet. */
+function canonicalDirectory(path) {
+  try {
+    return realpathSync(path);
+  } catch {
+    return resolve(path);
+  }
+}
+
+/** Resolves installed tools once and runs them with consistent paths, directory and environment. */
+export function createToolRunner({ env = process.env, cwd = process.cwd(), workspace = process.cwd(), runner = spawnSync } = {}) {
+  const roots = [workspace, environmentValue(env, "GITHUB_WORKSPACE")].filter(Boolean)
+    .flatMap((path) => [resolve(path), canonicalDirectory(path)]);
+  const outsideWorkspace = (path) => !roots.some((root) => withinDirectory(root, path));
+  const directories = [];
+  const invocationDirectories = [];
+  for (const entry of (environmentValue(env, "PATH") || "").split(delimiter)) {
+    const path = process.platform === "win32" ? entry.replace(/^"(.*)"$/, "$1") : entry;
+    if (!isAbsolute(path) || !outsideWorkspace(resolve(path))) continue;
+    try {
+      const directory = realpathSync(path);
+      if (outsideWorkspace(directory) && statSync(directory).isDirectory()) {
+        directories.push(directory);
+        invocationDirectories.push(resolve(path));
+      }
+    } catch { /* An absent PATH entry contributes no installed tools. */ }
+  }
+  const tools = new Map();
+  return (name, args, options = {}) => {
+    if (!tools.has(name)) {
+      let executable = null;
+      for (const directory of invocationDirectories) {
+        for (const suffix of process.platform === "win32" ? [".com", ".exe"] : [""]) {
+          try {
+            const invocation = join(directory, name + suffix);
+            const candidate = realpathSync(invocation);
+            if (!outsideWorkspace(candidate) || !statSync(candidate).isFile()) continue;
+            accessSync(candidate, process.platform === "win32" ? constants.F_OK : constants.X_OK);
+            executable = { invocation, target: candidate };
+            break;
+          } catch { /* Try the next installed candidate. */ }
+        }
+        if (executable) break;
+      }
+      tools.set(name, executable);
+    }
+    const executable = tools.get(name);
+    if (!executable) return { status: null, error: Object.assign(new Error(`${name} is unavailable`), { code: "ENOENT" }) };
+    try {
+      if (realpathSync(executable.invocation) !== executable.target) throw new Error("tool path changed");
+    } catch {
+      return { status: null, error: Object.assign(new Error(`${name} is unavailable`), { code: "ENOENT" }) };
+    }
+    const childEnv = {
+      ...withoutVariables(options.env ?? toolEnvironment(env), ["PATH", "NoDefaultCurrentDirectoryInExePath"]),
+      PATH: directories.join(delimiter),
+    };
+    if (process.platform === "win32") childEnv.NoDefaultCurrentDirectoryInExePath = "1";
+    return runner(executable.invocation, args, { ...options, argv0: name, cwd, env: childEnv });
+  };
 }
 
 /**
@@ -670,7 +771,7 @@ async function analyze({ env, cwd }, state) {
         `unsupported platform: no VitestDedup release is published for ${process.platform}/${process.arch}`,
       );
     }
-    ({ binary, attestation } = await installRelease(inputs.version, target, env));
+    ({ binary, attestation } = await installRelease(inputs.version, target, env, cwd));
   }
 
   // `stdio: "inherit"` streams the child's stdout/stderr directly to the workflow log as it is

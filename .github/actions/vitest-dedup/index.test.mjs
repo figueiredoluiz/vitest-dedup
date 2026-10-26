@@ -1,14 +1,15 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
 import { createHash } from "node:crypto";
 
 import {
   analyzerEnvironment,
   attestationIdentity,
   buildArguments,
+  createToolRunner,
   describeExitCode,
   detectLibc,
   encodeAnnotationData,
@@ -22,6 +23,7 @@ import {
   resolveReportPath,
   resolveReporters,
   runAction,
+  toolEnvironment,
   verifyChecksum,
   verifyAttestation,
   warningAnnotation,
@@ -868,7 +870,7 @@ describe("verifyAttestation", () => {
     // token, so the token input is the only way verification can run on a hosted runner.
     const env = verifyEnvironment("token-value");
     assert.equal(env.GH_TOKEN, "token-value");
-    assert.equal(env.PATH, process.env.PATH, "the rest of the environment is kept");
+    assert.equal(Object.entries(env).find(([name]) => name.toUpperCase() === "PATH")?.[1], process.env.PATH, "tool runtime settings are kept");
   });
 
   test("replaces a differently-cased GH_TOKEN instead of adding a second one", (t) => {
@@ -882,7 +884,18 @@ describe("verifyAttestation", () => {
   });
 
   test("injects no GH_TOKEN when the token is empty", () => {
-    assert.equal(verifyEnvironment(""), process.env);
+    assert.deepEqual(verifyEnvironment(""), toolEnvironment(process.env, ""));
+  });
+
+  test("selects authentication only for the verification call", () => {
+    const env = { PATH: "/tools", INPUT_TOKEN: "input", ACTIONS_RUNTIME_TOKEN: "runtime", DEPLOY_KEY: "job", GH_TOKEN: "existing" };
+    const calls = [];
+    const runner = (command, args, options) => { calls.push({ command, args, options }); return { status: 0 }; };
+    assert.equal(verifyAttestation("/tmp/a.tar.gz", "o/r", "0.8.0", runner, "explicit", env), "verified");
+    assert.equal(calls.length, 2);
+    assert.deepEqual(calls[0].options.env, { PATH: "/tools" });
+    assert.deepEqual(calls[1].options.env, { PATH: "/tools", GH_TOKEN: "explicit" });
+    assert.equal(env.GH_TOKEN, "existing");
   });
 
   test("reports unavailable, without throwing, when gh is not authenticated", () => {
@@ -963,4 +976,249 @@ describe("analyzerEnvironment", () => {
     const env = analyzerEnvironment({ Gh_Token: "a", actions_runtime_token: "b", Input_Token: "c", Path: "C:\\bin" });
     assert.deepEqual(env, { Path: "C:\\bin" });
   });
+});
+
+describe("toolEnvironment", () => {
+  test("retains runtime, configuration and network settings", () => {
+    const env = { Path: "/tools", HOME: "/home", SystemRoot: "C:\\Windows", TMP: "/tmp", GH_CONFIG_DIR: "/config", https_proxy: "https://proxy", SSL_CERT_FILE: "/cert", LANG: "C", LC_ALL: "C" };
+    assert.deepEqual(toolEnvironment(env), env);
+  });
+
+  test("selects explicit or existing authentication without copying job settings", () => {
+    const env = { PATH: "/tools", Gh_Token: "existing", GITHUB_TOKEN: "fallback", GH_ENTERPRISE_TOKEN: "enterprise", GITHUB_ENTERPRISE_TOKEN: "fallback-enterprise", DBUS_SESSION_BUS_ADDRESS: "unix:path=/session/bus", Input_Token: "input", actions_runtime_token: "runtime", ACTIONS_ID_TOKEN_REQUEST_TOKEN: "oidc", DEPLOY_KEY: "job", NODE_OPTIONS: "options" };
+    assert.deepEqual(toolEnvironment(env), { PATH: "/tools" });
+    assert.deepEqual(toolEnvironment(env, "explicit"), { PATH: "/tools", GH_TOKEN: "explicit" });
+    assert.deepEqual(toolEnvironment(env, ""), { PATH: "/tools", Gh_Token: "existing", GITHUB_TOKEN: "fallback", GH_ENTERPRISE_TOKEN: "enterprise", GITHUB_ENTERPRISE_TOKEN: "fallback-enterprise", DBUS_SESSION_BUS_ADDRESS: "unix:path=/session/bus" });
+  });
+});
+
+/** Creates independent workspace, installed-tool and execution directories for tool tests. */
+function toolFixture(t) {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "vitest-dedup-tools-")));
+  t.after(() => rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }));
+  const workspace = join(root, "workspace");
+  const installed = join(root, "installed");
+  const cwd = join(root, "execution");
+  for (const directory of [workspace, installed, cwd]) mkdirSync(directory);
+  const file = (directory, name, content = "fixture") => {
+    const path = join(directory, name + (process.platform === "win32" ? ".exe" : ""));
+    writeFileSync(path, content, { mode: 0o755 });
+    return path;
+  };
+  return { root, workspace, installed, cwd, file };
+}
+
+/** Creates an executable alias, recording platforms that prohibit file symlinks. */
+function toolAlias(t, target, path) {
+  try { symlinkSync(target, path, "file"); }
+  catch (error) {
+    if (error.code !== "EPERM") throw error;
+    t.skip("file symlinks require permission");
+    return false;
+  }
+  return true;
+}
+
+describe("installed tools", () => {
+  test("uses installed paths and a consistent directory for each operation", (t) => {
+    const f = toolFixture(t);
+    const gh = f.file(f.installed, "gh");
+    const tar = f.file(f.installed, "tar");
+    f.file(f.workspace, "gh");
+    f.file(f.workspace, "tar");
+    if (process.platform === "win32") {
+      for (const name of ["gh", "tar"]) copyFileSync(join(f.workspace, `${name}.exe`), join(f.workspace, `${name}.com`));
+    }
+    const calls = [];
+    const env = { Path: ["", ".", "relative", f.workspace, f.installed].join(delimiter), INPUT_TOKEN: "input", GITHUB_WORKSPACE: f.workspace };
+    const run = createToolRunner({ env, workspace: f.workspace, cwd: f.cwd, runner: (command, args, options) => { calls.push({ command, args, options }); return { status: 0 }; } });
+    assert.equal(verifyAttestation(join(f.cwd, "a.tar.gz"), "o/r", "0.8.0", run, "explicit", env), "verified");
+    assert.equal(run("tar", ["-xf", "a.tar.gz"]).status, 0);
+    assert.deepEqual(calls.map(c => c.command), [gh, gh, tar]);
+    assert.ok(calls.every(c => c.options.cwd === f.cwd && c.options.env.PATH === f.installed));
+    assert.ok(calls.every(c => c.options.env.INPUT_TOKEN === undefined && c.options.env.Path === undefined));
+    assert.deepEqual(calls.map(c => c.options.env.GH_TOKEN), [undefined, "explicit", undefined]);
+    if (process.platform === "win32") assert.ok(calls.every(c => c.options.env.NoDefaultCurrentDirectoryInExePath === "1"));
+  });
+
+  test("retains the selected executable between operations", (t) => {
+    const f = toolFixture(t);
+    const first = join(f.root, "first"); mkdirSync(first);
+    const chosen = f.file(f.installed, "gh");
+    const calls = [];
+    const run = createToolRunner({ env: { PATH: [first, f.installed].join(delimiter) }, workspace: f.workspace, cwd: f.cwd, runner: command => { calls.push(command); return { status: 0 }; } });
+    run("gh", ["--version"]);
+    f.file(first, "gh");
+    run("gh", ["attestation"]);
+    assert.deepEqual(calls, [chosen, chosen]);
+  });
+
+  test("skips missing, directory and unusable candidates", (t) => {
+    const f = toolFixture(t);
+    const directory = join(f.root, "directory"); mkdirSync(directory);
+    mkdirSync(join(directory, "gh" + (process.platform === "win32" ? ".exe" : "")));
+    const unused = join(f.root, "unused"); mkdirSync(unused);
+    if (process.platform !== "win32") chmodSync(f.file(unused, "gh"), 0o644);
+    const chosen = f.file(f.installed, "gh");
+    const pathFile = join(f.root, "path-file"); writeFileSync(pathFile, "file");
+    const run = createToolRunner({ env: { PATH: [join(f.root, "missing"), pathFile, directory, unused, f.installed].join(delimiter) }, workspace: f.workspace, runner: command => ({ status: 0, command }) });
+    assert.equal(run("gh", []).command, chosen);
+  });
+
+  test("uses an unavailable result when no installed candidate exists", (t) => {
+    const f = toolFixture(t); f.file(f.workspace, "gh");
+    const run = createToolRunner({ env: { PATH: [f.workspace, "."].join(delimiter) }, workspace: f.workspace, runner: () => assert.fail("no installed candidate") });
+    assert.equal(run("gh", []).error.code, "ENOENT");
+    const output = captureStdout(() => assert.equal(verifyAttestation(join(f.cwd, "a"), "o/r", "0.8.0", run), "unavailable"));
+    assert.match(output, /unavailable/);
+  });
+
+  test("also honors the runner workspace boundary", (t) => {
+    const f = toolFixture(t); f.file(f.workspace, "gh");
+    const run = createToolRunner({ env: { PATH: f.workspace, GITHUB_WORKSPACE: f.workspace }, workspace: f.cwd, runner: () => assert.fail("outside installed paths") });
+    assert.equal(run("gh", []).error.code, "ENOENT");
+  });
+
+  test("uses the explicit PATH spelling and supports quoted Windows directories", (t) => {
+    const f = toolFixture(t); const chosen = f.file(f.installed, "gh");
+    const path = process.platform === "win32" ? `"${f.installed}"` : f.installed;
+    const run = createToolRunner({ env: { Path: f.workspace, PATH: path }, workspace: join(f.root, "not-created"), runner: command => ({ status: 0, command }) });
+    assert.equal(run("gh", []).command, chosen);
+    const absent = createToolRunner({ env: {}, workspace: f.workspace, runner: () => assert.fail("no PATH") });
+    assert.equal(absent("gh", []).error.code, "ENOENT");
+  });
+
+  test("resolves directory aliases before selecting installed paths", (t) => {
+    const f = toolFixture(t); f.file(f.workspace, "gh");
+    f.file(f.installed, "gh");
+    const inward = join(f.root, "inward"), outward = join(f.workspace, "outward"), installedAlias = join(f.root, "alias");
+    symlinkSync(f.workspace, inward, "junction"); symlinkSync(f.installed, outward, "junction"); symlinkSync(f.installed, installedAlias, "junction");
+    const run = createToolRunner({ env: { PATH: [inward, outward, installedAlias].join(delimiter) }, workspace: f.workspace, runner: (command, args, options) => ({ status: 0, command, path: options.env.PATH }) });
+    assert.deepEqual(run("gh", []), { status: 0, command: join(installedAlias, "gh" + (process.platform === "win32" ? ".exe" : "")), path: f.installed });
+  });
+
+  test("resolves file aliases before selecting executables", (t) => {
+    const f = toolFixture(t);
+    const local = f.file(f.workspace, "gh");
+    const first = join(f.root, "first"); mkdirSync(first);
+    const link = join(first, "gh" + (process.platform === "win32" ? ".exe" : ""));
+    if (!toolAlias(t, local, link)) return;
+    const chosen = f.file(f.installed, "gh");
+    const run = createToolRunner({ env: { PATH: [first, f.installed].join(delimiter) }, workspace: f.workspace, runner: command => ({ status: 0, command }) });
+    assert.equal(run("gh", []).command, chosen);
+  });
+
+  for (const name of ["gh", "tar"]) {
+    test(`preserves the ${name} invocation name through installed aliases`, (t) => {
+      const f = toolFixture(t);
+      const alias = join(f.root, "alias"); symlinkSync(f.installed, alias, "junction");
+      const link = join(f.installed, name + (process.platform === "win32" ? ".exe" : ""));
+      if (!toolAlias(t, process.execPath, link)) return;
+      f.file(f.workspace, name);
+      const run = createToolRunner({ env: { ...process.env, PATH: [f.workspace, alias].join(delimiter), INPUT_TOKEN: "input" }, workspace: f.workspace, cwd: f.cwd });
+      const result = run(name, ["-e", "console.log(JSON.stringify({name:process.argv0,cwd:process.cwd(),input:process.env.INPUT_TOKEN??null}))"], { encoding: "utf8", timeout: 10000, maxBuffer: 65536 });
+      assert.equal(result.status, 0, result.stderr || result.error?.message);
+      assert.deepEqual(JSON.parse(result.stdout), { name, cwd: f.cwd, input: null });
+    });
+
+    test(`preserves the ${name} wrapper path through directory aliases`, { skip: process.platform === "win32" }, (t) => {
+      const f = toolFixture(t);
+      const target = f.file(f.installed, "dispatch", '#!/bin/sh\nprintf "%s\\n%s\\n" "$0" "${INPUT_TOKEN-unset}"\n');
+      symlinkSync(target, join(f.installed, name));
+      const alias = join(f.root, "alias"); symlinkSync(f.installed, alias, "junction");
+      const run = createToolRunner({ env: { PATH: alias, INPUT_TOKEN: "input" }, workspace: f.workspace, cwd: f.cwd });
+      const result = run(name, [], { encoding: "utf8", timeout: 10000, maxBuffer: 65536 });
+      assert.equal(result.status, 0, result.stderr || result.error?.message);
+      assert.equal(result.stdout, `${join(alias, name)}\nunset\n`);
+    });
+  }
+
+  for (const change of ["workspace", "installed", "removed"]) {
+    test(`rejects a ${change} target change between probe and verification`, (t) => {
+      const f = toolFixture(t);
+      const original = f.file(f.installed, "original");
+      const next = f.file(change === "workspace" ? f.workspace : f.installed, "next");
+      const link = join(f.installed, "gh" + (process.platform === "win32" ? ".exe" : ""));
+      if (!toolAlias(t, original, link)) return;
+      let calls = 0;
+      const run = createToolRunner({ env: { PATH: f.installed }, workspace: f.workspace, cwd: f.cwd, runner: () => {
+        calls++; rmSync(link);
+        if (change !== "removed") symlinkSync(next, link, "file");
+        return { status: 0 };
+      } });
+      assert.throws(() => verifyAttestation(join(f.cwd, "a.tar.gz"), "o/r", "0.8.0", run), /attestation failed/);
+      assert.equal(calls, 1, "the changed tool must not be invoked for verification");
+    });
+  }
+
+  test("constructs the default verifier from the supplied environment", { skip: process.platform === "win32" }, (t) => {
+    const f = toolFixture(t);
+    const trace = join(f.root, "calls");
+    f.file(f.installed, "gh", `#!${process.execPath}\nimport {appendFileSync} from 'node:fs';\nappendFileSync(${JSON.stringify(trace)}, JSON.stringify({args:process.argv.slice(2),auth:process.env.GH_TOKEN??null})+'\\n');`);
+    assert.equal(verifyAttestation(join(f.cwd, "archive"), "o/r", "0.8.0", undefined, "explicit", { PATH: f.installed }), "verified");
+    const calls = readFileSync(trace, "utf8").trim().split("\n").map(JSON.parse);
+    assert.equal(calls.length, 2);
+    assert.deepEqual(calls.map(call => call.auth), [null, "explicit"]);
+  });
+
+  test("executes the selected runtime with the requested environment", (t) => {
+    const f = toolFixture(t);
+    const executable = f.file(f.installed, "node"); copyFileSync(process.execPath, executable); chmodSync(executable, 0o755);
+    f.file(f.workspace, "node");
+    const run = createToolRunner({ env: { ...process.env, PATH: [f.workspace, f.installed].join(delimiter), INPUT_TOKEN: "input", DEPLOY_KEY: "job" }, workspace: f.workspace, cwd: f.cwd });
+    const result = run("node", ["-e", "console.log(JSON.stringify({cwd:process.cwd(),input:process.env.INPUT_TOKEN??null,job:process.env.DEPLOY_KEY??null}))"], { encoding: "utf8", timeout: 10000, maxBuffer: 65536 });
+    assert.equal(result.status, 0, result.stderr || result.error?.message);
+    assert.deepEqual(JSON.parse(result.stdout), { cwd: f.cwd, input: null, job: null });
+  });
+});
+
+describe("release installation", { skip: process.platform === "win32" }, () => {
+  for (const mode of ["verified", "symlinked", "preauthenticated", "without-gh", "without-tar", "workspace-only", "verification-failed", "checksum-mismatch"]) {
+    test(`retains the ${mode} outcome`, async (t) => {
+      const f = toolFixture(t);
+      const trace = join(f.root, "calls.jsonl");
+      const report = join(f.workspace, "report.json");
+      const output = join(f.root, "outputs");
+      writeFileSync(output, "");
+      const stem = `vitest-dedup-0.8.0-${releaseTarget().key}`;
+      const archive = Buffer.from("owned release fixture");
+      const digest = createHash("sha256").update(archive).digest("hex");
+      const directory = mode === "workspace-only" ? f.workspace : f.installed;
+      const installedAlias = join(f.root, "alias"); symlinkSync(directory, installedAlias, "junction");
+      const path = mode === "symlinked" ? installedAlias : directory;
+      const install = (name, content) => {
+        const file = f.file(directory, mode === "symlinked" ? `wrapped-${name}` : name, content);
+        if (mode === "symlinked") symlinkSync(file, join(directory, name));
+      };
+      const ghExit = mode === "verification-failed" ? "process.argv[2] === 'attestation' ? 1 : 0"
+        : mode === "preauthenticated" ? "process.argv[2] === '--version' || (process.env.DBUS_SESSION_BUS_ADDRESS === 'unix:path=/owned-bus' && process.env.GH_TOKEN === 'existing') ? 0 : 4" : "0";
+      const log = `appendFileSync(${JSON.stringify(trace)}, JSON.stringify({tool: process.argv[1], args: process.argv.slice(2), input: process.env.INPUT_TOKEN ?? null, runtime: process.env.ACTIONS_RUNTIME_TOKEN ?? null, job: process.env.DEPLOY_KEY ?? null, bus: process.env.DBUS_SESSION_BUS_ADDRESS ?? null, auth: process.env.GH_TOKEN ?? null}) + '\\n');`;
+      if (mode !== "without-gh") install("gh", `#!${process.execPath}\nimport {appendFileSync} from 'node:fs';\n${log}\nprocess.exit(${ghExit});`);
+      const analyzer = `#!${process.execPath}\nimport {writeFileSync} from 'node:fs';\nwriteFileSync(${JSON.stringify(report)}, JSON.stringify({schemaVersion:'0.1',testsAnalyzed:1,filesAnalyzed:1,incomplete:false,findings:[]}));`;
+      if (mode !== "without-tar") install("tar", `#!${process.execPath}\nimport {appendFileSync,mkdirSync,writeFileSync} from 'node:fs';\nimport {join} from 'node:path';\n${log}\nconst dir=join(process.argv[process.argv.indexOf('-C')+1],${JSON.stringify(stem)}); mkdirSync(dir,{recursive:true}); writeFileSync(join(dir,${JSON.stringify(releaseTarget().binaryName)}),${JSON.stringify(analyzer)},{mode:0o755});`);
+      t.mock.method(globalThis, "fetch", async (url) => new Response(url.endsWith(".sha256")
+        ? `${mode === "checksum-mismatch" ? "0".repeat(64) : digest}  ${stem}.tar.gz\n` : archive));
+      const env = { PATH: path, RUNNER_TEMP: f.cwd, GITHUB_OUTPUT: output, INPUT_VERSION: "0.8.0", INPUT_OUTPUT: join(f.workspace, "report"), INPUT_TOKEN: mode === "preauthenticated" ? "" : "explicit", GH_TOKEN: "existing", DBUS_SESSION_BUS_ADDRESS: "unix:path=/owned-bus", ACTIONS_RUNTIME_TOKEN: "runtime", DEPLOY_KEY: "job" };
+      const run = runAction({ env, cwd: f.workspace });
+      if (["without-tar", "workspace-only", "verification-failed", "checksum-mismatch"].includes(mode)) {
+        await assert.rejects(run, /failed to extract|attestation failed|checksum/i);
+        assert.equal(parseGithubOutput(readFileSync(output, "utf8"))["exit-code"], "2");
+        assert.equal(existsSync(report), false);
+      } else {
+        assert.equal(await run, 0);
+        const outputs = parseGithubOutput(readFileSync(output, "utf8"));
+        assert.equal(outputs.attestation, mode === "without-gh" ? "unavailable" : "verified");
+        assert.equal(outputs["tests-analyzed"], "1");
+      }
+      const calls = existsSync(trace) ? readFileSync(trace, "utf8").trim().split("\n").map(JSON.parse) : [];
+      const expected = { verified: 3, symlinked: 3, preauthenticated: 3, "without-gh": 1, "without-tar": 2, "workspace-only": 0, "verification-failed": 2, "checksum-mismatch": 0 };
+      assert.equal(calls.length, expected[mode]);
+      for (const call of calls) {
+        assert.equal(dirname(call.tool), path);
+        assert.equal(call.input, null); assert.equal(call.runtime, null); assert.equal(call.job, null);
+        assert.equal(call.auth, call.args[0] === "attestation" ? (mode === "preauthenticated" ? "existing" : "explicit") : null);
+        assert.equal(call.bus, mode === "preauthenticated" && call.args[0] === "attestation" ? "unix:path=/owned-bus" : null);
+      }
+    });
+  }
 });
