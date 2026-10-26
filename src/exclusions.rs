@@ -32,6 +32,7 @@ fn explains_excluded_tests(reason: ExclusionReason) -> bool {
             | HelperEffectsUnproved
             | HelperLimit
             | HelperSourcesUnavailable
+            | PackageManifestUnreadable
             | RunnerMocked
             | UnsupportedExpression
     )

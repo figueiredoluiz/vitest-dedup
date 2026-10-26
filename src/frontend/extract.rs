@@ -527,22 +527,23 @@ fn run(source: &str, file: &SourceFile, globals: Globals, allow_imported: bool) 
     let semantic = &semantic_return.semantic;
 
     // Every body fingerprinted below shares this file's import origins, computed once here.
-    let walker = super::fingerprint::with_file_import_origins(source, &file.path, program, || {
-        let mut registry = Registry::new(program, globals);
-        let mut walker = Walker::new(source, file, program, semantic, globals);
-        walker.allow_imported = allow_imported;
-        walker.prepare_imported_constants(&allocator);
-        walker.walk_statements(&program.body, &mut registry);
-        walker.finish_imported_constants();
-        if !walker.helper_setup.is_empty() {
-            for case in &mut walker.tests {
-                case.context
-                    .module_setup
-                    .extend(walker.helper_setup.iter().cloned());
+    let mut walker =
+        super::fingerprint::with_file_import_origins(source, &file.path, program, || {
+            let mut registry = Registry::new(program, globals);
+            let mut walker = Walker::new(source, file, program, semantic, globals);
+            walker.allow_imported = allow_imported;
+            walker.prepare_imported_constants(&allocator);
+            walker.walk_statements(&program.body, &mut registry);
+            walker.finish_imported_constants();
+            if !walker.helper_setup.is_empty() {
+                for case in &mut walker.tests {
+                    case.context
+                        .module_setup
+                        .extend(walker.helper_setup.iter().cloned());
+                }
             }
-        }
-        walker
-    });
+            walker
+        });
     reasons.extend(walker.reasons);
     diagnostics.extend(walker.diagnostics);
     for (reason, text) in walker.expansion.borrow().budget_diagnostics() {
@@ -552,6 +553,13 @@ fn run(source: &str, file: &SourceFile, globals: Globals, allow_imported: bool) 
     for text in super::resolver::take_refusals() {
         reasons.push(ExclusionReason::ImportOutsideRoot);
         diagnostics.push(text);
+    }
+    for text in super::resolver::take_manifest_refusals() {
+        reasons.push(ExclusionReason::PackageManifestUnreadable);
+        diagnostics.push(text);
+        for test in &mut walker.tests {
+            test.context.unresolved = true;
+        }
     }
     debug_assert_eq!(reasons.len(), diagnostics.len());
 

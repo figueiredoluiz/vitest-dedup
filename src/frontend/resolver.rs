@@ -60,7 +60,10 @@
 //! [`Resolved::Unresolved`], never opened, and recorded for [`take_refusals`] so the file's
 //! extraction says so.
 
-use oxc_resolver::{ResolveOptions, Resolver, TsconfigDiscovery};
+mod manifest_fs;
+
+use manifest_fs::ManifestResolver as Resolver;
+use oxc_resolver::{ResolveOptions, TsconfigDiscovery};
 use oxc_span::VALID_EXTENSIONS;
 use std::cell::RefCell;
 use std::collections::BTreeMap;
@@ -268,6 +271,9 @@ fn record_failure(importing_file: &Path, specifier: &str, error: &oxc_resolver::
 }
 
 thread_local! {
+    /// Required metadata refusals, separate from root-confinement diagnostics.
+    static MANIFEST_REFUSALS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+
     /// One resolver per worker, built lazily and reused until that extraction completes.
     /// `TsconfigDiscovery::Auto` means each call finds *its own* nearest `tsconfig.json` by
     /// walking up from the importing file -- the right default for a monorepo with one
@@ -420,12 +426,34 @@ pub(super) fn begin_file_with_proof_root(root: Option<&Path>, proof_root: Option
     PROOF_ROOT.with(|slot| *slot.borrow_mut() = proof_root.map(Path::to_path_buf));
     ANALYSIS_ROOT.with(|slot| *slot.borrow_mut() = root.map(Path::to_path_buf));
     REFUSALS.with(|refusals| refusals.borrow_mut().clear());
+    MANIFEST_REFUSALS.with(|refusals| refusals.borrow_mut().clear());
     CACHE.with(|cache| cache.borrow_mut().clear());
 }
 
 /// Drains the diagnostics for resolutions refused since [`begin_file`].
 pub(super) fn take_refusals() -> Vec<String> {
     REFUSALS.with(|refusals| std::mem::take(&mut *refusals.borrow_mut()))
+}
+
+/// Records a required manifest refusal without making optional proof reads taint the file.
+fn record_manifest_refusal(path: &Path) {
+    if !QUIET.with(std::cell::Cell::get) {
+        let message = format!(
+            "package manifest `{}` could not be read as a UTF-8 regular file of at most 1 MiB",
+            path.display()
+        );
+        MANIFEST_REFUSALS.with(|refusals| {
+            let mut refusals = refusals.borrow_mut();
+            if !refusals.contains(&message) {
+                refusals.push(message);
+            }
+        });
+    }
+}
+
+/// Drains metadata refusals for the current file's completeness report.
+pub(super) fn take_manifest_refusals() -> Vec<String> {
+    MANIFEST_REFUSALS.with(|refusals| std::mem::take(&mut *refusals.borrow_mut()))
 }
 
 /// Refuses a resolution that leaves the analysis root unless it is independent of tsconfig.
@@ -470,6 +498,41 @@ fn confine_resolution(importing_file: &Path, specifier: &str, resolved: Resolved
 mod tests {
     use super::*;
     use std::fs;
+
+    /// Refused metadata cannot be cached as absence, even after an optional quiet lookup.
+    #[test]
+    fn refused_metadata_is_not_cached_as_an_index_or_ancestor_fallback() {
+        let dir = tempfile::tempdir().unwrap();
+        let package = dir.path().join("node_modules/owned");
+        std::fs::create_dir_all(&package).unwrap();
+        let importer = dir.path().join("test.ts");
+        std::fs::write(&importer, "").unwrap();
+        std::fs::write(package.join("index.js"), "export const x = 1;").unwrap();
+        std::fs::write(package.join("other.js"), "export const x = 2;").unwrap();
+        let manifest = package.join("package.json");
+        std::fs::write(
+            &manifest,
+            " ".repeat(crate::package_json::MAX_BYTES as usize + 1),
+        )
+        .unwrap();
+        begin_file(None);
+        assert_eq!(
+            quietly(|| resolve(&importer, "owned")),
+            Resolved::Unresolved
+        );
+        assert!(take_manifest_refusals().is_empty());
+        assert_eq!(resolve(&importer, "owned"), Resolved::Unresolved);
+        assert_eq!(take_manifest_refusals().len(), 1);
+        assert_eq!(resolve(&importer, "owned/other"), Resolved::Unresolved);
+        assert_eq!(take_manifest_refusals().len(), 1);
+        std::fs::write(&manifest, r#"{"name":"owned","exports":"./other.js"}"#).unwrap();
+        begin_file(None);
+        assert_eq!(
+            resolve(&importer, "owned"),
+            Resolved::Module(package.join("other.js").canonicalize().unwrap())
+        );
+        assert!(take_manifest_refusals().is_empty());
+    }
 
     /// Two differently-spelled relative specifiers that both name the same file on disk must
     /// resolve to the same [`Resolved::Module`] path -- this is the whole point of real resolution

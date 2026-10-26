@@ -630,6 +630,39 @@ fn files_left_unanalyzed_by_the_memory_budget_are_memory_budget() {
     assert_eq!(run.json["exclusions"]["reasons"][0]["files"], skipped);
 }
 
+/// A required manifest refusal has one stable code across JSON, JSONL and the terminal histogram.
+#[test]
+fn refused_package_metadata_is_reported_without_tainting_independent_files() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    write(root, "clean.test.ts", CLEAN);
+    write(
+        root,
+        "node_modules/owned/index.js",
+        "export const value = 1;",
+    );
+    write(
+        root,
+        "node_modules/owned/package.json",
+        format!("{{\"name\":\"owned\"}}{}", " ".repeat(1024 * 1024)),
+    );
+    write(root, "dependent.test.ts", "import { test, expect } from 'vitest';\nimport { value } from 'owned';\ntest('first', () => expect(value).toBe(1));\ntest('second', () => expect(value).toBe(1));\n");
+    let result = run(root, &[]);
+    assert_eq!(result.json["testsAnalyzed"], 3);
+    assert_eq!(result.json["unresolvedTests"], 2);
+    assert!(result.json["findings"].as_array().unwrap().is_empty());
+    assert_listed(
+        &result,
+        &[Expect {
+            path: "dependent.test.ts",
+            reason: "package-manifest-unreadable",
+            others: &[],
+            excluded: 2,
+            total: 2,
+        }],
+    );
+}
+
 /// Every code has a scenario here or a named unit test elsewhere.
 #[test]
 fn every_closed_code_has_a_scenario_or_a_named_unit_test() {
@@ -649,6 +682,7 @@ fn every_closed_code_has_a_scenario_or_a_named_unit_test() {
         "source-limit",
         "walk-limit",
         "import-outside-root",
+        "package-manifest-unreadable",
         "globals-undetermined",
         "file-too-large",
         "unreadable",

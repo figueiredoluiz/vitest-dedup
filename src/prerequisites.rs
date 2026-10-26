@@ -35,9 +35,8 @@ const NO_MANAGER_FIX: &str = "install the dependencies";
 #[must_use]
 pub fn assess(root: &Path, gaps: &ResolutionGaps) -> Vec<MissingPrerequisite> {
     // The nearest manifest at or above the root governs it, as for Node's own lookup.
-    let manifest = root
-        .ancestors()
-        .find_map(|directory| std::fs::read_to_string(directory.join("package.json")).ok())
+    let manifest = governing_manifest(root, |_| true)
+        .map(|(_, text)| text)
         .unwrap_or_default();
     let mut missing: Vec<MissingPrerequisite> = gaps
         .tsconfig
@@ -81,11 +80,8 @@ fn missing_installs(root: &Path, gaps: &ResolutionGaps) -> Vec<MissingPrerequisi
         if has_installed_packages(directory) {
             continue;
         }
-        let governing = directory.ancestors().find(|candidate| {
-            std::fs::read_to_string(candidate.join("package.json"))
-                .is_ok_and(|manifest| lists_dependencies(&manifest))
-        });
-        if let Some(governing) = governing {
+        let governing = governing_manifest(directory, lists_dependencies);
+        if let Some((governing, _)) = governing {
             *by_project.entry(governing).or_insert(0) += *count;
         }
     }
@@ -100,6 +96,19 @@ fn missing_installs(root: &Path, gaps: &ResolutionGaps) -> Vec<MissingPrerequisi
         .collect();
     entries.sort_by(|a, b| a.path.cmp(&b.path));
     entries
+}
+
+/// Finds usable ancestor metadata without treating a refused manifest as an absent one.
+fn governing_manifest(root: &Path, accepts: impl Fn(&str) -> bool) -> Option<(&Path, String)> {
+    for directory in root.ancestors() {
+        match crate::package_json::read(&directory.join("package.json")) {
+            Ok(text) if accepts(&text) => return Some((directory, text)),
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => return None,
+        }
+    }
+    None
 }
 
 /// A path as the reports show it, before sanitizing: relative to the root with forward slashes
@@ -205,6 +214,42 @@ mod tests {
                 BTreeMap::from([(directory.to_path_buf(), count)])
             },
         }
+    }
+
+    /// Refused local metadata cannot borrow an ancestor's dependency or Nuxt advice.
+    #[test]
+    fn refused_manifest_stops_advice_at_the_governing_project() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("member");
+        fs::create_dir(&root).unwrap();
+        fs::write(
+            directory.path().join("package.json"),
+            r#"{"dependencies":{"nuxt":"1"}}"#,
+        )
+        .unwrap();
+        fs::write(
+            root.join("package.json"),
+            " ".repeat(crate::package_json::MAX_BYTES as usize + 1),
+        )
+        .unwrap();
+        assert!(assess(&root, &gaps_at(&root, 1)).is_empty());
+        let missing = assess(
+            &root,
+            &gaps(
+                vec![(TsconfigGap::Absent(root.join(".nuxt/tsconfig.json")), 1)],
+                0,
+            ),
+        );
+        assert_eq!(missing.len(), 1);
+        assert_eq!(missing[0].fix, GENERIC_FIX);
+        fs::remove_file(root.join("package.json")).unwrap();
+        assert_eq!(assess(&root, &gaps_at(&root, 1)).len(), 1);
+        fs::write(
+            root.join("package.json"),
+            r#"{"dependencies":{"local":"1"}}"#,
+        )
+        .unwrap();
+        assert_eq!(assess(&root, &gaps_at(&root, 1))[0].path, "node_modules");
     }
 
     /// No recorded failure reports nothing, whatever the project lists.

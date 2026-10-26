@@ -211,7 +211,10 @@ generated list are not read.
   then remain unproved, and their calling scopes are excluded with an incomplete result;
   tests that do not need the table remain eligible for comparison.
 - One setup-helper proof visits at most 64 modules, and reads at most 256 manifests for each
-  installed package it reaches.
+  installed package it reaches. Each manifest must be a UTF-8 regular file of at most 1 MiB.
+  Links to regular manifests remain supported; special files and oversized manifests are refused.
+  The same bound applies during module resolution and when reading prerequisite advice.
+  Unreadable advice does not invent a missing prerequisite or borrow an ancestor manifest.
 - The text check of an installed package follows relative `require`, `from` and `import()` to at
   most 1,024 scripts and 32 MiB (8 MiB each); a package past that is refused.
 - The command-line tool reads an installed package in a separate worker process with a 20 s deadline

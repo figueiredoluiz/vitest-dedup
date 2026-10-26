@@ -5975,6 +5975,51 @@
           ]
         }
       ]
+    },
+    {
+      "name": "framework-package-manifest-regular",
+      "path": "framework-package-manifest-regular",
+      "rule": "duplicate-test",
+      "role": "positive",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-10-27",
+      "expectedTests": 2,
+      "expectedIncomplete": false,
+      "expectedUnresolved": 0,
+      "expectedFindings": [
+        {
+          "rule": "duplicate-test",
+          "severity": "error",
+          "titles": [
+            "keeps the first observation",
+            "keeps the second observation"
+          ]
+        }
+      ],
+      "expectedAbsent": []
+    },
+    {
+      "name": "framework-package-manifest-oversized",
+      "path": "framework-package-manifest-oversized",
+      "rule": "duplicate-test",
+      "role": "negative",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-10-27",
+      "expectedTests": 2,
+      "expectedIncomplete": true,
+      "expectedUnresolved": 2,
+      "expectedFindings": [],
+      "expectedAbsent": [
+        {
+          "rule": "duplicate-test",
+          "titles": [
+            "keeps the first observation",
+            "keeps the second observation"
+          ]
+        }
+      ]
     }
   ],
   "knownFalsePositiveBaseline": 1,

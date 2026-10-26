@@ -18,6 +18,7 @@ pub mod frontend;
 pub mod memory;
 pub mod model;
 pub mod modes;
+pub(crate) mod package_json;
 pub mod prerequisites;
 pub mod reporters;
 pub mod vitest_config;

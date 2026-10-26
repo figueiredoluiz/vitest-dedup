@@ -49,7 +49,7 @@ file and specifier. A file's project is the nearest `package.json` at or above i
 listed dependencies, or only relative imports produce nothing. Only resolution failures are
 reported, so a tsconfig that is merely unusual is silent.
 
-Limits: detection relies on what the resolver reports. A target that cannot be read because of an
+Limits: tsconfig detection relies on what the resolver reports. A tsconfig target that cannot be read because of an
 I/O error (invalid UTF-8, no read permission) is swallowed by the resolver during discovery and is not
 reported. On Windows a tsconfig is not found from a canonical importer path at all, so the two
 `tsconfig-*` kinds are not detected there (the same gap that keeps `paths` aliases from applying); the
@@ -124,6 +124,7 @@ alone. Past the cap the files with the fewest excluded tests are left out of the
 | `source-limit` | The nesting or syntax-unit limit refused the file. |
 | `extraction-failed` | Extraction could not run, or panicked and was recovered. |
 | `walk-limit` | The per-file declaration or loop-unrolling budget was reached. |
+| `package-manifest-unreadable` | Module resolution needed a `package.json` that could not be read as a UTF-8 regular file of at most 1 MiB. The affected test file is excluded; refused metadata cannot select an ancestor manifest or an index fallback. |
 | `import-outside-root` | An import resolved outside the analysis root and was not read. |
 | `globals-undetermined` | The governing project's `globals` setting could not be determined. |
 | `file-too-large` | The file exceeds the source-size limit and was not read. |

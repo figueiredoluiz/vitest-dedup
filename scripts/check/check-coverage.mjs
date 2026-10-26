@@ -215,6 +215,7 @@ const RUST_MODULES = {
   // Imported table constants: measured at 94.57% (87/92 instrumented lines).
   'src/frontend/registry/imported_constants.rs': 94,
   'src/frontend/resolver.rs': 100,
+  'src/frontend/resolver/manifest_fs.rs': 99,
   'src/main.rs': 97,
   // Native memory readers: measured 41/44 instrumented lines (93.18%) on macOS.
   'src/rss.rs': 93,
@@ -233,6 +234,7 @@ const RUST_MODULES = {
   // through arithmetic that never calls `.heap_bytes()` on the count itself).
   'src/memory.rs': 98,
   'src/model.rs': 99,
+  'src/package_json.rs': 94,
   'src/prerequisites.rs': 99,
   'src/modes.rs': 97,
   // `src/reporters.rs` is the module root: the `Reporter` trait, the dispatch table, and the shared
