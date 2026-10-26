@@ -4,6 +4,29 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    groups:
+      # These crates share compiler types and must move together. oxc_resolver
+      # has an independent release cycle and is intentionally not included.
+      oxc-compiler:
+        applies-to: version-updates
+        patterns:
+          - oxc_allocator
+          - oxc_ast
+          - oxc_ast_visit
+          - oxc_parser
+          - oxc_semantic
+          - oxc_span
+          - oxc_syntax
+      oxc-compiler-security:
+        applies-to: security-updates
+        patterns:
+          - oxc_allocator
+          - oxc_ast
+          - oxc_ast_visit
+          - oxc_parser
+          - oxc_semantic
+          - oxc_span
+          - oxc_syntax
     labels:
       - dependencies
     commit-message:
@@ -20,6 +43,16 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    groups:
+      # Keep init, analyze, and any future CodeQL sub-actions on one release.
+      codeql:
+        applies-to: version-updates
+        patterns:
+          - "github/codeql-action/*"
+      codeql-security:
+        applies-to: security-updates
+        patterns:
+          - "github/codeql-action/*"
     labels:
       - dependencies
     commit-message:
