@@ -1571,6 +1571,63 @@ fn ambient_declarations_on_the_runner_module_are_not_setup_effects() {
 }
 
 #[test]
+/// A runner module may create module-local values at import; anything else its top level runs can
+/// change what the importing file observes, so it still refuses the runner.
+fn module_local_values_on_the_runner_module_are_not_setup_effects() {
+    for (prelude, statement, admitted) in [
+        ("", "export const api = { fetchUser: vi.fn(() => 1) };", true),
+        ("", "export const spy = vi.fn();", true),
+        ("", "const seen = new Set<string>(['a']);", true),
+        ("", "const byId = new Map([[1, 'a']]);", true),
+        ("", "export const seeds = [42, -1, `x`, null] as const;", true),
+        ("", "export const nested = { list: [{ ok: true }], label: 'x' };", true),
+        ("", "export class Registry { static items: string[] = []; }", true),
+        ("", "export const restore = vi.stubEnv('MODE', 'x');", false),
+        ("", "export const fetch = vi.stubGlobal('fetch', vi.fn());", false),
+        ("", "export const clock = vi.useFakeTimers();", false),
+        ("", "export const log = vi.spyOn(console, 'log');", false),
+        ("", "export const matchers = expect.extend({});", false),
+        ("", "export const tree = make({ id: 1 }); function make(o: object) { return o; }", false),
+        ("", "export const copy = { ...{ a: 1 } };", false),
+        ("", "export const keyed = { ['a']: 1 };", false),
+        ("", "export const gone = delete (globalThis as any).x;", false),
+        ("", "export class Registry { static items = Registry.load(); static load() { return []; } }", false),
+        ("", "export class Registry { static { (globalThis as any).x = 1; } }", false),
+        ("class Set { constructor() { (globalThis as any).x = 1; } } ", "const seen = new Set();", false),
+        ("const vi = { fn: () => { (globalThis as any).x = 1; } }; ", "export const spy = vi.fn();", false),
+        // Code that runs, or a throw, while an admitted-looking value is evaluated.
+        ("", "export const n = +{ valueOf() { test('hidden', () => {}); return 0; } };", false),
+        ("", "const byKey = new Map([{ get 0() { test('hidden', () => {}); return 'k'; }, 1: 0 }]);", false),
+        ("", "export const { x } = { get x() { test('hidden', () => {}); return 0; } };", false),
+        ("", "export const o = { get x() { return 0; } };", false),
+        ("", "export const o = { __proto__: { x: 1 } };", false),
+        ("", "const broken = new Map([1]);", false),
+        ("", "const broken = new Set({});", false),
+        ("", "const broken = new WeakSet([1]);", false),
+        ("", "const broken = new Array(-1);", false),
+        ("", "export const spy = vi.fn('not a function');", false),
+        ("", "export const n = +1n;", false),
+        ("", "export const n = [-1n, ~1n, +'x'];", true),
+        ("", "const pairs = new Map([['a', 1], ['b', 2]]);", true),
+        ("", "export const server = { listen() {}, close() {} };", true),
+    ] {
+        let case = RunnerCase::new(
+            &format!("import {{ test, describe, beforeEach, expect }} from 'vitest'; {}{prelude}{statement} export function run() {{ test('own', () => {{}}); }}",
+                if prelude.starts_with("const vi") { "" } else { "import { vi } from 'vitest'; " }),
+            "test('before', () => {}); run();",
+        );
+        let extraction = case.extract(Globals::Disabled);
+        assert_eq!(
+            extraction.tests.len(),
+            if admitted { 2 } else { 1 },
+            "{prelude}{statement}: {:?}",
+            extraction.diagnostics
+        );
+        assert_eq!(extraction.incomplete, !admitted, "{prelude}{statement}");
+    }
+}
+
+#[test]
 /// A recovered worker failure carries its own code, and a nested runner refusal keeps its own.
 fn recovered_and_nested_refusals_carry_their_own_codes() {
     let recovered = recovered_extraction("worker failed".to_owned());

@@ -508,7 +508,6 @@ const DELIBERATE_BLIND_FILES = new Set([
   // row that supports its shape lands, and leaves this list in the same change.
   'recall/framework-auto-import-in-helper/unknown.test.ts',
   'recall/framework-auto-import-ungenerated-control/known.test.ts',
-  'recall/framework-hook-helper-server/orders.test.ts',
   'recall/framework-package-mock-call-uninstalled/users.test.ts',
   // `mockNuxtImport` factories that must stay refused: a redeclared `var` whose later value registers,
   // and a counter a hook increments (identical tests that observe different values).
@@ -543,6 +542,12 @@ const DELIBERATE_BLIND_FILES = new Set([
   // permanently, as the control for admitting ambient declarations on a runner's chain.
   'recall/framework-runner-namespace-hook-negative/observe.test.ts',
   'recall/framework-runner-namespace-hook-negative/slugs.test.ts',
+  // A runner module that switches to fake timers at import: blind on purpose, permanently, as the
+  // control for admitting module-local values on a runner's chain.
+  'recall/framework-runner-fake-timers-negative/observe.test.ts',
+  'recall/framework-runner-fake-timers-negative/slugs.test.ts',
+  // A runner module whose destructured getter registers a test at import: blind on purpose.
+  'recall/framework-runner-getter-value-negative/slugs.test.ts',
 ])
 
 /**

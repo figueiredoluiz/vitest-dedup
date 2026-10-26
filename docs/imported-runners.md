@@ -71,6 +71,13 @@ it refuses the outer runner. Recursion through modules or local helpers is refus
   the module reassigns.
 - Module setup effects. TypeScript ambient declarations (`declare module`, `declare global`,
   `declare namespace`, `declare enum`) are erased before the module runs and are not effects.
+  Creating a module-local value is not an effect either: literals, functions, object literals
+  without getters, setters or `__proto__`, array literals, an empty `Set`, `Map`, `WeakSet`,
+  `WeakMap` or `Array`, a `Set` built from an array literal, a `Map` built from an array literal of
+  key-value pairs, Vitest's `vi.fn()` with no argument or a function, and classes whose static
+  fields hold such values, bound to a plain name. Any other call at import, such as `vi.stubEnv`,
+  `vi.mock`, `vi.useFakeTimers` or `expect.extend`, changes what the importing file's own tests
+  observe and refuses the runner.
 - Called opaque imports at registration time. Uncalled imports and calls inside test callbacks are
   not registration candidates.
 - Named or default object method calls as runner candidates, and function `.call()` / `.apply()`
