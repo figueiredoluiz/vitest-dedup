@@ -174,7 +174,9 @@ and a helper that registers anything are refused as before.
 Importing a module runs it, called or not. Module dependencies must be Vitest, the validated named
 re-export chain, or first-party modules that are inert or that provably register nothing (see
 [Setup helpers](#setup-helpers)); effects other than registration at import time are accepted and
-are attributed through the runner's identity. Unknown dependency or setup effects, and helper
+are attributed through the runner's identity. A module that uses `vi` or `expect` while it loads
+(`vi.mock`, `vi.stubEnv`, `vi.fn()`, `expect.extend`, ...) is not: that effect reaches every test in
+the calling file, not only the runner's. Unknown dependency or setup effects, and helper
 mocking effects, mark the entire calling file unresolved.
 
 ### What a refusal does

@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "minimumCases": 197,
+  "minimumCases": 199,
   "knownMissBaseline": 0,
   "minimumRecall": 0.99,
   "recallDestination": 1,
@@ -4843,6 +4843,51 @@
       "expectedAbsent": [
         {
           "rule": "duplicate-test",
+          "titles": [
+            "page lowercases",
+            "page slug is lowercase"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "framework-runner-plain-import-control",
+      "path": "framework-runner-plain-import-control",
+      "rule": "duplicate-test",
+      "role": "positive",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-10-26",
+      "expectedTests": 2,
+      "expectedIncomplete": false,
+      "expectedUnresolved": 0,
+      "expectedFindings": [
+        {
+          "rule": "duplicate-test",
+          "severity": "error",
+          "titles": [
+            "page lowercases",
+            "page slug is lowercase"
+          ]
+        }
+      ],
+      "expectedAbsent": []
+    },
+    {
+      "name": "framework-runner-import-time-mock-negative",
+      "path": "framework-runner-import-time-mock-negative",
+      "rule": "cross-file-duplicate",
+      "role": "negative",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-10-26",
+      "expectedTests": 2,
+      "expectedIncomplete": true,
+      "expectedUnresolved": 1,
+      "expectedFindings": [],
+      "expectedAbsent": [
+        {
+          "rule": "cross-file-duplicate",
           "titles": [
             "page lowercases",
             "page slug is lowercase"

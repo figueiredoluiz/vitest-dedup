@@ -1633,6 +1633,66 @@ fn module_local_values_on_the_runner_module_are_not_setup_effects() {
 }
 
 #[test]
+/// A module the runner imports may not use `vi` or `expect` while it loads: the effect reaches
+/// every test in the calling file, and no test's context records it. Using them only inside a
+/// function the import does not run is harmless.
+fn vitest_calls_while_an_imported_module_loads_taint_the_file() {
+    const VI: &str = "import { vi, expect } from 'vitest'; ";
+    for (effects, utils, tainted) in [
+        ("vi.mock('./slug', () => ({}));", "", true),
+        ("vi.stubEnv('MODE', 'x');", "", true),
+        ("expect.extend({});", "", true),
+        ("export const spy = vi.fn();", "", true),
+        ("export const log = vi.spyOn(console, 'log');", "", true),
+        ("export const restore = (() => vi.stubEnv('MODE', 'x'))();", "", true),
+        ("namespace Setup { vi.mock('./slug'); }", "", true),
+        // Every route to `vi` or `expect` while the module loads, not only `vi.member`.
+        ("export const r = vi['stubEnv']('MODE', 'x');", "", true),
+        ("const v = vi; export const r = v.stubEnv('MODE', 'x');", "", true),
+        ("const { stubEnv } = vi; export const r = stubEnv('MODE', 'x');", "", true),
+        ("const apply = (tool: any) => tool.stubEnv('MODE', 'x'); export const r = apply(vi);", "", true),
+        ("export const r = expect['extend']({});", "", true),
+        ("export const r = globalThis.vi.stubEnv('MODE', 'x');", "", true),
+        ("export const r = (global as any).vi.stubEnv('MODE', 'x');", "", true),
+        ("export const r = (window as any).vi.stubEnv('MODE', 'x');", "", true),
+        ("export const r = (self as any).vi.stubEnv('MODE', 'x');", "", true),
+        ("export const r = globalThis.expect.extend({});", "", true),
+        ("import { vi as v } from './utils'; export const r = v.stubEnv('MODE', 'x');", "export { vi } from 'vitest';", true),
+        ("import { mocker } from './utils'; export const r = mocker.stubEnv('MODE', 'x');", "export { vi as mocker } from 'vitest';", true),
+        ("import { vi as v } from './utils'; export const r = v.stubEnv('MODE', 'x');", "export * from 'vitest';", true),
+        ("import { setup } from './utils'; export const r = setup();", "import { vi } from 'vitest'; export function setup() { return vi.stubEnv('MODE', 'x'); }", true),
+        // Code that does not run while the module loads.
+        ("import { setup } from './utils'; export const later = () => setup();", "import { vi } from 'vitest'; export function setup() { return vi.stubEnv('MODE', 'x'); }", false),
+        ("export function later() { vi.mock('./slug'); }", "", false),
+        ("export const value = 1;", "", false),
+        ("declare namespace Setup { const value: string }", "", false),
+    ] {
+        let case = RunnerCase::new(
+            &format!("{NESTED_PRELUDE}import './effects'; export function run() {{ test('own', () => {{}}); }}"),
+            "test('before', () => {}); run();",
+        );
+        let prelude = if effects.starts_with("import") { "" } else { VI };
+        let effects_source = format!("{prelude}{effects}");
+        let mut modules = vec![("effects.ts", effects_source.as_str())];
+        if !utils.is_empty() {
+            modules.push(("utils.ts", utils));
+        }
+        write_modules(&case, &modules);
+        let extraction = case.extract(Globals::Disabled);
+        assert_eq!(
+            extraction.incomplete, tainted,
+            "{effects} / {utils}: {:?}",
+            extraction.diagnostics
+        );
+        assert_eq!(
+            extraction.tests.len(),
+            if tainted { 1 } else { 2 },
+            "{effects} / {utils}"
+        );
+    }
+}
+
+#[test]
 /// A recovered worker failure carries its own code, and a nested runner refusal keeps its own.
 fn recovered_and_nested_refusals_carry_their_own_codes() {
     let recovered = recovered_extraction("worker failed".to_owned());

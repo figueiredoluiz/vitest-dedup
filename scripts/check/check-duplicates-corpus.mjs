@@ -548,6 +548,8 @@ const DELIBERATE_BLIND_FILES = new Set([
   'recall/framework-runner-fake-timers-negative/slugs.test.ts',
   // A runner module whose destructured getter registers a test at import: blind on purpose.
   'recall/framework-runner-getter-value-negative/slugs.test.ts',
+  // A runner whose imported module mocks a module at load: blind on purpose, permanently.
+  'recall/framework-runner-import-time-mock-negative/slugs.test.ts',
 ])
 
 /**

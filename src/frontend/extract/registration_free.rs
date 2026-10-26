@@ -389,7 +389,9 @@ enum Root {
     Whole,
 }
 
-type Edge = (PathBuf, Root);
+/// A module to prove, the part of it, and whether that code runs while an importing module loads:
+/// everything an import-time scan reaches runs then too.
+type Edge = (PathBuf, Root, bool);
 
 /// A bounded proof over modules reachable from a starting point.
 #[derive(Default)]
@@ -401,18 +403,22 @@ struct Proof {
 }
 
 impl Proof {
-    fn prove(&mut self, path: &Path, root: Root) -> bool {
-        let edge = (path.to_path_buf(), root.clone());
+    /// Proves one edge once, refusing a re-export that comes back to itself while it is still
+    /// being proved.
+    fn prove(&mut self, path: &Path, root: Root, at_import: bool) -> bool {
+        let edge = (path.to_path_buf(), root.clone(), at_import);
         if !self.visited.insert(edge.clone()) {
             return !(matches!(root, Root::Reexport(_)) && self.active.contains(&edge));
         }
         self.active.insert(edge.clone());
-        let proved = self.prove_new(path, root);
+        let proved = self.prove_new(path, root, at_import);
         self.active.remove(&edge);
         proved
     }
 
-    fn prove_new(&mut self, path: &Path, root: Root) -> bool {
+    /// Proves an edge not seen before: an installed package by its manifests, an asset outright,
+    /// and a first-party module by scanning it and proving every edge the scan reaches.
+    fn prove_new(&mut self, path: &Path, root: Root, at_import: bool) -> bool {
         if helpers::is_dependency(path) {
             return crate::frontend::package_manifests::cannot_register_tests(
                 path,
@@ -428,19 +434,19 @@ impl Proof {
                 return false;
             }
         }
-        let Some(edges) = scan_file(path, &root) else {
+        let Some(edges) = scan_file(path, &root, at_import) else {
             return false;
         };
         edges
             .into_iter()
-            .all(|(next, next_root)| self.prove(&next, next_root))
+            .all(|(next, next_root, next_at_import)| self.prove(&next, next_root, next_at_import))
     }
 
     /// Proves every edge a scan produced; true when none is refused.
     fn prove_edges(&mut self, edges: Vec<Edge>) -> bool {
         edges
             .into_iter()
-            .all(|(path, root)| self.prove(&path, root))
+            .all(|(path, root, at_import)| self.prove(&path, root, at_import))
     }
 }
 
@@ -473,17 +479,19 @@ pub(super) fn forget() {
 
 /// The verdict for `root` of the module at `path`, proved once per worker.
 fn proved(path: &Path, root: Root) -> Option<Vec<PathBuf>> {
-    let key = (path.to_path_buf(), root.clone());
+    let at_import = matches!(root, Root::ImportTime);
+    let key = (path.to_path_buf(), root.clone(), at_import);
     if let Some(done) = PROVED.with(|proved| proved.borrow().get(&key).cloned()) {
         return done;
     }
     let mut proof = Proof::default();
-    let verdict = proof.prove(path, root).then_some(proof.modules);
+    let verdict = proof.prove(path, root, at_import).then_some(proof.modules);
     PROVED.with(|proved| proved.borrow_mut().insert(key, verdict.clone()));
     verdict
 }
 
-/// Whether importing the module at `path` provably registers nothing.
+/// Whether importing the module at `path` provably registers nothing and uses no `vi` or `expect`
+/// while it loads (see [`Scanner::import_time`]).
 pub(super) fn imports_register_nothing(path: &Path) -> bool {
     proved(path, Root::ImportTime).is_some()
 }
@@ -520,7 +528,8 @@ pub(super) fn arguments_register_nothing(
 }
 
 /// Scans the part of the file at `path` named by `root`, and returns the edges it reaches.
-fn scan_file(path: &Path, root: &Root) -> Option<Vec<Edge>> {
+/// `at_import` says the code runs while an importing module loads.
+fn scan_file(path: &Path, root: &Root, at_import: bool) -> Option<Vec<Edge>> {
     let source = helpers::admitted_source(path)?;
     let is_component = path.extension().is_some_and(|extension| extension == "vue");
     let blocks: Vec<Block> = if is_component {
@@ -536,12 +545,15 @@ fn scan_file(path: &Path, root: &Root) -> Option<Vec<Edge>> {
     for block in &blocks {
         // A component's `<script setup>` runs at mount: only its imports run at import.
         let root = if is_component { &Root::Whole } else { root };
-        edges.extend(scan_block(path, block, root)?);
+        edges.extend(scan_block(path, block, root, at_import)?);
     }
     Some(edges)
 }
 
-fn scan_block(path: &Path, block: &Block, root: &Root) -> Option<Vec<Edge>> {
+/// Scans one script block for the part `root` names, returning the module edges it reaches, or
+/// `None` when the block cannot be proved. A `<script setup>` block runs at mount, never while
+/// its module loads.
+fn scan_block(path: &Path, block: &Block, root: &Root, at_import: bool) -> Option<Vec<Edge>> {
     let allocator = Allocator::default();
     let parsed = Parser::new(&allocator, &block.text, block.source_type).parse();
     if parsed.fatal_error || !parsed.diagnostics.is_empty() {
@@ -555,6 +567,7 @@ fn scan_block(path: &Path, block: &Block, root: &Root) -> Option<Vec<Edge>> {
     }
     let program = &parsed.program;
     let mut scanner = Scanner::new(&semantic_return.semantic, program, path);
+    scanner.import_time = at_import && !block.setup;
     if !block.setup && !top_level_is_declarations(program) {
         return None;
     }
@@ -796,9 +809,14 @@ struct Scanner<'s, 'a> {
     /// call is not the declaration that was read.
     written: Option<&'s HashSet<SymbolId>>,
     failed: bool,
+    /// Whether the scan is of a module's import-time code (see [`Root::ImportTime`]). `vi` and
+    /// `expect` used there change what every test in the importing file sees, and no test's
+    /// context records it, so they fail the proof.
+    import_time: bool,
 }
 
 impl<'s, 'a> Scanner<'s, 'a> {
+    /// A scanner over `program`, with its import bindings indexed; nothing is queued yet.
     fn new(semantic: &'s Semantic<'a>, program: &Program<'a>, file: &'s Path) -> Self {
         let mut bindings = HashMap::new();
         for statement in &program.body {
@@ -829,6 +847,7 @@ impl<'s, 'a> Scanner<'s, 'a> {
             edges: Vec::new(),
             written: None,
             failed: false,
+            import_time: false,
         }
     }
 
@@ -870,8 +889,12 @@ impl<'s, 'a> Scanner<'s, 'a> {
             // Importing it runs nothing that registers; what is taken from it is judged by name.
             match &root {
                 Root::ImportTime => {}
+                // A re-export of `vi` or `expect` read while a module loads is the same effect as
+                // using it there directly.
                 Root::Export(name) | Root::Reexport(name) | Root::ExportIfPresent(name) => {
-                    if REGISTRATION.contains(&name.as_str()) {
+                    if REGISTRATION.contains(&name.as_str())
+                        || (self.import_time && matches!(name.as_str(), "vi" | "expect"))
+                    {
                         self.failed = true;
                     }
                 }
@@ -923,7 +946,10 @@ impl<'s, 'a> Scanner<'s, 'a> {
             return;
         }
         match resolver::resolve(importer, specifier) {
-            Resolved::Module(path) => self.edges.push((path, root)),
+            Resolved::Module(path) => {
+                let at_import = self.import_time || matches!(root, Root::ImportTime);
+                self.edges.push((path, root, at_import));
+            }
             Resolved::Unresolved => self.failed = true,
         }
     }
@@ -1336,6 +1362,8 @@ impl<'s, 'a> Scanner<'s, 'a> {
 }
 
 impl<'a> Visit<'a> for Scanner<'_, 'a> {
+    /// Judges a name the scanned code reads: a type-only use is erased, a Vitest export is judged by
+    /// name, an import becomes an edge, and a local binding is followed to its declaration.
     fn visit_identifier_reference(&mut self, ident: &IdentifierReference<'a>) {
         // A name used only as a type is erased and reaches no code.
         if ident
@@ -1355,7 +1383,13 @@ impl<'a> Visit<'a> for Scanner<'_, 'a> {
             return;
         }
         if let Some(name) = self.vitest_name(ident) {
-            if REGISTRATION.contains(&name.as_str()) || name == "vitest" || name == "*" {
+            // At import time any read of `vi` or `expect` counts as using it: through an alias, a
+            // computed member, destructuring or an argument it reaches the same effects.
+            if REGISTRATION.contains(&name.as_str())
+                || name == "vitest"
+                || name == "*"
+                || (self.import_time && matches!(name.as_str(), "vi" | "expect"))
+            {
                 self.failed = true;
             }
             return;
@@ -1383,6 +1417,9 @@ impl<'a> Visit<'a> for Scanner<'_, 'a> {
         }
     }
 
+    /// Judges `object.property`: a registration API or reflective access fails the proof, a `vi` or
+    /// `expect` member fails it only in import-time code, and a namespace member is one more export
+    /// to prove.
     fn visit_static_member_expression(&mut self, member: &StaticMemberExpression<'a>) {
         // `globalThis.ready` reads or writes one named property, which cannot reach a registration
         // API unless it is one; the bare object or a computed key could.
@@ -1394,16 +1431,24 @@ impl<'a> Visit<'a> for Scanner<'_, 'a> {
                 && !matches!(object.name.as_str(), "eval" | "Function" | "require")
             {
                 let property = member.property.name.as_str();
-                if REGISTRATION.contains(&property) || REFLECTIVE.contains(&property) {
+                // `globalThis.vi` is Vitest's `vi` when globals are enabled.
+                if REGISTRATION.contains(&property)
+                    || REFLECTIVE.contains(&property)
+                    || (self.import_time && matches!(property, "vi" | "expect"))
+                {
                     self.failed = true;
                 }
                 return;
             }
         }
         if let Expression::Identifier(object) = &member.object {
-            // `vi` and `expect` mock modules and change global state, which is setup the call's
-            // identity carries; neither registers a test or a hook.
+            // `vi` and `expect` mock modules and change global state, which is setup a helper call's
+            // identity carries; neither registers a test or a hook. Run while a module is imported,
+            // they reach every test in the importing file instead, which no context records.
             if matches!(self.vitest_name(object).as_deref(), Some("vi" | "expect")) {
+                if self.import_time {
+                    self.failed = true;
+                }
                 return;
             }
             // `ns.member` on a namespace import reads one export.

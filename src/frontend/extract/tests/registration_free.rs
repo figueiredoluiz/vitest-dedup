@@ -142,7 +142,9 @@ fn a_function_the_call_never_reaches_does_not_count() {
 }
 
 /// Importing runs top-level initialisers: a call that registers there refuses the import, a
-/// function body that is merely defined does not, and bare statements are refused outright.
+/// function body that is merely defined does not, and bare statements are refused outright. `vi`
+/// and `expect` used while the module loads refuse it too: the effect reaches every test in the
+/// importing file, and no context records it.
 #[test]
 fn importing_runs_initialisers_not_function_bodies() {
     let directory = project(&[
@@ -172,7 +174,7 @@ fn importing_runs_initialisers_not_function_bodies() {
     assert!(!imports(&directory, "via-helper.ts"));
     assert!(!imports(&directory, "statement.ts"));
     assert!(!imports(&directory, "control.ts"));
-    assert!(imports(&directory, "framework.ts"));
+    assert!(!imports(&directory, "framework.ts"));
     assert!(!imports(&directory, "class.ts"));
     assert!(imports(&directory, "inert-class.ts"));
 }
