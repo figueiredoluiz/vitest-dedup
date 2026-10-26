@@ -335,7 +335,7 @@ jobs:
         with:
           # Its own cache: the instrumented build shares nothing with the `test` job's.
           prefix-key: llvm-cov
-      - uses: taiki-e/install-action@9983c65e42da123ff25d1f78505eb6de315aa172 # cargo-llvm-cov
+      - uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # cargo-llvm-cov
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: 24
