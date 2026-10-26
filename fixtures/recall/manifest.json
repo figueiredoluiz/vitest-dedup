@@ -5884,6 +5884,51 @@
           ]
         }
       ]
+    },
+    {
+      "name": "framework-auto-import-flat-table",
+      "path": "framework-auto-import-flat-table",
+      "rule": "duplicate-test",
+      "role": "positive",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-10-26",
+      "expectedTests": 2,
+      "expectedIncomplete": false,
+      "expectedUnresolved": 0,
+      "expectedFindings": [
+        {
+          "rule": "duplicate-test",
+          "severity": "error",
+          "titles": [
+            "clock: first check",
+            "clock: second check"
+          ]
+        }
+      ],
+      "expectedAbsent": []
+    },
+    {
+      "name": "framework-auto-import-table-depth",
+      "path": "framework-auto-import-table-depth",
+      "rule": "duplicate-test",
+      "role": "variant",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-10-26",
+      "expectedTests": 2,
+      "expectedIncomplete": true,
+      "expectedUnresolved": 2,
+      "expectedFindings": [],
+      "expectedAbsent": [
+        {
+          "rule": "duplicate-test",
+          "titles": [
+            "clock: first check",
+            "clock: second check"
+          ]
+        }
+      ]
     }
   ],
   "knownFalsePositiveBaseline": 1,

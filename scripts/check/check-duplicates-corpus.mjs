@@ -509,6 +509,8 @@ const DELIBERATE_BLIND_FILES = new Set([
   'recall/framework-auto-import-in-helper/unknown.test.ts',
   'recall/framework-auto-import-ungenerated-control/known.test.ts',
   'recall/framework-package-mock-call-uninstalled/users.test.ts',
+  // Required generated metadata beyond the nesting budget must leave its callers unproved.
+  'recall/framework-auto-import-table-depth/clock.test.ts',
   // `mockNuxtImport` factories that must stay refused: a redeclared `var` whose later value registers,
   // and a counter a hook increments (identical tests that observe different values).
   'recall/framework-nuxt-mock-redeclared-binding/run.test.ts',

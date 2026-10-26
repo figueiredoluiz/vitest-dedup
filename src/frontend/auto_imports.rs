@@ -35,9 +35,13 @@ thread_local! {
     static TABLES: RefCell<HashMap<PathBuf, Option<Table>>> = RefCell::new(HashMap::new());
 }
 
-/// Reads one `imports.d.ts` into name -> origin. `None` when it cannot be read or parsed.
+/// Reads one `imports.d.ts` into name -> origin. `None` when reading, admission or parsing fails.
 fn read_table(file: &Path) -> Option<Table> {
-    let source = std::fs::read_to_string(file).ok()?;
+    let source =
+        crate::discovery::read_bounded(file, crate::discovery::MAX_SOURCE_FILE_BYTES).ok()??;
+    if super::extract::parse_refusal(&source).is_some() {
+        return None;
+    }
     let allocator = Allocator::default();
     let parsed = Parser::new(&allocator, &source, SourceType::ts()).parse();
     if parsed.fatal_error {
@@ -95,6 +99,50 @@ pub(crate) fn lookup(file: &Path, name: &str) -> Option<AutoImport> {
 mod tests {
     use super::*;
     use std::fs;
+
+    /// Byte admission includes the exact ceiling, but never accepts the next byte.
+    #[test]
+    fn table_source_size_boundary() {
+        let directory = tempfile::tempdir().unwrap();
+        let file = directory.path().join("imports.d.ts");
+        let mut source = "export { clock } from 'vue';".to_owned();
+        source.extend(std::iter::repeat_n(
+            ' ',
+            crate::discovery::MAX_SOURCE_FILE_BYTES as usize - source.len(),
+        ));
+        fs::write(&file, &source).unwrap();
+        assert!(read_table(&file).unwrap().contains_key("clock"));
+        source.push(' ');
+        fs::write(&file, source).unwrap();
+        assert!(read_table(&file).is_none());
+    }
+
+    /// Raw syntax admission remains independent of bracket masking, even inside a comment.
+    #[test]
+    fn table_raw_syntax_boundary() {
+        let directory = tempfile::tempdir().unwrap();
+        let file = directory.path().join("imports.d.ts");
+        // The comment delimiters contribute four raw units; its contents add the rest.
+        let source = format!("/*{}*/", "!".repeat(36_864 - 4));
+        fs::write(&file, &source).unwrap();
+        assert!(read_table(&file).is_some());
+        fs::write(&file, source.replace("*/", "!*/")).unwrap();
+        assert!(read_table(&file).is_none());
+    }
+
+    /// Read errors and invalid UTF-8 are refused, and a failed lookup remains failed in its cache.
+    #[test]
+    fn unreadable_tables_and_cached_refusals_resolve_nothing() {
+        let directory = tempfile::tempdir().unwrap();
+        assert!(read_table(directory.path()).is_none());
+        let generated = directory.path().join(".nuxt/imports.d.ts");
+        fs::create_dir_all(generated.parent().unwrap()).unwrap();
+        fs::write(&generated, [0xff]).unwrap();
+        let file = directory.path().join("test.ts");
+        assert!(lookup(&file, "clock").is_none());
+        fs::write(&generated, "export { clock } from 'vue';").unwrap();
+        assert!(lookup(&file, "clock").is_none());
+    }
 
     #[test]
     fn names_resolve_through_the_nearest_generated_list() {

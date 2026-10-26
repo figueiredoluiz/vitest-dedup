@@ -206,6 +206,10 @@ generated list are not read.
 ## Budgets
 
 - Local and imported expansion share a depth of 8 and 2,000 body admissions across both passes.
+- Generated Nuxt auto-import tables use the source limits: 8 MiB, 36,864 raw syntax units and
+  lexical nesting depth 256. A table past any limit is refused. Helpers that need its bindings
+  then remain unproved, and their calling scopes are excluded with an incomplete result;
+  tests that do not need the table remain eligible for comparison.
 - One setup-helper proof visits at most 64 modules, and reads at most 256 manifests for each
   installed package it reaches.
 - The text check of an installed package follows relative `require`, `from` and `import()` to at
