@@ -1154,7 +1154,7 @@ describe("installed tools", () => {
   test("constructs the default verifier from the supplied environment", { skip: process.platform === "win32" }, (t) => {
     const f = toolFixture(t);
     const trace = join(f.root, "calls");
-    f.file(f.installed, "gh", `#!${process.execPath}\nimport {appendFileSync} from 'node:fs';\nappendFileSync(${JSON.stringify(trace)}, JSON.stringify({args:process.argv.slice(2),auth:process.env.GH_TOKEN??null})+'\\n');`);
+    f.file(f.installed, "gh", `#!${process.execPath}\nconst {appendFileSync} = require('node:fs');\nappendFileSync(${JSON.stringify(trace)}, JSON.stringify({args:process.argv.slice(2),auth:process.env.GH_TOKEN??null})+'\\n');`);
     assert.equal(verifyAttestation(join(f.cwd, "archive"), "o/r", "0.8.0", undefined, "explicit", { PATH: f.installed }), "verified");
     const calls = readFileSync(trace, "utf8").trim().split("\n").map(JSON.parse);
     assert.equal(calls.length, 2);
@@ -1193,9 +1193,9 @@ describe("release installation", { skip: process.platform === "win32" }, () => {
       const ghExit = mode === "verification-failed" ? "process.argv[2] === 'attestation' ? 1 : 0"
         : mode === "preauthenticated" ? "process.argv[2] === '--version' || (process.env.DBUS_SESSION_BUS_ADDRESS === 'unix:path=/owned-bus' && process.env.GH_TOKEN === 'existing') ? 0 : 4" : "0";
       const log = `appendFileSync(${JSON.stringify(trace)}, JSON.stringify({tool: process.argv[1], args: process.argv.slice(2), input: process.env.INPUT_TOKEN ?? null, runtime: process.env.ACTIONS_RUNTIME_TOKEN ?? null, job: process.env.DEPLOY_KEY ?? null, bus: process.env.DBUS_SESSION_BUS_ADDRESS ?? null, auth: process.env.GH_TOKEN ?? null}) + '\\n');`;
-      if (mode !== "without-gh") install("gh", `#!${process.execPath}\nimport {appendFileSync} from 'node:fs';\n${log}\nprocess.exit(${ghExit});`);
-      const analyzer = `#!${process.execPath}\nimport {writeFileSync} from 'node:fs';\nwriteFileSync(${JSON.stringify(report)}, JSON.stringify({schemaVersion:'0.1',testsAnalyzed:1,filesAnalyzed:1,incomplete:false,findings:[]}));`;
-      if (mode !== "without-tar") install("tar", `#!${process.execPath}\nimport {appendFileSync,mkdirSync,writeFileSync} from 'node:fs';\nimport {join} from 'node:path';\n${log}\nconst dir=join(process.argv[process.argv.indexOf('-C')+1],${JSON.stringify(stem)}); mkdirSync(dir,{recursive:true}); writeFileSync(join(dir,${JSON.stringify(releaseTarget().binaryName)}),${JSON.stringify(analyzer)},{mode:0o755});`);
+      if (mode !== "without-gh") install("gh", `#!${process.execPath}\nconst {appendFileSync} = require('node:fs');\n${log}\nprocess.exit(${ghExit});`);
+      const analyzer = `#!${process.execPath}\nconst {writeFileSync} = require('node:fs');\nwriteFileSync(${JSON.stringify(report)}, JSON.stringify({schemaVersion:'0.1',testsAnalyzed:1,filesAnalyzed:1,incomplete:false,findings:[]}));`;
+      if (mode !== "without-tar") install("tar", `#!${process.execPath}\nconst {appendFileSync,mkdirSync,writeFileSync} = require('node:fs');\nconst {join} = require('node:path');\n${log}\nconst dir=join(process.argv[process.argv.indexOf('-C')+1],${JSON.stringify(stem)}); mkdirSync(dir,{recursive:true}); writeFileSync(join(dir,${JSON.stringify(releaseTarget().binaryName)}),${JSON.stringify(analyzer)},{mode:0o755});`);
       t.mock.method(globalThis, "fetch", async (url) => new Response(url.endsWith(".sha256")
         ? `${mode === "checksum-mismatch" ? "0".repeat(64) : digest}  ${stem}.tar.gz\n` : archive));
       const env = { PATH: path, RUNNER_TEMP: f.cwd, GITHUB_OUTPUT: output, INPUT_VERSION: "0.8.0", INPUT_OUTPUT: join(f.workspace, "report"), INPUT_TOKEN: mode === "preauthenticated" ? "" : "explicit", GH_TOKEN: "existing", DBUS_SESSION_BUS_ADDRESS: "unix:path=/owned-bus", ACTIONS_RUNTIME_TOKEN: "runtime", DEPLOY_KEY: "job" };
