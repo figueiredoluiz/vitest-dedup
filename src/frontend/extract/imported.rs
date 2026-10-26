@@ -1342,140 +1342,54 @@ fn is_ambient_declaration(statement: &Statement) -> bool {
     }
 }
 
-/// What a module's top level binds, for deciding whether an initializer only creates a value.
-struct ModuleValues<'s> {
-    scoping: &'s oxc_semantic::Scoping,
-    /// Whether `vi` is Vitest's, imported by name from `vitest`.
-    vitest_vi: bool,
-}
-
-impl ModuleValues<'_> {
-    /// Collection constructors whose `new` only allocates.
-    const COLLECTIONS: [&'static str; 5] = ["Set", "Map", "WeakSet", "WeakMap", "Array"];
-
-    /// Whether evaluating `expression` only creates a module-local value: literals, functions,
-    /// object and array literals of such values, a global collection built from array literals,
-    /// and Vitest's `vi.fn`. Evaluating what it admits runs no user code and cannot throw, so
-    /// nothing reaches state the importing file can observe except through the module's own
-    /// bindings: no accessor, no `__proto__`, no coercion of an object, no argument a
-    /// constructor rejects.
-    fn creates_value(&self, expression: &Expression) -> bool {
-        use oxc_ast::ast::{ArrayExpressionElement, ObjectPropertyKind, PropertyKind};
-        if inert_expression(expression) {
-            return true;
-        }
-        match expression {
-            Expression::ObjectExpression(object) => {
-                object.properties.iter().all(|property| match property {
-                    ObjectPropertyKind::ObjectProperty(property) => {
-                        property.kind == PropertyKind::Init
-                            && !property.computed
-                            && !property.key.is_specific_static_name("__proto__")
-                            && self.creates_value(&property.value)
-                    }
-                    ObjectPropertyKind::SpreadProperty(_) => false,
-                })
-            }
-            Expression::ArrayExpression(array) => {
-                array.elements.iter().all(|element| match element {
-                    ArrayExpressionElement::SpreadElement(_) => false,
-                    ArrayExpressionElement::Elision(_) => true,
-                    element => element
-                        .as_expression()
-                        .is_some_and(|value| self.creates_value(value)),
-                })
-            }
-            Expression::TemplateLiteral(template) => template.expressions.is_empty(),
-            // Coercing an object runs its `valueOf`: only a primitive operand is admitted, and
-            // unary plus on a BigInt throws.
-            Expression::UnaryExpression(unary) => {
-                use oxc_syntax::operator::UnaryOperator;
-                match (unary.operator, &unary.argument) {
-                    (UnaryOperator::Delete, _)
-                    | (UnaryOperator::UnaryPlus, Expression::BigIntLiteral(_)) => false,
-                    (_, argument) => matches!(
-                        argument,
-                        Expression::NumericLiteral(_)
-                            | Expression::StringLiteral(_)
-                            | Expression::BooleanLiteral(_)
-                            | Expression::NullLiteral(_)
-                            | Expression::BigIntLiteral(_)
-                    ),
+/// Whether evaluating `expression` only creates a module-local value: literals, functions, and
+/// object and array literals of such values. Creating these calls no function, so nothing runs
+/// that the importing file could observe, even where a setup file has replaced a built-in or a
+/// Vitest export: no call or `new` (`vi.fn()`, `new Set()`), no accessor, no `__proto__`, and no
+/// coercion of an object.
+fn creates_value(expression: &Expression) -> bool {
+    use oxc_ast::ast::{ArrayExpressionElement, ObjectPropertyKind, PropertyKind};
+    use oxc_syntax::operator::UnaryOperator;
+    if inert_expression(expression) {
+        return true;
+    }
+    match expression {
+        Expression::ObjectExpression(object) => {
+            object.properties.iter().all(|property| match property {
+                ObjectPropertyKind::ObjectProperty(property) => {
+                    property.kind == PropertyKind::Init
+                        && !property.computed
+                        && !property.key.is_specific_static_name("__proto__")
+                        && creates_value(&property.value)
                 }
-            }
-            Expression::ParenthesizedExpression(inner) => self.creates_value(&inner.expression),
-            Expression::TSAsExpression(inner) => self.creates_value(&inner.expression),
-            Expression::TSSatisfiesExpression(inner) => self.creates_value(&inner.expression),
-            Expression::NewExpression(new) => self.creates_collection(new),
-            Expression::CallExpression(call) => {
-                self.vitest_vi
-                    && !call.optional
-                    && matches!(&call.callee, Expression::StaticMemberExpression(member)
-                        if !member.optional
-                            && member.property.name == "fn"
-                            && matches!(&member.object, Expression::Identifier(object) if object.name == "vi"))
-                    && match call.arguments.as_slice() {
-                        [] => true,
-                        [implementation] => matches!(
-                            implementation.as_expression(),
-                            Some(
-                                Expression::ArrowFunctionExpression(_)
-                                    | Expression::FunctionExpression(_)
-                            )
-                        ),
-                        _ => false,
-                    }
-            }
-            _ => false,
+                ObjectPropertyKind::SpreadProperty(_) => false,
+            })
         }
+        Expression::ArrayExpression(array) => array.elements.iter().all(|element| match element {
+            ArrayExpressionElement::SpreadElement(_) => false,
+            ArrayExpressionElement::Elision(_) => true,
+            element => element.as_expression().is_some_and(creates_value),
+        }),
+        Expression::TemplateLiteral(template) => template.expressions.is_empty(),
+        // Coercing an object runs its `valueOf`: only a primitive operand is admitted, and unary
+        // plus on a BigInt throws.
+        Expression::UnaryExpression(unary) => match (unary.operator, &unary.argument) {
+            (UnaryOperator::Delete, _)
+            | (UnaryOperator::UnaryPlus, Expression::BigIntLiteral(_)) => false,
+            (_, argument) => matches!(
+                argument,
+                Expression::NumericLiteral(_)
+                    | Expression::StringLiteral(_)
+                    | Expression::BooleanLiteral(_)
+                    | Expression::NullLiteral(_)
+                    | Expression::BigIntLiteral(_)
+            ),
+        },
+        Expression::ParenthesizedExpression(inner) => creates_value(&inner.expression),
+        Expression::TSAsExpression(inner) => creates_value(&inner.expression),
+        Expression::TSSatisfiesExpression(inner) => creates_value(&inner.expression),
+        _ => false,
     }
-
-    /// Whether `new` builds a global collection without throwing or reading user code: no
-    /// arguments, a `Set` over an array literal, or a `Map` over an array literal of key-value
-    /// pairs. Any other argument can throw (`new Map([1])`, `new Array(-1)`, a weak key that is
-    /// not an object) or run code the constructor reads (an entry's getter).
-    fn creates_collection(&self, new: &oxc_ast::ast::NewExpression) -> bool {
-        let Expression::Identifier(callee) = &new.callee else {
-            return false;
-        };
-        let name = callee.name.as_str();
-        if !Self::COLLECTIONS.contains(&name)
-            || self.scoping.get_root_binding(name.into()).is_some()
-        {
-            return false;
-        }
-        let elements = |argument: &oxc_ast::ast::Argument, admit: &dyn Fn(&Expression) -> bool| {
-            matches!(argument.as_expression(), Some(Expression::ArrayExpression(array))
-                if array.elements.iter().all(|element| element.as_expression().is_some_and(admit)))
-        };
-        match (name, new.arguments.as_slice()) {
-            (_, []) => true,
-            ("Set", [values]) => elements(values, &|value| self.creates_value(value)),
-            ("Map", [entries]) => elements(entries, &|entry| {
-                matches!(entry, Expression::ArrayExpression(pair)
-                if pair.elements.len() == 2
-                    && pair.elements.iter().all(|item| {
-                        item.as_expression().is_some_and(|value| self.creates_value(value))
-                    }))
-            }),
-            _ => false,
-        }
-    }
-}
-
-/// Whether the module imports Vitest's `vi` under its own name.
-fn imports_vitest_vi(program: &Program) -> bool {
-    program.body.iter().any(|statement| {
-        matches!(statement, Statement::ImportDeclaration(import)
-            if import.source.value == "vitest"
-                && !matches!(import.import_kind, ImportOrExportKind::Type)
-                && import.specifiers.as_ref().is_some_and(|specifiers| specifiers.iter().any(|specifier| {
-                    matches!(specifier, ImportDeclarationSpecifier::ImportSpecifier(specifier)
-                        if specifier.local.name == "vi"
-                            && specifier.imported.name() == "vi"
-                            && !matches!(specifier.import_kind, ImportOrExportKind::Type))
-                })))
-    })
 }
 
 /// Checks module execution for unmodeled setup effects.
@@ -1486,12 +1400,6 @@ fn module_is_inert(
     modules: &[PathBuf],
     imports_inert: &mut dyn FnMut(&Path, &str) -> bool,
 ) -> bool {
-    let semantic = SemanticBuilder::new().build(program).semantic;
-    let values = ModuleValues {
-        scoping: semantic.scoping(),
-        vitest_vi: imports_vitest_vi(program),
-    };
-    let creates_value = |expression: &Expression| values.creates_value(expression);
     // Destructuring reads properties, and a property can be a getter: only a plain name binds an
     // admitted value without running anything.
     let declares_value = |declaration: &oxc_ast::ast::VariableDeclarator| {

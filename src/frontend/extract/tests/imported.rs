@@ -1571,14 +1571,19 @@ fn ambient_declarations_on_the_runner_module_are_not_setup_effects() {
 }
 
 #[test]
-/// A runner module may create module-local values at import; anything else its top level runs can
-/// change what the importing file observes, so it still refuses the runner.
+/// A runner module may create module-local values at import: literals, functions, and object and
+/// array literals of them. Any call or `new` runs code (a setup file may have replaced it), and
+/// anything else its top level runs can change what the importing file observes, so it still
+/// refuses the runner.
 fn module_local_values_on_the_runner_module_are_not_setup_effects() {
     for (prelude, statement, admitted) in [
-        ("", "export const api = { fetchUser: vi.fn(() => 1) };", true),
-        ("", "export const spy = vi.fn();", true),
-        ("", "const seen = new Set<string>(['a']);", true),
-        ("", "const byId = new Map([[1, 'a']]);", true),
+        // A call or `new` runs a function a setup file may have replaced, so none is a value.
+        ("", "export const api = { fetchUser: vi.fn(() => 1) };", false),
+        ("", "export const spy = vi.fn();", false),
+        ("", "const seen = new Set<string>(['a']);", false),
+        ("", "const seen = new Set();", false),
+        ("", "const byId = new Map([[1, 'a']]);", false),
+        ("", "export const handler = { fetchUser: () => ({ name: 'Ada' }) };", true),
         ("", "export const seeds = [42, -1, `x`, null] as const;", true),
         ("", "export const nested = { list: [{ ok: true }], label: 'x' };", true),
         ("", "export class Registry { static items: string[] = []; }", true),
@@ -1608,7 +1613,7 @@ fn module_local_values_on_the_runner_module_are_not_setup_effects() {
         ("", "export const spy = vi.fn('not a function');", false),
         ("", "export const n = +1n;", false),
         ("", "export const n = [-1n, ~1n, +'x'];", true),
-        ("", "const pairs = new Map([['a', 1], ['b', 2]]);", true),
+        ("", "const pairs = new Map([['a', 1], ['b', 2]]);", false),
         ("", "export const server = { listen() {}, close() {} };", true),
     ] {
         let case = RunnerCase::new(

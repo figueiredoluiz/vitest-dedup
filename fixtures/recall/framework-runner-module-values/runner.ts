@@ -1,10 +1,8 @@
-// First-party runner whose module creates module-local values at import: a stub object, a
-// collection, a data array and a class with a literal static field.
-import { expect, test, vi } from 'vitest'
+// First-party runner whose module creates module-local values at import: a stub object, a data array
+// and a class with a literal static field.
+import { expect, test } from 'vitest'
 
-export const api = { fetchUser: vi.fn(() => ({ name: 'Ada' })) }
-
-const seen = new Set<string>()
+export const api = { fetchUser: () => ({ name: 'Ada' }) }
 
 export const seeds = [42, 1337] as const
 
