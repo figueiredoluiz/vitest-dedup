@@ -1531,6 +1531,46 @@ fn imported_but_uncalled_modules_with_setup_effects_taint_the_file() {
 }
 
 #[test]
+/// A `declare` statement on the runner's module is erased before it runs, so it never refuses the
+/// runner; the same shape without `declare` emits code and still does.
+fn ambient_declarations_on_the_runner_module_are_not_setup_effects() {
+    for (statement, admitted) in [
+        (
+            "declare module 'vitest' { interface Assertion<T> { toBeSlug(): T } }",
+            true,
+        ),
+        ("declare global { var separator: string }", true),
+        ("declare namespace Slug { const separator: string }", true),
+        ("export declare namespace Slug { interface Shape {} }", true),
+        ("declare enum Case { Lower }", true),
+        ("export declare enum Case { Lower }", true),
+        ("namespace Slug { beforeEach(() => {}); }", false),
+        ("export namespace Slug { beforeEach(() => {}); }", false),
+        ("enum Case { Lower }", false),
+    ] {
+        let case = RunnerCase::new(
+            &format!(
+                "{NESTED_PRELUDE}{statement} export function run() {{ test('own', () => {{}}); }}"
+            ),
+            "test('before', () => {}); run();",
+        );
+        let extraction = case.extract(Globals::Disabled);
+        assert_eq!(
+            extraction.tests.len(),
+            if admitted { 2 } else { 1 },
+            "{statement}: {:?}",
+            extraction.diagnostics
+        );
+        assert_eq!(extraction.incomplete, !admitted, "{statement}");
+        assert_eq!(
+            extraction.tests.iter().any(|case| case.context.unresolved),
+            !admitted,
+            "{statement}"
+        );
+    }
+}
+
+#[test]
 /// A recovered worker failure carries its own code, and a nested runner refusal keeps its own.
 fn recovered_and_nested_refusals_carry_their_own_codes() {
     let recovered = recovered_extraction("worker failed".to_owned());

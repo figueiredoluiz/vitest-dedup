@@ -1313,6 +1313,26 @@ fn reexport_is_inert(
     }
 }
 
+/// Whether `statement` is a TypeScript ambient declaration (`declare module`, `declare global`,
+/// `declare namespace` or `declare enum`, exported or not). The transform erases it before the
+/// module runs, so it evaluates nothing.
+fn is_ambient_declaration(statement: &Statement) -> bool {
+    let declaration = match statement {
+        Statement::ExportDeclaration(export) => &export.declaration,
+        other => match other.as_declaration() {
+            Some(declaration) => declaration,
+            None => return false,
+        },
+    };
+    match declaration {
+        Declaration::TSExternalModuleDeclaration(declaration) => declaration.declare,
+        Declaration::TSGlobalDeclaration(declaration) => declaration.declare,
+        Declaration::TSNamespaceDeclaration(declaration) => declaration.declare,
+        Declaration::TSEnumDeclaration(declaration) => declaration.declare,
+        _ => false,
+    }
+}
+
 /// Checks module execution for unmodeled setup effects.
 /// Allows erased declarations, inert values, Vitest imports and validated re-export hops.
 fn module_is_inert(
@@ -1322,6 +1342,7 @@ fn module_is_inert(
     imports_inert: &mut dyn FnMut(&Path, &str) -> bool,
 ) -> bool {
     program.body.iter().all(|statement| match statement {
+        statement if is_ambient_declaration(statement) => true,
         Statement::ImportDeclaration(import) => {
             matches!(import.import_kind, ImportOrExportKind::Type)
                 || import.specifiers.as_ref().is_some_and(|specifiers| {

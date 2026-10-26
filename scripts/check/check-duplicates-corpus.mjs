@@ -539,6 +539,10 @@ const DELIBERATE_BLIND_FILES = new Set([
   'recall/framework-runner-default-imported-negative/slugs.test.ts',
   'recall/framework-runner-default-let-negative/slugs.test.ts',
   'recall/framework-runner-default-reassigned-negative/slugs.test.ts',
+  // A runner module whose non-`declare` namespace registers a hook at import: blind on purpose,
+  // permanently, as the control for admitting ambient declarations on a runner's chain.
+  'recall/framework-runner-namespace-hook-negative/observe.test.ts',
+  'recall/framework-runner-namespace-hook-negative/slugs.test.ts',
 ])
 
 /**

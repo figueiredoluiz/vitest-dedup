@@ -69,7 +69,8 @@ it refuses the outer runner. Recursion through modules or local helpers is refus
 - A default export of a name that is not a readable runner in the same file: an imported binding
   (a further hop), a class or other value, a `const` declared after the export statement, or a function declaration
   the module reassigns.
-- Module setup effects.
+- Module setup effects. TypeScript ambient declarations (`declare module`, `declare global`,
+  `declare namespace`, `declare enum`) are erased before the module runs and are not effects.
 - Called opaque imports at registration time. Uncalled imports and calls inside test callbacks are
   not registration candidates.
 - Named or default object method calls as runner candidates, and function `.call()` / `.apply()`
