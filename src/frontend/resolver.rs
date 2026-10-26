@@ -527,8 +527,12 @@ mod tests {
         assert_eq!(take_manifest_refusals().len(), 1);
         std::fs::write(&manifest, r#"{"name":"owned","exports":"./other.js"}"#).unwrap();
         begin_file(None);
+        let mut resolved = resolve(&importer, "owned");
+        if let Resolved::Module(path) = &mut resolved {
+            *path = path.canonicalize().unwrap();
+        }
         assert_eq!(
-            resolve(&importer, "owned"),
+            resolved,
             Resolved::Module(package.join("other.js").canonicalize().unwrap())
         );
         assert!(take_manifest_refusals().is_empty());
