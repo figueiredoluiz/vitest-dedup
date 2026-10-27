@@ -64,12 +64,13 @@
 //!
 //! # Bounding the work
 //!
-//! Two independent bounds keep a pathological or hostile config from turning this into unbounded
-//! work: [`MAX_PROJECTS`] caps the number of projects a single repository resolves into (real
-//! corpora observed top out under 30, the largest at ~26), and
+//! Independent bounds limit project discovery work: [`MAX_PROJECTS`] caps the number of projects
+//! a single repository resolves into (real corpora observed top out under 30, the largest at ~26), and
 //! `MAX_GLOB_WALK_ENTRIES` caps the total filesystem entries visited while expanding every
-//! glob-shaped `projects` string (e.g. `'packages/*'`) across the whole resolution. Either limit
-//! being hit sets [`ProjectSet::truncated`] and [`ProjectSet::has_unresolved_entries`] rather than
+//! glob-shaped `projects` string (e.g. `'packages/*'`) across the whole resolution. Project globs
+//! also have a per-pattern byte limit and a shared compilation-byte budget, including directory
+//! prefixes compiled for symlink checks. Reaching a limit sets [`ProjectSet::truncated`] and
+//! [`ProjectSet::has_unresolved_entries`] rather than
 //! silently returning a partial-but-unflagged answer.
 //!
 //! # Known limitations
@@ -112,7 +113,7 @@ use crate::vitest_config::{
     locate_test_object, mask_non_code, property_present, read_bounded, skip_trivia, ConfigObject,
     DelimitedLiteral, GlobalsDetection, TestObject,
 };
-use globset::GlobBuilder;
+use globset::{GlobBuilder, GlobMatcher};
 use ignore::WalkBuilder;
 use std::collections::BTreeSet;
 use std::ops::Range;
@@ -133,6 +134,12 @@ const MAX_GLOB_WALK_ENTRIES: usize = 20_000;
 /// Depth bound applied to a glob-shaped `projects` entry whose pattern contains `**`, where the
 /// pattern's own segment count can't otherwise bound the walk.
 const MAX_GLOB_WALK_DEPTH: usize = 12;
+
+/// Maximum UTF-8 bytes in one project glob before expansion or compilation.
+const MAX_PROJECT_GLOB_BYTES: usize = 16 * 1024;
+
+/// Total pattern bytes submitted to full and directory-prefix matcher compilation per resolution.
+const MAX_GLOB_COMPILE_BYTES: usize = 1024 * 1024;
 
 /// A project's resolved `include` or `exclude` glob list.
 ///
@@ -295,8 +302,7 @@ pub struct ProjectSet {
     /// Forces [`ProjectSet::governing_project`] to answer `Unknown` rather than `NotIncluded` for a
     /// file no *known* project claims, since the unresolved entry might have claimed it.
     pub has_unresolved_entries: bool,
-    /// Set when [`MAX_PROJECTS`] or `MAX_GLOB_WALK_ENTRIES` was hit before every entry could be
-    /// processed.
+    /// Set when a project count, filesystem walk or glob compilation limit stopped resolution.
     pub truncated: bool,
     /// Whether a Vitest/Vite configuration file (or legacy `vitest.workspace.*`) was found at
     /// `root` at all.
@@ -1923,18 +1929,51 @@ fn read_string_property(
     read_string_literal(original, value_extent(masked, value_start, range.end))
 }
 
-/// Bounds filesystem work shared across every glob expansion performed while resolving one
-/// repository's projects.
+/// Bounds filesystem and compilation work shared across one repository's project resolution.
 #[derive(Default)]
 struct Budget {
     entries_visited: usize,
+    compile_bytes: usize,
+    compilation_refused: bool,
 }
 
 impl Budget {
-    /// Report whether the directory-entry walk has reached its configured budget.
+    /// Report whether filesystem work is exhausted or compilation work was refused.
     fn exhausted(&self) -> bool {
-        self.entries_visited >= MAX_GLOB_WALK_ENTRIES
+        self.entries_visited >= MAX_GLOB_WALK_ENTRIES || self.compilation_refused
     }
+
+    /// Reserve compilation work before constructing matchers, keeping refusal sticky.
+    fn charge_compilation(&mut self, bytes: usize) -> bool {
+        if self.compilation_refused || bytes > MAX_GLOB_COMPILE_BYTES - self.compile_bytes {
+            self.compilation_refused = true;
+            return false;
+        }
+        self.compile_bytes += bytes;
+        true
+    }
+}
+
+/// Compile a project glob using the same separator semantics for full and prefix matches.
+fn project_glob_matcher(pattern: &str) -> Option<GlobMatcher> {
+    GlobBuilder::new(pattern)
+        .literal_separator(true)
+        .build()
+        .ok()
+        .map(|glob| glob.compile_matcher())
+}
+
+/// Compile directory prefixes only when a symlink needs a containment check.
+/// Reserve their complete byte cost before constructing any matcher.
+fn project_directory_matchers(pattern: &str, budget: &mut Budget) -> Vec<GlobMatcher> {
+    let ends = || pattern.match_indices('/').map(|(offset, _)| offset);
+    let bytes = ends().try_fold(0usize, |sum, end| sum.checked_add(end));
+    if !budget.charge_compilation(bytes.unwrap_or(usize::MAX)) {
+        return Vec::new();
+    }
+    ends()
+        .filter_map(|end| project_glob_matcher(&pattern[..end]))
+        .collect()
 }
 
 /// Records that the `test.projects`/workspace entry at `declared_at` could not be resolved into a
@@ -2036,6 +2075,13 @@ fn expand_project_path(root: &Path, pattern: &str, budget: &mut Budget) -> Expan
         outside: 0,
     };
     let pattern = pattern.strip_prefix("./").unwrap_or(pattern);
+    if budget.exhausted() {
+        return expanded;
+    }
+    if looks_like_glob(pattern) && pattern.len() > MAX_PROJECT_GLOB_BYTES {
+        budget.compilation_refused = true;
+        return expanded;
+    }
 
     // The walk starts from the pattern's literal prefix, so an alternative like `{pkg,../other}`
     // that leaves the tree would never be visited, let alone judged. An alternation holding one
@@ -2084,11 +2130,10 @@ fn expand_project_path(root: &Path, pattern: &str, budget: &mut Budget) -> Expan
         return expanded;
     }
 
-    let Ok(matcher) = GlobBuilder::new(pattern)
-        .literal_separator(true)
-        .build()
-        .map(|glob| glob.compile_matcher())
-    else {
+    if !budget.charge_compilation(pattern.len()) {
+        return expanded;
+    }
+    let Some(matcher) = project_glob_matcher(pattern) else {
         return expanded;
     };
 
@@ -2099,16 +2144,7 @@ fn expand_project_path(root: &Path, pattern: &str, budget: &mut Budget) -> Expan
     // The walk does not follow links, so a symlinked directory in the middle of the pattern is
     // never entered. Vitest follows it, and it may hold a project; these match the directory
     // prefixes of the pattern so such a link is still counted when it leaves the tree.
-    let directory_matchers: Vec<_> = (1..pattern.split('/').count())
-        .filter_map(|keep| {
-            let prefix = pattern.split('/').take(keep).collect::<Vec<_>>().join("/");
-            GlobBuilder::new(&prefix)
-                .literal_separator(true)
-                .build()
-                .ok()
-                .map(|glob| glob.compile_matcher())
-        })
-        .collect();
+    let mut directory_matchers = None;
     let start_dir = root.join(prefix_segments.join("/"));
     if matches!(confine(root, &start_dir), Confinement::Outside) {
         // Not even listed: enumerating a directory outside the tree is itself a read.
@@ -2145,12 +2181,18 @@ fn expand_project_path(root: &Path, pattern: &str, budget: &mut Budget) -> Expan
         let relative = path.strip_prefix(root).unwrap_or(path);
         let relative = relative.to_string_lossy().replace('\\', "/");
         if !matcher.is_match(&relative) {
-            if entry.file_type().is_some_and(|kind| kind.is_symlink())
-                && directory_matchers.iter().any(|dir| dir.is_match(&relative))
-                && path.is_dir()
-                && matches!(confine(root, path), Confinement::Outside)
-            {
-                expanded.outside += 1;
+            if entry.file_type().is_some_and(|kind| kind.is_symlink()) {
+                let matchers = directory_matchers
+                    .get_or_insert_with(|| project_directory_matchers(pattern, budget));
+                if budget.compilation_refused {
+                    break;
+                }
+                if matchers.iter().any(|dir| dir.is_match(&relative))
+                    && path.is_dir()
+                    && matches!(confine(root, path), Confinement::Outside)
+                {
+                    expanded.outside += 1;
+                }
             }
             continue;
         }
@@ -3385,6 +3427,15 @@ fn resolve_project_entry(
             return;
         }
         let expanded = expand_project_path(root, &path_str, budget);
+        if budget.compilation_refused {
+            diagnostics.push(
+                "project glob compilation budget exhausted; project map is incomplete".to_owned(),
+            );
+            *has_unresolved = true;
+            *truncated = true;
+            note_unresolved_position(max_unresolved_position, declared_at);
+            return;
+        }
         if expanded.outside > 0 {
             diagnostics.push(format!(
                 "a `test.projects` entry in {} (`{path_str}`) resolves outside the analysis \
@@ -3622,6 +3673,15 @@ fn resolve_projects_array(
             value_extent(masked, value_start, test_body.end),
         ) {
             let expanded = expand_project_path(root, &pattern, budget);
+            if budget.compilation_refused {
+                diagnostics.push(
+                    "project glob compilation budget exhausted; project map is incomplete"
+                        .to_owned(),
+                );
+                let mut set = unresolved_set(root, diagnostics, true);
+                set.truncated = true;
+                return set;
+            }
             let outside = expanded.outside > 0;
             let mut refused = false;
             if outside {

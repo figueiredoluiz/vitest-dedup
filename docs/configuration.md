@@ -67,6 +67,11 @@ Differences from the set Vitest runs:
 A config declaring `test.projects`, or a `vitest.workspace.*` file, is resolved entry by entry,
 honouring `extends: false`.
 
+Project discovery limits each glob to 16 KiB of UTF-8 text and shares a 1 MiB compilation-text
+budget across the project list, including directory-prefix matchers needed for symlink checks.
+Exceeding either limit stops resolution and reports an incomplete project map. Simplify the
+patterns or analyze a smaller project root; entries are never silently dropped.
+
 Every path a configuration names must resolve inside the analyzed directory, after symlinks and
 `..` segments are followed: project entries and globs, a project's string `extends`, a
 `mergeConfig` base import, a project's `root` or `dir`, and tsconfig `paths`. A path that leaves it

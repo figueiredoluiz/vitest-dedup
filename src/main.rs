@@ -318,7 +318,7 @@ fn run_with_rss(args: ParsedArgs, mut resident: impl FnMut() -> Option<u64>) -> 
              were matched against the built-in defaults instead, so a project's `globals` or \
              `include` may have been missed.",
             if projects.truncated {
-                " (truncated at the project limit)"
+                " (truncated at a project discovery limit)"
             } else {
                 ""
             }

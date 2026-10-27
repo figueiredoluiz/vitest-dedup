@@ -658,6 +658,7 @@ fn review_glob_budget_exhaustion_reports_truncation() {
     };
     let mut budget = Budget {
         entries_visited: MAX_GLOB_WALK_ENTRIES,
+        ..Budget::default()
     };
     let set = resolve_projects_array(
         directory.path(),
@@ -744,6 +745,7 @@ fn review_partial_glob_results_keep_unknown_governance() {
     let test_end = find_matching_delim(&masked, test_start, '{', '}').unwrap();
     let mut budget = Budget {
         entries_visited: MAX_GLOB_WALK_ENTRIES - 2,
+        ..Budget::default()
     };
     let set = resolve_projects_array(
         directory.path(),
@@ -4359,3 +4361,5 @@ fn an_unresolved_entry_is_recorded_on_the_set() {
         );
     }
 }
+
+mod glob_budget;
