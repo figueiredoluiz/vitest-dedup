@@ -58,13 +58,73 @@ export function cleanEnvironment(env) {
  * @throws {Error} If a record or either object ID is malformed.
  */
 export function pushCommits(input) {
-  const commits = new Set()
+  return pushUpdates(input).map(update => update.revision)
+}
+
+/** Group every destination of a proposed commit so no remote baseline is discarded. */
+function pushUpdates(input) {
+  const updates = new Map()
   for (const line of input.trim().split('\n').filter(Boolean)) {
     const fields = line.trim().split(/\s+/)
     if (fields.length !== 4 || !OID.test(fields[1]) || !OID.test(fields[3])) throw new Error('Malformed pre-push ref input')
-    if (!ZERO.test(fields[1])) commits.add(fields[1])
+    const [, revision, remoteRef, remote] = fields
+    if (ZERO.test(revision)) continue
+    const update = updates.get(revision) ?? { revision, remotes: new Set(), branches: true }
+    update.remotes.add(remote)
+    update.branches &&= remoteRef.startsWith('refs/heads/')
+    updates.set(revision, update)
   }
-  return [...commits]
+  return [...updates.values()]
+}
+
+/**
+ * Read staged paths or the union of each destination's outgoing delta, preserving filename bytes.
+ * Unknown push baselines and non-branch refs return null, requiring the full profile.
+ * @param {string} root Source repository.
+ * @param {object} [options] Optional grouped push update and Git environment.
+ * @returns {string[]|null} Changed repository-relative paths, or unknown scope.
+ */
+function changedPaths(root, { update, env = process.env } = {}) {
+  /** Read NUL-delimited names without trimming whitespace from a filename. */
+  const names = args => execFileSync('git', ['diff', '--no-ext-diff', '--no-renames', '--name-only', '-z', ...args, '--'], { cwd: root, env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: GIT_MAX_BUFFER }).split('\0').filter(Boolean)
+  if (!update) return names(['--cached'])
+  if (!update.branches) return null
+  try {
+    const paths = new Set()
+    for (const remote of update.remotes) {
+      const base = ZERO.test(remote)
+        ? git(root, ['merge-base', update.revision, 'origin/main'], env)
+        : git(root, ['rev-parse', '--verify', `${remote}^{commit}`], env)
+      for (const path of names([base, update.revision])) paths.add(path)
+    }
+    return [...paths]
+  } catch { return null }
+}
+
+/** Classify only known independent surfaces; unknown paths keep full verification. */
+export function hookScope(paths) {
+  if (paths === null) return ['full']
+  const scopes = new Set()
+  for (const path of paths) {
+    if (/^(?:README|CONTRIBUTING|CHANGELOG|SECURITY)\.md$/.test(path) || path === 'LICENSE' || /^(?:docs|skills)\/.+\.md$/.test(path)) scopes.add('docs')
+    else if (path.startsWith('.github/actions/vitest-dedup/')) scopes.add('action')
+    else if (path.startsWith('npm/')) scopes.add('npm')
+    else if (/^(?:scripts\/dev\/verify(?:\.test)?\.mjs|\.githooks\/pre-(?:commit|push))$/.test(path)) scopes.add('tooling')
+    else return ['full']
+  }
+  return [...scopes].sort()
+}
+
+/** Select local hook checks while preserving the explicit manual profiles and CI. */
+export function hookCommands(mode, paths, docDiff) {
+  const scopes = hookScope(paths)
+  if (scopes.includes('full')) return commands(mode === 'pre-commit' ? 'fast' : 'full', mode === 'pre-push' || rustChanged(paths ?? []), docDiff)
+  const steps = staticCommands(docDiff)
+  if (scopes.includes('action')) steps.push(['npm', 'run', 'test:action'])
+  if (scopes.includes('npm')) steps.push(['npm', 'test'], ['npm', 'run', 'pack:check'])
+  if (scopes.includes('tooling')) steps.push(['npm', 'run', 'test:dev-checks'], ['npm', 'run', 'test:check-lib'])
+  if (mode === 'pre-push' && scopes.some(scope => scope !== 'docs')) steps.push(['npm', 'run', 'check:duplication'], ['npm', 'run', 'check:coverage:js'])
+  return steps
 }
 
 /**
@@ -75,6 +135,19 @@ export function pushCommits(input) {
  */
 export function rustChanged(paths) {
   return paths.some(path => path.endsWith('.rs') || /(^|\/)Cargo\.(toml|lock)$/.test(path) || path === 'scripts/check/check-coverage.mjs')
+}
+
+/** Build the inexpensive checks shared by every local profile and scope. */
+function staticCommands(docDiff) {
+  return [
+    ['node', 'scripts/check/check-docstrings.mjs', ...(docDiff ? ['--diff-file', docDiff] : [])],
+    ['npm', 'run', 'check:action-pins'],
+    ['npm', 'run', 'check:release-workflow'],
+    ['npm', 'run', 'check:versions'],
+    ['npm', 'run', 'check:docs'],
+    ['npm', 'run', 'check:names'],
+    ['npm', 'run', 'skills:check'],
+  ]
 }
 
 /**
@@ -99,15 +172,7 @@ export function rustChanged(paths) {
  */
 export function commands(profile, rust = true, docDiff) {
   if (!['fast', 'full'].includes(profile)) throw new Error(`Unknown verification profile: ${profile}`)
-  const steps = [
-    ['node', 'scripts/check/check-docstrings.mjs', ...(docDiff ? ['--diff-file', docDiff] : [])],
-    ['npm', 'run', 'check:action-pins'],
-    ['npm', 'run', 'check:release-workflow'],
-    ['npm', 'run', 'check:versions'],
-    ['npm', 'run', 'check:docs'],
-    ['npm', 'run', 'check:names'],
-    ['npm', 'run', 'skills:check'],
-  ]
+  const steps = staticCommands(docDiff)
   if (rust || profile === 'full') steps.push(['cargo', 'fmt', '--all', '--check'])
   if (profile === 'fast') {
     steps.push(['npm', 'run', 'test:dev-checks'], ['npm', 'run', 'test:check-lib'])
@@ -338,8 +403,8 @@ export function main(args = process.argv.slice(2), { env = process.env, input, c
   if (!['fast', 'full', 'pre-commit', 'pre-push', 'install'].includes(mode) || (mode !== 'pre-push' && rest.length)) throw new Error('Usage: verify.mjs fast|full|pre-commit|pre-push|install')
   root = resolve(git(root, ['rev-parse', '--show-toplevel'], env))
   if (mode === 'install') { print(`Hooks installed for this worktree: ${installHooks(root)}`); return }
-  const commits = mode === 'pre-push' ? pushCommits(input ?? readFileSync(0, 'utf8')) : []
-  if (mode === 'pre-push' && !commits.length) { print('No commits to verify (deletion or up-to-date push).'); return }
+  const updates = mode === 'pre-push' ? pushUpdates(input ?? readFileSync(0, 'utf8')) : []
+  if (mode === 'pre-push' && !updates.length) { print('No commits to verify (deletion or up-to-date push).'); return }
   const common = resolve(root, git(root, ['rev-parse', '--git-common-dir'], env))
   const cache = env.CARGO_TARGET_DIR ? resolve(root, env.CARGO_TARGET_DIR) : join(dirname(common), 'target')
   const logs = join(common, 'delivery-check-logs', `${Date.now()}-${process.pid}`)
@@ -349,8 +414,7 @@ export function main(args = process.argv.slice(2), { env = process.env, input, c
       withTargetCache(root, cache, () => check(root, commands(mode), { env: runEnv, logRoot: logs, print }))
       return
     }
-    const paths = git(root, ['diff', '--cached', '--no-renames', '--name-only', '--diff-filter=ACDMRT', '-z'], env).split('\0').filter(Boolean)
-    const revisions = mode === 'pre-commit' ? [null] : commits
+    const revisions = mode === 'pre-commit' ? [{ revision: null }] : updates
     // Snapshots never build in the checkout's cache: a test binary bakes its export's
     // `CARGO_MANIFEST_DIR`, and Cargo would hand it to the checkout once the export is gone. The
     // cache is keyed by repository so two clones sharing one external cache cannot trade binaries
@@ -373,14 +437,16 @@ export function main(args = process.argv.slice(2), { env = process.env, input, c
     const coverage = join(hookCache, 'llvm-cov-target')
     const hookEnv = { ...runEnv, CARGO_TARGET_DIR: hookCache, CARGO_BUILD_BUILD_DIR: hookCache, CARGO_LLVM_COV_TARGET_DIR: coverage, CARGO_LLVM_COV_BUILD_DIR: coverage }
     const work = join(env.XDG_RUNTIME_DIR || tmpdir(), `vitest-dedup-hook-${key}`)
-    for (const [i, revision] of revisions.entries()) {
+    for (const [i, update] of revisions.entries()) {
+      const { revision } = update
       print(revision ? `Verifying proposed commit ${revision}` : 'Verifying the staged index')
       mkdirSync(logs, { recursive: true })
       const docDiff = join(logs, `docstrings-${i}.diff`)
       writeFileSync(docDiff, scopeDiff(root, { revision: revision ?? undefined, staged: !revision, env }))
+      const paths = changedPaths(root, { update: revision ? update : undefined, env })
+      print(`Local check scope: ${hookScope(paths).join(', ') || 'no changed paths'} (${paths === null ? 'unknown baseline' : `${paths.length} changed paths`})`)
       withSnapshot(root, revision, snapshot => {
-        // Full push verification includes coverage: a new ref may have no available remote base.
-        withNodeModules(snapshot, root, () => withTargetCache(snapshot, hookCache, () => check(snapshot, commands(mode === 'pre-commit' ? 'fast' : 'full', revision ? true : rustChanged(paths), docDiff), { env: hookEnv, logRoot: join(logs, String(i)), print })))
+        withNodeModules(snapshot, root, () => withTargetCache(snapshot, hookCache, () => check(snapshot, hookCommands(mode, paths, docDiff), { env: hookEnv, logRoot: join(logs, String(i)), print })))
       }, env, work)
     }
   })

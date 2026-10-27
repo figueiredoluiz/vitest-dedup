@@ -5,6 +5,7 @@ work=$(mktemp -d "${TMPDIR:-/tmp}/vitest-dedup-hook-driver.XXXXXX")
 trap 'rm -rf "$work"' 0
 trap 'exit 1' HUP INT TERM
 cd "$root"
+cat > "$work/refs"
 seen=' '
 while read -r local_ref local_oid remote_ref remote_oid extra || [ -n "${local_ref:-}" ]; do
   [ -n "$local_ref" ] && [ -n "$remote_ref" ] && [ -z "$extra" ] || { echo 'Malformed pre-push ref input' >&2; exit 1; }
@@ -17,5 +18,6 @@ while read -r local_ref local_oid remote_ref remote_oid extra || [ -n "${local_r
   seen="$seen$local_oid "
   # Each proposed commit supplies its own driver, independent of the current checkout.
   git show "$local_oid:scripts/dev/verify.mjs" > "$work/verify.mjs"
-  printf '%s %s %s %s\n' "$local_ref" "$local_oid" "$remote_ref" "$remote_oid" | node "$work/verify.mjs" pre-push "$@"
-done
+  awk -v oid="$local_oid" '$2 == oid' "$work/refs" > "$work/selected-refs"
+  node "$work/verify.mjs" pre-push "$@" < "$work/selected-refs"
+done < "$work/refs"

@@ -4,7 +4,7 @@ import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, realpathSync,
 import { tmpdir } from 'node:os'
 import { basename, delimiter, dirname, join, resolve, sep } from 'node:path'
 import { test } from 'node:test'
-import { cleanEnvironment, commands, installHooks, main, pushCommits, repositoryKey, runSteps, rustChanged, withLock, withNodeModules, withSnapshot, withTargetCache } from './verify.mjs'
+import { cleanEnvironment, commands, hookCommands, hookScope, installHooks, main, pushCommits, repositoryKey, runSteps, rustChanged, withLock, withNodeModules, withSnapshot, withTargetCache } from './verify.mjs'
 import { coverage } from '../check/check-docstrings.mjs'
 
 const oid = 'a'.repeat(40)
@@ -663,4 +663,186 @@ test('existing CI Rust flags keep their Cargo cache identity without weakening w
       spawn: (_cmd, _args, options) => { assert.equal(options.env.RUSTFLAGS, expected); assert.ok(/-D\s*warnings/.test(options.env.RUSTDOCFLAGS)); return { status: 0 } },
     })
   }
+}))
+
+/** Commit exact fixture files without invoking the developer's configured hooks. */
+function commitChanges(root, files) {
+  for (const [path, contents] of Object.entries(files)) {
+    mkdirSync(dirname(join(root, path)), { recursive: true })
+    writeFileSync(join(root, path), contents)
+    git(root, 'add', '--', path)
+  }
+  git(root, '-c', 'core.hooksPath=/dev/null', 'commit', '--quiet', '-m', 'fixture change')
+  return git(root, 'rev-parse', 'HEAD')
+}
+
+/** Capture the real hook dispatch plan over exported fixture bytes without running heavy tools. */
+function plannedChecks(root, mode, input) {
+  const plans = []
+  main([mode], { root, input, print() {}, check(_snapshot, steps) { plans.push(steps.map(step => step.join(' '))) } })
+  return plans
+}
+
+for (const mode of ['pre-commit', 'pre-push']) test(`${mode}: documentation-only changes select static checks without compiler or unrelated suites`, () => fixture(root => {
+  const before = git(root, 'rev-parse', 'HEAD')
+  const proposed = commitChanges(root, { 'README.md': '# Documentation\n' })
+  if (mode === 'pre-commit') {
+    writeFileSync(join(root, 'README.md'), '# Updated documentation\n')
+    git(root, 'add', 'README.md')
+  }
+  const [steps] = plannedChecks(root, mode, `refs/heads/topic ${proposed} refs/heads/topic ${before}`)
+  assert.ok(steps.includes('npm run check:docs'))
+  assert.ok(steps.includes('npm run check:names'))
+  for (const step of steps) assert.doesNotMatch(step, /^(cargo |npm (test$|run (check$|check:coverage|check:corpus|check:recall|test:)))/, step)
+}))
+
+test('incremental docs push skips earlier Rust work, but a new branch includes it', () => fixture(root => {
+  const base = git(root, 'rev-parse', 'HEAD')
+  git(root, 'update-ref', 'refs/remotes/origin/main', base)
+  const remote = commitChanges(root, { 'src/lib.rs': 'pub fn value() {}\n' })
+  const proposed = commitChanges(root, { 'README.md': '# Documentation\n' })
+  const [incremental] = plannedChecks(root, 'pre-push', `refs/heads/topic ${proposed} refs/heads/topic ${remote}`)
+  assert.equal(incremental.some(step => step.startsWith('cargo ')), false)
+  const [initial] = plannedChecks(root, 'pre-push', `refs/heads/topic ${proposed} refs/heads/topic ${zero}`)
+  assert.ok(initial.includes('npm run check:coverage:rust'))
+  assert.ok(initial.includes('cargo test --all-targets --all-features --locked'))
+}))
+
+for (const [paths, scopes, required] of [
+  [['docs/development.md', 'skills/vitest-dedup/SKILL.md'], ['docs'], ['npm run check:docs', 'npm run skills:check']],
+  [['.github/actions/vitest-dedup/index.js'], ['action'], ['npm run test:action']],
+  [['npm/lib/launcher.mjs'], ['npm'], ['npm test', 'npm run pack:check']],
+  [['scripts/dev/verify.mjs', '.githooks/pre-push'], ['tooling'], ['npm run test:dev-checks', 'npm run test:check-lib']],
+  [['README.md', 'npm/test/launcher.test.mjs', '.github/actions/vitest-dedup/action.yml'], ['action', 'docs', 'npm'], ['npm run test:action', 'npm test', 'npm run pack:check']],
+]) test(`local scope ${scopes.join('+')} selects relevant checks and preserves JS ratchets`, () => {
+  assert.deepEqual(hookScope(paths), scopes)
+  for (const mode of ['pre-commit', 'pre-push']) {
+    const steps = hookCommands(mode, paths, 'scope.diff').map(step => step.join(' '))
+    assert.equal(steps[0], 'node scripts/check/check-docstrings.mjs --diff-file scope.diff')
+    for (const step of required) assert.ok(steps.includes(step), step)
+    assert.equal(steps.some(step => step.startsWith('cargo ')), false)
+    const quality = mode === 'pre-push' && scopes.some(scope => scope !== 'docs')
+    for (const gate of ['check:duplication', 'check:coverage:js']) assert.equal(steps.includes('npm run ' + gate), quality)
+    assert.equal(new Set(steps).size, steps.length)
+  }
+})
+
+for (const path of ['src/model.rs', 'tests/example.rs', 'fixtures/recall/sample.test.ts', 'Cargo.toml', 'Cargo.lock', 'package.json', 'package-lock.json', '.cargo/config.toml', '.github/workflows/ci.yml', 'scripts/check/check-coverage.mjs', 'scripts/check/lib/collection-oracle.mjs', 'new-script.sh', ' docs/guide.md', '\ndocs/guide.md', 'docs/README.md.rs']) {
+  test(`unknown or shared scope stays full: ${JSON.stringify(path)}`, () => {
+    assert.deepEqual(hookScope(['README.md', path]), ['full'])
+    assert.deepEqual(hookCommands('pre-push', [path]), commands('full'))
+  })
+}
+
+test('empty scope remains static; unknown scope remains full', () => {
+  assert.deepEqual(hookScope([]), [])
+  assert.deepEqual(hookScope(null), ['full'])
+  assert.ok(hookCommands('pre-push', null).some(step => step.join(' ') === 'npm run check:coverage:rust'))
+  assert.equal(hookCommands('pre-push', []).some(step => step[0] === 'cargo'), false)
+})
+
+for (const name of [' docs/guide.md', '\ndocs/guide.md', 'src/空 白.rs']) test(`Git path decoding retains exact bytes: ${JSON.stringify(name)}`, () => fixture(root => {
+  mkdirSync(dirname(join(root, name)), { recursive: true })
+  writeFileSync(join(root, name), 'content\n')
+  git(root, 'add', '--', name)
+  const [steps] = plannedChecks(root, 'pre-commit')
+  assert.ok(steps.includes('npm run test:dev-checks'), 'unknown staged path cannot become docs-only')
+  if (name.endsWith('.rs')) assert.ok(steps.includes('cargo fmt --all --check'))
+}))
+
+test('existing remote delta handles force updates and HEAD source refs without reading dirty HEAD', () => fixture(root => {
+  const base = git(root, 'rev-parse', 'HEAD')
+  const remote = commitChanges(root, { 'README.md': 'old docs\n' })
+  git(root, 'checkout', '--quiet', '--detach', base)
+  const proposed = commitChanges(root, { 'README.md': 'replacement docs\n' })
+  commitChanges(root, { 'src/lib.rs': 'pub fn later() {}\n' })
+  const [steps] = plannedChecks(root, 'pre-push', `HEAD ${proposed} refs/heads/topic ${remote}`)
+  assert.ok(steps.includes('npm run check:docs'))
+  assert.equal(steps.some(step => step.startsWith('cargo ')), false)
+}))
+
+for (const remote of [zero, oid]) test(`unavailable push baseline ${remote.slice(0, 4)} never narrows checks`, () => fixture(root => {
+  const proposed = commitChanges(root, { 'README.md': '# docs\n' })
+  const [steps] = plannedChecks(root, 'pre-push', `refs/heads/topic ${proposed} refs/heads/topic ${remote}`)
+  assert.ok(steps.includes('npm run check:coverage:rust'))
+}))
+
+test('non-branch destinations retain full checks even for docs-only changes', () => fixture(root => {
+  const before = git(root, 'rev-parse', 'HEAD')
+  const proposed = commitChanges(root, { 'README.md': '# docs\n' })
+  const [steps] = plannedChecks(root, 'pre-push', `refs/tags/v1 ${proposed} refs/tags/v1 ${before}`)
+  assert.ok(steps.includes('npm run check:coverage:rust'))
+}))
+
+test('same proposed commit unions distinct remote baselines once and ignores staged changes', () => fixture(root => {
+  const base = git(root, 'rev-parse', 'HEAD')
+  const remote = commitChanges(root, { 'src/lib.rs': 'pub fn earlier() {}\n' })
+  const proposed = commitChanges(root, { 'README.md': '# docs\n' })
+  writeFileSync(join(root, 'source.txt'), 'unrelated staged change\n')
+  git(root, 'add', 'source.txt')
+  const [steps] = plannedChecks(root, 'pre-push', `refs/heads/topic ${proposed} refs/heads/a ${remote}\nrefs/heads/topic ${proposed} refs/heads/b ${base}`)
+  assert.ok(steps.includes('npm run check:coverage:rust'))
+  assert.equal(plannedChecks(root, 'pre-push', `refs/heads/topic ${proposed} refs/heads/a ${remote}\nrefs/heads/topic ${proposed} refs/heads/b ${remote}`).length, 1)
+}))
+
+for (const rename of [false, true]) test(`push scope retains removed Rust ${rename ? 'rename source' : 'file'}`, () => fixture(root => {
+  const remote = commitChanges(root, { 'src/old.rs': 'pub fn old() {}\n' })
+  if (rename) git(root, 'mv', 'src/old.rs', 'README.md')
+  else git(root, 'rm', 'src/old.rs')
+  git(root, '-c', 'core.hooksPath=/dev/null', 'commit', '--quiet', '-m', 'remove Rust')
+  const proposed = git(root, 'rev-parse', 'HEAD')
+  const [steps] = plannedChecks(root, 'pre-push', `refs/heads/topic ${proposed} refs/heads/topic ${remote}`)
+  assert.ok(steps.includes('npm run check:coverage:rust'))
+}))
+
+test('the shell hook forwards every remote baseline to a shared proposed driver', () => fixture(root => {
+  const before = git(root, 'rev-parse', 'HEAD')
+  const driver = "import { readFileSync } from 'node:fs'; console.error('REFS=' + readFileSync(0, 'utf8').trim().split('\\n').length)\n"
+  const proposed = commitChanges(root, { 'scripts/dev/verify.mjs': driver })
+  const input = `refs/heads/topic ${proposed} refs/heads/a ${before}\nrefs/heads/topic ${proposed} refs/heads/b ${zero}\n`
+  const run = spawnSync('sh', [resolve('.githooks/pre-push')], { cwd: root, input, encoding: 'utf8' })
+  assert.equal(run.status, 0, run.stderr)
+  assert.equal(run.stderr.trim(), 'REFS=2')
+}))
+
+test('docs-only shell hooks execute static subprocesses, never Cargo, and propagate a selected failure', () => fixture(root => {
+  const before = commitChanges(root, {
+    'scripts/dev/verify.mjs': readFileSync(resolve('scripts/dev/verify.mjs'), 'utf8'),
+    'scripts/check/check-docstrings.mjs': 'process.exit(0)\n',
+    'README.md': '# Before\n',
+  })
+  git(root, 'update-ref', 'refs/remotes/origin/main', before)
+  writeFileSync(join(root, 'README.md'), '# After\n')
+  git(root, 'add', 'README.md')
+  withGitleaks(0, env => {
+    const bin = env.PATH.split(delimiter)[0]
+    const log = join(root, 'commands.log')
+    writeFileSync(join(bin, 'npm'), '#!/bin/sh\nprintf "%s\\n" "$*" >> "$CHECK_LOG"\nif [ "$2" = check:docs ] && [ "${FAIL_DOCS:-0}" = 1 ]; then exit 7; fi\n', { mode: 0o755 })
+    writeFileSync(join(bin, 'cargo'), '#!/bin/sh\necho forbidden-cargo >> "$CHECK_LOG"\nexit 99\n', { mode: 0o755 })
+    env = { ...env, CHECK_LOG: log }
+    const commit = spawnSync('sh', [resolve('.githooks/pre-commit')], { cwd: root, env, encoding: 'utf8' })
+    assert.equal(commit.status, 0, commit.stderr)
+    const proposed = commitChanges(root, { 'README.md': '# After\n' })
+    const input = `refs/heads/topic ${proposed} refs/heads/topic ${before}\n`
+    const push = spawnSync('sh', [resolve('.githooks/pre-push')], { cwd: root, env, input, encoding: 'utf8' })
+    assert.equal(push.status, 0, push.stderr)
+    const expected = ['check:action-pins', 'check:release-workflow', 'check:versions', 'check:docs', 'check:names', 'skills:check'].map(gate => 'run ' + gate)
+    assert.deepEqual(readFileSync(log, 'utf8').trim().split('\n'), [...expected, ...expected])
+    const failed = spawnSync('sh', [resolve('.githooks/pre-push')], { cwd: root, env: { ...env, FAIL_DOCS: '1' }, input, encoding: 'utf8' })
+    assert.notEqual(failed.status, 0)
+    assert.match(failed.stderr, /npm run check:docs failed/)
+    assert.doesNotMatch(readFileSync(log, 'utf8'), /forbidden-cargo/)
+  })
+}))
+
+test('a failed ref-grouping command cannot become an empty successful push check', () => fixture(root => {
+  const before = git(root, 'rev-parse', 'HEAD')
+  const proposed = commitChanges(root, { 'scripts/dev/verify.mjs': "console.error('driver should not run')\n" })
+  withGitleaks(0, env => {
+    writeFileSync(join(env.PATH.split(delimiter)[0], 'awk'), '#!/bin/sh\nexit 42\n', { mode: 0o755 })
+    const input = `refs/heads/topic ${proposed} refs/heads/topic ${before}\n`
+    const run = spawnSync('sh', [resolve('.githooks/pre-push')], { cwd: root, env, input, encoding: 'utf8' })
+    assert.notEqual(run.status, 0)
+    assert.doesNotMatch(run.stderr, /driver should not run/)
+  })
 }))

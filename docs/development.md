@@ -116,17 +116,35 @@ file reporter and, under `--update-baseline`, the baseline file.
 
 ## Git hooks
 
-- The pre-commit hook checks a temporary snapshot of the staged index, so unstaged edits and local
-  notes cannot make a bad staged change pass. It runs the fast profile -- the diff-scoped
-  docstring check, the static gates, and `cargo fmt --check` when any staged path affects Rust
-  (deletions and file-type changes count, including Unicode paths) -- and compiles nothing, so a
-  rejected commit costs seconds. Clippy, the Rust suite, the npm gate chain and the Rust coverage
-  ratchet run once, at push, in the full profile; both profiles order checks cheapest first and
-  stop at the first failure.
-- The pre-push hook checks each distinct proposed commit from Git's ref input with the full
-  profile; a deletion-only push has no source to check.
-- Both hooks reject whitespace errors in the snapshot, and each loads the verifier from the staged
-  index or proposed commit, so an unstaged verifier edit cannot change which checks run.
+The local hooks select checks from changed paths. CI and the explicit `verify:fast` and
+`verify:full` commands keep their existing behavior. Each hook prints its selected scope.
+
+| Changed surface | Pre-commit | Pre-push |
+| --- | --- | --- |
+| Root README/contributing/changelog/security Markdown, LICENSE, `docs/**/*.md`, `skills/**/*.md` | Static checks | Static checks |
+| `.github/actions/vitest-dedup/` | Static checks and Action tests | Same, plus duplication and JS coverage |
+| `npm/` | Static checks, npm tests and package validation | Same, plus duplication and JS coverage |
+| `scripts/dev/verify.mjs`, its test, `.githooks/pre-commit` and `.githooks/pre-push` | Static checks and developer/check-helper tests | Same, plus duplication and JS coverage |
+| Rust, fixtures, dependency manifests, workflows, other paths, or unknown push scope | Existing compilation-free fast checks | Existing full checks, including Rust coverage |
+
+Static checks include touched-function docstrings, Action pins, release workflow/version consistency,
+documentation accuracy, repository names and shipped skills. Pre-commit still scans the staged index
+for secrets before running the verifier. A mixed change selects all its relevant checks; any path
+requiring full verification takes precedence. Selection uses paths, not diff size: a small Rust edit
+still selects Rust verification. Markdown documents consumed by runtime contract tests receive static
+local checks; those runtime tests remain in CI and `verify:full`.
+
+- Pre-commit classifies and checks the staged index, including deleted paths, both rename sides and
+  type changes. Unstaged edits and local notes cannot change the selection or make it pass.
+- Pre-push checks each distinct proposed commit from Git's ref input. An existing branch uses the
+  delta from the remote head supplied by Git; a new branch uses its merge base with local
+  `origin/main`. Thus a docs-only update after already-pushed Rust work does not repeat that Rust
+  work locally. Missing baseline objects, unavailable merge bases and non-branch destinations
+  require full checks. Multiple destinations for one commit combine their changed paths.
+- Deletion-only pushes have no source to check. Both hooks reject snapshot whitespace errors, load
+  the verifier from the staged index or proposed commit, and stop at the first selected failure.
+  The touched-function documentation gate keeps its cumulative PR scope independently of check
+  selection.
 
 ### Snapshots
 
@@ -140,7 +158,7 @@ clear source-repository Git paths and command-scoped configuration overrides.
 Hook installation uses worktree-specific Git configuration and preserves an existing hook manager.
 Install again in each worktree where you want the hooks.
 
-They need a POSIX shell, `mktemp`, a Node release `devEngines` admits, npm, Rust, and Git on `PATH`.
+They need a POSIX shell, `awk`, `mktemp`, a Node release `devEngines` admits, npm, Rust, and Git on `PATH`.
 Full verification also needs `cargo-llvm-cov` and LLVM tools, as the coverage gate does, and the
 checkout's `node_modules` (`npm ci`), which the snapshot links in for the title harness. The hooks
 are local safeguards; CI remains authoritative and Git can bypass them.
@@ -183,8 +201,9 @@ merging:
 2. Record the full commit SHA and the Rust coverage result in the PR description.
 3. Verify the main coverage job after merging as well.
 
-The pre-push hook checks that proposed commit's coverage too, but hooks are opt-in, so their
-existence alone is not evidence that the check ran. New commits invalidate the previous result and
+The pre-push hook runs Rust coverage when its selected scope requires full checks. A scoped push
+does not establish full-head coverage; hooks are opt-in, so their existence alone is not evidence
+that a check ran. New commits invalidate the previous result and
 need another check before merge. Coverage floors and scope stay unchanged.
 
 Back to the [documentation index](README.md).
