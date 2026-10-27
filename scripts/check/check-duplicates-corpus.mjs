@@ -91,7 +91,7 @@ import { copyFileSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSyn
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 import { report as reportIsolation, run as runIsolation } from './check-fixture-isolation.mjs'
-import { parseFixture } from './lib/fixture-directives.mjs'
+import { enumerateFixtures, FIXTURE_NAME, parseFixture } from './lib/fixture-directives.mjs'
 import { findCallback, tokenize } from './lib/js-tokens.mjs'
 import { defaultBinary, runAnalyzerJsonl } from './lib/run-analyzer.mjs'
 
@@ -172,38 +172,15 @@ function runJsonl(target, args) {
 }
 
 /**
- * A file this gate enumerates as a fixture: named like a test, in any extension discovery reaches.
- *
- * This was `.endsWith('.test.ts')` and the narrowness was a blind spot, not a simplification. A
- * `.test.tsx` fixture placed in a scanned directory was COPIED into the temp run (so it analyzed and
- * could be named as a participant) but never enumerated, so its directive block was never parsed and
- * its expectations never asserted. It looked asserted and asserted nothing — the worst state for a
- * gate to be in, and invisible precisely because the gate is what would have reported it. Component
- * tests are roughly 8% of real test files, so the extension that mattered most was the one missing.
- *
- * Named like a test, not merely analyzable: a helper module beside a fixture carries no directive
- * block, and enumerating it would turn a legitimate sibling into a gate failure.
- */
-const FIXTURE_NAME = /\.(test|spec|bench)\.[cm]?[jt]sx?$/
-
-/**
  * Runs every check this gate owns against one fixture directory, appending to `failures`.
  *
  * @returns {number} how many fixtures the directory holds, for the summary line.
  */
 function checkTarget(target, failures, pendingHeld) {
   const { dir } = target
-  const fixtureNames = readdirSync(dir).filter((f) => FIXTURE_NAME.test(f)).sort()
-  // Participant references may name any analyzable sibling, not only the fixtures this gate parses
-  // and asserts: the directive grammar admits the full script-extension set discovery reaches, so a
-  // cross-file pair with an in-source `.ts` half is nameable the day one lands. The enumeration
-  // above is narrower than that on purpose -- it admits files NAMED like tests, because those are
-  // the ones that can carry a directive block, and a helper module with no block would be a gate
-  // failure rather than a fixture.
-  const knownFiles = new Set([
-    ...fixtureNames,
-    ...readdirSync(dir).filter((f) => /\.[cm]?[jt]sx?$/.test(f)),
-  ])
+  const { fixtureNames, knownFiles } = enumerateFixtures(dir)
+  // `knownFiles` is wider than `fixtureNames` on purpose: a participant may name any analyzable
+  // sibling, but only files named like tests carry a block, so a helper is never parsed as one.
 
   // Parse every fixture's expectation block up front. A fixture that fails to parse still counts
   // toward the total and is reported, but is excluded from the finding/extraction checks below --

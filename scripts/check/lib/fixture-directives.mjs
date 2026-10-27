@@ -88,6 +88,7 @@
 // running fixtures under Vitest as an oracle has a machine-readable exclusion list instead of a
 // discovery process. It carries a free-text reason and stays file-level metadata: no gate asserts
 // on it, but it is parsed here so a gate that wants it does not have to invent a second parser.
+import { readdirSync } from 'node:fs'
 import { DIMENSIONS, NOT_ISOLABLE, UNCHECKED, UNSTATEABLE } from './isolation.mjs'
 
 const RULES = new Set([
@@ -103,6 +104,35 @@ const RULES = new Set([
   'none',
 ])
 const SEVERITIES = new Set(['error', 'warning', 'off', 'none'])
+
+/**
+ * A file that carries a directive block: named like a test, in any extension discovery reaches.
+ *
+ * Narrowing this to `.test.ts` was a blind spot, not a simplification. A `.test.tsx` fixture was
+ * copied into the temporary run (so it analyzed and could be named as a participant) but never
+ * enumerated, so its expectations were never asserted. A helper module beside a fixture carries no
+ * block and is not a fixture.
+ */
+export const FIXTURE_NAME = /\.(test|spec|bench)\.[cm]?[jt]sx?$/
+
+/**
+ * Lists one fixture directory the way every gate must: the same files, parsed and referenced
+ * identically, so one gate cannot assert a fixture another never sees.
+ *
+ * Only regular files count; a directory named like a test would otherwise be read as a fixture.
+ *
+ * @param {string} dir fixture directory, flat.
+ * @returns {{fixtureNames: string[], knownFiles: Set<string>}} the sorted fixtures to parse, and
+ *   every analyzable file a participant may name (fixtures plus helper siblings).
+ */
+export function enumerateFixtures(dir) {
+  const names = readdirSync(dir, { withFileTypes: true })
+    .filter((entry) => entry.isFile())
+    .map((entry) => entry.name)
+  const fixtureNames = names.filter((name) => FIXTURE_NAME.test(name)).sort()
+  const knownFiles = new Set([...fixtureNames, ...names.filter((name) => /\.[cm]?[jt]sx?$/.test(name))])
+  return { fixtureNames, knownFiles }
+}
 
 /** verdict -> the set of rules it may pair with (`null` means `rule=none`). */
 export const VERDICT_RULE = {

@@ -11,9 +11,17 @@
 // Run directly: `node --test scripts/check/lib/fixture-directives.test.mjs` (also part of
 // `npm run test:check-lib`).
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { test } from 'node:test'
-import { ALL_RULES, OFF_BY_DEFAULT_RULES, parseFixture, VERDICT_RULE } from './fixture-directives.mjs'
+import {
+  ALL_RULES,
+  enumerateFixtures,
+  OFF_BY_DEFAULT_RULES,
+  parseFixture,
+  VERDICT_RULE,
+} from './fixture-directives.mjs'
 
 // Every parse in this file runs against the same fictional directory, so cross-file participant
 // references and the extension set are exercised without touching a real fixture corpus.
@@ -421,4 +429,22 @@ test('the JS rule table mirrors Rule::ALL exactly, so no Rust rule can escape th
 test('the JS off-by-default set mirrors Rust so supplemental retention cannot mask regressions', () => {
   const source = readFileSync(new URL('../../../src/model.rs', import.meta.url), 'utf8')
   assert.deepEqual(new Set(rustOffRuleIds(source)), OFF_BY_DEFAULT_RULES)
+})
+
+test('enumerateFixtures admits every test-named extension and keeps helpers as known siblings only', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'fixture-enum-'))
+  try {
+    const files = ['b.spec.tsx', 'a.test.ts', 'c.bench.mjs', 'd.test.cjs', 'helper.ts', 'notes.md', 'e.test.ts.bak']
+    for (const name of files) writeFileSync(join(dir, name), '')
+    mkdirSync(join(dir, 'sub.test.ts'))
+    const { fixtureNames, knownFiles } = enumerateFixtures(dir)
+    assert.equal(fixtureNames.length, 4, 'four test-named files are fixtures')
+    assert.deepEqual(fixtureNames, ['a.test.ts', 'b.spec.tsx', 'c.bench.mjs', 'd.test.cjs'])
+    assert.ok(knownFiles.has('helper.ts'), 'a helper sibling is a nameable participant file')
+    assert.ok(!fixtureNames.includes('helper.ts'), 'a helper is never parsed as a fixture')
+    assert.ok(!knownFiles.has('notes.md') && !knownFiles.has('e.test.ts.bak'))
+    assert.ok(!knownFiles.has('sub.test.ts'), 'a directory named like a test is not a file')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
 })
