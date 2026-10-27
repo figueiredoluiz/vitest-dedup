@@ -54,9 +54,14 @@ scripts/release/release-comparison.mjs compare --version <version> --binary <bin
 ### If npm publication stops partway through
 
 Dispatch the workflow again on the same tag with `publish: true` and `publish_npm_only: true`. This
-verifies the existing GitHub Release and its live tag at the dispatched commit, rebuilds and checks
-the npm binaries against its archived binaries, then publishes only missing package versions. It
-does not recreate the GitHub Release or publish the crate.
+verifies the existing GitHub Release and its live tag at the dispatched commit, then downloads every
+platform archive. Each archive must pass its checksum and GitHub build-provenance verification for
+this repository, `release.yml`, the exact tag and commit. Missing or invalid provenance stops recovery.
+The archived binaries supply the npm packages directly; recovery skips the build matrix and publishes
+only missing package versions. It does not recreate the GitHub Release or publish the crate.
+
+This recovery path applies to tags containing this workflow. Existing immutable tags keep their
+original workflow; do not move a tag to retrofit recovery behavior.
 
 ## Website rebuild
 

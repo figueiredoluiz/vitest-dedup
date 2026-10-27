@@ -1,9 +1,10 @@
 // Proves the executables about to be published on npm are byte-for-byte the ones in the
 // checksummed, provenance-attested GitHub release archives.
 //
-// The npm job downloads the raw binary (what goes into the platform package) and either the
-// matching build's archives for a normal release or the existing GitHub Release archives for
-// npm-only recovery. Each archive has a `.sha256` sidecar and is what the Action verifies before
+// The npm job downloads the raw binary (what goes into the platform package) and the
+// matching build's archives for a normal release or rehearsal. npm-only recovery instead derives
+// its binaries directly from authenticated archives in recover-npm-binaries.mjs.
+// Each archive has a `.sha256` sidecar and is what the Action verifies before
 // executing. Nothing otherwise connects the downloaded binary to the release. Without this
 // check, "the release archive is attested" says nothing about the npm tarball -- a corrupted
 // upload, a mixed-up matrix leg, or a tampered artifact between jobs would ship a different binary

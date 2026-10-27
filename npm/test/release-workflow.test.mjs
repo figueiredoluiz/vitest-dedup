@@ -84,7 +84,6 @@ test('npm publishing runs only after the GitHub release exists', () => {
   assert.ok(job.length > 0, 'release.yml has no publish-npm job')
   assert.match(job, /needs: \[resolve, build, publish\]/)
   assert.match(job, /!cancelled\(\)/)
-  assert.match(job, /inputs\.publish_npm_only \|\| needs\.publish\.result == 'success'/)
   // A single script owns the platform-first ordering; the workflow must not reimplement it as a
   // sequence of steps that a later edit could reorder.
   assert.match(job, /node scripts\/release\/publish-npm-packages\.mjs/)
@@ -100,8 +99,7 @@ test('npm-only recovery verifies the existing release and skips release and crat
   assert.match(resolve, /check-recovery-release\.mjs/)
   assert.match(publish, /!inputs\.publish_npm_only/)
   assert.match(crate, /!inputs\.publish_npm_only/)
-  assert.match(npm, /gh release download/)
-  assert.match(npm, /published-release/)
+  assert.match(npm, /recover-npm-binaries\.mjs native/)
   assert.match(npm, /verify-npm-binaries\.mjs/)
 })
 
@@ -317,4 +315,51 @@ test('the hosted Action job pins a release no older than 0.5.1 and not yet unpub
   assert.match(step.with.version, /^\d+\.\d+\.\d+$/)
   assert.ok(order(parse(step.with.version), [0, 5, 1]) >= 0, `pinned ${step.with.version}`)
   assert.ok(order(parse(step.with.version), parse(rootManifest.version)) <= 0, `pinned ${step.with.version} is newer than ${rootManifest.version}`)
+})
+
+/** Evaluate the workflow's boolean-only job conditions against explicit dependency results. */
+function releaseCondition(expression, { recovery = false, publish = true, enabled = true, cancelled = false, resolve = 'success', build = 'success', release = 'success' } = {}) {
+  const js = expression.replace(/^\s*\$\{\{|\}\}\s*$/g, '')
+    .replaceAll('cancelled()', JSON.stringify(cancelled))
+    .replaceAll('inputs.publish_npm_only', JSON.stringify(recovery))
+    .replaceAll('inputs.publish', JSON.stringify(publish))
+    .replaceAll('vars.PUBLISH_NPM', JSON.stringify(enabled ? 'true' : 'false'))
+    .replaceAll('needs.resolve.result', JSON.stringify(resolve))
+    .replaceAll('needs.build.result', JSON.stringify(build))
+    .replaceAll('needs.publish.result', JSON.stringify(release))
+  assert.match(js, /^[\s()!&|='"a-z]+$/, 'only the modeled boolean expression may execute')
+  return Function(`return (${js})`)()
+}
+
+test('npm recovery skips builds and consumes authenticated archives while normal publication stays gated', () => {
+  const workflow = parseDocument(release).toJS()
+  const jobs = workflow.jobs
+  assert.equal(releaseCondition(jobs.build.if, { recovery: true }), false)
+  assert.equal(releaseCondition(jobs.build.if), true)
+  assert.equal(releaseCondition(jobs.build.if, { publish: false }), true)
+  const condition = jobs['publish-npm'].if
+  assert.equal(releaseCondition(condition, { recovery: true, build: 'skipped', release: 'skipped' }), true)
+  assert.equal(releaseCondition(condition), true)
+  for (const state of [
+    { build: 'failure' }, { build: 'skipped' }, { release: 'failure' }, { release: 'skipped' },
+    { recovery: true, build: 'failure', release: 'skipped' },
+    { recovery: true, build: 'skipped', release: 'failure' },
+    ...['failure', 'cancelled', 'skipped'].map(resolve => ({ recovery: true, build: 'skipped', release: 'skipped', resolve })),
+    { recovery: true, build: 'skipped', release: 'skipped', cancelled: true },
+    { recovery: true, build: 'skipped', release: 'skipped', publish: false },
+    { recovery: true, build: 'skipped', release: 'skipped', enabled: false },
+  ]) assert.equal(releaseCondition(condition, state), false, JSON.stringify(state))
+  const steps = jobs['publish-npm'].steps
+  const recovery = steps.findIndex(step => step.run?.includes('recover-npm-binaries.mjs'))
+  const prepare = steps.findIndex(step => step.run?.includes('prepare-npm-packages.mjs'))
+  const live = steps.findIndex(step => step.run?.includes('validate-release-context.mjs --remote'))
+  assert.ok(recovery > -1 && recovery < live && live < prepare)
+  assert.equal(steps[recovery].if, 'inputs.publish_npm_only')
+  assert.equal(steps[recovery].env.RELEASE_SHA, '${{ github.sha }}')
+  assert.equal(steps[recovery].env.GH_REPO, '${{ github.repository }}')
+  assert.equal(jobs['publish-npm'].env.VERSION, '${{ needs.resolve.outputs.version }}')
+  const downloads = steps.filter(step => step.uses?.startsWith('actions/download-artifact@'))
+  assert.equal(downloads.length, 2)
+  for (const step of downloads) assert.equal(step.if, '!inputs.publish_npm_only')
+  assert.equal(steps.find(step => step.run?.includes('verify-npm-binaries.mjs')).if, '!inputs.publish_npm_only')
 })

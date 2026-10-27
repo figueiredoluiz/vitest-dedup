@@ -378,6 +378,9 @@ const JS_MODULES = {
   // The pure release identity guard is imported by recovery-release.test.mjs (15/30 lines).
   // The gh CLI adapter runs as a separate process in the workflow, outside this coverage run.
   'scripts/release/check-recovery-release.mjs': 50,
+  // Measured at 85/87 lines (97.70%), including the portable CLI subprocess test
+  // through Node's inherited coverage environment.
+  'scripts/release/recover-npm-binaries.mjs': 97,
   'scripts/release/release-comparison.mjs': 98,
   'scripts/release/platform-package.mjs': 100,
   'scripts/release/prepare-npm-packages.mjs': 65,

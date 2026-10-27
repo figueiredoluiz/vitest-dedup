@@ -136,6 +136,7 @@ jobs:
   build:
     name: Build ${{ matrix.key }}
     needs: resolve
+    if: inputs.publish_npm_only != true
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -493,8 +494,8 @@ jobs:
         inputs.publish == true &&
         vars.PUBLISH_NPM == 'true' &&
         needs.resolve.result == 'success' &&
-        needs.build.result == 'success' &&
-        (inputs.publish_npm_only || needs.publish.result == 'success')
+        ((inputs.publish_npm_only && needs.build.result == 'skipped' && needs.publish.result == 'skipped') ||
+          (!inputs.publish_npm_only && needs.build.result == 'success' && needs.publish.result == 'success'))
       }}
     runs-on: ubuntu-22.04
     timeout-minutes: 20
@@ -502,6 +503,7 @@ jobs:
     permissions:
       contents: read
       id-token: write
+      attestations: read
     env:
       VERSION: ${{ needs.resolve.outputs.version }}
     steps:
@@ -518,6 +520,7 @@ jobs:
       # Kept unmerged: every target's binary is called `vitest-dedup`, so merging would collapse
       # eight different executables onto one path.
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        if: '!inputs.publish_npm_only'
         with:
           pattern: binary-*
           path: native
@@ -527,12 +530,13 @@ jobs:
           pattern: release-*
           path: release-assets
           merge-multiple: true
-      - name: Download existing GitHub Release archives for npm recovery
+      - name: Recover binaries from the authenticated GitHub Release
         if: inputs.publish_npm_only
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-        run: gh release download "v$VERSION" --pattern '*.tar.gz*' --dir published-release
+          RELEASE_SHA: ${{ github.sha }}
+        run: node scripts/release/recover-npm-binaries.mjs native
       - name: Verify every version site agrees with the tag
         shell: bash
         env:
@@ -549,15 +553,11 @@ jobs:
       # Ties the npm binaries to the attested release archives by digest. Without this, "the
       # release is attested" would say nothing about what npm users receive.
       - name: Verify npm binaries against the checksummed release archives
+        if: '!inputs.publish_npm_only'
         shell: bash
-        env:
-          PUBLISH_NPM_ONLY: ${{ inputs.publish_npm_only }}
         run: |
-          set -euo pipefail
-          archives=release-assets
-          if [ "$PUBLISH_NPM_ONLY" = "true" ]; then archives=published-release; fi
           node scripts/release/verify-npm-binaries.mjs \
-            --binaries native --archives "$archives" --version "$VERSION"
+            --binaries native --archives release-assets --version "$VERSION"
       - name: Generate the platform packages
         run: node scripts/release/prepare-npm-packages.mjs native
       - name: Re-verify the generated packages
