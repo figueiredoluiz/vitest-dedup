@@ -3,7 +3,7 @@ use super::*;
 /// Exhaustion at the final entry must remain visible through every project-list reader.
 #[test]
 fn oversized_globs_degrade_arrays_workspaces_and_glob_sync() {
-    let pattern = format!("p[{}]g", "k".repeat(MAX_PROJECT_GLOB_BYTES));
+    let pattern = format!("p[k{}]g", "0".repeat(MAX_PROJECT_GLOB_BYTES - 1));
     for (file, source) in [
         ("vitest.config.ts", format!("export default {{ test: {{ projects: ['{pattern}'] }} }}")),
         ("vitest.workspace.ts", format!("export default ['{pattern}']")),
@@ -21,7 +21,7 @@ fn oversized_globs_degrade_arrays_workspaces_and_glob_sync() {
 #[test]
 fn compilation_refusal_cannot_leave_earlier_governance_certain() {
     let directory = tempfile::tempdir().unwrap();
-    let pattern = format!("p[{}]g", "k".repeat(MAX_PROJECT_GLOB_BYTES));
+    let pattern = format!("p[k{}]g", "0".repeat(MAX_PROJECT_GLOB_BYTES - 1));
     write(directory.path(), "vitest.config.ts", &format!("export default {{ test: {{ projects: [{{ test: {{ include: ['**/*.test.ts'] }} }}, '{pattern}'] }} }}"));
     let set = resolve_projects(directory.path());
     assert_eq!(set.projects.len(), 1);
@@ -56,7 +56,7 @@ fn compilation_charges_are_cumulative_and_refusal_is_sticky() {
 #[test]
 fn pattern_and_prefix_boundaries_are_checked_before_compilation() {
     let root = tempfile::tempdir().unwrap();
-    let pattern = format!("p[{}]g", "k".repeat(MAX_PROJECT_GLOB_BYTES - 4));
+    let pattern = format!("p[k{}]g", "0".repeat(MAX_PROJECT_GLOB_BYTES - 5));
     let mut budget = Budget::default();
     expand_project_path(root.path(), &pattern, &mut budget);
     assert!(!budget.compilation_refused);
