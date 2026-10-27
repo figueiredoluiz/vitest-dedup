@@ -2626,27 +2626,14 @@ impl<'a> Walker<'a> {
             |own: Vec<Modifier>| -> Vec<Modifier> { [suite_prefix.clone(), own].concat() };
         let args: &[Argument<'a>] = &call.arguments;
 
-        // `test(function myTestName() { ... })`: the title comes from the function's own name,
-        // and the function itself is the body -- it is never invoked to produce the title.
-        if let Some(Argument::FunctionExpression(function)) = args.first() {
-            if let Some(id) = &function.id {
-                let title = Title::Static(id.name.as_str().to_owned());
-                self.push_test_case(
-                    kind,
-                    title,
-                    combined_modifiers(own_modifiers),
-                    args.first(),
-                    call,
-                    resolved.fixtures,
-                    fixtures_unresolved || each_unresolved,
-                    // A named-function body is never a `.each` row callback -- see the loop
-                    // below, the only site that ever has a `Row` to substitute from.
-                    None,
-                    true,
-                );
-                return;
+        // A named function supplies only its name. Its body is never the test handler:
+        // options, the actual handler and table rows follow the ordinary declaration path.
+        let function_title = match args.first() {
+            Some(Argument::FunctionExpression(function)) => {
+                function.id.as_ref().map(|id| id.name.as_str().to_owned())
             }
-        }
+            _ => None,
+        };
 
         let (title_arg, options, body_arg) = split_declaration_args(args);
         let mut own_modifiers = own_modifiers;
@@ -2655,7 +2642,12 @@ impl<'a> Walker<'a> {
         }
 
         if let Some(each) = each {
-            let pattern = raw_title_pattern(title_arg, self.source);
+            let pattern = function_title
+                .map(|text| TitlePattern {
+                    text,
+                    resolved: true,
+                })
+                .unwrap_or_else(|| raw_title_pattern(title_arg, self.source));
             match &each.rows {
                 Ok(rows) if !rows.is_empty() => {
                     let row_classes = table_row_classes(rows);
@@ -2750,7 +2742,9 @@ impl<'a> Walker<'a> {
                 }
             }
         } else {
-            let title = self.extract_title(title_arg);
+            let title = function_title
+                .map(Title::Static)
+                .unwrap_or_else(|| self.extract_title(title_arg));
             self.push_test_case(
                 kind,
                 title,
@@ -9771,11 +9765,10 @@ mod tests {
     // Suite and declaration shapes
     // -----------------------------------------------------------------------------------------
 
-    /// Check declaration extraction: a named function callback supplies its own title.
+    /// A named function supplies only its title; without a later handler the test is bodyless.
     #[test]
-    fn a_named_function_callback_supplies_its_own_title() {
-        // `test(function myTestName() { ... })`: the title is the function's name, and the
-        // function is the body -- it is never invoked to produce a title.
+    fn a_named_function_supplies_only_its_title() {
+        // Vitest never executes the title function, even when no handler follows it.
         let extraction = extract_source(
             "test(function myTestName() { f(); });",
             "case.test.ts",
@@ -9786,6 +9779,7 @@ mod tests {
             extraction.tests[0].title,
             Title::Static("myTestName".to_owned())
         );
+        assert!(!extraction.tests[0].has_body);
         // An *anonymous* function argument has no name to take, so it falls through to the
         // ordinary title/body split and has no title at all.
         let extraction = extract_source(
@@ -9799,6 +9793,82 @@ mod tests {
             "got {:?}",
             extraction.tests[0].title
         );
+    }
+
+    /// Named titles preserve the ordinary argument, modifier, row and uncertainty contracts.
+    #[test]
+    fn named_function_titles_use_the_ordinary_declaration_pipeline() {
+        for (declaration, count) in [
+            ("test(TITLE)", 1),
+            ("test(TITLE, {})", 1),
+            ("test(TITLE, () => expect(1).toBe(1))", 1),
+            ("test(TITLE, () => expect(1).toBe(1), 500)", 1),
+            ("test(TITLE, { skip: true }, () => expect(1).toBe(1))", 1),
+            (
+                "test.skip(TITLE, { todo: true }, () => expect(1).toBe(1))",
+                1,
+            ),
+            ("test.each([1, 2])(TITLE, n => expect(n).toBe(1))", 2),
+            (
+                "test.for([1, 2])(TITLE, { fails: true }, n => expect(n).toBe(1))",
+                2,
+            ),
+            ("test.each([])(TITLE, n => expect(n).toBe(1))", 0),
+            ("test.each(rows)(TITLE, n => expect(n).toBe(1))", 1),
+            (
+                "describe.skip('suite', () => { test(TITLE, () => expect(1).toBe(1)) })",
+                2,
+            ),
+        ] {
+            let named = extract_source(
+                &declaration.replace("TITLE", "function named() { throw Error('title') }"),
+                "case.test.ts",
+                Globals::Enabled,
+            );
+            let string = extract_source(
+                &declaration.replace("TITLE", "'named'"),
+                "case.test.ts",
+                Globals::Enabled,
+            );
+            assert_eq!(named.tests.len(), count, "{declaration}");
+            assert_eq!(string.tests.len(), count, "{declaration}");
+            assert_eq!(named.incomplete, string.incomplete, "{declaration}");
+            for (actual, expected) in named.tests.iter().zip(&string.tests) {
+                // The suite record fingerprints the whole declaration; compare its child instead.
+                if actual.kind == DeclarationKind::Suite {
+                    continue;
+                }
+                assert_eq!(actual.title, expected.title, "{declaration}");
+                assert_eq!(actual.has_body, expected.has_body, "{declaration}");
+                assert_eq!(actual.body, expected.body, "{declaration}");
+                assert_eq!(actual.modifiers, expected.modifiers, "{declaration}");
+                assert_eq!(actual.context, expected.context, "{declaration}");
+                assert_eq!(
+                    actual.table_row_class, expected.table_row_class,
+                    "{declaration}"
+                );
+            }
+        }
+    }
+
+    /// Only dependencies read by the executed handler contribute to the test's import context.
+    #[test]
+    fn named_function_titles_do_not_contribute_body_imports() {
+        let extraction = extract_source(
+            "import { titleOnly } from './title'; import { bodyOnly } from './body'; \
+             test(function named() { titleOnly(); }, () => bodyOnly()); \
+             test('string', () => bodyOnly());",
+            "case.test.ts",
+            Globals::Enabled,
+        );
+        assert_eq!(extraction.tests.len(), 2);
+        assert!(extraction.tests.iter().all(|test| test.has_body));
+        let named = &extraction.tests[0];
+        let string = &extraction.tests[1];
+        assert_eq!(named.body, string.body);
+        assert_eq!(named.context.imports, string.context.imports);
+        assert_eq!(named.context.imports.len(), 1);
+        assert!(named.context.imports[0].contains("body"));
     }
 
     /// Check declaration extraction: an empty suite body and a concise one are both handled.

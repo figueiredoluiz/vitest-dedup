@@ -503,6 +503,8 @@ const DELIBERATE_BLIND_FILES = new Set([
   'mixed/mixed-loop-each-in-non-idempotent-hook-scope.test.ts',
   'recall/duplicate-test-dynamic-title/session.test.ts',
   'recall/duplicate-test-name-dynamic-title/tenants.test.ts',
+  // Anonymous and binding-inferred function titles remain deliberately unresolved.
+  'recall/function-title-unresolved/run.test.ts',
   'recall/mixed-loop-each-under-projects-entry/pkg/loops.spec.ts',
   // Framework-application shapes the analyzer cannot read yet: each file is blind on purpose until the
   // row that supports its shape lands, and leaves this list in the same change.
