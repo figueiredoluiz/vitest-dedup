@@ -18,6 +18,16 @@ destination-symlink and failure handling as file reports. It is refused when the
 represented caller in a file changed since that revision. Findings withheld this way force
 `incomplete`: they are real, were found, and are not in this report.
 
+Git-backed modes use local objects and ignore inherited `GIT_*` command/repository settings and
+replacement refs. They retain file-based Git settings, including ignores, line endings and linked
+worktrees. Commands do not refresh the index or fetch missing objects. Changed-file comparison does
+not run filesystem monitors, external diffs or text conversions. If Git needs an executable
+clean/process filter to compare a tracked file, the run fails with an operational error (exit 2);
+it does not treat unconverted bytes as a valid comparison. Installed but unused filters do not
+prevent analysis on supported Git versions. Configured executable filter names containing `=`
+require Git 2.31 or newer for changed-file comparison; older Git fails explicitly. Historical
+baselines read committed blobs without those conversions.
+
 ## Baseline from a revision
 
 `--baseline-from-ref <rev>` computes the baseline from the base revision's own findings instead of a

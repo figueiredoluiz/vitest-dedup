@@ -1,3 +1,5 @@
+mod git_context;
+
 use super::*;
 use crate::model::{Location, Position, Rule, Severity, Span};
 

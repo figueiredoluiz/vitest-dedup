@@ -568,10 +568,16 @@ pub fn revision_sources(
                 terminal_safe(path_text)
             );
         };
-        let too_large = std::str::from_utf8(size)
+        let size = std::str::from_utf8(size)
             .ok()
-            .and_then(|size| size.parse::<u64>().ok())
-            .is_none_or(|size| size > MAX_REVISION_SOURCE_BYTES);
+            .and_then(|size| size.parse::<u64>().ok());
+        if *kind == b"blob" && size.is_none() {
+            bail!(
+                "git could not read the size of base file `{}` from local objects",
+                terminal_safe(path_text)
+            );
+        }
+        let too_large = size.is_none_or(|size| size > MAX_REVISION_SOURCE_BYTES);
         admitted.push(AdmittedEntry {
             path_text: path_text.to_owned(),
             relative,
@@ -919,7 +925,7 @@ thread_local! {
     static BLOB_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-/// A `git` invocation bound to `root` and nothing else.
+/// Build a read-only Git invocation at `root`, independent of inherited command settings.
 fn git_at(root: &Path) -> Command {
     #[cfg(test)]
     GIT_SPAWNS.with(|spawns| spawns.set(spawns.get() + 1));
@@ -927,9 +933,106 @@ fn git_at(root: &Path) -> Command {
     for variable in INHERITED_GIT_VARIABLES {
         command.env_remove(variable);
     }
-    command.env("GIT_TERMINAL_PROMPT", "0");
-    command.arg("-C").arg(root);
+    for (name, _) in std::env::vars_os() {
+        if name
+            .to_string_lossy()
+            .to_ascii_uppercase()
+            .starts_with("GIT_")
+        {
+            command.env_remove(name);
+        }
+    }
+    command.envs([
+        ("GIT_TERMINAL_PROMPT", "0"),
+        ("GIT_OPTIONAL_LOCKS", "0"),
+        ("GIT_NO_LAZY_FETCH", "1"),
+        ("GIT_ALLOW_PROTOCOL", ""),
+    ]);
     command
+        .args([
+            "--no-pager",
+            "--no-replace-objects",
+            "-c",
+            "core.fsmonitor=",
+            "-c",
+            "core.hooksPath=/dev/null",
+            "-C",
+        ])
+        .arg(root);
+    command
+}
+
+/// Read effective conversion drivers without executing them; later empty values override earlier ones.
+fn conversion_drivers(config: &[u8]) -> Result<BTreeSet<String>> {
+    let mut effective = BTreeMap::new();
+    for record in config
+        .split(|byte| *byte == 0)
+        .filter(|record| !record.is_empty())
+    {
+        let separator = record
+            .iter()
+            .position(|byte| *byte == b'\n')
+            .context("Git returned a filter setting without a value")?;
+        let key =
+            std::str::from_utf8(&record[..separator]).context("Git filter name is not UTF-8")?;
+        effective.insert(key, !record[separator + 1..].is_empty());
+    }
+    effective
+        .into_iter()
+        .filter(|(_, enabled)| *enabled)
+        .map(|(key, _)| {
+            key.strip_suffix(".clean")
+                .or_else(|| key.strip_suffix(".process"))
+                .filter(|driver| driver.starts_with("filter."))
+                .map(str::to_owned)
+                .context("Git returned an unexpected filter setting")
+        })
+        .collect()
+}
+
+/// Refuse a needed executable conversion instead of silently comparing unconverted file bytes.
+fn git_worktree_at(root: &Path) -> Result<Command> {
+    let output = git_at(root)
+        .args([
+            "config",
+            "--null",
+            "--get-regexp",
+            r"^filter\..*\.(clean|process)$",
+        ])
+        .output()
+        .context("failed to read Git conversion settings for --changed-since")?;
+    // `git config --get-regexp` exits 1 when there are no matching settings.
+    if !output.status.success() && output.status.code() != Some(1) {
+        bail!(
+            "could not read Git conversion settings for --changed-since: {}",
+            terminal_safe(String::from_utf8_lossy(&output.stderr).trim())
+        );
+    }
+    let drivers = conversion_drivers(&output.stdout)?;
+    let mut command = git_at(root);
+    let mut slot = 0;
+    for driver in drivers {
+        for (setting, value) in [("clean", ""), ("process", ""), ("required", "true")] {
+            if driver.contains('=') {
+                // Environment pairs preserve names that cannot be represented by -c key=value.
+                command.env(
+                    format!("GIT_CONFIG_KEY_{slot}"),
+                    format!("{driver}.{setting}"),
+                );
+                command.env(format!("GIT_CONFIG_VALUE_{slot}"), value);
+                slot += 1;
+            } else {
+                command.args(["-c", &format!("{driver}.{setting}={value}")]);
+            }
+        }
+    }
+    if slot > 0 {
+        command.env("GIT_CONFIG_COUNT", slot.to_string());
+        // Both interfaces arrived in Git 2.31. Older Git must reject this option rather than
+        // silently ignore the environment pairs. The first generated value is always empty.
+        command.arg("--config-env=core.fsmonitor=GIT_CONFIG_VALUE_0");
+    }
+    Ok(command)
 }
 
 /// Files under `root` changed since `base`, relative to `root`, plus untracked files.
@@ -940,17 +1043,17 @@ fn git_at(root: &Path) -> Command {
 ///
 /// # Errors
 ///
-/// All three of the operational failures a changed-files run has are errors here, never an empty
-/// result:
+/// Repository, revision and required-conversion failures are errors here, never an empty result:
 ///
 /// - `root` is not inside a Git repository at all,
 /// - the repository is a shallow clone, where `base` may exist as a name but its history does not,
 ///   so a diff against it is silently wrong rather than absent,
 /// - `base` does not resolve to a commit.
+/// - Comparing a tracked file requires an executable conversion driver.
 ///
 /// Every one of them would otherwise produce an empty changed set, which filters away every
 /// finding and reports a clean run over a repository nobody looked at. That is the exact false
-/// clean this module exists to prevent, so it is an operational error (exit 2) in all three cases.
+/// clean this module exists to prevent, so each is an operational error (exit 2).
 pub fn changed_files_since(root: &Path, base: &str) -> Result<BTreeSet<PathBuf>> {
     if base.trim().is_empty() || base.starts_with('-') {
         bail!("invalid --changed-since revision `{}`", terminal_safe(base));
@@ -963,6 +1066,9 @@ pub fn changed_files_since(root: &Path, base: &str) -> Result<BTreeSet<PathBuf>>
         root,
         &[
             "diff",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--ignore-submodules=dirty",
             "--relative",
             "--name-only",
             "-z",
@@ -1055,7 +1161,12 @@ pub(crate) fn resolve_commit(root: &Path, base: &str, flag: &str) -> Result<Stri
 
 /// Runs a `-z`-terminated path-listing git command and decodes its output.
 fn git_paths(root: &Path, arguments: &[&str], what: &str) -> Result<BTreeSet<PathBuf>> {
-    let output = git_at(root)
+    let mut command = if arguments.first() == Some(&"diff") {
+        git_worktree_at(root)?
+    } else {
+        git_at(root)
+    };
+    let output = command
         // Without this, git escapes non-ASCII names into C-style quoted strings, and the decoded
         // path would never equal the real one -- silently dropping every non-ASCII file from the
         // changed set.
