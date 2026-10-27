@@ -531,6 +531,62 @@ pub(super) fn local_call_registers_nothing(
         .is_some()
 }
 
+/// Proves an expression the helper walker ignores has no registration effects when evaluated.
+pub(super) fn ignored_expression_registers_nothing(
+    program: &Program<'_>,
+    semantic: &Semantic<'_>,
+    written: &HashSet<SymbolId>,
+    file: &Path,
+    parameters: Span,
+    expression: &Expression<'_>,
+) -> bool {
+    creates_without_running(semantic, expression)
+        || ignored_evaluation_registers_nothing(
+            program,
+            semantic,
+            written,
+            file,
+            (parameters, expression.span()),
+            Pending::Expression(expression),
+        )
+}
+
+/// Destructuring evaluates defaults, computed keys and getters as well as its initializer.
+pub(super) fn ignored_declarator_registers_nothing(
+    program: &Program<'_>,
+    semantic: &Semantic<'_>,
+    written: &HashSet<SymbolId>,
+    file: &Path,
+    parameters: Span,
+    declarator: &VariableDeclarator<'_>,
+) -> bool {
+    ignored_evaluation_registers_nothing(
+        program,
+        semantic,
+        written,
+        file,
+        (parameters, declarator.span),
+        Pending::Declarator(declarator),
+    )
+}
+
+/// Reuses the bounded registration proof, treating helper parameters as values supplied by callers.
+fn ignored_evaluation_registers_nothing<'a>(
+    program: &'a Program<'a>,
+    semantic: &Semantic<'a>,
+    written: &HashSet<SymbolId>,
+    file: &Path,
+    call: (Span, Span),
+    pending: Pending<'a>,
+) -> bool {
+    let mut scanner = Scanner::new(semantic, program, file);
+    scanner.written = Some(written);
+    scanner.helper_call = Some(call);
+    scanner.queue.push(pending);
+    scanner.drain();
+    !scanner.failed && Proof::default().prove_edges(scanner.edges)
+}
+
 /// Scans `callee` (when given) and `arguments` as code that runs in the file at `file`, and proves
 /// the modules they reach; the modules the proof relied on, or `None`.
 fn evaluation_registers_nothing(

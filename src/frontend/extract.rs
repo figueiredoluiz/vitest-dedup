@@ -21,10 +21,10 @@ use crate::model::{
 use oxc_allocator::Allocator;
 use oxc_ast::ast::{
     Argument, ArrayExpressionElement, ArrowFunctionBody, AssignmentOperator, AssignmentTarget,
-    BindingPattern, CallExpression, Expression, ForOfStatement, ForStatementLeft, FormalParameters,
-    Function, FunctionType, IdentifierReference, ImportDeclarationSpecifier, LabelIdentifier,
-    ObjectExpression, ObjectPropertyKind, Program, Statement, TemplateLiteral, UnaryOperator,
-    VariableDeclarationKind, VariableDeclarator,
+    BindingPattern, CallExpression, ChainElement, Expression, ForOfStatement, ForStatementLeft,
+    FormalParameters, Function, FunctionType, IdentifierReference, ImportDeclarationSpecifier,
+    LabelIdentifier, ObjectExpression, ObjectPropertyKind, Program, Statement, TemplateLiteral,
+    UnaryOperator, VariableDeclarationKind, VariableDeclarator,
 };
 use oxc_ast::AstKind;
 use oxc_ast_visit::{walk, Visit};
@@ -1641,18 +1641,41 @@ impl<'a> Walker<'a> {
         match statement {
             Statement::VariableDeclaration(declaration) => {
                 for declarator in &declaration.declarations {
-                    self.register_variable_declarator(declarator, registry);
+                    let handled_binding = self.register_variable_declarator(declarator, registry);
+                    if let Some(frame) = self.helper_frames.last() {
+                        if matches!(declarator.id, BindingPattern::BindingIdentifier(_)) {
+                            if let Some(init) = &declarator.init {
+                                self.prepare_helper_expression(init, registry);
+                            }
+                        } else if !handled_binding
+                            && !self.guards_prove_unreachable()
+                            && !registration_free::ignored_declarator_registers_nothing(
+                                self.program,
+                                self.semantic,
+                                self.written_bindings(),
+                                &self.file.path,
+                                frame.helper.params.span,
+                                declarator,
+                            )
+                        {
+                            self.refuse_unwalked_helper_expression();
+                        }
+                    }
                 }
             }
             Statement::ExpressionStatement(expression_statement) => {
                 if let Expression::CallExpression(call) = &expression_statement.expression {
                     self.prepare_call(call, registry);
+                } else {
+                    self.prepare_helper_expression(&expression_statement.expression, registry);
                 }
             }
             // `return f()` runs `f()` before it leaves, exactly as the statement `f()` would.
             Statement::ReturnStatement(return_statement) => {
                 if let Some(Expression::CallExpression(call)) = &return_statement.argument {
                     self.prepare_call(call, registry);
+                } else if let Some(expression) = &return_statement.argument {
+                    self.prepare_helper_expression(expression, registry);
                 }
             }
             // A bare block does not introduce a new hook scope; its hooks belong to the
@@ -1680,6 +1703,96 @@ impl<'a> Walker<'a> {
             // control-flow constructs, whose reading must not differ between the passes.
             other => self.guarded_control_flow(other, registry, Self::prepare_statement),
         }
+    }
+
+    /// Reads a helper initializer's direct call; other unwalked expressions must register nothing.
+    fn prepare_helper_expression(&mut self, expression: &Expression<'a>, registry: &mut Registry) {
+        if self.helper_frames.is_empty() || self.guards_prove_unreachable() {
+            return;
+        }
+        // Resolving the whole initializer recognizes a factory value, not a registration.
+        let proved = if self.resolve_call_callee(expression, registry).is_some() {
+            self.factory_inputs_register_nothing(expression)
+        } else {
+            match expression {
+                Expression::CallExpression(call) => {
+                    self.prepare_call(call, registry);
+                    return;
+                }
+                _ => self.ignored_helper_expression_registers_nothing(expression),
+            }
+        };
+        if !proved {
+            self.refuse_unwalked_helper_expression();
+        }
+    }
+
+    /// Checks every evaluated input of a registry-recognized factory, including earlier chain links.
+    fn factory_inputs_register_nothing(&self, mut expression: &Expression<'a>) -> bool {
+        loop {
+            let call = match super::registry::unwrap_transparent(expression) {
+                Expression::Identifier(_) => return true,
+                Expression::CallExpression(call) => call.as_ref(),
+                Expression::StaticMemberExpression(member) => {
+                    expression = &member.object;
+                    continue;
+                }
+                Expression::TaggedTemplateExpression(tagged) => {
+                    if !tagged
+                        .quasi
+                        .expressions
+                        .iter()
+                        .all(|input| self.ignored_helper_expression_registers_nothing(input))
+                    {
+                        return false;
+                    }
+                    expression = &tagged.tag;
+                    continue;
+                }
+                Expression::ChainExpression(chain) => match &chain.expression {
+                    ChainElement::CallExpression(call) => call.as_ref(),
+                    ChainElement::StaticMemberExpression(member) => {
+                        expression = &member.object;
+                        continue;
+                    }
+                    _ => return false,
+                },
+                _ => return false,
+            };
+            if !call.arguments.iter().all(|argument| {
+                argument
+                    .as_expression()
+                    .is_some_and(|input| self.ignored_helper_expression_registers_nothing(input))
+            }) {
+                return false;
+            }
+            expression = &call.callee;
+        }
+    }
+
+    /// Proves evaluation effects with the active helper's parameter bindings left unknown.
+    fn ignored_helper_expression_registers_nothing(&self, expression: &Expression<'a>) -> bool {
+        registration_free::ignored_expression_registers_nothing(
+            self.program,
+            self.semantic,
+            self.written_bindings(),
+            &self.file.path,
+            self.helper_frames
+                .last()
+                .expect("active helper")
+                .helper
+                .params
+                .span,
+            expression,
+        )
+    }
+
+    /// Makes an unwalked helper effect visible and excludes its scope from comparison.
+    fn refuse_unwalked_helper_expression(&mut self) {
+        self.refuse_helper_expansion(refusal(
+            ExclusionReason::HelperEffectsUnproved,
+            "an unwalked expression in the called helper may register tests or hooks",
+        ));
     }
 
     /// Prepare all statements of a block body, otherwise prepare the single body statement.
@@ -1830,7 +1943,18 @@ impl<'a> Walker<'a> {
                     self.classify_call(call, registry);
                 }
             }
-            // Already handled by `prepare_statements`.
+            // Bindings and hooks were prepared already; a helper initializer may also declare tests.
+            Statement::VariableDeclaration(declaration) if !self.helper_frames.is_empty() => {
+                for declarator in &declaration.declarations {
+                    if matches!(declarator.id, BindingPattern::BindingIdentifier(_)) {
+                        if let Some(init @ Expression::CallExpression(call)) = &declarator.init {
+                            if self.resolve_call_callee(init, registry).is_none() {
+                                self.classify_call(call, registry);
+                            }
+                        }
+                    }
+                }
+            }
             Statement::VariableDeclaration(_) => {}
             Statement::BlockStatement(block) => self.walk_statement_list(&block.body, registry),
             Statement::ForOfStatement(for_of) => {
@@ -2543,13 +2667,16 @@ impl<'a> Walker<'a> {
     }
 
     /// Binds a local symbol introduced outside a plain `import` statement: either an
-    /// `import.meta.vitest` destructure, or a `test.extend(...)` result.
+    /// `import.meta.vitest` destructure, or a `test.extend(...)` result. Returns whether a simple
+    /// in-source destructure was fully handled, with no defaults, computed keys or rest to evaluate.
     fn register_variable_declarator(
         &mut self,
         declarator: &VariableDeclarator<'a>,
         registry: &mut Registry,
-    ) {
-        let Some(init) = &declarator.init else { return };
+    ) -> bool {
+        let Some(init) = &declarator.init else {
+            return false;
+        };
 
         if is_import_meta_vitest_expr(init) {
             if let BindingPattern::ObjectPattern(pattern) = &declarator.id {
@@ -2566,17 +2693,22 @@ impl<'a> Walker<'a> {
                         }
                     }
                 }
+                return pattern.rest.is_none()
+                    && pattern.properties.iter().all(|property| {
+                        !property.computed
+                            && matches!(property.value, BindingPattern::BindingIdentifier(_))
+                    });
             }
-            return;
+            return false;
         }
 
         // `const myTest = baseTest.extend({...})` (or a plain re-export like `const x = test`):
         // either way, `myTest`/`x` should resolve exactly like `resolved` did, fixtures included.
         let Some(resolved) = self.resolve_call_callee(init, registry) else {
-            return;
+            return false;
         };
         if resolved.root != "test" {
-            return;
+            return false;
         }
         if let BindingPattern::BindingIdentifier(binding) = &declarator.id {
             if let Some(symbol_id) = binding.symbol_id.get() {
@@ -2588,6 +2720,7 @@ impl<'a> Walker<'a> {
                 );
             }
         }
+        false
     }
 
     /// Dispatch recognized test/suite calls for emission; attempt helper expansion for
@@ -11157,3 +11290,7 @@ mod registration_free_tests;
 #[cfg(test)]
 #[path = "extract/tests/imported_constants.rs"]
 mod imported_constants_tests;
+
+#[cfg(test)]
+#[path = "extract/tests/helper_expressions.rs"]
+mod helper_expression_tests;

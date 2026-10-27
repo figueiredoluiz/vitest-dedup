@@ -129,6 +129,30 @@ impl RunnerCase {
 
 const SIMPLE_RUNNER: &str = "import { test, expect } from 'vitest'; export function run() { test('a', () => { expect(3).toBe(3) }); test('b', () => { expect(3).toBe(3) }); }";
 
+/// Nested local helpers preserve initializer registrations and refuse unwalked hook effects.
+#[test]
+fn imported_runner_local_helper_initializers() {
+    for (effect, incomplete, hooks) in [
+        ("const registered = beforeEach(() => {});", false, 1),
+        ("true && beforeEach(() => {});", true, 0),
+    ] {
+        let helper = format!("import {{ test, beforeEach }} from 'vitest'; export function run() {{ const local = () => {{ {effect} const testRegistration = test('hidden', () => {{}}); }}; local(); }}");
+        let case = RunnerCase::new(&helper, "run(); test('visible', () => {});");
+        let extraction = case.extract(Globals::Disabled);
+        let tests = declared_tests(&extraction);
+        assert_eq!(tests.len(), if incomplete { 1 } else { 2 });
+        assert_eq!(
+            extraction.incomplete, incomplete,
+            "{:?}",
+            extraction.diagnostics
+        );
+        assert!(tests
+            .iter()
+            .all(|test| test.context.unresolved == incomplete));
+        assert!(tests.iter().all(|test| test.context.hooks.len() == hooks));
+    }
+}
+
 #[test]
 /// Retains caller hook/setup/configuration context while using the helper's lexical frame.
 fn caller_hooks_setup_configuration_and_modifiers_survive_the_helper_frame() {

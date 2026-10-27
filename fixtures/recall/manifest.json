@@ -7151,6 +7151,253 @@
           ]
         }
       ]
+    },
+    {
+      "name": "helper-initializer-hook",
+      "path": "helper-initializer-hook",
+      "rule": "duplicate-test",
+      "role": "variant",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-10-28",
+      "expectedTests": 2,
+      "expectedIncomplete": false,
+      "expectedUnresolved": 0,
+      "expectedFindings": [],
+      "expectedAbsent": [
+        {
+          "rule": "duplicate-test",
+          "titles": [
+            "hooked > reads",
+            "plain > reads"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "helper-initializer-equivalent-hooks",
+      "path": "helper-initializer-equivalent-hooks",
+      "rule": "duplicate-test",
+      "role": "positive",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-10-28",
+      "expectedTests": 2,
+      "expectedIncomplete": false,
+      "expectedUnresolved": 0,
+      "expectedFindings": [
+        {
+          "rule": "duplicate-test",
+          "severity": "error",
+          "titles": [
+            "hooked > reads",
+            "plain > reads"
+          ]
+        }
+      ],
+      "expectedAbsent": []
+    },
+    {
+      "name": "helper-ignored-assignment-hook",
+      "path": "helper-ignored-assignment-hook",
+      "rule": "duplicate-test",
+      "role": "variant",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-10-28",
+      "expectedTests": 2,
+      "expectedIncomplete": true,
+      "expectedUnresolved": 1,
+      "expectedFindings": [],
+      "expectedAbsent": [
+        {
+          "rule": "duplicate-test",
+          "titles": [
+            "hooked > reads",
+            "plain > reads"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "helper-ignored-sequence-hook",
+      "path": "helper-ignored-sequence-hook",
+      "rule": "duplicate-test",
+      "role": "variant",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-10-28",
+      "expectedTests": 2,
+      "expectedIncomplete": true,
+      "expectedUnresolved": 1,
+      "expectedFindings": [],
+      "expectedAbsent": [
+        {
+          "rule": "duplicate-test",
+          "titles": [
+            "hooked > reads",
+            "plain > reads"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "helper-ignored-logical-hook",
+      "path": "helper-ignored-logical-hook",
+      "rule": "duplicate-test",
+      "role": "variant",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-10-28",
+      "expectedTests": 2,
+      "expectedIncomplete": true,
+      "expectedUnresolved": 1,
+      "expectedFindings": [],
+      "expectedAbsent": [
+        {
+          "rule": "duplicate-test",
+          "titles": [
+            "hooked > reads",
+            "plain > reads"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "helper-ignored-conditional-hook",
+      "path": "helper-ignored-conditional-hook",
+      "rule": "duplicate-test",
+      "role": "variant",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-10-28",
+      "expectedTests": 2,
+      "expectedIncomplete": true,
+      "expectedUnresolved": 1,
+      "expectedFindings": [],
+      "expectedAbsent": [
+        {
+          "rule": "duplicate-test",
+          "titles": [
+            "hooked > reads",
+            "plain > reads"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "helper-inert-registration-callback",
+      "path": "helper-inert-registration-callback",
+      "rule": "duplicate-test",
+      "role": "positive",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-10-28",
+      "expectedTests": 2,
+      "expectedIncomplete": false,
+      "expectedUnresolved": 0,
+      "expectedFindings": [
+        {
+          "rule": "duplicate-test",
+          "severity": "error",
+          "titles": [
+            "hooked > reads",
+            "plain > reads"
+          ]
+        }
+      ],
+      "expectedAbsent": []
+    },
+    {
+      "name": "helper-initializer-test",
+      "path": "helper-initializer-test",
+      "rule": "duplicate-test",
+      "role": "positive",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-10-28",
+      "expectedTests": 2,
+      "expectedIncomplete": false,
+      "expectedUnresolved": 0,
+      "expectedFindings": [
+        {
+          "rule": "duplicate-test",
+          "severity": "error",
+          "titles": [
+            "hidden",
+            "visible"
+          ]
+        }
+      ],
+      "expectedAbsent": []
+    },
+    {
+      "name": "helper-initializer-factories",
+      "path": "helper-initializer-factories",
+      "rule": "duplicate-test",
+      "role": "positive",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-10-28",
+      "expectedTests": 2,
+      "expectedIncomplete": false,
+      "expectedUnresolved": 0,
+      "expectedFindings": [
+        {
+          "rule": "duplicate-test",
+          "titles": [
+            "first",
+            "second"
+          ],
+          "severity": "error"
+        }
+      ],
+      "expectedAbsent": []
+    },
+    {
+      "name": "helper-in-source-bindings",
+      "path": "helper-in-source-bindings",
+      "rule": "duplicate-test",
+      "role": "positive",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-10-28",
+      "expectedTests": 2,
+      "expectedIncomplete": false,
+      "expectedUnresolved": 0,
+      "expectedFindings": [
+        {
+          "rule": "duplicate-test",
+          "titles": [
+            "first",
+            "second"
+          ],
+          "severity": "error"
+        }
+      ],
+      "expectedAbsent": []
+    },
+    {
+      "name": "helper-initializer-factory-argument-hook",
+      "path": "helper-initializer-factory-argument-hook",
+      "rule": "duplicate-test",
+      "role": "variant",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-10-28",
+      "expectedTests": 2,
+      "expectedIncomplete": true,
+      "expectedUnresolved": 1,
+      "expectedFindings": [],
+      "expectedAbsent": [
+        {
+          "rule": "duplicate-test",
+          "titles": [
+            "hooked > reads",
+            "plain > reads"
+          ]
+        }
+      ]
     }
   ],
   "knownFalsePositiveBaseline": 1,
