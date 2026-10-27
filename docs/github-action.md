@@ -30,8 +30,9 @@ The inputs are `path`, `config`, `threshold`, `reporters`, `output`, `rule`, `gl
 `no-metrics`, `fail-on-incomplete`, `baseline`, `fail-on-new`, `changed-since`, `max-memory`,
 `no-memory-cap`, `version`, and `token`.
 
-- `path` is the positional argument, `version` selects the release binary, and `token`
-  authenticates the attestation check.
+- `path` is the positional argument, passed last after `--`, so a value such as `-dir` or
+  `check` names a directory. `version` selects the release binary, and `token` authenticates the
+  attestation check.
 - Each of the others maps to the flag of the same name.
 - `globals` accepts `true`, `false`, or empty (including omission). Only `true` forces globals;
   the other accepted values preserve config detection. Other values fail before installation or analysis.

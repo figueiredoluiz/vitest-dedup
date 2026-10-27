@@ -138,7 +138,7 @@ describe("buildArguments", () => {
       globals: "",
       failOnIncomplete: "",
     });
-    assert.deepEqual(args, [".", "--reporters", "terminal,json"]);
+    assert.deepEqual(args, ["--reporters", "terminal,json", "--", "."]);
   });
 
   test("includes every flag when every input is set", () => {
@@ -153,7 +153,6 @@ describe("buildArguments", () => {
       failOnIncomplete: "true",
     });
     assert.deepEqual(args, [
-      "src",
       "--config",
       ".vitest-dedup.json",
       "--threshold",
@@ -166,8 +165,19 @@ describe("buildArguments", () => {
       "duplicate-test=warning",
       "--globals",
       "--fail-on-incomplete",
+      "--",
+      "src",
     ]);
   });
+
+  for (const path of ["--update-baseline", "-dash", "check", "with space"]) {
+    test(`passes path ${JSON.stringify(path)} only after the delimiter`, () => {
+      const args = buildArguments({ path, baseline: "baseline.json" });
+      assert.deepEqual(args.slice(-2), ["--", path]);
+      assert.equal(args.indexOf("--"), args.length - 2);
+      assert.equal(args.indexOf(path), args.length - 1);
+    });
+  }
 
   test("force-adds json to a terminal-only reporters input without dropping terminal", () => {
     const args = buildArguments({ path: ".", reporters: "terminal" });
@@ -249,6 +259,8 @@ describe("buildArguments", () => {
       "0",
       "--changed-since",
       "origin/main",
+      "--",
+      ".",
     ]);
   });
 
@@ -263,7 +275,7 @@ describe("buildArguments", () => {
 
   test("forwards the memory budget inputs, and omits them when unset", () => {
     const args = buildArguments({ path: ".", maxMemory: "512", noMemoryCap: "true" });
-    assert.deepEqual(args.slice(args.indexOf("--max-memory")), ["--max-memory", "512", "--no-memory-cap"]);
+    assert.deepEqual(args.slice(args.indexOf("--max-memory")), ["--max-memory", "512", "--no-memory-cap", "--", "."]);
     const unset = buildArguments({ path: ".", maxMemory: "", noMemoryCap: "false" });
     assert.ok(!unset.includes("--max-memory"));
     assert.ok(!unset.includes("--no-memory-cap"));
@@ -271,7 +283,7 @@ describe("buildArguments", () => {
 
   test("passes --fail-on-new 0, which is the strictest limit and not an absent one", () => {
     const args = buildArguments({ path: ".", baseline: "b.json", failOnNew: "0" });
-    assert.deepEqual(args.slice(args.indexOf("--fail-on-new")), ["--fail-on-new", "0"]);
+    assert.deepEqual(args.slice(args.indexOf("--fail-on-new")), ["--fail-on-new", "0", "--", "."]);
   });
 });
 
@@ -587,6 +599,19 @@ describe("runAction", () => {
       outputs: () => parseGithubOutput(readFileSync(githubOutputPath, "utf8")),
     };
   }
+
+  test("forwards a flag-shaped path input to the binary as the path", async (t) => {
+    const fixture = actionFixture(t);
+    const argvPath = join(fixture.dir, "argv.json");
+    const report = { schemaVersion: "0.1", testsAnalyzed: 1, filesAnalyzed: 1, incomplete: false, findings: [] };
+    const script = reportWriter(fixture.reportPath, report,
+      `writeFileSync(${JSON.stringify(argvPath)}, JSON.stringify(process.argv.slice(2)));`);
+    const inputs = { INPUT_PATH: "--update-baseline", INPUT_BASELINE: "baseline.json" };
+    assert.equal(await fixture.run(script, inputs), 0);
+    const argv = JSON.parse(readFileSync(argvPath, "utf8"));
+    assert.deepEqual(argv.slice(-2), ["--", "--update-baseline"]);
+    assert.equal(argv.indexOf("--update-baseline"), argv.length - 1);
+  });
 
   for (const value of ["false", "true"]) {
     test(`reads no-metrics action input ${value} and forwards it to the binary`, async (t) => {

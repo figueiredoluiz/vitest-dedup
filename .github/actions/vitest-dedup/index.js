@@ -117,7 +117,7 @@ export function buildArguments(inputs) {
     );
   }
 
-  const args = [inputs.path || "."];
+  const args = [];
 
   if (inputs.config) {
     args.push("--config", inputs.config);
@@ -176,6 +176,10 @@ export function buildArguments(inputs) {
   if (inputs.noMemoryCap === "true") {
     args.push("--no-memory-cap");
   }
+
+  // Last and after `--`, so a path such as `--update-baseline` or `check` names a directory
+  // instead of becoming a flag or the subcommand.
+  args.push("--", inputs.path || ".");
 
   return args;
 }
