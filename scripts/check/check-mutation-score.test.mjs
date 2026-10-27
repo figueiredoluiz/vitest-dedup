@@ -335,6 +335,16 @@ test('the CLI honours an explicit threshold argument', () => {
   assert.equal(cli({}, { argv: ['mutants.out/outcomes.json', '99'] }).status, 1)
 })
 
+test('the CLI rejects a blank or non-numeric threshold instead of reading it as zero', () => {
+  // `Number('')` and `Number('  ')` are 0, which every score satisfies.
+  for (const threshold of ['', '  ', 'abc', '30%']) {
+    const { status, err } = cli({}, { argv: ['mutants.out/outcomes.json', threshold] })
+    assert.equal(status, 1, JSON.stringify(threshold))
+    assert.match(err.join('\n'), /minimumScore must be a percentage/, JSON.stringify(threshold))
+  }
+  assert.equal(cli({}, { argv: ['mutants.out/outcomes.json', '0'] }).status, 0)
+})
+
 test('--print-scope emits exactly the arguments the workflow passes to cargo-mutants', () => {
   const { status, out } = runCli(['--print-scope'])
   assert.equal(status, 0)

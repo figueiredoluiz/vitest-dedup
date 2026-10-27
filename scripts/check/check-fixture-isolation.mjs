@@ -54,7 +54,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { enumerateFixtures, parseFixture } from './lib/fixture-directives.mjs'
-import { checkExpectation, collectFingerprintRecords } from './lib/isolation.mjs'
+import { checkExpectation, collectFingerprintRecords, tallyExpectation } from './lib/isolation.mjs'
 import { defaultBinary } from './lib/run-analyzer.mjs'
 
 // Every fixture directory carrying `@vitest-dedup:` expectation blocks. `fixtures/observed/` holds
@@ -162,7 +162,7 @@ export function run(binary = DEFAULT_BINARY) {
   const unstateable = []
   const notIsolable = []
   const violations = []
-  let checked = 0
+  const tally = { failures, unchecked, unstateable, notIsolable, violations, checked: 0 }
   let negatives = 0
 
   for (const dir of DIRS) {
@@ -197,23 +197,12 @@ export function run(binary = DEFAULT_BINARY) {
         if (expectation.rule !== 'none') continue
         negatives += 1
         const result = checkExpectation(expectation, index, readSource)
-        if (result.status === 'fail') {
-          failures.push(`FAIL ${join(dir, name)}: ${result.message}`)
-        } else if (result.status === 'unchecked') {
-          unchecked.push(`${join(dir, name)}: ${result.message}`)
-        } else if (result.status === 'unstateable') {
-          unstateable.push(`${join(dir, name)}: ${result.message}`)
-        } else if (result.status === 'not-isolable') {
-          notIsolable.push(`${join(dir, name)}: ${result.message}`)
-        } else if (result.status === 'violation') {
-          violations.push(`${join(dir, name)}: ${result.message}`)
-        } else {
-          checked += 1
-        }
+        tallyExpectation(tally, join(dir, name), result)
       }
     }
   }
 
+  const { checked } = tally
   if (checked < MIN_CHECKED_EXPECTATIONS) {
     failures.push(
       `FAIL (gate): only ${checked} negative expectation(s) were actually checked, below the floor ` +

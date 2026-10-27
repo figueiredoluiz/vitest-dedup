@@ -445,6 +445,35 @@ export function combineDimensions(names) {
   return { equal: [...equal], differ: [...differ] }
 }
 
+/** The bucket `tallyExpectation` files each status `checkExpectation` can return under. */
+const STATUS_BUCKETS = new Map([
+  ['ok', 'checked'],
+  ['fail', 'failures'],
+  ['unchecked', 'unchecked'],
+  ['unstateable', 'unstateable'],
+  ['not-isolable', 'notIsolable'],
+  ['violation', 'violations'],
+])
+
+/**
+ * Files one `checkExpectation` result into `tally`. Only a recognised `ok` counts toward `checked`;
+ * a status this table does not know is a gate failure, so it can never pad the checked floor.
+ *
+ * @param {{failures: string[], unchecked: string[], unstateable: string[], notIsolable: string[],
+ *   violations: string[], checked: number}} tally mutated in place.
+ * @param {string} where the `dir/file` the expectation came from.
+ * @param {{status: string, message?: string}} result
+ */
+export function tallyExpectation(tally, where, result) {
+  const bucket = STATUS_BUCKETS.get(result.status)
+  if (bucket === 'checked') tally.checked += 1
+  else if (bucket === 'failures') tally.failures.push(`FAIL ${where}: ${result.message}`)
+  else if (bucket !== undefined) tally[bucket].push(`${where}: ${result.message}`)
+  else {
+    tally.failures.push(`FAIL ${where}: unrecognised isolation status ${JSON.stringify(result.status)}`)
+  }
+}
+
 /**
  * Checks one `rule=none` expectation's isolation claim.
  *
@@ -456,7 +485,7 @@ export function combineDimensions(names) {
  * @param {object} index the result of `collectTestRecords` for the expectation's directory.
  * @param {(file: string) => string|null} readSource resolves a bare fixture filename to its text,
  *   used only to validate the line number of a participant that has no record of its own.
- * @returns {{status: 'ok'|'unchecked'|'not-isolable'|'violation'|'fail', message?: string}} `fail`
+ * @returns {{status: 'ok'|'unchecked'|'unstateable'|'not-isolable'|'violation'|'fail', message?: string}} `fail`
  *   covers both a broken declaration (a participant naming nothing the analyzer emitted) and an
  *   unmarked divergence; neither is ever downgraded to `violation`.
  */

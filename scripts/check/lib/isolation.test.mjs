@@ -5,7 +5,7 @@
 // and cannot observe: that a file/line key holds EVERY hook declared there, not the last one.
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { checkExpectation } from './isolation.mjs'
+import { checkExpectation, tallyExpectation } from './isolation.mjs'
 
 /**
  * The indexing `collectFingerprintRecords` performs for `"hook"` records, in isolation.
@@ -192,5 +192,38 @@ test('for await isolation rejects a collapsed protocol and unrelated context dri
   for (const field of ['alpha', 'structural', 'behavior', 'contextKey', 'modifierKey']) {
     const changed = { ...second, [field]: field.endsWith('Key') ? 'different' : first[field] }
     assert.equal(checkExpectation(expectation, indexOver([first, changed]), readSource).status, 'fail')
+  }
+})
+
+/** A fresh tally in the shape `tallyExpectation` fills. */
+function emptyTally() {
+  return { failures: [], unchecked: [], unstateable: [], notIsolable: [], violations: [], checked: 0 }
+}
+
+test('tallyExpectation files each recognised status in exactly its own bucket', () => {
+  const cases = [
+    ['ok', 'checked'],
+    ['fail', 'failures'],
+    ['unchecked', 'unchecked'],
+    ['unstateable', 'unstateable'],
+    ['not-isolable', 'notIsolable'],
+    ['violation', 'violations'],
+  ]
+  for (const [status, bucket] of cases) {
+    const tally = emptyTally()
+    tallyExpectation(tally, 'dir/a.test.ts', { status, message: 'why' })
+    const filed = Object.entries(tally).filter(([, v]) => (Array.isArray(v) ? v.length : v) > 0)
+    assert.deepEqual(filed.map(([k]) => k), [bucket], status)
+  }
+})
+
+test('tallyExpectation refuses an unrecognised status instead of counting it as checked', () => {
+  // `constructor` is a prototype name: a plain-object lookup would find a value for it.
+  for (const status of [undefined, '', 'OK', 'okay', 'constructor']) {
+    const tally = emptyTally()
+    tallyExpectation(tally, 'dir/a.test.ts', { status })
+    assert.equal(tally.checked, 0, String(status))
+    assert.equal(tally.failures.length, 1, String(status))
+    assert.match(tally.failures[0], /^FAIL dir\/a\.test\.ts: unrecognised isolation status/)
   }
 })

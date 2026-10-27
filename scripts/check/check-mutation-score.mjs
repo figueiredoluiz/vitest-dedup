@@ -311,6 +311,17 @@ export function runMutants(argv, { spawn = spawnSync } = {}) {
 }
 
 /**
+ * Parses the optional threshold argument. A blank value is NaN, which `checkMutationScore` rejects,
+ * rather than the 0 that `Number('')` would give and every score would satisfy.
+ *
+ * @param {string} raw
+ * @returns {number}
+ */
+function parseThreshold(raw) {
+  return raw.trim() === '' ? Number.NaN : Number(raw)
+}
+
+/**
  * The whole command line, as a pure function of its arguments.
  *
  * It returns a status and the lines to print rather than calling `process.exit` itself, because a
@@ -336,7 +347,7 @@ export function runCli(argv, { read = readFileSync, spawn = spawnSync } = {}) {
   }
   const positional = argv.filter((argument) => !argument.startsWith('--'))
   const path = positional[0] || join('mutants.out', 'outcomes.json')
-  const minimumScore = Number(positional[1] ?? MINIMUM_SCORE)
+  const minimumScore = positional[1] === undefined ? MINIMUM_SCORE : parseThreshold(positional[1])
   let report
   try {
     report = JSON.parse(read(path, 'utf8'))
