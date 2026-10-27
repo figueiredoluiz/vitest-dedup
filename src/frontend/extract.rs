@@ -43,10 +43,11 @@ mod setup_identity;
 
 use super::fingerprint::{fingerprint, FunctionLike, RowSubstitution};
 use super::registry::{
-    canonicalize_export_name, const_fold, is_ecmascript_trim_whitespace, js_number_to_string,
-    js_radix_digits_value, property_key_name, render_js_to_string, resolve_callee, source_text,
-    split_radix_prefix, CellValue, ChainStep, Globals, ImportedConstants, Registry, ResolvedCallee,
-    Row, RowCells, TitleArg, TitleNumber, OVER_LIMIT_TABLE,
+    canonicalize_export_name, const_fold, is_ecmascript_trim_whitespace,
+    is_import_meta_vitest_expr, js_number_to_string, js_radix_digits_value, property_key_name,
+    render_js_to_string, resolve_callee, source_text, split_radix_prefix, CellValue, ChainStep,
+    Globals, ImportedConstants, Registry, ResolvedCallee, Row, RowCells, TitleArg, TitleNumber,
+    OVER_LIMIT_TABLE,
 };
 use super::FileExtraction;
 
@@ -617,8 +618,7 @@ fn collect_module_setup(
     program: &Program,
     source: &str,
     semantic: &Semantic,
-    import_specifiers: &HashMap<SymbolId, Arc<str>>,
-    exported_as: &HashMap<SymbolId, String>,
+    registry: &Registry,
 ) -> Vec<(u32, String)> {
     let mut calls = Vec::new();
     for statement in &program.body {
@@ -631,8 +631,7 @@ fn collect_module_setup(
                     .then(|| await_expression.argument.span())
             }
             Expression::CallExpression(call) => {
-                is_ambient_state_call(call, semantic, import_specifiers, exported_as)
-                    .then(|| call.span())
+                is_ambient_state_call(call, semantic, registry).then(|| call.span())
             }
             _ => None,
         };
@@ -655,74 +654,19 @@ fn collect_module_setup(
     calls
 }
 
-/// Whether a module-top-level call establishes ambient state every test in the file inherits.
-///
-/// The second admission rule for [`collect_module_setup`], and the narrowest one that closes a
-/// four-instance false-positive class. `Context` saw only AWAITED module-scope calls, so a
-/// synchronous one was invisible and two files differing *only* in it compared equal —
-/// `cross-file-duplicate` then reported them "under an equivalent context" for:
-///
-/// ```text
-/// vi.useFakeTimers()                          vs  vi.useRealTimers()
-/// vi.spyOn(flags, 'isEnabled').mockReturnValue(true)  vs  ...(false)
-/// vi.stubEnv('MODE', 'production')            vs  ...'development'
-/// expect.extend({ toBeWithin: inclusive })    vs  ...exclusive
-/// ```
-///
-/// In the last of those, exactly one of the two "identical" tests passes.
-///
-/// **Why not simply admit every module-scope call.** [`crate::model::Context::module_setup`]'s
-/// doc rules it out in as many words: since S11 a module-scope helper call can *declare tests*,
-/// and folding it into the context key would key those tests on their own declaration. So the
-/// rule keys on the CALLEE instead — a member call on a resolved `vi` or `expect` namespace is
-/// the framework changing ambient behaviour, and a call to anything else is ordinary program
-/// text. That resolution is [`is_vitest_namespace`], the same three-state binding check
-/// `redundant-hook` uses, so a file-local `const vi = createFakeVi()` does not qualify here
-/// either.
-///
-/// **Whole-namespace, not an allowlist.** Naming the four APIs that were reported would leave
-/// `vi.stubGlobal` and everything Vitest adds next behaving the old way — this repository's most
-/// repeated defect is a fix that lands for the reported site and not its siblings.
-///
-/// `vi.mock`/`vi.unmock` are excluded: [`collect_mocked_modules`] already folds them into
-/// `Context::mocked_modules`, and admitting them twice would move every existing `contextKey`
-/// that has one without changing what the key distinguishes.
-fn is_ambient_state_call(
-    call: &CallExpression,
-    semantic: &Semantic,
-    import_specifiers: &HashMap<SymbolId, Arc<str>>,
-    exported_as: &HashMap<SymbolId, String>,
-) -> bool {
-    /// Already modelled as [`crate::model::Context::mocked_modules`].
-    const ALREADY_MODELLED: [&str; 2] = ["mock", "unmock"];
-
-    // Walk to the root of the member/call chain. `vi.spyOn(f, 'x').mockReturnValue(true)` is a
-    // call whose callee's object is itself a CALL, not an identifier, so stopping at the first
-    // member expression misses exactly the case with the widest blast radius -- measured: the
-    // spy false positive survived a first version of this function that did.
+/// Whether a top-level call chain changes framework state not already carried by mock context.
+fn is_ambient_state_call(call: &CallExpression, semantic: &Semantic, registry: &Registry) -> bool {
     let mut cursor = &call.callee;
-    let mut root_property: Option<&str> = None;
     loop {
+        if let Some((api, method)) = registry.api_member(cursor, semantic) {
+            return api == "expect" || !matches!(method.as_str(), "mock" | "unmock");
+        }
+        if registry.api_name(cursor, semantic).is_some() {
+            return true;
+        }
         match cursor {
-            Expression::StaticMemberExpression(member) => {
-                root_property = Some(member.property.name.as_str());
-                cursor = &member.object;
-            }
+            Expression::StaticMemberExpression(member) => cursor = &member.object,
             Expression::CallExpression(inner) => cursor = &inner.callee,
-            Expression::Identifier(object) => {
-                // `vi.mock(...)` is excluded by the property directly on the namespace, which is
-                // the one this walk ends holding.
-                if is_vitest_namespace(object, "vi", semantic, import_specifiers, exported_as) {
-                    return !root_property.is_some_and(|p| ALREADY_MODELLED.contains(&p));
-                }
-                return is_vitest_namespace(
-                    object,
-                    "expect",
-                    semantic,
-                    import_specifiers,
-                    exported_as,
-                );
-            }
             _ => return false,
         }
     }
@@ -732,13 +676,12 @@ fn is_ambient_state_call(
 fn collect_import_specifiers(
     program: &Program,
     file: &std::path::Path,
-) -> (HashMap<SymbolId, Arc<str>>, HashMap<SymbolId, String>) {
+) -> HashMap<SymbolId, Arc<str>> {
     let mut map = HashMap::new();
     // Local symbol to the name it was EXPORTED under, which is not always the name it is used by:
     // `import { vi as v } from 'vitest'` binds `v` to the export `vi`. Without this, a namespace
     // check comparing the LOCAL name rejects an aliased import, so `v.useFakeTimers()` never
     // reaches `module_setup` and the false positive C1 removes comes straight back. Measured.
-    let mut exported_as = HashMap::new();
     // One shared allocation per distinct specifier in the file: every binding of it, across
     // however many declarations, and every test that references one of them, holds an `Arc` to
     // this same text. Keyed by the specifier as written; `file` is fixed, so the same text always
@@ -753,30 +696,25 @@ fn collect_import_specifiers(
             continue;
         };
         for specifier in specifiers {
-            let (local, export) = match specifier {
-                ImportDeclarationSpecifier::ImportSpecifier(s) => {
-                    if matches!(s.import_kind, oxc_ast::ast::ImportOrExportKind::Type) {
+            let local = match specifier {
+                ImportDeclarationSpecifier::ImportSpecifier(specifier) => {
+                    if matches!(
+                        specifier.import_kind,
+                        oxc_ast::ast::ImportOrExportKind::Type
+                    ) {
                         continue;
                     }
-                    (&s.local, Some(s.imported.name().to_string()))
+                    &specifier.local
                 }
-                ImportDeclarationSpecifier::ImportDefaultSpecifier(s) => {
-                    (&s.local, Some("default".to_owned()))
-                }
-                // A namespace import binds the whole module, so there is no single export name to
-                // record. `vitest.vi.useFakeTimers()` is a two-level chain the namespace check does
-                // not model either way; left as it was rather than half-handled here.
-                ImportDeclarationSpecifier::ImportNamespaceSpecifier(s) => (&s.local, None),
+                ImportDeclarationSpecifier::ImportDefaultSpecifier(specifier) => &specifier.local,
+                ImportDeclarationSpecifier::ImportNamespaceSpecifier(specifier) => &specifier.local,
             };
             if let Some(symbol_id) = local.symbol_id.get() {
                 map.insert(symbol_id, Arc::clone(&identity));
-                if let Some(export) = export {
-                    exported_as.insert(symbol_id, export);
-                }
             }
         }
     }
-    (map, exported_as)
+    map
 }
 
 /// The local bindings of `mockNuxtImport` imported from `@nuxt/test-utils`.
@@ -927,30 +865,53 @@ fn collect_mocked_modules(
         call: &CallExpression<'_>,
         registry: &Registry,
         semantic: &Semantic<'_>,
-        source: &str,
-        file: &std::path::Path,
     ) -> Option<String> {
-        // Only the root and the last member matter here; never read a `.each` table's rows.
-        registry.limit_table_rows(0);
-        let resolved = resolve_callee(
-            &call.callee,
-            registry,
-            semantic,
-            &ImportedConstants::default(),
-            source,
-            file,
-        )?;
-        if resolved.root != "vi" {
-            return None;
+        let (api, member) = registry.api_member(&call.callee, semantic)?;
+        (api == "vi" && matches!(member.as_str(), "mock" | "unmock" | "doMock" | "doUnmock"))
+            .then_some(member)
+    }
+
+    /// Vitest recognizes direct vi/vitest member syntax for hoisting; identity through an alias
+    /// or namespace alone says nothing about whether imports execute before the mock.
+    fn hoistable(call: &CallExpression, semantic: &Semantic, source: &str) -> bool {
+        let Expression::StaticMemberExpression(member) = &call.callee else {
+            return false;
+        };
+        let Expression::Identifier(object) = &member.object else {
+            return false;
+        };
+        if call.optional || member.optional || !matches!(object.name.as_str(), "vi" | "vitest") {
+            return false;
         }
-        match resolved.steps.last() {
-            Some(ChainStep::Member(name))
-                if matches!(name.as_str(), "mock" | "unmock" | "doMock" | "doUnmock") =>
-            {
-                Some(name.clone())
+        if let Some(symbol) = object
+            .reference_id
+            .get()
+            .and_then(|id| semantic.scoping().get_reference(id).symbol_id())
+        {
+            if matches!(
+                semantic
+                    .nodes()
+                    .kind(semantic.scoping().symbol_declaration(symbol)),
+                AstKind::VariableDeclarator(_)
+            ) {
+                return false;
             }
-            _ => None,
         }
+        // Match the transform's whitespace-only trigger; comments/TS syntax may prevent it.
+        let text = source_text(source, call.span);
+        let Some(tail) = text.strip_prefix(object.name.as_str()) else {
+            return false;
+        };
+        let Some(tail) = tail.trim_start().strip_prefix('.') else {
+            return false;
+        };
+        let Some(tail) = tail
+            .trim_start()
+            .strip_prefix(member.property.name.as_str())
+        else {
+            return false;
+        };
+        tail.trim_start().starts_with('(')
     }
 
     let mut unresolved = false;
@@ -967,10 +928,14 @@ fn collect_mocked_modules(
         let Expression::CallExpression(call) = &expression_statement.expression else {
             continue;
         };
-        let Some(member) = mocking_member(call, registry, semantic, source, file) else {
+        let Some(member) = mocking_member(call, registry, semantic) else {
             continue;
         };
         read_at_top_level.insert((call.span.start, call.span.end));
+        if !hoistable(call, semantic, source) {
+            unresolved = true;
+            continue;
+        }
         match member.as_str() {
             "mock" => match call.arguments.first() {
                 Some(Argument::StringLiteral(literal)) => {
@@ -1080,8 +1045,6 @@ fn collect_mocked_modules(
     struct NestedMockScan<'r, 'a> {
         registry: &'r Registry,
         semantic: &'r Semantic<'a>,
-        source: &'r str,
-        file: &'r std::path::Path,
         read_at_top_level: &'r HashSet<(u32, u32)>,
         nuxt_mock_symbols: &'r HashSet<SymbolId>,
         found: bool,
@@ -1093,8 +1056,7 @@ fn collect_mocked_modules(
             if !self
                 .read_at_top_level
                 .contains(&(it.span.start, it.span.end))
-                && (mocking_member(it, self.registry, self.semantic, self.source, self.file)
-                    .is_some()
+                && (mocking_member(it, self.registry, self.semantic).is_some()
                     || is_nuxt_mock_call(it, self.semantic, self.nuxt_mock_symbols))
             {
                 self.found = true;
@@ -1105,8 +1067,6 @@ fn collect_mocked_modules(
     let mut nested = NestedMockScan {
         registry,
         semantic,
-        source,
-        file,
         read_at_top_level: &read_at_top_level,
         nuxt_mock_symbols: &nuxt_mock_symbols,
         found: false,
@@ -1410,7 +1370,6 @@ struct Walker<'a> {
     /// test's `Context::unresolved` in [`Walker::push_test_case`].
     mocks_unresolved: bool,
     import_specifiers: HashMap<SymbolId, Arc<str>>,
-    exported_as: HashMap<SymbolId, String>,
     suite_path: Vec<Title>,
     hook_scopes: Vec<ScopeHooks>,
     /// The control-flow positions the walk is currently inside, outermost first -- an `if`
@@ -1546,12 +1505,12 @@ impl<'a> Walker<'a> {
         semantic: &'a Semantic<'a>,
         globals: Globals,
     ) -> Self {
-        let (import_specifiers, exported_as) = collect_import_specifiers(program, &file.path);
+        let import_specifiers = collect_import_specifiers(program, &file.path);
         let registry = Registry::new(program, globals);
         let (mocked_modules, mocks_unresolved) =
             collect_mocked_modules(program, &registry, semantic, source, &file.path);
         let (module_setup_starts, module_setup): (Vec<u32>, Vec<String>) =
-            collect_module_setup(program, source, semantic, &import_specifiers, &exported_as)
+            collect_module_setup(program, source, semantic, &registry)
                 .into_iter()
                 .unzip();
         Self {
@@ -1569,7 +1528,6 @@ impl<'a> Walker<'a> {
             setup_site: None,
             written: std::cell::OnceCell::new(),
             import_specifiers,
-            exported_as,
             suite_path: Vec::new(),
             hook_scopes: vec![ScopeHooks::default()],
             guards: Vec::new(),
@@ -1865,7 +1823,7 @@ impl<'a> Walker<'a> {
             if let Expression::Identifier(ident) = &call.callee {
                 if let Some(kind) = hook_kind(ident.name.as_str()) {
                     if self.is_free_reference(ident) {
-                        self.record_hook(call, kind);
+                        self.record_hook(call, kind, registry);
                         return;
                     }
                 }
@@ -1889,7 +1847,7 @@ impl<'a> Walker<'a> {
             None
         };
         if let Some(kind) = kind {
-            self.record_hook(call, kind);
+            self.record_hook(call, kind, registry);
         }
     }
 
@@ -2763,7 +2721,7 @@ impl<'a> Walker<'a> {
 
     /// Fingerprint a readable hook callback and record its kind, location and idempotence in
     /// the current scope.
-    fn record_hook(&mut self, call: &CallExpression<'a>, kind: HookKind) {
+    fn record_hook(&mut self, call: &CallExpression<'a>, kind: HookKind, registry: &Registry) {
         // The refusal below covers every registration under a guard, including one whose
         // callback is not inline (`beforeEach(reset)`): the early return for a missing
         // function-like argument must not skip it, or a guarded registration that names its
@@ -2799,7 +2757,7 @@ impl<'a> Walker<'a> {
             &function_like,
             self.semantic,
             &self.import_specifiers,
-            &self.exported_as,
+            registry,
         );
         // A hook body is never a `.each` row callback -- nothing to substitute.
         let body = fingerprint(
@@ -4390,7 +4348,7 @@ fn hook_body_is_idempotent(
     function_like: &FunctionLike,
     semantic: &Semantic,
     import_specifiers: &HashMap<SymbolId, Arc<str>>,
-    exported_as: &HashMap<SymbolId, String>,
+    registry: &Registry,
 ) -> bool {
     let Some(statements) = function_like_statements(function_like) else {
         // A concise-arrow body (`() => expr`) is one expression; treat it as a single statement.
@@ -4406,7 +4364,7 @@ fn hook_body_is_idempotent(
     let mut written_targets: Vec<String> = Vec::new();
 
     for statement in statements {
-        match idempotent_statement(statement, semantic, import_specifiers, exported_as) {
+        match idempotent_statement(statement, semantic, import_specifiers, registry) {
             Some(IdempotentStatement::Guarded { target }) => {
                 guard_targets.push(target.clone());
                 written_targets.push(target);
@@ -4498,7 +4456,7 @@ fn idempotent_statement(
     statement: &Statement,
     semantic: &Semantic,
     import_specifiers: &HashMap<SymbolId, Arc<str>>,
-    exported_as: &HashMap<SymbolId, String>,
+    registry: &Registry,
 ) -> Option<IdempotentStatement> {
     match statement {
         Statement::ExpressionStatement(statement) => match &statement.expression {
@@ -4520,7 +4478,7 @@ fn idempotent_statement(
                 }
             }
             Expression::CallExpression(call) => {
-                is_framework_reset_call(call, semantic, import_specifiers, exported_as)
+                is_framework_reset_call(call, semantic, import_specifiers, registry)
                     .then_some(IdempotentStatement::Reset)
             }
             _ => None,
@@ -4564,9 +4522,8 @@ fn idempotent_statement(
 ///
 /// Collapsing the last two was a real defect: `None` meant both "free reference" and "bound to
 /// something that is not an import", so a file-local `const vi = createFakeVi()` was accepted as
-/// Vitest's own. Shared by [`is_framework_reset_call`] and [`collect_module_setup`] rather than
-/// written twice — the production duplication ceiling is 0.00%, and a second copy of a security-
-/// relevant binding check is how the two drift apart.
+/// Vitest's own. Framework APIs use the registry; this remaining classification identifies
+/// Testing Library imports for reset operations.
 enum Binding {
     /// Binds to nothing: the ambient `vi` of a `globals: true` run.
     Free,
@@ -4596,42 +4553,6 @@ fn binding_of(
     }
 }
 
-/// Whether `ident` is Vitest's own namespace of the given name (`vi` or `expect`).
-///
-/// A free reference qualifies because that is exactly what `globals: true` produces; an import
-/// qualifies only when it really comes from the `vitest` package; a file-local binding never does.
-/// Which name is compared depends on the binding, and conflating the two was a review finding.
-/// A FREE reference has only its own name — that is the ambient `vi` of a `globals: true` run, so
-/// the local name is the evidence. An IMPORTED one must be compared on the name it was exported
-/// under: `import { vi as v } from 'vitest'` is Vitest's `vi` however the file spells it, and
-/// rejecting it on the local name `v` let the C1 false positive back in for aliased imports.
-/// Measured before the fix, and the same gap existed in `is_framework_reset_call`, which this now
-/// closes too.
-fn is_vitest_namespace(
-    ident: &IdentifierReference,
-    name: &str,
-    semantic: &Semantic,
-    import_specifiers: &HashMap<SymbolId, Arc<str>>,
-    exported_as: &HashMap<SymbolId, String>,
-) -> bool {
-    match binding_of(ident, semantic, import_specifiers) {
-        Binding::Free => ident.name.as_str() == name,
-        Binding::Imported(module) => {
-            if !import_is_package(&module, "vitest") {
-                return false;
-            }
-            let exported = ident
-                .reference_id
-                .get()
-                .and_then(|reference| semantic.scoping().get_reference(reference).symbol_id())
-                .and_then(|symbol| exported_as.get(&symbol));
-            // No recorded export name means a namespace import, which this check does not model.
-            exported.is_some_and(|exported| exported == name)
-        }
-        Binding::Local => false,
-    }
-}
-
 /// Whether `call` is one of the framework reset operations, resolved through the import graph.
 ///
 /// Never by bare name. `not-redundant-hook-guarded-connect.test.ts` exists to forbid an
@@ -4641,7 +4562,7 @@ fn is_framework_reset_call(
     call: &CallExpression,
     semantic: &Semantic,
     import_specifiers: &HashMap<SymbolId, Arc<str>>,
-    exported_as: &HashMap<SymbolId, String>,
+    registry: &Registry,
 ) -> bool {
     /// `vi`'s reset family: each replaces a whole registry's state, so running it twice leaves
     /// what running it once left.
@@ -4664,13 +4585,10 @@ fn is_framework_reset_call(
             Binding::Imported(module) => import_is_package(&module, "@testing-library/"),
             Binding::Free | Binding::Local => false,
         },
-        // `vi.clearAllMocks()` and family.
+        // The same binding proof covers named, renamed, namespace and in-source APIs.
         Expression::StaticMemberExpression(member) => {
-            let Expression::Identifier(object) = &member.object else {
-                return false;
-            };
             VI_RESETS.contains(&member.property.name.as_str())
-                && is_vitest_namespace(object, "vi", semantic, import_specifiers, exported_as)
+                && registry.api_name(&member.object, semantic) == Some("vi")
         }
         _ => false,
     }
@@ -5042,15 +4960,6 @@ fn parse_numeric_prefix(rendered: &str, float: bool) -> Option<f64> {
         }
     }
     trimmed[..index].parse::<f64>().ok()
-}
-
-/// Recognize the static import.meta.vitest member expression used by in-source tests.
-fn is_import_meta_vitest_expr(expr: &Expression) -> bool {
-    matches!(
-        expr,
-        Expression::StaticMemberExpression(member)
-            if matches!(&member.object, Expression::ImportMeta(_)) && member.property.name.as_str() == "vitest"
-    )
 }
 
 struct LineIndex<'a> {
@@ -11294,3 +11203,7 @@ mod imported_constants_tests;
 #[cfg(test)]
 #[path = "extract/tests/helper_expressions.rs"]
 mod helper_expression_tests;
+
+#[cfg(test)]
+#[path = "extract/tests/vitest_api.rs"]
+mod vitest_api_tests;

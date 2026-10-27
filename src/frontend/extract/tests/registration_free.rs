@@ -968,3 +968,17 @@ fn call_inputs_are_proved_by_what_they_evaluate() {
         "undefined",
     ));
 }
+
+/// Import-time alias effects must remain visible through reexports and reflective global reads.
+#[test]
+fn vitest_api_import_time_effects() {
+    let directory = project(&[
+        ("api.ts", "export { vitest as tools } from 'vitest';"),
+        ("reexport.ts", "import { tools } from './api'; export const applied = tools.stubEnv('U12_API_OWNED', 'mocked'); export function run() {}"),
+        ("global.ts", "export const applied = globalThis.vitest.stubEnv('U12_API_OWNED', 'mocked'); export function run() {}"),
+        ("pure.ts", "export const value = 1;"),
+    ]);
+    assert!(!imports(&directory, "reexport.ts"));
+    assert!(!imports(&directory, "global.ts"));
+    assert!(imports(&directory, "pure.ts"));
+}

@@ -477,6 +477,10 @@ const DELIBERATE_BLIND_FILES = new Set([
   'each/each-printf-directives.test.ts',
   'edge/vi-domock-scoped.test.ts',
   'edge/vi-dounmock-scoped.test.ts',
+  // API identity does not prove hoisting through renamed or namespace mock calls.
+  'recall/vitest-api-namespace-dynamic/alias.test.ts',
+  'recall/vitest-api-renamed/alias.test.ts',
+  'recall/vitest-api-renamed/renamed-vi.test.ts',
   'mixed/mixed-loop-each-in-non-idempotent-hook-scope.test.ts',
   'recall/duplicate-test-dynamic-title/session.test.ts',
   'recall/duplicate-test-name-dynamic-title/tenants.test.ts',

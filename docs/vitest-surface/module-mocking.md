@@ -17,6 +17,21 @@ the way `vi.doMock` does. The distinction is easy to miss because the call shape
 | `vi.mockObject(value, options?)` | N/A | Not a registration |
 | `vi.when(spy, options?)` | N/A | Not a registration |
 
+## API aliases and timing
+
+`vi` and `vitest` denote the same mock API. The analyzer recognizes named imports, renamed
+imports, namespace members and configured globals. Direct top-level `vi.mock`/`vitest.mock`
+and `unmock` calls retain the file-wide model below. Mock calls through renamed or namespace
+bindings, computed members, optional calls, or immutable in-source bindings mark mock context unresolved:
+API identity alone does not prove that Vitest hoists them before static imports. Such files
+remain visible in extraction but are excluded from duplicate comparison. This also applies to
+renamed `vi` imports.
+
+Top-level ambient setup such as `vitest.stubEnv` and `tools.spyOn(...).mockReturnValue(...)`
+keeps its raw source text in the context, including aliases and immutable `import.meta.vitest`
+destructures. Identical setup still compares; spelling or formatting differences can conservatively
+separate equivalent setup. Local objects with framework-like names do not become Vitest APIs.
+
 ## Members
 
 ### `vi.mock(path, factory?)`

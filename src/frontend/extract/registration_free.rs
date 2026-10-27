@@ -1360,7 +1360,7 @@ impl<'s, 'a> Scanner<'s, 'a> {
                 // using it there directly.
                 Root::Export(name) | Root::Reexport(name) | Root::ExportIfPresent(name) => {
                     if REGISTRATION.contains(&name.as_str())
-                        || (self.import_time && matches!(name.as_str(), "vi" | "expect"))
+                        || (self.import_time && matches!(name.as_str(), "vi" | "vitest" | "expect"))
                     {
                         self.failed = true;
                     }
@@ -1881,7 +1881,7 @@ impl<'a> Visit<'a> for Scanner<'_, 'a> {
             if REGISTRATION.contains(&name.as_str())
                 || name == "vitest"
                 || name == "*"
-                || (self.import_time && matches!(name.as_str(), "vi" | "expect"))
+                || (self.import_time && matches!(name.as_str(), "vi" | "vitest" | "expect"))
             {
                 self.failed = true;
             }
@@ -1927,7 +1927,7 @@ impl<'a> Visit<'a> for Scanner<'_, 'a> {
                 // `globalThis.vi` is Vitest's `vi` when globals are enabled.
                 if REGISTRATION.contains(&property)
                     || REFLECTIVE.contains(&property)
-                    || (self.import_time && matches!(property, "vi" | "expect"))
+                    || (self.import_time && matches!(property, "vi" | "vitest" | "expect"))
                 {
                     self.failed = true;
                 }

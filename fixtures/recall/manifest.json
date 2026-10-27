@@ -7398,6 +7398,209 @@
           ]
         }
       ]
+    },
+    {
+      "name": "vitest-api-named",
+      "path": "vitest-api-named",
+      "rule": "cross-file-duplicate",
+      "role": "positive",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-10-28",
+      "expectedTests": 3,
+      "expectedIncomplete": false,
+      "expectedUnresolved": 0,
+      "expectedFindings": [
+        {
+          "rule": "cross-file-duplicate",
+          "severity": "warning",
+          "locations": [
+            "alias.test.ts:5",
+            "vi.test.ts:5"
+          ]
+        }
+      ],
+      "expectedAbsent": [
+        {
+          "rule": "cross-file-duplicate",
+          "locations": [
+            "alias.test.ts:5",
+            "plain.test.ts:3"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "vitest-api-renamed",
+      "path": "vitest-api-renamed",
+      "rule": "cross-file-duplicate",
+      "role": "negative",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-10-28",
+      "expectedTests": 4,
+      "expectedIncomplete": true,
+      "expectedUnresolved": 2,
+      "expectedFindings": [],
+      "expectedAbsent": [
+        {
+          "rule": "cross-file-duplicate",
+          "locations": [
+            "alias.test.ts:5",
+            "plain.test.ts:3"
+          ]
+        },
+        {
+          "rule": "cross-file-duplicate",
+          "locations": [
+            "renamed-vi.test.ts:5",
+            "vi.test.ts:5"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "vitest-api-namespace-dynamic",
+      "path": "vitest-api-namespace-dynamic",
+      "rule": "cross-file-duplicate",
+      "role": "negative",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-10-28",
+      "expectedTests": 3,
+      "expectedIncomplete": true,
+      "expectedUnresolved": 1,
+      "expectedFindings": [],
+      "expectedAbsent": [
+        {
+          "rule": "cross-file-duplicate",
+          "locations": [
+            "alias.test.ts:4",
+            "plain.test.ts:2"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "vitest-api-vitest-environment",
+      "path": "vitest-api-vitest-environment",
+      "rule": "cross-file-duplicate",
+      "role": "negative",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-10-28",
+      "expectedTests": 2,
+      "expectedIncomplete": false,
+      "expectedUnresolved": 0,
+      "expectedFindings": [],
+      "expectedAbsent": [
+        {
+          "rule": "cross-file-duplicate",
+          "locations": [
+            "alias.test.ts:4",
+            "plain.test.ts:2"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "vitest-api-vi-positive",
+      "path": "vitest-api-vi-positive",
+      "rule": "cross-file-duplicate",
+      "role": "positive",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-10-28",
+      "expectedTests": 3,
+      "expectedIncomplete": false,
+      "expectedUnresolved": 0,
+      "expectedFindings": [
+        {
+          "rule": "cross-file-duplicate",
+          "severity": "warning",
+          "locations": [
+            "alias.test.ts:4",
+            "vi.test.ts:4"
+          ]
+        }
+      ],
+      "expectedAbsent": [
+        {
+          "rule": "cross-file-duplicate",
+          "locations": [
+            "alias.test.ts:4",
+            "plain.test.ts:2"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "vitest-api-shadowed-environment",
+      "path": "vitest-api-shadowed-environment",
+      "rule": "cross-file-duplicate",
+      "role": "positive",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-10-28",
+      "expectedTests": 2,
+      "expectedIncomplete": false,
+      "expectedUnresolved": 0,
+      "expectedFindings": [
+        {
+          "rule": "cross-file-duplicate",
+          "severity": "warning",
+          "locations": [
+            "alias.test.ts:4",
+            "plain.test.ts:2"
+          ]
+        }
+      ],
+      "expectedAbsent": []
+    },
+    {
+      "name": "vitest-api-ambient-positive",
+      "path": "vitest-api-ambient-positive",
+      "rule": "cross-file-duplicate",
+      "role": "positive",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-10-28",
+      "expectedTests": 2,
+      "expectedIncomplete": false,
+      "expectedUnresolved": 0,
+      "expectedFindings": [
+        {
+          "rule": "cross-file-duplicate",
+          "severity": "warning",
+          "locations": [
+            "first.test.ts:4",
+            "second.test.ts:4"
+          ]
+        }
+      ],
+      "expectedAbsent": []
+    },
+    {
+      "name": "vitest-api-insource",
+      "path": "vitest-api-insource",
+      "rule": "cross-file-duplicate",
+      "role": "negative",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-10-28",
+      "expectedTests": 2,
+      "expectedIncomplete": false,
+      "expectedUnresolved": 0,
+      "expectedFindings": [],
+      "expectedAbsent": [
+        {
+          "rule": "cross-file-duplicate",
+          "locations": [
+            "alias.test.ts:4",
+            "plain.test.ts:2"
+          ]
+        }
+      ]
     }
   ],
   "knownFalsePositiveBaseline": 1,

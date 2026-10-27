@@ -115,6 +115,79 @@ impl Registry {
         registry
     }
 
+    /// Resolve the setup APIs by binding identity, independently of mock hoisting syntax.
+    /// In-source APIs must come from a simple const destructure, never a reassigned local.
+    pub(super) fn api_name(
+        &self,
+        expression: &Expression,
+        semantic: &Semantic,
+    ) -> Option<&'static str> {
+        let name = match unwrap_transparent(expression) {
+            Expression::Identifier(identifier) => {
+                let reference = semantic
+                    .scoping()
+                    .get_reference(identifier.reference_id.get()?);
+                if let Some(symbol) = reference.symbol_id() {
+                    let node = semantic.scoping().symbol_declaration(symbol);
+                    if let AstKind::VariableDeclarator(declarator) = semantic.nodes().kind(node) {
+                        if !matches!(semantic.nodes().parent_kind(node), AstKind::VariableDeclaration(declaration) if declaration.kind == VariableDeclarationKind::Const)
+                            || !semantic.scoping().symbol_redeclarations(symbol).is_empty()
+                        {
+                            return None;
+                        }
+                        let initializer = declarator.init.as_ref()?;
+                        if !is_import_meta_vitest_expr(initializer) {
+                            return None;
+                        }
+                        let BindingPattern::ObjectPattern(pattern) = &declarator.id else {
+                            return None;
+                        };
+                        let property = pattern.properties.iter().find(|property| {
+                            !property.computed && matches!(&property.value, BindingPattern::BindingIdentifier(binding) if binding.symbol_id.get() == Some(symbol))
+                        })?;
+                        canonicalize(&property_key_name(&property.key)?)?
+                    } else {
+                        resolve_identifier(identifier, self, semantic.scoping())?.root
+                    }
+                } else {
+                    resolve_identifier(identifier, self, semantic.scoping())?.root
+                }
+            }
+            Expression::StaticMemberExpression(member)
+                if is_namespace(&member.object, self, semantic.scoping()) =>
+            {
+                canonicalize(member.property.name.as_str())?
+            }
+            _ => return None,
+        };
+        matches!(name, "vi" | "expect").then_some(name)
+    }
+
+    /// The API and method directly addressed by a member call. Computed literals establish
+    /// identity but deliberately do not establish that Vitest hoists the call.
+    pub(super) fn api_member(
+        &self,
+        expression: &Expression,
+        semantic: &Semantic,
+    ) -> Option<(&'static str, String)> {
+        match unwrap_transparent(expression) {
+            Expression::StaticMemberExpression(member) => Some((
+                self.api_name(&member.object, semantic)?,
+                member.property.name.to_string(),
+            )),
+            Expression::ComputedMemberExpression(member) => {
+                let Expression::StringLiteral(property) = &member.expression else {
+                    return None;
+                };
+                Some((
+                    self.api_name(&member.object, semantic)?,
+                    string_text(property).into_owned(),
+                ))
+            }
+            _ => None,
+        }
+    }
+
     /// Sets how many rows a table may have before resolution refuses it without reading a row.
     pub(super) fn limit_table_rows(&self, limit: usize) {
         self.table_row_limit.set(limit);
@@ -195,6 +268,15 @@ impl Registry {
     }
 }
 
+/// Whether an initializer directly reads the in-source Vitest API.
+pub(super) fn is_import_meta_vitest_expr(expr: &Expression) -> bool {
+    matches!(
+        expr,
+        Expression::StaticMemberExpression(member)
+            if matches!(&member.object, Expression::ImportMeta(_)) && member.property.name.as_str() == "vitest"
+    )
+}
+
 /// Maps an imported/exported name to its canonical, alias-free form.
 ///
 /// `it` and `suite` are full aliases of `test` and `describe` respectively (per
@@ -207,7 +289,7 @@ fn canonicalize(name: &str) -> Option<&'static str> {
         "test" | "it" => Some("test"),
         "describe" | "suite" => Some("describe"),
         "bench" => Some("bench"),
-        "vi" => Some("vi"),
+        "vi" | "vitest" => Some("vi"),
         "beforeAll" => Some("beforeAll"),
         "beforeEach" => Some("beforeEach"),
         "afterEach" => Some("afterEach"),
