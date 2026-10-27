@@ -1179,6 +1179,22 @@ struct LocalHelper<'a> {
     start: u32,
     params: &'a FormalParameters<'a>,
     body: LocalHelperBody<'a>,
+    /// Calling a generator only creates an iterator; its body does not run.
+    generator: bool,
+    asynchronous: bool,
+}
+
+impl<'a> LocalHelper<'a> {
+    /// The helper a function with a body is; `None` for an overload signature or `declare`.
+    fn of_function(function: &'a Function<'a>) -> Option<Self> {
+        Some(Self {
+            start: function.span.start,
+            params: &function.params,
+            body: LocalHelperBody::Statements(&function.body.as_ref()?.statements),
+            generator: function.generator,
+            asynchronous: function.r#async,
+        })
+    }
 }
 
 /// A [`LocalHelper`]'s body: a statement list, or a concise arrow's single call.
@@ -3262,27 +3278,27 @@ impl<'a> Walker<'a> {
         Some(frame)
     }
 
-    /// Why calling `function` from `call` registers more than walking its body shows, if it may:
+    /// Why calling `helper` from `call` registers more than walking its body shows, if it may:
     /// a generator runs none of its body; an async body that awaits registers what follows on
     /// promise timing; and the call's arguments and the parameters' defaults run before the body.
     fn unwalkable_helper_call(
         &self,
-        function: &'a Function<'a>,
+        helper: LocalHelper<'a>,
         call: &CallExpression<'a>,
     ) -> Option<Refusal> {
-        if function.generator {
+        if helper.generator {
             return Some(refusal(
                 ExclusionReason::UnsupportedExpression,
                 "the called helper is a generator, whose body a call does not run",
             ));
         }
-        if function.r#async && function.body.as_ref().is_some_and(|body| awaits(body)) {
+        if helper.asynchronous && awaits(helper.body) {
             return Some(refusal(
                 ExclusionReason::UnsupportedExpression,
                 "the called helper is async and awaits, so what follows depends on promise timing",
             ));
         }
-        if registration_free::call_binding_fails(self.semantic, &function.params, &call.arguments) {
+        if registration_free::call_binding_fails(self.semantic, helper.params, &call.arguments) {
             return Some(refusal(
                 ExclusionReason::UnsupportedExpression,
                 "an argument cannot bind the helper's destructuring parameter, so the call throws before the body runs",
@@ -3293,7 +3309,7 @@ impl<'a> Walker<'a> {
             self.semantic,
             self.written_bindings(),
             &self.file.path,
-            &function.params,
+            helper.params,
             &call.arguments,
             call.span,
         ))
@@ -3435,11 +3451,7 @@ impl<'a> Walker<'a> {
                 if function.r#type != FunctionType::FunctionDeclaration {
                     return None;
                 }
-                Some(LocalHelper {
-                    start: function.span.start,
-                    params: &function.params,
-                    body: LocalHelperBody::Statements(&function.body.as_ref()?.statements),
-                })
+                LocalHelper::of_function(function)
             }
             AstKind::VariableDeclarator(declarator) => {
                 self.const_helper(symbol, node, declarator, call)
@@ -3483,26 +3495,13 @@ impl<'a> Walker<'a> {
                     ArrowFunctionBody::CallExpression(body) => LocalHelperBody::Concise(body),
                     _ => return None,
                 },
+                generator: false,
+                asynchronous: arrow.r#async,
             },
-            // Calling a generator only creates an iterator; its body does not run.
-            Expression::FunctionExpression(function) if !function.generator => LocalHelper {
-                start: function.span.start,
-                params: &function.params,
-                body: LocalHelperBody::Statements(&function.body.as_ref()?.statements),
-            },
+            Expression::FunctionExpression(function) => LocalHelper::of_function(function)?,
             _ => return None,
         };
-        // The arguments and parameter defaults run before the body and are not walked, so a
-        // registration in them would be dropped.
-        registration_free::call_inputs_register_nothing(
-            self.program,
-            semantic,
-            self.written_bindings(),
-            &self.file.path,
-            helper.params,
-            &call.arguments,
-        )
-        .then_some(helper)
+        Some(helper)
     }
 
     /// Whether the `const` binding `symbol`, whose declarator ends at `declared_end`, has been
@@ -4964,7 +4963,7 @@ impl<'a> LineIndex<'a> {
 
 /// Whether `body` suspends: an `await`, `for await` or `await using` of its own, outside nested
 /// functions, which run only when called.
-fn awaits(body: &oxc_ast::ast::FunctionBody) -> bool {
+fn awaits(body: LocalHelperBody<'_>) -> bool {
     struct Awaits(bool);
     impl<'a> Visit<'a> for Awaits {
         fn visit_await_expression(&mut self, _it: &oxc_ast::ast::AwaitExpression<'a>) {
@@ -4986,7 +4985,14 @@ fn awaits(body: &oxc_ast::ast::FunctionBody) -> bool {
         }
     }
     let mut visitor = Awaits(false);
-    visitor.visit_function_body(body);
+    match body {
+        LocalHelperBody::Statements(statements) => {
+            for statement in statements {
+                visitor.visit_statement(statement);
+            }
+        }
+        LocalHelperBody::Concise(call) => visitor.visit_call_expression(call),
+    }
     visitor.0
 }
 
@@ -8898,6 +8904,23 @@ mod tests {
         assert!(extraction.tests[0].context.unresolved);
     }
 
+    /// Asserts a helper call in `case` was read in full: the file is complete and holds two tests,
+    /// the helper's and `visible`, which it returns.
+    fn assert_read_in_full<'e>(extraction: &'e FileExtraction, case: &str) -> Vec<&'e TestCase> {
+        assert!(
+            !extraction.incomplete,
+            "{case}: {:?}",
+            extraction.diagnostics
+        );
+        let tests: Vec<_> = extraction
+            .tests
+            .iter()
+            .filter(|test| test.kind != DeclarationKind::Suite)
+            .collect();
+        assert_eq!(tests.len(), 2, "{case}");
+        tests
+    }
+
     /// Asserts a helper call in `case` was refused visibly: the file is incomplete, the one test
     /// left (`visible`) is unresolved, and a diagnostic names `reason`.
     fn assert_visible_refusal(extraction: &FileExtraction, case: &str, reason: &str) {
@@ -8935,6 +8958,13 @@ mod tests {
                 "arguments",
             ),
             ("function* declare() { test('hidden', () => {}); } declare();", "generator"),
+            // A `const` helper is held to the same check.
+            ("const declare = function* () { test('hidden', () => {}); }; declare();", "generator"),
+            ("const setup = async () => { await 0; beforeEach(() => {}); }; setup();", "awaits"),
+            ("const declare = async () => test(await name, () => {}); declare();", "awaits"),
+            ("const declare = (_hook) => {}; declare(test('hidden', () => {}));", "arguments"),
+            ("const declare = (_hook = test('hidden', () => {})) => {}; declare();", "arguments"),
+            ("const declare = ({ v }) => { test('hidden', () => {}); }; declare(null);", "cannot bind"),
             ("async function setup() { await 0; beforeEach(() => {}); } setup();", "awaits"),
             (
                 "async function setup() { await using _r = null; beforeEach(() => {}); } setup();",
@@ -8985,13 +9015,7 @@ mod tests {
             "function declare({ v }) { test('hidden', () => {}); } const handler = (event) => event; declare({ v: handler });",
         ] {
             let extraction = extract_with(body);
-            assert!(!extraction.incomplete, "{body}: {:?}", extraction.diagnostics);
-            let tests: Vec<_> = extraction
-                .tests
-                .iter()
-                .filter(|case| case.kind != DeclarationKind::Suite)
-                .collect();
-            assert_eq!(tests.len(), 2, "{body}");
+            let tests = assert_read_in_full(&extraction, body);
             assert!(tests.iter().all(|case| !case.context.unresolved), "{body}");
         }
 
@@ -11041,13 +11065,7 @@ mod tests {
                 "import {{ describe, test }} from 'vitest';\n{body}\ntest('visible', () => {{}});"
             );
             let extraction = extract_source(&source, "case.test.ts", Globals::Disabled);
-            assert!(!extraction.incomplete, "{body}: {:?}", extraction.diagnostics);
-            let tests: Vec<_> = extraction
-                .tests
-                .iter()
-                .filter(|case| case.kind != DeclarationKind::Suite)
-                .collect();
-            assert_eq!(tests.len(), 2, "{body}");
+            let tests = assert_read_in_full(&extraction, body);
             assert!(
                 tests
                     .iter()
@@ -11069,10 +11087,6 @@ mod tests {
             "const declare = (() => () => { test('hidden', () => {}); })(); declare();",
             "switch (mode) { case 1: const declare = () => { test('hidden', () => {}); }; break; case 2: declare(); }",
             "switch (mode) { case 1: const declare = () => { test('hidden', () => {}); }; function run() { declare(); } break; case 2: run(); }",
-            "const declare = function* () { test('hidden', () => {}); }; declare();",
-            "const declare = (_hook) => {}; declare(test('hidden', () => {}));",
-            "const declare = (_hook = test('hidden', () => {})) => {}; declare();",
-            "const declare = () => {}; declare(() => test('hidden', () => {}));",
         ];
         for body in refused {
             let source =
@@ -11086,6 +11100,8 @@ mod tests {
 
         let kept = [
             "const values = []; const fill = () => { values.push(1); }; fill();",
+            // An argument that only creates a function registers nothing until it is called.
+            "const declare = () => {}; declare(() => test('hidden', () => {}));",
             "const declare = () => { test('never', () => {}); };",
             "setup();",
             "declare const declare: () => void; declare();",

@@ -5892,6 +5892,72 @@
       ]
     },
     {
+      "name": "local-helper-const-return-hook",
+      "path": "local-helper-const-return-hook",
+      "rule": "duplicate-test",
+      "role": "variant",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-10-28",
+      "expectedTests": 2,
+      "expectedIncomplete": false,
+      "expectedUnresolved": 0,
+      "expectedFindings": [],
+      "expectedAbsent": [
+        {
+          "rule": "duplicate-test",
+          "titles": [
+            "hooked > reads",
+            "plain > reads"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "local-helper-const-async-await",
+      "path": "local-helper-const-async-await",
+      "rule": "duplicate-test",
+      "role": "variant",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-10-28",
+      "expectedTests": 1,
+      "expectedIncomplete": true,
+      "expectedUnresolved": 1,
+      "expectedFindings": [],
+      "expectedAbsent": [
+        {
+          "rule": "duplicate-test",
+          "titles": [
+            "hidden",
+            "visible"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "local-helper-const-computed-key",
+      "path": "local-helper-const-computed-key",
+      "rule": "duplicate-test",
+      "role": "variant",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-10-28",
+      "expectedTests": 2,
+      "expectedIncomplete": true,
+      "expectedUnresolved": 1,
+      "expectedFindings": [],
+      "expectedAbsent": [
+        {
+          "rule": "duplicate-test",
+          "titles": [
+            "hooked > reads",
+            "plain > reads"
+          ]
+        }
+      ]
+    },
+    {
       "name": "local-helper-const-switch-cross-case",
       "path": "local-helper-const-switch-cross-case",
       "rule": "duplicate-test",

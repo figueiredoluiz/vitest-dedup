@@ -552,6 +552,7 @@ const DELIBERATE_BLIND_FILES = new Set([
   'recall/local-helper-const-tdz/run.test.ts',
   'recall/local-helper-const-switch-case/run.test.ts',
   'recall/local-helper-const-generator/run.test.ts',
+  'recall/local-helper-const-async-await/run.test.ts',
   'recall/local-helper-const-switch-cross-case/run.test.ts',
   // Default exports a runner must keep refusing (a `let`, a reassigned declaration, an imported
   // binding): blind on purpose, permanently, as the controls for the default-identifier support.
