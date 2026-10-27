@@ -180,11 +180,14 @@ const RUST_MODULES = {
   'src/frontend/fingerprint/serializer_members.rs': 96,
   'src/frontend/fingerprint/text.rs': 100,
   'src/frontend/fingerprint/trivial.rs': 98,
-  'src/frontend/fingerprint/classes/captures.rs': 83,
-  'src/frontend/fingerprint/classes/callables.rs': 83,
-  'src/frontend/fingerprint/classes/escape.rs': 85,
-  'src/frontend/fingerprint/classes/identity.rs': 84,
-  'src/frontend/fingerprint/classes/summary.rs': 90,
+  // Raised 2026-10-28 after branch-constraining owned-class regressions; measured respectively
+  // at 85.34% (611/716), 85.92% (360/419), 86.60% (278/321), 86.92% (319/367),
+  // and 91.25% (292/320).
+  'src/frontend/fingerprint/classes/captures.rs': 85,
+  'src/frontend/fingerprint/classes/callables.rs': 85,
+  'src/frontend/fingerprint/classes/escape.rs': 86,
+  'src/frontend/fingerprint/classes/identity.rs': 86,
+  'src/frontend/fingerprint/classes/summary.rs': 91,
   // Raised 2026-09-25 from 97.6, measured 97.88% (2309/2359). Production-only coverage is 98.45%
   // -- 13 of its 841 production lines uncovered, enumerated rather than excluded:
   //

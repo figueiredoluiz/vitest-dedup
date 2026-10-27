@@ -25,6 +25,150 @@ fn owned_class_summaries_are_compact_and_phase_separated() {
     );
 }
 
+/// Erased TypeScript wrappers do not hide a locally owned constructor from class modeling.
+#[test]
+fn owned_class_erased_wrappers_preserve_constructor_outcomes() {
+    use crate::model::Rule;
+
+    for (first, second) in [
+        (
+            "const C=((((class{value=1}) as any) satisfies any))!;const c=new C();expect(c.value).toBe(1)",
+            "const Renamed=((((class{value=1}) as any) satisfies any))!;const c=new Renamed();expect(c.value).toBe(1)",
+        ),
+        (
+            "const c=new ((((class{value=1}) as any) satisfies any))!();expect(c.value).toBe(1)",
+            "const renamed=new ((((class{value=1}) as any) satisfies any))!();expect(renamed.value).toBe(1)",
+        ),
+    ] {
+        let source = format!(
+            "import {{test,expect}} from 'vitest';test('first',()=>{{{first}}});test('second',()=>{{{second}}});"
+        );
+        let prints = fingerprint_all(&source);
+        assert_eq!(prints.len(), 2, "{source}");
+        assert!(
+            prints.iter().all(|print| print
+                .behavior
+                .iter()
+                .any(|event| event.contains("(instance "))),
+            "the wrapped construction must stay on the owned-instance path: {prints:?}"
+        );
+        let findings = complete_pair_findings(&source);
+        assert_eq!(
+            findings
+                .iter()
+                .filter(|finding| finding.rule == Rule::DuplicateTest)
+                .count(),
+            1,
+            "{source}: {findings:?}"
+        );
+    }
+
+    let conflicting = "import {test,expect} from 'vitest';test('first',()=>{const C=((((class{value=1}) as any) satisfies any))!;const c=new C();expect(c.value).toBe(1)});test('second',()=>{const C=((((class{value=2}) as any) satisfies any))!;const c=new C();expect(c.value).toBe(1)});";
+    assert_class_distinct(&complete_pair_findings(conflicting), conflicting);
+}
+
+/// Auto-accessors retain their own class-body kind, private callable identity, and static name.
+#[test]
+fn owned_class_auto_accessors_preserve_runtime_outcomes() {
+    use crate::model::Rule;
+
+    for body in [
+        "class C{accessor #fn=()=>1;read(){return this.#fn.name}}const c=new C();expect(c.read()).toBe('#fn')",
+        "class C{static accessor name='Stable'}expect(C.name).toBe('Stable')",
+    ] {
+        let source = format!(
+            "import {{test,expect}} from 'vitest';test('first',()=>{{{body}}});test('second',()=>{{{body}}});"
+        );
+        let findings = complete_pair_findings(&source);
+        assert_eq!(
+            findings
+                .iter()
+                .filter(|finding| finding.rule == Rule::DuplicateTest)
+                .count(),
+            1,
+            "{source}: {findings:?}"
+        );
+    }
+
+    let accessor_vs_field = "import {test,expect} from 'vitest';test('accessor',()=>{class C{accessor value=1}const c=new C();expect(c.value).toBe(1)});test('field',()=>{class C{value=1}const c=new C();expect(c.value).toBe(1)});";
+    assert_class_distinct(
+        &complete_pair_findings(accessor_vs_field),
+        accessor_vs_field,
+    );
+}
+
+/// Class shapes whose runtime identity cannot be summarized remain explicitly incomparable.
+#[test]
+fn owned_class_summary_uncertainty_covers_unnameable_and_type_only_shapes() {
+    let anonymous = fingerprint_all(
+        "test('anonymous',()=>{const C=class{self(){return this}};const c=new C();expect(c.self()).toBe(c)})",
+    );
+    assert_eq!(anonymous.len(), 1);
+    assert!(
+        anonymous[0].class_unresolved,
+        "an anonymous class that exposes its receiver has no stable runtime name"
+    );
+
+    let named = fingerprint_all(
+        "test('named',()=>{const C=class Stable{self(){return this}};const c=new C();expect(c.self()).toBe(c)})",
+    );
+    assert_eq!(named.len(), 1);
+    assert!(
+        !named[0].class_unresolved,
+        "a named class expression supplies the observable name"
+    );
+
+    let anonymous_constructor_escape = fingerprint_all(
+        "test('anonymous',()=>{const C=class{send(){new Sink(this)}};const c=new C();c.send();expect(1).toBe(1)})",
+    );
+    assert_eq!(anonymous_constructor_escape.len(), 1);
+    assert!(
+        anonymous_constructor_escape[0].class_unresolved,
+        "passing an anonymous class receiver to a constructor exposes its missing runtime name"
+    );
+
+    let named_constructor_escape = fingerprint_all(
+        "test('named',()=>{const C=class Stable{send(){new Sink(this)}};const c=new C();c.send();expect(1).toBe(1)})",
+    );
+    assert_eq!(named_constructor_escape.len(), 1);
+    assert!(
+        !named_constructor_escape[0].class_unresolved,
+        "a named class expression keeps constructor escape modeling precise"
+    );
+
+    let index_signature = fingerprint_all(
+        "test('index',()=>{class C{[key:string]:unknown;value=1}const c=new C();expect(c.value).toBe(1)})",
+    );
+    assert_eq!(index_signature.len(), 1);
+    assert!(
+        index_signature[0].class_unresolved,
+        "a type-only index signature is not silently erased from the class contract"
+    );
+}
+
+/// Ordered writes to captured heap state participate in the class environment history.
+#[test]
+fn owned_class_capture_history_includes_straight_line_assignments() {
+    use crate::model::Rule;
+
+    let body = "const state={value:0};state.value=1;class C{read(){return state.value}}const c=new C();expect(c.read()).toBe(1)";
+    let equivalent = format!(
+        "import {{test,expect}} from 'vitest';test('first',()=>{{{body}}});test('second',()=>{{{body}}});"
+    );
+    let findings = complete_pair_findings(&equivalent);
+    assert_eq!(
+        findings
+            .iter()
+            .filter(|finding| finding.rule == Rule::DuplicateTest)
+            .count(),
+        1,
+        "{equivalent}: {findings:?}"
+    );
+
+    let conflicting = "import {test,expect} from 'vitest';test('first',()=>{const state={value:0};state.value=1;class C{read(){return state.value}}const c=new C();expect(c.read()).toBe(1)});test('second',()=>{const state={value:0};state.value=2;class C{read(){return state.value}}const c=new C();expect(c.read()).toBe(1)});";
+    assert_class_distinct(&complete_pair_findings(conflicting), conflicting);
+}
+
 /// Unsupported state is visible and scoped to its consumers, preserving unrelated matches.
 #[test]
 fn owned_class_uncertainty_is_visible_and_body_scoped() {
