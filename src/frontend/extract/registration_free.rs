@@ -506,12 +506,12 @@ pub(super) fn call_registers_nothing(path: &Path, export: &str) -> Option<Vec<Pa
 
 /// Whether evaluating `arguments`, written in the file at `file`, provably registers nothing: no
 /// registration API is reachable from them, so a helper handed them cannot run one.
-pub(super) fn arguments_register_nothing(
+pub(super) fn arguments_register_nothing<'p, 'a: 'p>(
     program: &Program<'_>,
     semantic: &Semantic<'_>,
     written: &HashSet<SymbolId>,
     file: &Path,
-    arguments: &[Argument<'_>],
+    arguments: impl IntoIterator<Item = &'p Argument<'a>>,
 ) -> Option<Vec<PathBuf>> {
     evaluation_registers_nothing(program, semantic, written, file, None, arguments)
 }
@@ -589,13 +589,13 @@ fn ignored_evaluation_registers_nothing<'a>(
 
 /// Scans `callee` (when given) and `arguments` as code that runs in the file at `file`, and proves
 /// the modules they reach; the modules the proof relied on, or `None`.
-fn evaluation_registers_nothing(
+fn evaluation_registers_nothing<'p, 'a: 'p>(
     program: &Program<'_>,
     semantic: &Semantic<'_>,
     written: &HashSet<SymbolId>,
     file: &Path,
     callee: Option<&Expression<'_>>,
-    arguments: &[Argument<'_>],
+    arguments: impl IntoIterator<Item = &'p Argument<'a>>,
 ) -> Option<Vec<PathBuf>> {
     let mut scanner = Scanner::new(semantic, program, file);
     scanner.written = Some(written);

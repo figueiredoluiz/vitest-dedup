@@ -42,6 +42,7 @@ pub(super) mod registration_free;
 mod setup_identity;
 
 use super::fingerprint::{fingerprint, FunctionLike, RowSubstitution};
+use super::helpers;
 use super::registry::{
     canonicalize_export_name, const_fold, is_ecmascript_trim_whitespace,
     is_import_meta_vitest_expr, js_number_to_string, js_radix_digits_value, property_key_name,
@@ -1761,17 +1762,21 @@ impl<'a> Walker<'a> {
         }
     }
 
+    /// The binding `ident` refers to, or `None` for a free name.
+    fn symbol_of(&self, ident: &IdentifierReference) -> Option<SymbolId> {
+        ident
+            .reference_id
+            .get()
+            .and_then(|reference| self.semantic.scoping().get_reference(reference).symbol_id())
+    }
+
     /// Whether `ident` binds to nothing in this file -- no import, no declaration, no parameter.
     ///
     /// `oxc_semantic` answers this, not a name check: a reference with no `symbol_id` resolved to
     /// no binding in any enclosing scope, which is exactly "ambient" for the purposes of
     /// [`Self::prepare_call`]'s R10 arm.
     fn is_free_reference(&self, ident: &IdentifierReference) -> bool {
-        ident
-            .reference_id
-            .get()
-            .and_then(|reference| self.semantic.scoping().get_reference(reference).symbol_id())
-            .is_none()
+        self.symbol_of(ident).is_none()
     }
 
     /// Resolves a call's callee against this extractor's own file -- the exact prologue both
@@ -3232,11 +3237,7 @@ impl<'a> Walker<'a> {
         };
         let semantic: &'a Semantic<'a> = self.semantic;
         let scoping = semantic.scoping();
-        let Some(symbol) = ident
-            .reference_id
-            .get()
-            .and_then(|reference| scoping.get_reference(reference).symbol_id())
-        else {
+        let Some(symbol) = self.symbol_of(ident) else {
             return false;
         };
         // An ambient (`declare`) binding is a global the runtime provides, judged like a free name.
@@ -3272,6 +3273,81 @@ impl<'a> Walker<'a> {
             "the called local helper is not a `function` declaration or an initialized `const` function",
         ));
         true
+    }
+
+    /// Refuses a call this walker neither recognizes nor inlines (`[1, 2].forEach(...)`, a method on
+    /// an imported value) when an argument it is handed may register: the callee may call it, and
+    /// skipping the call would drop whatever it declares silently. See
+    /// [`Self::may_call_into`] for which arguments are judged.
+    fn refuse_registering_callback(&mut self, call: &CallExpression<'a>) {
+        // Another runner's global (`describe` with Vitest globals off) is not a helper.
+        if let Expression::Identifier(ident) = &call.callee {
+            if self.is_free_reference(ident)
+                && registration_free::REGISTRATION.contains(&ident.name.as_str())
+            {
+                return;
+            }
+        }
+        let callbacks: Vec<&Argument<'a>> = call
+            .arguments
+            .iter()
+            .filter(|argument| {
+                argument
+                    .as_expression()
+                    .is_none_or(|expression| self.may_call_into(expression))
+            })
+            .collect();
+        if callbacks.is_empty()
+            || registration_free::arguments_register_nothing(
+                self.program,
+                self.semantic,
+                self.written_bindings(),
+                &self.file.path,
+                callbacks,
+            )
+            .is_some()
+        {
+            return;
+        }
+        self.refuse_helper_expansion(refusal(
+            ExclusionReason::HelperEffectsUnproved,
+            "a callback handed to a call the analyzer does not read may register",
+        ));
+    }
+
+    /// Whether `argument` may be a function its callee calls ([`helpers::value_may_call`]), read
+    /// through a name: a parameter, a reassigned binding, an import this cannot read, or a binding
+    /// whose initializer may be one. Free names (globals) are not judged.
+    fn may_call_into(&self, argument: &Expression<'a>) -> bool {
+        let Expression::Identifier(ident) = argument.get_inner_expression() else {
+            return helpers::value_may_call(argument, &|ident| self.is_free_reference(ident));
+        };
+        let semantic: &'a Semantic<'a> = self.semantic;
+        let scoping = semantic.scoping();
+        let Some(symbol) = self.symbol_of(ident) else {
+            return false;
+        };
+        if let Some(import) = self.runner_imports.get(&symbol) {
+            return !import.erased
+                && import.origin.resolved.as_ref().is_none_or(|start| {
+                    import.origin.exported == "*"
+                        || helpers::exported_value_may_call(start, &import.origin.exported)
+                });
+        }
+        // A Vitest import (registration APIs are what the scan looks for) or a reassigned binding.
+        if scoping.symbol_flags(symbol).is_import() || self.written_bindings().contains(&symbol) {
+            return true;
+        }
+        registration_free::runtime_declaration(semantic, symbol).is_none_or(|node| {
+            match semantic.nodes().kind(node) {
+                AstKind::VariableDeclarator(declarator) => {
+                    declarator.init.as_ref().is_none_or(|init| {
+                        helpers::value_may_call(init, &|ident| self.is_free_reference(ident))
+                    })
+                }
+                _ => true,
+            }
+        })
     }
 
     /// The shape both helper-expansion passes share: open the frame, run one walk over the
@@ -8977,6 +9053,79 @@ mod tests {
             "{case}: {:?}",
             extraction.diagnostics
         );
+    }
+
+    /// A callback handed to a call the walker does not read is refused when it may register, in
+    /// the scope the call stands in, and ignored when it provably registers nothing.
+    #[test]
+    fn a_registering_callback_to_an_unread_call_is_refused() {
+        let extract_with = |body: &str| {
+            extract_source(
+                &format!("import {{ test, beforeEach, describe }} from 'vitest';\n{body}\ntest('visible', () => {{}});"),
+                "case.test.ts",
+                Globals::Disabled,
+            )
+        };
+        for body in [
+            "[1, 2].forEach(() => { test('hidden', () => {}); });",
+            "[1].forEach(() => { beforeEach(() => {}); });",
+            "items.forEach(function () { test('hidden', () => {}); });",
+            "function register() { test('hidden', () => {}); } [1, 2].map(register);",
+            "function setup() { [1].forEach(() => test('hidden', () => {})); } setup();",
+            // Wrapped, imported or bound callbacks, and a free callee that is not another runner's
+            // registration name.
+            "[1].forEach((() => { test('hidden', () => {}); }) as never);",
+            "import { register } from './register'; [1].forEach(register);",
+            "const register = () => { test('hidden', () => {}); }; [1].forEach(register);",
+            // A factory's result may be a function, inline or through a name.
+            "import { make } from './make'; const register = make(); [1].forEach(register);",
+            "import { make } from './make'; [1].forEach(make());",
+            // `new` may return a function, and a local `Symbol` is not the global.
+            "import { Make } from './make'; [1].forEach(new Make());",
+            "import { make } from './make'; const Symbol = make; [1].forEach(Symbol());",
+            "register(() => { test('hidden', () => {}); });",
+        ] {
+            assert_visible_refusal(&extract_with(body), body, "callback handed");
+        }
+        for body in [
+            "const seen = []; [1].forEach((n) => { seen.push(n); });",
+            "setTimeout(() => {}, 0);",
+            "const rows = [1]; consume(rows, { register: true });",
+            // Names that are not local functions are data the callee receives.
+            "Object.defineProperty(globalThis, 'k', { value: 1 });",
+            // Another runner's global, not a Vitest helper.
+            "suite('s', () => { test('hidden', () => {}); });",
+            "const key = Symbol('k'); const event = { type: 'x' }; target.dispatch(event, key);",
+            // Values that cannot be functions: data and instances, inline or through a name.
+            "const key = Symbol('k'); target.dispatch([1], { a: 1 }, `t`, -1, key);",
+            "import { make } from './make'; const store = [[1, make]]; holder.provide(store);",
+            "import { make } from './make'; const store = [[1, make]]; holder.provide((store as never));",
+        ] {
+            let extraction = extract_with(body);
+            assert!(
+                !extraction.incomplete,
+                "{body}: {:?}",
+                extraction.diagnostics
+            );
+            assert_eq!(extraction.tests.len(), 1, "{body}");
+        }
+
+        // Refused in the suite the call stands in; a sibling scope stays comparable.
+        let extraction = extract_with(
+            "describe('d', () => { [1].forEach(() => test('hidden', () => {})); test('inner', () => {}); });",
+        );
+        assert!(extraction.incomplete);
+        let unresolved = |title: &str| {
+            extraction
+                .tests
+                .iter()
+                .find(|case| case.title == Title::Static(title.to_owned()))
+                .unwrap_or_else(|| panic!("{title} extracted"))
+                .context
+                .unresolved
+        };
+        assert!(unresolved("inner"));
+        assert!(!unresolved("visible"));
     }
 
     /// A helper call is read only when it registers exactly what its walked body does: inputs

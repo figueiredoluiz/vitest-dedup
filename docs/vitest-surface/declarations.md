@@ -119,5 +119,11 @@ test('name', ({ expect, skip, task, annotate, signal, onTestFailed, onTestFinish
   its direct siblings, under `if (false)` or in the `else` of `if (true)`, never runs and is not
   read; a `finally` that jumps (`finally { break out }`) cancels the exit it follows. `return test(...)` and `return describe(...)` register like the call written as a
   statement.
+- **Declarations in callbacks**: a callback handed to a call the analyzer does not read
+  (`[1, 2].forEach((n) => test(...))`, a method on an imported value) is not entered. Every
+  argument that may be a function is judged, inline or through a name: when it may register, the
+  scope the call stands in is refused (`helper-effects-unproved`). Values that cannot be functions
+  (literals, array and object literals, operator results, a call to the global `Symbol`) and
+  globals are not judged.
 
 Back to the [Vitest surface index](../vitest-surface.md).

@@ -94,8 +94,8 @@ use crate::frontend::js_text::string_text;
 use oxc_allocator::Allocator;
 use oxc_ast::ast::{
     ArrowFunctionExpression, BindingPattern, Declaration, ExportDefaultDeclarationKind,
-    ExportFromDeclaration, ExportSpecifier, Expression, Function, FunctionType, Program, Statement,
-    VariableDeclaration, VariableDeclarationKind,
+    ExportFromDeclaration, ExportSpecifier, Expression, Function, FunctionType,
+    IdentifierReference, Program, Statement, VariableDeclaration, VariableDeclarationKind,
 };
 use oxc_parser::Parser;
 use oxc_semantic::SemanticBuilder;
@@ -848,6 +848,84 @@ fn reexport_hop(it: &ExportFromDeclaration, export: &str) -> Option<(String, Str
     }
     specifier_local(&it.specifiers, export)
         .map(|local| (string_text(&it.source).into_owned(), local))
+}
+
+/// Whether `value` may be a function: anything but a value that provably is not one -- a literal,
+/// a template, an array or object literal, an operator's result, or a call to the global `Symbol`
+/// (`is_global` says whether a name resolves to nothing in its file). A call, `new`, a member read
+/// or a name may produce a function, so it may.
+pub(in crate::frontend) fn value_may_call(
+    value: &Expression,
+    is_global: &dyn Fn(&IdentifierReference) -> bool,
+) -> bool {
+    let value = value.get_inner_expression();
+    !value.is_literal()
+        && !matches!(
+            value,
+            Expression::TemplateLiteral(_)
+                | Expression::ArrayExpression(_)
+                | Expression::ObjectExpression(_)
+                | Expression::UnaryExpression(_)
+                | Expression::BinaryExpression(_)
+                | Expression::UpdateExpression(_)
+        )
+        && !matches!(value, Expression::CallExpression(call)
+            if matches!(&call.callee, Expression::Identifier(callee)
+                if callee.name == "Symbol" && is_global(callee)))
+}
+
+/// Whether the first-party export `export`, reached from `start` through its re-export chain, may
+/// be a function: a callable export, a `const` whose initializer may be one
+/// ([`value_may_call`]), or anything this cannot read.
+pub(in crate::frontend) fn exported_value_may_call(start: &Path, export: &str) -> bool {
+    if export_contract::resolve_export_chain(start, export).is_ok() {
+        return true;
+    }
+    let Ok(chain) = export_contract::resolve_value_export_chain(start, export) else {
+        return true;
+    };
+    let terminal = chain.terminal;
+    with_parsed_file(&terminal.path, |program, _| {
+        let Some(ValueExport::Declared(local)) = find_value_export(program, &terminal.export)
+        else {
+            return Some(true);
+        };
+        let semantic = SemanticBuilder::new().build(program).semantic;
+        let scoping = semantic.scoping();
+        let is_global = |ident: &IdentifierReference| {
+            ident
+                .reference_id
+                .get()
+                .and_then(|reference| scoping.get_reference(reference).symbol_id())
+                .is_none()
+        };
+        let declarator = program.body.iter().find_map(|statement| {
+            let variables = match statement {
+                Statement::VariableDeclaration(variables) => variables,
+                Statement::ExportDeclaration(export) => match &export.declaration {
+                    Declaration::VariableDeclaration(variables) => variables,
+                    _ => return None,
+                },
+                _ => return None,
+            };
+            variables
+                .declarations
+                .iter()
+                .find(|declarator| {
+                    matches!(&declarator.id, BindingPattern::BindingIdentifier(binding)
+                        if binding.name.as_str() == local)
+                })
+                .map(|declarator| (variables.kind, declarator))
+        });
+        Some(match declarator {
+            Some((VariableDeclarationKind::Const, declarator)) => declarator
+                .init
+                .as_ref()
+                .is_none_or(|init| value_may_call(init, &is_global)),
+            _ => true,
+        })
+    })
+    .unwrap_or(true)
 }
 
 /// What a named export of a value is in `program`: declared by a module-level binding (its local

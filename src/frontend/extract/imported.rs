@@ -424,6 +424,7 @@ impl<'a> Walker<'a> {
     /// Expands one registration-time import call or records a bounded scope refusal.
     pub(super) fn imported_helper_call(&mut self, call: &CallExpression<'a>, prepare: bool) {
         let Some(origin) = self.runner_origin(&call.callee) else {
+            self.refuse_registering_callback(call);
             return;
         };
         // `registerEndpoint` installs a mock HTTP endpoint when it runs and calls nothing it is

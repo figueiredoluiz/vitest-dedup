@@ -853,3 +853,50 @@ fn a_misspelled_start_still_names_a_cycle_at_the_hop_boundary() {
         "the start's first revisit is detected through the canonical identity"
     );
 }
+
+/// An export may be called unless it is a `const` whose initializer cannot be a function, read
+/// through its re-export chain; a factory's result and anything unread may.
+#[test]
+fn exported_value_may_call_reads_the_terminal_initializer() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("values.ts"),
+        "export const KEY = Symbol('k')\nexport const ROWS = [1]\nconst local = make()\nexport { local as MADE }\nexport function run() {}\nexport const arrow = () => {}\nexport const alias = arrow\nexport let mutable = 1\nexport const empty = undefined\nexport const BUILT = new Function('return 1')\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.path().join("hop.ts"),
+        "export { KEY, run } from './values'\n",
+    )
+    .unwrap();
+    let values = dir.path().join("values.ts");
+    for export in ["KEY", "ROWS"] {
+        assert!(!exported_value_may_call(&values, export), "{export}");
+    }
+    // `undefined` is a name, judged like any alias.
+    for export in [
+        "MADE", "run", "arrow", "alias", "mutable", "empty", "missing",
+    ] {
+        assert!(exported_value_may_call(&values, export), "{export}");
+    }
+    let hop = dir.path().join("hop.ts");
+    assert!(!exported_value_may_call(&hop, "KEY"));
+    assert!(exported_value_may_call(&hop, "run"));
+    assert!(exported_value_may_call(
+        &dir.path().join("absent.ts"),
+        "KEY"
+    ));
+}
+
+/// A `Symbol` the file declares is not the global, so its call may return a function.
+#[test]
+fn a_shadowed_symbol_call_may_be_a_function() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("shadow.ts");
+    std::fs::write(
+        &path,
+        "const Symbol = () => () => {}\nexport const KEY = Symbol()\n",
+    )
+    .unwrap();
+    assert!(exported_value_may_call(&path, "KEY"));
+}
