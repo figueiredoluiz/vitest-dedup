@@ -3468,12 +3468,12 @@ impl<'a> Walker<'a> {
             || semantic.scoping().symbol_is_mutated(symbol)
             || !matches!(&declarator.id, BindingPattern::BindingIdentifier(binding)
                 if binding.symbol_id.get() == Some(symbol))
-            || !self.initialized_before_call(symbol, declarator.span.end, call)
+            || !self.initialized_before_call(symbol, node, declarator.span.end, call)
         {
             return None;
         }
-        match super::registry::unwrap_transparent(declarator.init.as_ref()?) {
-            Expression::ArrowFunctionExpression(arrow) => Some(LocalHelper {
+        let helper = match super::registry::unwrap_transparent(declarator.init.as_ref()?) {
+            Expression::ArrowFunctionExpression(arrow) => LocalHelper {
                 start: arrow.span.start,
                 params: &arrow.params,
                 body: match &arrow.body {
@@ -3483,14 +3483,26 @@ impl<'a> Walker<'a> {
                     ArrowFunctionBody::CallExpression(body) => LocalHelperBody::Concise(body),
                     _ => return None,
                 },
-            }),
-            Expression::FunctionExpression(function) => Some(LocalHelper {
+            },
+            // Calling a generator only creates an iterator; its body does not run.
+            Expression::FunctionExpression(function) if !function.generator => LocalHelper {
                 start: function.span.start,
                 params: &function.params,
                 body: LocalHelperBody::Statements(&function.body.as_ref()?.statements),
-            }),
-            _ => None,
-        }
+            },
+            _ => return None,
+        };
+        // The arguments and parameter defaults run before the body and are not walked, so a
+        // registration in them would be dropped.
+        registration_free::call_inputs_register_nothing(
+            self.program,
+            semantic,
+            self.written_bindings(),
+            &self.file.path,
+            helper.params,
+            &call.arguments,
+        )
+        .then_some(helper)
     }
 
     /// Whether the `const` binding `symbol`, whose declarator ends at `declared_end`, has been
@@ -3499,26 +3511,40 @@ impl<'a> Walker<'a> {
     /// A call inside an inlined helper executes where that helper was called, not where it is
     /// written: `run(); const f = ...; function run() { f() }` reads `f` in its temporal dead
     /// zone. The execution chain is the open helper frames' call sites, outermost first, then
-    /// `call`. The binding's scope runs in source order, so the binding is initialized when the
-    /// outermost link inside that scope comes after the declarator.
+    /// `call`. The binding is initialized when the outermost link inside its scope comes after
+    /// the declarator, because that scope runs in source order -- except a `switch`, one scope
+    /// any case can be entered at: a link in a later case can skip the declarator, so the
+    /// outermost link in the whole `switch` must lie in the declarator's own case.
     fn initialized_before_call(
         &self,
         symbol: SymbolId,
+        declarator: oxc_semantic::NodeId,
         declared_end: u32,
         call: &CallExpression,
     ) -> bool {
         let semantic: &'a Semantic<'a> = self.semantic;
         let scoping = semantic.scoping();
-        let scope = semantic
-            .nodes()
-            .kind(scoping.get_node_id(scoping.symbol_scope_id(symbol)))
-            .span();
-        self.helper_frames
+        let nodes = semantic.nodes();
+        let scope_node = nodes.kind(scoping.get_node_id(scoping.symbol_scope_id(symbol)));
+        let scope = scope_node.span();
+        let Some(position) = self
+            .helper_frames
             .iter()
             .map(|frame| frame.call_start)
             .chain(std::iter::once(call.span.start))
             .find(|position| scope.start <= *position && *position < scope.end)
-            .is_some_and(|position| declared_end <= position)
+        else {
+            return false;
+        };
+        if matches!(scope_node, AstKind::SwitchStatement(_)) {
+            let AstKind::SwitchCase(case) = nodes.parent_kind(nodes.parent_id(declarator)) else {
+                return false;
+            };
+            if position < case.span.start || case.span.end <= position {
+                return false;
+            }
+        }
+        declared_end <= position
     }
 
     /// Binds each of `parameters` to the const-folded text of the argument this
@@ -11008,6 +11034,8 @@ mod tests {
             "const declare = (() => { test('hidden', () => {}); }) as () => void; declare();",
             "function run() { declare(); } const declare = () => { test('hidden', () => {}); }; run();",
             "describe('d', () => { const declare = () => { test('hidden', () => {}); }; declare(); });",
+            "switch (mode) { case 1: const declare = () => { test('hidden', () => {}); }; declare(); }",
+            "const made = make(); const declare = (_m, _s = '') => { test('hidden', () => {}); }; declare(made);",
         ] {
             let source = format!(
                 "import {{ describe, test }} from 'vitest';\n{body}\ntest('visible', () => {{}});"
@@ -11039,6 +11067,12 @@ mod tests {
             "declare(); const declare = () => { test('hidden', () => {}); };",
             "run(); const declare = () => { test('hidden', () => {}); }; function run() { declare(); }",
             "const declare = (() => () => { test('hidden', () => {}); })(); declare();",
+            "switch (mode) { case 1: const declare = () => { test('hidden', () => {}); }; break; case 2: declare(); }",
+            "switch (mode) { case 1: const declare = () => { test('hidden', () => {}); }; function run() { declare(); } break; case 2: run(); }",
+            "const declare = function* () { test('hidden', () => {}); }; declare();",
+            "const declare = (_hook) => {}; declare(test('hidden', () => {}));",
+            "const declare = (_hook = test('hidden', () => {})) => {}; declare();",
+            "const declare = () => {}; declare(() => test('hidden', () => {}));",
         ];
         for body in refused {
             let source =
@@ -11055,7 +11089,6 @@ mod tests {
             "const declare = () => { test('never', () => {}); };",
             "setup();",
             "declare const declare: () => void; declare();",
-            "const declare = () => {}; declare(() => test('never', () => {}));",
         ];
         for body in kept {
             let source =

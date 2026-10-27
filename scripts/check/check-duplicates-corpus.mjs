@@ -545,10 +545,14 @@ const DELIBERATE_BLIND_FILES = new Set([
   // body runs, so it is refused and the remaining test is unresolved.
   'recall/local-helper-null-destructure/run.test.ts',
   'recall/local-helper-noniterable-destructure/run.test.ts',
-  // A called parameter and a `const` helper reached in its temporal dead zone: refused so the
-  // tests they may declare are not dropped silently.
+  // A called parameter, a `const` generator, and `const` helpers reached in their temporal dead
+  // zone (through a hoisted function, or from another `switch` case): refused so the tests they
+  // may declare are not dropped silently.
   'recall/local-helper-parameter-callee/run.test.ts',
   'recall/local-helper-const-tdz/run.test.ts',
+  'recall/local-helper-const-switch-case/run.test.ts',
+  'recall/local-helper-const-generator/run.test.ts',
+  'recall/local-helper-const-switch-cross-case/run.test.ts',
   // Default exports a runner must keep refusing (a `let`, a reassigned declaration, an imported
   // binding): blind on purpose, permanently, as the controls for the default-identifier support.
   'recall/framework-runner-default-imported-negative/slugs.test.ts',
