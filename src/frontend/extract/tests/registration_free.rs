@@ -724,3 +724,123 @@ fn a_chain_of_modules_past_the_cap_is_refused() {
     assert!(!calls(&directory, "m0.ts", "run"));
     assert!(calls(&directory, "m60.ts", "run"));
 }
+
+/// Whether a call `helper(<arguments>)` to `function helper(<parameters>) {}`, written after
+/// `prelude` in a test file, provably evaluates no registration before the body runs.
+fn inputs_register_nothing(prelude: &str, parameters: &str, arguments: &str) -> bool {
+    use oxc_ast::ast::{Expression, Statement};
+    let source = format!(
+        "import {{ beforeEach }} from 'vitest';\n{prelude}\nfunction helper({parameters}) {{}}\nhelper({arguments});\n"
+    );
+    let allocator = oxc_allocator::Allocator::default();
+    let parsed = oxc_parser::Parser::new(&allocator, &source, oxc_span::SourceType::ts()).parse();
+    assert!(
+        parsed.diagnostics.is_empty(),
+        "{source}: {:?}",
+        parsed.diagnostics
+    );
+    let semantic = oxc_semantic::SemanticBuilder::new()
+        .with_build_nodes(true)
+        .build(&parsed.program)
+        .semantic;
+    let program = &parsed.program;
+    let parameters = program
+        .body
+        .iter()
+        .find_map(|statement| match statement {
+            Statement::FunctionDeclaration(function)
+                if function.id.as_ref().is_some_and(|id| id.name == "helper") =>
+            {
+                Some(&function.params)
+            }
+            _ => None,
+        })
+        .expect("helper declared");
+    let Some(Statement::ExpressionStatement(statement)) = program.body.last() else {
+        panic!("call last");
+    };
+    let Expression::CallExpression(call) = &statement.expression else {
+        panic!("call last");
+    };
+    let written = super::registration_free::written_bindings(program, &semantic);
+    super::registration_free::call_inputs_register_nothing(
+        program,
+        &semantic,
+        &written,
+        std::path::Path::new("case.test.ts"),
+        parameters,
+        &call.arguments,
+    )
+}
+
+/// Inputs that only read or create values pass without a scan; any input that runs code passes
+/// only when the scan proves it registers nothing, whichever pattern position evaluates it.
+#[test]
+fn call_inputs_are_proved_by_what_they_evaluate() {
+    let unproved = "function make() { return eval('0'); }\nconst made = make();\n\
+        const input = { get value() { beforeEach(() => {}); return 0; } };";
+    for (parameters, arguments) in [
+        ("_a", "1n, /a/, `x`, null, true, 'x'"),
+        (
+            "_a",
+            "[1, , made], { made, f() {}, get g() { return beforeEach; }, k: (made as any)! }",
+        ),
+        (
+            "_a",
+            "(made satisfies unknown), () => beforeEach(() => {}), function () {}",
+        ),
+        ("_a = made", ""),
+        ("[_a = 1, ..._rest]", "[]"),
+        ("{ _a, ..._rest }", "{}"),
+        ("..._rest", "made"),
+        // A default its argument never lets run, and destructuring that reads only plain data.
+        ("_a = beforeEach(() => {})", "null"),
+        ("{ _a } = {}", ""),
+        (
+            "{ value: _v } = { get value() { beforeEach(() => {}); return 0; } }",
+            "{ value: 1 }",
+        ),
+        ("{ _a }", "{ _a: 1 }"),
+    ] {
+        assert!(
+            inputs_register_nothing(unproved, parameters, arguments),
+            "({parameters}) <- ({arguments})"
+        );
+    }
+    for (parameters, arguments) in [
+        ("_a", "beforeEach(() => {})"),
+        ("_a", "...[made]"),
+        ("_a", "{ [String(beforeEach(() => {}))]: 0 }"),
+        ("_a", "`${beforeEach(() => {})}`"),
+        ("_a", "made.value"),
+        ("_a = beforeEach(() => {})", ""),
+        ("[_a = beforeEach(() => {})]", "[]"),
+        ("[..._rest] = [beforeEach(() => {})]", ""),
+        ("{ [String(beforeEach(() => {}))]: _a }", "{}"),
+        ("{ ..._rest } = { a: beforeEach(() => {}) }", ""),
+        ("...[_a = beforeEach(() => {})]", ""),
+        // Destructuring reads the argument (a getter here), an unproved value may be iterated or
+        // read, and destructuring a missing argument throws.
+        ("{ value: _v }", "input"),
+        ("[_a]", "made"),
+        ("{ _a }", ""),
+        ("_a = beforeEach(() => {})", "made"),
+        // A default that can run is destructured too, so a getter in it registers.
+        (
+            "{ value: _v } = { get value() { beforeEach(() => {}); return 0; } }",
+            "",
+        ),
+        (
+            "{ value: _v } = { get value() { beforeEach(() => {}); return 0; } }",
+            "undefined",
+        ),
+        // Destructuring `undefined` throws.
+        ("{ _a }", "undefined"),
+        ("{ _a }", "void 0"),
+    ] {
+        assert!(
+            !inputs_register_nothing(unproved, parameters, arguments),
+            "({parameters}) <- ({arguments})"
+        );
+    }
+}

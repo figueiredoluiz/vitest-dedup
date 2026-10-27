@@ -1563,6 +1563,12 @@ impl<'a> Walker<'a> {
                     self.prepare_call(call, registry);
                 }
             }
+            // `return f()` runs `f()` before it leaves, exactly as the statement `f()` would.
+            Statement::ReturnStatement(return_statement) => {
+                if let Some(Expression::CallExpression(call)) = &return_statement.argument {
+                    self.prepare_call(call, registry);
+                }
+            }
             // A bare block does not introduce a new hook scope; its hooks belong to the
             // enclosing one. Same for every other construct below: a hook declared inside an
             // `if`/`for`/`try`/`switch` at this level still belongs to the current suite's own
@@ -1727,6 +1733,11 @@ impl<'a> Walker<'a> {
         match statement {
             Statement::ExpressionStatement(expression_statement) => {
                 if let Expression::CallExpression(call) = &expression_statement.expression {
+                    self.classify_call(call, registry);
+                }
+            }
+            Statement::ReturnStatement(return_statement) => {
+                if let Some(Expression::CallExpression(call)) = &return_statement.argument {
                     self.classify_call(call, registry);
                 }
             }
@@ -3088,6 +3099,10 @@ impl<'a> Walker<'a> {
     /// walker refuses to expand -- see [`Self::refuse_helper_expansion`]).
     fn begin_helper_expansion(&mut self, call: &CallExpression<'a>) -> Option<HelperFrame<'a>> {
         let (_, function) = self.resolve_local_helper(&call.callee)?;
+        if let Some(reason) = self.unwalkable_helper_call(function, call) {
+            self.refuse_helper_expansion(reason);
+            return None;
+        }
 
         let identity = (
             self.file
@@ -3111,6 +3126,40 @@ impl<'a> Walker<'a> {
         };
         self.helper_frames.push(frame);
         Some(frame)
+    }
+
+    /// Why calling `function` from `call` registers more than walking its body shows, if it may:
+    /// a generator runs none of its body; an async body that awaits registers what follows on
+    /// promise timing; and the call's arguments and the parameters' defaults run before the body.
+    fn unwalkable_helper_call(
+        &self,
+        function: &'a Function<'a>,
+        call: &CallExpression<'a>,
+    ) -> Option<Refusal> {
+        if function.generator {
+            return Some(refusal(
+                ExclusionReason::UnsupportedExpression,
+                "the called helper is a generator, whose body a call does not run",
+            ));
+        }
+        if function.r#async && function.body.as_ref().is_some_and(|body| awaits(body)) {
+            return Some(refusal(
+                ExclusionReason::UnsupportedExpression,
+                "the called helper is async and awaits, so what follows depends on promise timing",
+            ));
+        }
+        (!registration_free::call_inputs_register_nothing(
+            self.program,
+            self.semantic,
+            self.written_bindings(),
+            &self.file.path,
+            &function.params,
+            &call.arguments,
+        ))
+        .then_some(refusal(
+            ExclusionReason::HelperEffectsUnproved,
+            "the call's arguments or the helper's parameter defaults may register",
+        ))
     }
 
     /// Restores caller parameter bindings and removes the completed local expansion identity.
@@ -4660,6 +4709,34 @@ impl<'a> LineIndex<'a> {
             column: column + 1,
         }
     }
+}
+
+/// Whether `body` suspends: an `await`, `for await` or `await using` of its own, outside nested
+/// functions, which run only when called.
+fn awaits(body: &oxc_ast::ast::FunctionBody) -> bool {
+    struct Awaits(bool);
+    impl<'a> Visit<'a> for Awaits {
+        fn visit_await_expression(&mut self, _it: &oxc_ast::ast::AwaitExpression<'a>) {
+            self.0 = true;
+        }
+        fn visit_for_of_statement(&mut self, it: &ForOfStatement<'a>) {
+            self.0 |= it.r#await;
+            walk::walk_for_of_statement(self, it);
+        }
+        fn visit_variable_declaration(&mut self, it: &oxc_ast::ast::VariableDeclaration<'a>) {
+            self.0 |= it.kind == oxc_ast::ast::VariableDeclarationKind::AwaitUsing;
+            walk::walk_variable_declaration(self, it);
+        }
+        fn visit_function(&mut self, _it: &Function<'a>, _flags: ScopeFlags) {}
+        fn visit_arrow_function_expression(
+            &mut self,
+            _it: &oxc_ast::ast::ArrowFunctionExpression<'a>,
+        ) {
+        }
+    }
+    let mut visitor = Awaits(false);
+    visitor.visit_function_body(body);
+    visitor.0
 }
 
 #[cfg(test)]
@@ -8569,14 +8646,89 @@ mod tests {
         assert!(extraction.tests[0].context.unresolved);
     }
 
+    /// Asserts a helper call in `case` was refused visibly: the file is incomplete, the one test
+    /// left (`visible`) is unresolved, and a diagnostic names `reason`.
+    fn assert_visible_refusal(extraction: &FileExtraction, case: &str, reason: &str) {
+        assert!(extraction.incomplete, "{case}");
+        assert_eq!(extraction.tests.len(), 1, "{case}");
+        assert!(extraction.tests[0].context.unresolved, "{case}");
+        assert!(
+            extraction
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.contains(reason)),
+            "{case}: {:?}",
+            extraction.diagnostics
+        );
+    }
+
+    /// A helper call is read only when it registers exactly what its walked body does: inputs
+    /// that may register, generators and bodies that await are refused, and a returned call
+    /// registers like the statement it evaluates.
+    #[test]
+    fn a_helper_call_registers_only_what_its_walked_body_registers() {
+        let extract_with = |body: &str| {
+            extract_source(
+                &format!("import {{ test, beforeEach, describe }} from 'vitest';\n{body}\ntest('visible', () => {{}});"),
+                "case.test.ts",
+                Globals::Disabled,
+            )
+        };
+        for (body, reason) in [
+            ("function setup(_h) {} setup(beforeEach(() => {}));", "arguments"),
+            ("function setup(_h = beforeEach(() => {})) {} setup();", "arguments"),
+            ("function setup({ [String(beforeEach(() => {}))]: _k }) {} setup({});", "arguments"),
+            (
+                "const input = { get v() { beforeEach(() => {}); return 0; } }; function setup(_v) {} setup(input.v);",
+                "arguments",
+            ),
+            ("function* declare() { test('hidden', () => {}); } declare();", "generator"),
+            ("async function setup() { await 0; beforeEach(() => {}); } setup();", "awaits"),
+            (
+                "async function setup() { await using _r = null; beforeEach(() => {}); } setup();",
+                "awaits",
+            ),
+            (
+                "async function setup() { class C { [await 0]() {} } beforeEach(() => {}); } setup();",
+                "awaits",
+            ),
+            // A spread or a call the analyzer cannot place may register too.
+            ("function declare(label) { test(label, () => {}); } declare(...labels);", "arguments"),
+            ("function declare(label) { test(label, () => {}); } declare(getLabel());", "arguments"),
+        ] {
+            assert_visible_refusal(&extract_with(body), body, reason);
+        }
+
+        for body in [
+            "function declare() { return test('hidden', () => {}); } declare();",
+            "function declare() { return describe('d', () => { test('hidden', () => {}); }); } declare();",
+            "describe('d', () => { return test('hidden', () => {}); });",
+            "async function declare() { test('hidden', () => {}); } declare();",
+            "function make() { return eval('({})'); } const made = make(); function declare(_m, _o, _s = '') { test('hidden', () => {}); } declare(made, { m: made, f() {} }, 'x');",
+        ] {
+            let extraction = extract_with(body);
+            assert!(!extraction.incomplete, "{body}: {:?}", extraction.diagnostics);
+            let tests: Vec<_> = extraction
+                .tests
+                .iter()
+                .filter(|case| case.kind != DeclarationKind::Suite)
+                .collect();
+            assert_eq!(tests.len(), 2, "{body}");
+            assert!(tests.iter().all(|case| !case.context.unresolved), "{body}");
+        }
+
+        // A returned hook joins the calling scope like one written as a statement.
+        let extraction = extract_with("function setup() { return beforeEach(() => {}); } setup();");
+        assert!(!extraction.incomplete, "{:?}", extraction.diagnostics);
+        assert_eq!(extraction.tests[0].context.hooks.len(), 1);
+    }
+
     /// Check declaration extraction: helper parameter refusals do not invent static titles.
     #[test]
     fn helper_parameter_refusals_do_not_invent_static_titles() {
         for (parameters, arguments) in [
-            ("label", "...args"),
             ("{ label }", "{ label: 'x' }"),
             ("label", ""),
-            ("label", "getLabel()"),
             ("...labels", "'x'"),
         ] {
             let source = format!("import {{ test }} from 'vitest'; function declare({parameters}) {{ test(`case ${{label}}`, () => {{}}); }} declare({arguments});");
@@ -10277,7 +10429,7 @@ mod tests {
         );
 
         let unprovable = extract_source(
-            "import { it } from 'vitest';\nfunction run(label) {\n  it(label, () => { expect(1).toBe(1); });\n}\nrun(computeLabel());\n",
+            "import { it } from 'vitest';\nfunction computeLabel() { return 'x'; }\nconst label = computeLabel();\nfunction run(label) {\n  it(label, () => { expect(1).toBe(1); });\n}\nrun(label);\n",
             "case.test.ts",
             Globals::Enabled,
         );
@@ -10529,15 +10681,10 @@ mod tests {
         for body in refused {
             let source =
                 format!("import {{ test }} from 'vitest';\n{body}\ntest('visible', () => {{}});");
-            let extraction = extract_source(&source, "case.test.ts", Globals::Disabled);
-            assert!(extraction.incomplete, "{body}");
-            assert_eq!(extraction.tests.len(), 1, "{body}");
-            assert!(extraction.tests[0].context.unresolved, "{body}");
-            assert!(
-                extraction.diagnostics.iter().any(|diagnostic| diagnostic
-                    .contains("the called local helper is not a `function` declaration")),
-                "{body}: {:?}",
-                extraction.diagnostics
+            assert_visible_refusal(
+                &extract_source(&source, "case.test.ts", Globals::Disabled),
+                body,
+                "the called local helper is not a `function` declaration",
             );
         }
 

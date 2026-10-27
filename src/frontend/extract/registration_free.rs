@@ -28,10 +28,11 @@ use crate::frontend::js_text::string_text;
 use crate::frontend::resolver::{self, Resolved};
 use oxc_allocator::Allocator;
 use oxc_ast::ast::{
-    Argument, Class, Declaration, ExportDefaultDeclarationKind, Expression, Function,
-    IdentifierReference, ImportDeclarationSpecifier, ImportExpression, ImportOrExportKind, Program,
-    Statement, StaticMemberExpression, TSEnumDeclaration, TSNamespaceDeclaration,
-    TSNamespaceDeclarationBody, VariableDeclaration, VariableDeclarator,
+    Argument, BindingPattern, Class, Declaration, ExportDefaultDeclarationKind, Expression,
+    FormalParameters, Function, IdentifierReference, ImportDeclarationSpecifier, ImportExpression,
+    ImportOrExportKind, ObjectPropertyKind, Program, PropertyKind, Statement,
+    StaticMemberExpression, TSEnumDeclaration, TSNamespaceDeclaration, TSNamespaceDeclarationBody,
+    VariableDeclaration, VariableDeclarator,
 };
 use oxc_ast::AstKind;
 use oxc_ast_visit::{walk, Visit};
@@ -557,6 +558,188 @@ fn evaluation_registers_nothing(
     }
     let mut proof = Proof::default();
     proof.prove_edges(scanner.edges).then_some(proof.modules)
+}
+
+/// Whether what a call to a local helper evaluates before its body runs provably registers
+/// nothing: the call's `arguments`, the parameter defaults that can run, the reads a destructuring
+/// parameter makes on its value (a getter or an iterator runs code), and the defaults and computed
+/// keys nested in its pattern. An input that only creates values ([`creates_without_running`])
+/// runs no code; any other input must pass the registration scan, which follows getters, called
+/// functions and imports.
+pub(super) fn call_inputs_register_nothing(
+    program: &Program<'_>,
+    semantic: &Semantic<'_>,
+    written: &HashSet<SymbolId>,
+    file: &Path,
+    parameters: &FormalParameters<'_>,
+    arguments: &[Argument<'_>],
+) -> bool {
+    let mut supplied = Vec::new();
+    for argument in arguments {
+        let Some(expression) = argument.as_expression() else {
+            return false;
+        };
+        supplied.push(expression);
+    }
+    let mut inputs: Vec<&Expression> = Vec::new();
+    // Read through a destructuring pattern, so scanned even when the expression itself is inert.
+    let mut destructured: Vec<&Expression> = Vec::new();
+    for (index, parameter) in parameters.items.iter().enumerate() {
+        // An argument written as `undefined` is passed as if absent.
+        let argument = supplied
+            .get(index)
+            .copied()
+            .filter(|argument| !written_undefined(argument));
+        // A default runs only when its argument is `undefined`, which a literal never is.
+        let default = parameter
+            .initializer
+            .as_deref()
+            .filter(|_| argument.is_none_or(|argument| !never_undefined(argument)));
+        inputs.extend(default);
+        if !matches!(parameter.pattern, BindingPattern::BindingIdentifier(_)) {
+            // Destructuring `undefined` throws, which the walk does not model.
+            if argument.is_none() && default.is_none() {
+                return false;
+            }
+            // The pattern reads whichever value it receives: the argument, or the default when
+            // that can run.
+            destructured.extend(argument);
+            destructured.extend(default);
+            pattern_inputs(&parameter.pattern, &mut inputs);
+        }
+    }
+    if let Some(rest) = &parameters.rest {
+        if !matches!(rest.rest.argument, BindingPattern::BindingIdentifier(_)) {
+            destructured.extend(supplied.iter().skip(parameters.items.len()).copied());
+            pattern_inputs(&rest.rest.argument, &mut inputs);
+        }
+    }
+    let mut scanner = Scanner::new(semantic, program, file);
+    scanner.written = Some(written);
+    for input in supplied.iter().chain(&inputs) {
+        if !creates_without_running(semantic, input) {
+            scanner.queue.push(Pending::Expression(input));
+        }
+    }
+    for value in destructured {
+        scanner.queue.push(Pending::Expression(value));
+    }
+    scanner.drain();
+    !scanner.failed && Proof::default().prove_edges(scanner.edges)
+}
+
+/// Whether `expression` is spelled as `undefined`: the free name, or a `void` expression.
+fn written_undefined(expression: &Expression<'_>) -> bool {
+    match expression {
+        Expression::Identifier(identifier) => identifier.name == "undefined",
+        Expression::UnaryExpression(unary) => {
+            unary.operator == oxc_syntax::operator::UnaryOperator::Void
+        }
+        Expression::ParenthesizedExpression(inner) => written_undefined(&inner.expression),
+        _ => false,
+    }
+}
+
+/// Whether `expression` evaluates to something other than `undefined` whatever the program does:
+/// a literal other than a name, so a parameter default it is passed for never runs.
+fn never_undefined(expression: &Expression<'_>) -> bool {
+    match expression {
+        Expression::TemplateLiteral(_)
+        | Expression::ArrayExpression(_)
+        | Expression::ObjectExpression(_) => true,
+        Expression::ParenthesizedExpression(inner) => never_undefined(&inner.expression),
+        other => is_value_literal(other),
+    }
+}
+
+/// A scalar literal or a function: evaluating it creates a value that is never `undefined` and
+/// runs no code.
+fn is_value_literal(expression: &Expression<'_>) -> bool {
+    matches!(
+        expression,
+        Expression::StringLiteral(_)
+            | Expression::NumericLiteral(_)
+            | Expression::BooleanLiteral(_)
+            | Expression::NullLiteral(_)
+            | Expression::BigIntLiteral(_)
+            | Expression::RegExpLiteral(_)
+            | Expression::FunctionExpression(_)
+            | Expression::ArrowFunctionExpression(_)
+    )
+}
+
+/// Whether evaluating `expression` only creates values and runs no code: a literal, a name this
+/// file binds or imports (reading a binding calls nothing; a free name may be a global getter), a
+/// function or arrow, or an array or object literal of those with plain keys and no spread.
+/// Member reads, computed keys, operators and calls can run code and are not admitted.
+fn creates_without_running(semantic: &Semantic<'_>, expression: &Expression<'_>) -> bool {
+    if is_value_literal(expression) {
+        return true;
+    }
+    match expression {
+        Expression::TemplateLiteral(template) => template.expressions.is_empty(),
+        Expression::Identifier(identifier) => {
+            identifier.reference_id.get().is_some_and(|reference| {
+                semantic
+                    .scoping()
+                    .get_reference(reference)
+                    .symbol_id()
+                    .is_some()
+            })
+        }
+        Expression::ArrayExpression(array) => array.elements.iter().all(|element| {
+            element.is_elision()
+                || element
+                    .as_expression()
+                    .is_some_and(|inner| creates_without_running(semantic, inner))
+        }),
+        Expression::ObjectExpression(object) => object.properties.iter().all(|property| {
+            matches!(property, ObjectPropertyKind::ObjectProperty(property)
+                if !property.computed
+                    && (property.method
+                        || property.kind != PropertyKind::Init
+                        || creates_without_running(semantic, &property.value)))
+        }),
+        Expression::ParenthesizedExpression(inner) => {
+            creates_without_running(semantic, &inner.expression)
+        }
+        Expression::TSAsExpression(inner) => creates_without_running(semantic, &inner.expression),
+        Expression::TSSatisfiesExpression(inner) => {
+            creates_without_running(semantic, &inner.expression)
+        }
+        Expression::TSNonNullExpression(inner) => {
+            creates_without_running(semantic, &inner.expression)
+        }
+        _ => false,
+    }
+}
+
+/// The expressions a binding pattern evaluates while it binds: defaults and computed keys.
+fn pattern_inputs<'p, 'a>(pattern: &'p BindingPattern<'a>, inputs: &mut Vec<&'p Expression<'a>>) {
+    match pattern {
+        BindingPattern::BindingIdentifier(_) => {}
+        BindingPattern::AssignmentPattern(assignment) => {
+            inputs.push(&assignment.right);
+            pattern_inputs(&assignment.left, inputs);
+        }
+        BindingPattern::ObjectPattern(object) => {
+            for property in &object.properties {
+                inputs.extend(property.key.as_expression());
+                pattern_inputs(&property.value, inputs);
+            }
+            if let Some(rest) = &object.rest {
+                pattern_inputs(&rest.argument, inputs);
+            }
+        }
+        BindingPattern::ArrayPattern(array) => {
+            for element in array.elements.iter().flatten() {
+                pattern_inputs(element, inputs);
+            }
+            if let Some(rest) = &array.rest {
+                pattern_inputs(&rest.argument, inputs);
+            }
+        }
+    }
 }
 
 /// Scans the part of the file at `path` named by `root`, and returns the edges it reaches.
