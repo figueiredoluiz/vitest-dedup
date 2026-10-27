@@ -108,7 +108,7 @@ alone. Past the cap the files with the fewest excluded tests are left out of the
 
 | Code | Meaning |
 | --- | --- |
-| `helper-export-unreadable` | An imported runner's export could not be resolved, read, or proved to be one function, and the call could not be proved to register nothing; a local helper the call names is declared more than once or reassigned, so the body that runs is not the one a declaration states. |
+| `helper-export-unreadable` | An imported runner's export could not be resolved, read, or proved to be one function, and the call could not be proved to register nothing; a local helper the call names is declared more than once or reassigned, so the body that runs is not the one a declaration states; or a local helper that is not a `function` declaration (an arrow, a function expression, a parameter) is called and could not be proved to register nothing. |
 | `helper-setup-effects` | An imported runner or a module on its chain has setup, fixture or module effects that were not proved inert, and the call could not be proved to register nothing. |
 | `helper-effects-unproved` | A call, argument or parameter write inside an imported runner has unproved effects. |
 | `helper-limit` | A helper expansion budget, recursion or depth limit was reached. |

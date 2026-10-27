@@ -2979,9 +2979,60 @@ impl<'a> Walker<'a> {
         }
         if self.resolve_local_helper(&call.callee).is_some() {
             self.with_helper_body(call, registry, walk);
-        } else {
+        } else if !self.refuse_unread_local_helper(call) {
             self.imported_helper_call(call, prepare);
         }
+    }
+
+    /// Refuses a call to a local binding this walker does not inline (an arrow or function
+    /// expression, a parameter, a value computed elsewhere) unless the call provably registers
+    /// nothing: skipping it would drop whatever it declares silently. Whether it refused.
+    fn refuse_unread_local_helper(&mut self, call: &CallExpression<'a>) -> bool {
+        let Expression::Identifier(ident) = &call.callee else {
+            return false;
+        };
+        let semantic: &'a Semantic<'a> = self.semantic;
+        let scoping = semantic.scoping();
+        let Some(symbol) = ident
+            .reference_id
+            .get()
+            .and_then(|reference| scoping.get_reference(reference).symbol_id())
+        else {
+            return false;
+        };
+        // An ambient (`declare`) binding is a global the runtime provides, judged like a free name.
+        let flags = scoping.symbol_flags(symbol);
+        if flags.is_import() || flags.is_ambient() {
+            return false;
+        }
+        // Only a declaration that states the value can be read; a parameter's value is the
+        // caller's, and a redeclared name has no single declaration that runs.
+        let shows_value =
+            registration_free::runtime_declaration(semantic, symbol).is_some_and(|node| {
+                match semantic.nodes().kind(node) {
+                    AstKind::VariableDeclarator(declarator) => declarator.init.is_some(),
+                    AstKind::Function(function) => function.body.is_some(),
+                    AstKind::Class(_) => true,
+                    _ => false,
+                }
+            });
+        if shows_value
+            && registration_free::local_call_registers_nothing(
+                self.program,
+                semantic,
+                self.written_bindings(),
+                &self.file.path,
+                &call.callee,
+                &call.arguments,
+            )
+        {
+            return false;
+        }
+        self.refuse_helper_expansion(refusal(
+            ExclusionReason::HelperExportUnreadable,
+            "the called local helper is not a `function` declaration",
+        ));
+        true
     }
 
     /// The shape both helper-expansion passes share: open the frame, run one walk over the
@@ -3186,8 +3237,8 @@ impl<'a> Walker<'a> {
     ///   call-graph question this fix deliberately does not open;
     /// - a body present, which excludes a TypeScript overload signature or `declare function`.
     ///
-    /// Anything outside that set falls through to the pre-S11 behaviour -- the call contributes
-    /// nothing -- rather than being guessed at.
+    /// Anything outside that set is not guessed at: [`Self::refuse_unread_local_helper`] refuses
+    /// the call unless it provably registers nothing.
     fn resolve_local_helper(&self, expr: &Expression) -> Option<(SymbolId, &'a Function<'a>)> {
         let Expression::Identifier(ident) = expr else {
             return None;
@@ -10392,6 +10443,73 @@ mod tests {
             "and spending the budget must be visible, never silent: {:?}",
             past.diagnostics
         );
+    }
+
+    /// A call to a local binding the walker does not inline is refused when it may register, and
+    /// left alone when it provably registers nothing or is never called.
+    #[test]
+    fn an_unread_local_helper_call_is_refused_unless_it_registers_nothing() {
+        let refused = [
+            "const declare = () => { test('hidden', () => {}); }; declare();",
+            "const declare = function () { test('hidden', () => {}); }; declare();",
+            "let declare = () => {}; declare = () => { test('hidden', () => {}); }; declare();",
+            "function wrap(fn) { fn(); } wrap(() => { test('hidden', () => {}); });",
+            "const declare = () => {}; declare(() => test('hidden', () => {}));",
+        ];
+        for body in refused {
+            let source =
+                format!("import {{ test }} from 'vitest';\n{body}\ntest('visible', () => {{}});");
+            let extraction = extract_source(&source, "case.test.ts", Globals::Disabled);
+            assert!(extraction.incomplete, "{body}");
+            assert_eq!(extraction.tests.len(), 1, "{body}");
+            assert!(extraction.tests[0].context.unresolved, "{body}");
+            assert!(
+                extraction.diagnostics.iter().any(|diagnostic| diagnostic
+                    .contains("the called local helper is not a `function` declaration")),
+                "{body}: {:?}",
+                extraction.diagnostics
+            );
+        }
+
+        let kept = [
+            "const values = []; const fill = () => { values.push(1); }; fill();",
+            "const declare = () => { test('never', () => {}); };",
+            "setup();",
+            "declare const declare: () => void; declare();",
+        ];
+        for body in kept {
+            let source =
+                format!("import {{ test }} from 'vitest';\n{body}\ntest('visible', () => {{}});");
+            let extraction = extract_source(&source, "case.test.ts", Globals::Disabled);
+            assert!(
+                !extraction.incomplete,
+                "{body}: {:?}",
+                extraction.diagnostics
+            );
+            assert_eq!(extraction.tests.len(), 1, "{body}");
+            assert!(!extraction.tests[0].context.unresolved, "{body}");
+        }
+
+        // The refusal taints the scope the call runs in, not its siblings.
+        let extraction = extract_source(
+            "import { describe, test } from 'vitest';\n\
+             describe('d', () => { const declare = () => { test('hidden', () => {}); }; declare(); test('inner', () => {}); });\n\
+             test('outer', () => {});",
+            "case.test.ts",
+            Globals::Disabled,
+        );
+        assert!(extraction.incomplete);
+        let unresolved = |title: &str| {
+            extraction
+                .tests
+                .iter()
+                .find(|case| matches!(&case.title, Title::Static(text) if text == title))
+                .unwrap_or_else(|| panic!("{title} extracted"))
+                .context
+                .unresolved
+        };
+        assert!(unresolved("inner"));
+        assert!(!unresolved("outer"));
     }
 }
 

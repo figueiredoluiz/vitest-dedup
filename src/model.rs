@@ -2299,7 +2299,8 @@ pub struct BlindFile {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ExclusionReason {
-    /// An imported runner's export could not be resolved, read, or proved to be the same function.
+    /// An imported runner's export, or a called local helper, could not be resolved, read, or
+    /// proved to be the function that runs.
     HelperExportUnreadable,
     /// An imported runner has module, setup or fixture effects that could not be proved inert.
     HelperSetupEffects,

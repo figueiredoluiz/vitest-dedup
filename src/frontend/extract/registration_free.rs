@@ -512,8 +512,39 @@ pub(super) fn arguments_register_nothing(
     file: &Path,
     arguments: &[Argument<'_>],
 ) -> Option<Vec<PathBuf>> {
+    evaluation_registers_nothing(program, semantic, written, file, None, arguments)
+}
+
+/// Whether calling `callee`, a binding written in the file at `file`, with `arguments` provably
+/// registers nothing: neither the value its declaration gives it nor the arguments reach a
+/// registration API. A binding written after it is declared fails the proof.
+pub(super) fn local_call_registers_nothing(
+    program: &Program<'_>,
+    semantic: &Semantic<'_>,
+    written: &HashSet<SymbolId>,
+    file: &Path,
+    callee: &Expression<'_>,
+    arguments: &[Argument<'_>],
+) -> bool {
+    evaluation_registers_nothing(program, semantic, written, file, Some(callee), arguments)
+        .is_some()
+}
+
+/// Scans `callee` (when given) and `arguments` as code that runs in the file at `file`, and proves
+/// the modules they reach; the modules the proof relied on, or `None`.
+fn evaluation_registers_nothing(
+    program: &Program<'_>,
+    semantic: &Semantic<'_>,
+    written: &HashSet<SymbolId>,
+    file: &Path,
+    callee: Option<&Expression<'_>>,
+    arguments: &[Argument<'_>],
+) -> Option<Vec<PathBuf>> {
     let mut scanner = Scanner::new(semantic, program, file);
     scanner.written = Some(written);
+    if let Some(callee) = callee {
+        scanner.queue.push(Pending::Expression(callee));
+    }
     for argument in arguments {
         if matches!(argument, Argument::SpreadElement(_)) {
             return None;

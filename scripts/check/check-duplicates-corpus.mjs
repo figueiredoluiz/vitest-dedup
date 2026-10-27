@@ -536,6 +536,10 @@ const DELIBERATE_BLIND_FILES = new Set([
   'recall/concise-suite-guarded-hook-uncertainty/run.test.ts',
   // A local helper reassigned with no overload signature: refused for the reassignment alone.
   'recall/local-helper-reassigned/run.test.ts',
+  // A local `const` arrow and a called parameter whose bodies are not read: refused so the tests
+  // they declare are not dropped silently. The arrow stays blind until `const` helpers are inlined.
+  'recall/local-helper-const-arrow/run.test.ts',
+  'recall/local-helper-parameter-callee/run.test.ts',
   // Default exports a runner must keep refusing (a `let`, a reassigned declaration, an imported
   // binding): blind on purpose, permanently, as the controls for the default-identifier support.
   'recall/framework-runner-default-imported-negative/slugs.test.ts',
