@@ -1181,6 +1181,56 @@ struct Fallthrough {
     label_target: Option<String>,
 }
 
+/// How a statement can finish ([`Walker::completions`]).
+#[derive(Default)]
+struct Completions {
+    /// Whether it can finish normally. Neither that nor a jump leaves only `return` and `throw`.
+    normal: bool,
+    /// The labels of the `break`s and `continue`s that leave it; `None` for an unlabeled one.
+    jumps: Vec<Option<String>>,
+}
+
+impl Completions {
+    /// Finishes normally and no other way.
+    fn normal() -> Self {
+        Self {
+            normal: true,
+            ..Self::default()
+        }
+    }
+
+    /// Only returns or throws.
+    fn exit() -> Self {
+        Self::default()
+    }
+
+    /// Only jumps to `label`.
+    fn jump(label: &Option<LabelIdentifier<'_>>) -> Self {
+        Self {
+            jumps: vec![label.as_ref().map(|label| label.name.as_str().to_owned())],
+            ..Self::default()
+        }
+    }
+
+    /// Either of two ways to finish.
+    fn or(mut self, other: Self) -> Self {
+        self.normal |= other.normal;
+        for jump in other.jumps {
+            if !self.jumps.contains(&jump) {
+                self.jumps.push(jump);
+            }
+        }
+        self
+    }
+
+    /// The jumps to `label` end here, where execution goes on normally.
+    fn land(&mut self, label: Option<&str>) {
+        let before = self.jumps.len();
+        self.jumps.retain(|jump| jump.as_deref() != label);
+        self.normal |= self.jumps.len() != before;
+    }
+}
+
 /// The exits one statement can take, outside nested functions and literal-dead branches.
 #[derive(Default)]
 struct ExitDestinations<'s> {
@@ -1674,7 +1724,10 @@ impl<'a> Walker<'a> {
             // Not a Vitest callee. S11: it may still be a local helper this file calls here, and
             // a hook registered inside that helper's body belongs to *this* scope, exactly like
             // one written here directly -- so the helper's body is pre-scanned on the same terms.
-            self.prepare_helper_call(call, registry);
+            // A call Vitest never reaches runs no body, so it neither registers nor refuses.
+            if !self.guards_prove_unreachable() {
+                self.prepare_helper_call(call, registry);
+            }
             return;
         };
         let kind = if resolved.steps.is_empty() {
@@ -2197,70 +2250,121 @@ impl<'a> Walker<'a> {
     /// itself stops). Everything after a statement that answers true in the same list is
     /// dead, and the guard stack says so.
     fn terminates(&self, statement: &Statement<'a>, function_exit_only: bool) -> bool {
+        let completions = self.completions(statement);
+        if completions.normal {
+            return false;
+        }
+        if function_exit_only {
+            return completions.jumps.is_empty();
+        }
+        // A jump that leaves the statement lands in a construct around this list, so the tail is
+        // dead; one this walk cannot place (no enclosing loop or label) is not trusted.
+        completions
+            .jumps
+            .iter()
+            .all(|label| self.break_terminates(label.as_deref()))
+    }
+
+    /// How `statement` can finish: normally, by a `return` or `throw`, or by a `break` or
+    /// `continue` that leaves it. A literal condition selects its arm; a loop or `switch` may
+    /// always finish normally, since its condition is not read.
+    fn completions(&self, statement: &Statement<'a>) -> Completions {
         match statement {
-            Statement::ReturnStatement(_) | Statement::ThrowStatement(_) => true,
-            // An unlabeled `break` leaves the innermost loop or switch and a labeled one the
-            // statement its label names -- a dead list tail, but the function resumes, so the
-            // function-exit reading does not count it. The same holds for `continue`.
-            Statement::BreakStatement(break_statement) if !function_exit_only => {
-                self.break_terminates(&break_statement.label)
-            }
-            Statement::ContinueStatement(_) if !function_exit_only => {
-                self.break_terminates_depth > 0
-            }
-            // Any direct sibling that ends the promised execution is enough: nothing before
-            // it can jump past it. Checking only the last statement missed
-            // `if (true) { return; void 0; }`, whose tail is dead but whose last statement
-            // is not.
-            Statement::BlockStatement(block) => block
-                .body
-                .iter()
-                .any(|part| self.terminates(part, function_exit_only)),
+            Statement::ReturnStatement(_) | Statement::ThrowStatement(_) => Completions::exit(),
+            Statement::BreakStatement(jump) => Completions::jump(&jump.label),
+            Statement::ContinueStatement(jump) => Completions::jump(&jump.label),
+            Statement::BlockStatement(block) => self.sequence_completions(&block.body),
             Statement::LabeledStatement(labeled) => {
-                self.terminates(&labeled.body, function_exit_only)
+                let mut completions = self.completions(&labeled.body);
+                completions.land(Some(labeled.label.name.as_str()));
+                completions
             }
             Statement::IfStatement(if_statement) => {
-                // The same rule the list walk applies to its own siblings: a literal
-                // condition selects one arm unconditionally, and only the selected arm has
-                // to end; any other condition requires both arms (an absent alternate falls
-                // through).
-                let consequent = self.terminates(&if_statement.consequent, function_exit_only);
-                let alternate = if_statement
-                    .alternate
-                    .as_ref()
-                    .is_some_and(|alternate| self.terminates(alternate, function_exit_only));
+                let consequent = || self.completions(&if_statement.consequent);
+                let alternate = || {
+                    if_statement
+                        .alternate
+                        .as_ref()
+                        .map_or_else(Completions::normal, |alternate| self.completions(alternate))
+                };
                 match self.raw_text(if_statement.test.span()).as_str() {
-                    "true" => consequent,
-                    "false" => alternate,
-                    _ => consequent && alternate,
+                    "true" => consequent(),
+                    "false" => alternate(),
+                    _ => consequent().or(alternate()),
                 }
             }
             Statement::TryStatement(try_statement) => {
-                let ends = |statements: &[Statement<'a>]| {
-                    statements
-                        .iter()
-                        .any(|part| self.terminates(part, function_exit_only))
+                // Anything in the guarded block can throw, so the handler may run after any part
+                // of it.
+                let guarded = self.sequence_completions(&try_statement.block.body);
+                let settled = match &try_statement.handler {
+                    Some(handler) => guarded.or(self.sequence_completions(&handler.body.body)),
+                    None => guarded,
                 };
-                // A throw that no handler catches propagates out, which ends the execution
-                // in either reading, so an absent handler reads as ending.
-                let handler_ends = try_statement
-                    .handler
-                    .as_ref()
-                    .map(|handler| ends(&handler.body.body))
-                    .unwrap_or(true);
-                let finalizer_ends = try_statement
-                    .finalizer
-                    .as_ref()
-                    .map(|finalizer| ends(&finalizer.body))
-                    .unwrap_or(false);
-                // A finalizer that always ends decides the statement no matter how the
-                // guarded body or the handler resolve; otherwise the guarded body and -- when
-                // it throws instead of ending -- the handler must both end. An absent
-                // finalizer does not make every path end: `try {} catch {}` falls through.
-                finalizer_ends || (ends(&try_statement.block.body) && handler_ends)
+                match &try_statement.finalizer {
+                    // A finalizer that finishes normally lets the pending completion through; one
+                    // that jumps, returns or throws replaces it.
+                    Some(finalizer) => {
+                        let finally = self.sequence_completions(&finalizer.body);
+                        if finally.normal {
+                            settled.or(Completions {
+                                normal: false,
+                                ..finally
+                            })
+                        } else {
+                            finally
+                        }
+                    }
+                    None => settled,
+                }
             }
-            _ => false,
+            Statement::ForStatement(_)
+            | Statement::ForInStatement(_)
+            | Statement::ForOfStatement(_)
+            | Statement::WhileStatement(_)
+            | Statement::DoWhileStatement(_)
+            | Statement::SwitchStatement(_) => {
+                let mut completions = match statement {
+                    Statement::ForStatement(inner) => self.completions(&inner.body),
+                    Statement::ForInStatement(inner) => self.completions(&inner.body),
+                    Statement::ForOfStatement(inner) => self.completions(&inner.body),
+                    Statement::WhileStatement(inner) => self.completions(&inner.body),
+                    Statement::DoWhileStatement(inner) => self.completions(&inner.body),
+                    Statement::SwitchStatement(switch) => switch
+                        .cases
+                        .iter()
+                        .map(|case| self.sequence_completions(&case.consequent))
+                        .fold(Completions::normal(), Completions::or),
+                    _ => unreachable!("matched above"),
+                };
+                completions.land(None);
+                completions.normal = true;
+                completions
+            }
+            _ => Completions::normal(),
         }
+    }
+
+    /// [`Self::completions`] of a statement list: it stops at the first statement that cannot
+    /// finish normally, so what follows that one adds nothing.
+    fn sequence_completions(&self, statements: &[Statement<'a>]) -> Completions {
+        let mut completions = Completions {
+            normal: false,
+            ..Completions::default()
+        };
+        for statement in statements {
+            let part = self.completions(statement);
+            let normal = part.normal;
+            completions = completions.or(Completions {
+                normal: false,
+                ..part
+            });
+            if !normal {
+                return completions;
+            }
+        }
+        completions.normal = true;
+        completions
     }
 
     /// The list-termination reading of [`Self::terminates`]: does this statement, whenever it
@@ -2294,13 +2398,10 @@ impl<'a> Walker<'a> {
     /// labeled one ends the statement its label names -- a dead tail exactly when that
     /// statement encloses this list, because a label naming a plain block further out would
     /// resume right where that block ended.
-    fn break_terminates(&self, label: &Option<LabelIdentifier>) -> bool {
+    fn break_terminates(&self, label: Option<&str>) -> bool {
         match label {
             None => self.break_terminates_depth > 0,
-            Some(label) => self
-                .label_stack
-                .iter()
-                .any(|held| held.as_str() == label.name.as_str()),
+            Some(label) => self.label_stack.iter().any(|held| held == label),
         }
     }
 
@@ -2456,6 +2557,11 @@ impl<'a> Walker<'a> {
     /// Dispatch recognized test/suite calls for emission; attempt helper expansion for
     /// unresolved callees.
     fn classify_call(&mut self, call: &CallExpression<'a>, registry: &mut Registry) {
+        // Vitest never reaches this call, so it registers nothing; reading it would invent a
+        // test that could pair with a live one (`return test(...)` followed by a dead tail).
+        if self.guards_prove_unreachable() {
+            return;
+        }
         let Some(resolved) = self.resolve_call_callee(&call.callee, registry) else {
             // S11: not Vitest, but possibly a local helper that declares tests. See
             // `walk_helper_call`.
@@ -3099,11 +3205,6 @@ impl<'a> Walker<'a> {
     /// walker refuses to expand -- see [`Self::refuse_helper_expansion`]).
     fn begin_helper_expansion(&mut self, call: &CallExpression<'a>) -> Option<HelperFrame<'a>> {
         let (_, function) = self.resolve_local_helper(&call.callee)?;
-        if let Some(reason) = self.unwalkable_helper_call(function, call) {
-            self.refuse_helper_expansion(reason);
-            return None;
-        }
-
         let identity = (
             self.file
                 .path
@@ -3111,6 +3212,14 @@ impl<'a> Walker<'a> {
                 .unwrap_or_else(|_| self.file.path.clone()),
             function.span.start,
         );
+        // A recursive call is refused below for what it is; its inputs read the helper's own
+        // parameters, which would otherwise be the reason given.
+        if !self.expansion.borrow().is_active(&identity) {
+            if let Some(reason) = self.unwalkable_helper_call(function, call) {
+                self.refuse_helper_expansion(reason);
+                return None;
+            }
+        }
         let admission = self.expansion.borrow_mut().begin(identity);
         if let Err(reason) = admission {
             self.refuse_helper_expansion(reason);
@@ -3146,6 +3255,12 @@ impl<'a> Walker<'a> {
             return Some(refusal(
                 ExclusionReason::UnsupportedExpression,
                 "the called helper is async and awaits, so what follows depends on promise timing",
+            ));
+        }
+        if registration_free::call_binding_fails(self.semantic, &function.params, &call.arguments) {
+            return Some(refusal(
+                ExclusionReason::UnsupportedExpression,
+                "an argument cannot bind the helper's destructuring parameter, so the call throws before the body runs",
             ));
         }
         (!registration_free::call_inputs_register_nothing(
@@ -4924,9 +5039,10 @@ mod tests {
         );
 
         // After a direct-sibling `return` the runtime never reaches the registration, and the
-        // guard says so.
+        // guard says so. Hooks bind to the whole scope, so the probe test sits before the exit,
+        // where it still registers; after an unconditional exit it would not be read at all.
         let dead = hook_guards(
-            "describe('suite', () => { return; beforeEach(() => { s.n = 1 }); test('reads', () => { expect(s.n).toBe(1) }); });",
+            "describe('suite', () => { test('reads', () => { expect(s.n).toBe(1) }); return; beforeEach(() => { s.n = 1 }); });",
         );
         assert_eq!(
             dead,
@@ -5063,7 +5179,7 @@ mod tests {
         // A block whose last statement is dead still terminates when an earlier statement is
         // an unconditional one: the statements after a `return` change nothing.
         let return_then_dead = hook_guards(
-            "describe('suite', () => { if (true) { return; void 0; } beforeEach(() => { s.n = 1 }); test('reads', () => { expect(s.n).toBe(1) }); });",
+            "describe('suite', () => { test('reads', () => { expect(s.n).toBe(1) }); if (true) { return; void 0; } beforeEach(() => { s.n = 1 }); });",
         );
         assert_eq!(
             return_then_dead,
@@ -5077,7 +5193,7 @@ mod tests {
         // A compound statement whose any sibling leaves terminates the list around it: the
         // block always returns, so the hook after it is dead.
         let block_return = hook_guards(
-            "describe('suite', () => { { return; } beforeEach(() => { s.n = 1 }); test('reads', () => { expect(s.n).toBe(1) }); });",
+            "describe('suite', () => { test('reads', () => { expect(s.n).toBe(1) }); { return; } beforeEach(() => { s.n = 1 }); });",
         );
         assert_eq!(
             block_return,
@@ -5089,7 +5205,7 @@ mod tests {
         // An `if` that always leaves -- the empty `else` never runs behind a literal `true` --
         // puts the hook after it in the implicit alternate.
         let if_else_true = hook_guards(
-            "describe('suite', () => { if (true) { return; } else { } beforeEach(() => { s.n = 1 }); test('reads', () => { expect(s.n).toBe(1) }); });",
+            "describe('suite', () => { test('reads', () => { expect(s.n).toBe(1) }); if (true) { return; } else { } beforeEach(() => { s.n = 1 }); });",
         );
         assert_eq!(
             if_else_true,
@@ -5137,7 +5253,7 @@ mod tests {
         // A literal-true conditional exit inside a block kills the block's tail, and the
         // block itself then terminates its own list: the two rules agree through the block.
         let literal_in_block = hook_guards(
-            "describe('suite', () => { { if (true) return; } beforeEach(() => { s.n = 1 }); test('reads', () => { expect(s.n).toBe(1) }); });",
+            "describe('suite', () => { test('reads', () => { expect(s.n).toBe(1) }); { if (true) return; } beforeEach(() => { s.n = 1 }); });",
         );
         assert_eq!(
             literal_in_block,
@@ -8695,6 +8811,16 @@ mod tests {
             // A spread or a call the analyzer cannot place may register too.
             ("function declare(label) { test(label, () => {}); } declare(...labels);", "arguments"),
             ("function declare(label) { test(label, () => {}); } declare(getLabel());", "arguments"),
+            // A default calls another parameter, whose value only the caller shows.
+            ("function declare(register, hook = register()) { test('hidden', () => {}); } declare(() => beforeEach(() => {}));", "arguments"),
+            // Binding the parameter throws, so the body never runs.
+            ("function declare({ v }) { test('hidden', () => {}); } declare(null);", "cannot bind"),
+            ("function declare({ v }) { test('hidden', () => {}); } declare(undefined);", "cannot bind"),
+            ("function declare({ v } = null) { test('hidden', () => {}); } declare();", "cannot bind"),
+            ("function declare([v]) { test('hidden', () => {}); } declare({});", "cannot bind"),
+            ("function declare([v]) { test('hidden', () => {}); } declare(1);", "cannot bind"),
+            ("function declare({ a: { b } }) { test('hidden', () => {}); } declare({});", "cannot bind"),
+            ("function declare([[v]]) { test('hidden', () => {}); } declare([0]);", "cannot bind"),
         ] {
             assert_visible_refusal(&extract_with(body), body, reason);
         }
@@ -8705,6 +8831,14 @@ mod tests {
             "describe('d', () => { return test('hidden', () => {}); });",
             "async function declare() { test('hidden', () => {}); } declare();",
             "function make() { return eval('({})'); } const made = make(); function declare(_m, _o, _s = '') { test('hidden', () => {}); } declare(made, { m: made, f() {} }, 'x');",
+            // Values that bind, or that the source does not spell out.
+            "function declare({ v }) { test('hidden', () => {}); } declare({ v: 1 });",
+            "function declare([v]) { test('hidden', () => {}); } declare([1]);",
+            "function declare([v]) { test('hidden', () => {}); } declare('ab');",
+            "function declare({ v } = {}) { test('hidden', () => {}); } declare();",
+            "function declare({ a: { b } = {} }) { test('hidden', () => {}); } declare({});",
+            "const options = { v: 1 }; function declare({ v }) { test('hidden', () => {}); } declare(options);",
+            "describe('d', () => { const undefined = {}; function declare({ v }) { test('hidden', () => {}); } declare(undefined); });",
         ] {
             let extraction = extract_with(body);
             assert!(!extraction.incomplete, "{body}: {:?}", extraction.diagnostics);
@@ -8721,6 +8855,84 @@ mod tests {
         let extraction = extract_with("function setup() { return beforeEach(() => {}); } setup();");
         assert!(!extraction.incomplete, "{:?}", extraction.diagnostics);
         assert_eq!(extraction.tests[0].context.hooks.len(), 1);
+    }
+
+    /// A declaration Vitest never reaches registers nothing, so it is not read: a dead tail after
+    /// `return test(...)` must not pair with the returned test. A test after a conditional exit
+    /// still registers.
+    #[test]
+    fn a_registration_vitest_never_reaches_is_not_read() {
+        for (body, expected) in [
+            (
+                "function declare() { return test('hidden', () => {}); test('dead', () => {}); } declare();",
+                vec!["hidden", "visible"],
+            ),
+            (
+                "describe('d', () => { test('hidden', () => {}); return; test('dead', () => {}); });",
+                vec!["hidden", "visible"],
+            ),
+            ("if (false) { test('dead', () => {}); }", vec!["visible"]),
+            ("if (true) {} else { test('dead', () => {}); }", vec!["visible"]),
+            (
+                "function declare() { test('dead', () => {}); } function outer() { return; declare(); } outer();",
+                vec!["visible"],
+            ),
+            (
+                "function declare(ready) { if (!ready) return; test('hidden', () => {}); } declare(true);",
+                vec!["hidden", "visible"],
+            ),
+            ("if (ready) { test('hidden', () => {}); }", vec!["hidden", "visible"]),
+            // A finalizer's jump cancels the exit it interrupts; one that only runs does not, nor
+            // does a jump that stays inside it. A jump before a `return` leaves first.
+            (
+                "function declare() { try { return test('hidden', () => {}); } finally { for (;;) { break; } } test('dead', () => {}); } declare();",
+                vec!["hidden", "visible"],
+            ),
+            (
+                "describe('d', () => { out: { break out; return; } test('live', () => {}); });",
+                vec!["live", "visible"],
+            ),
+            // A jump after the `return` never runs, and a finalizer that returns ends the call.
+            (
+                "describe('d', () => { out: { return; break out; } test('dead', () => {}); });",
+                vec!["visible"],
+            ),
+            (
+                "describe('d', () => { try { } finally { return; } test('dead', () => {}); });",
+                vec!["visible"],
+            ),
+            (
+                "describe('d', () => { exit: { try { return; } finally { break exit; } } test('live', () => {}); });",
+                vec!["live", "visible"],
+            ),
+            (
+                "describe('d', () => { exit: { try { return; } finally { void 0; } } test('dead', () => {}); });",
+                vec!["visible"],
+            ),
+            // A dead call runs no body, so a refusal its body would earn does not apply.
+            (
+                "function declare({ v }) { test('dead', () => {}); } function outer() { return; declare(null); } outer();",
+                vec!["visible"],
+            ),
+        ] {
+            let extraction = extract_source(
+                &format!("import {{ test, describe }} from 'vitest';\n{body}\ntest('visible', () => {{}});"),
+                "case.test.ts",
+                Globals::Disabled,
+            );
+            assert!(!extraction.incomplete, "{body}: {:?}", extraction.diagnostics);
+            let mut titles: Vec<_> = extraction
+                .tests
+                .iter()
+                .filter(|case| case.kind != DeclarationKind::Suite)
+                .map(|case| match &case.title {
+                    Title::Static(title) => title.as_str(),
+                    other => panic!("{body}: {other:?}"),
+                })
+                .collect();
+            titles.sort_unstable();
+            assert_eq!(titles, expected, "{body}");
+        }
     }
 
     /// Check declaration extraction: helper parameter refusals do not invent static titles.

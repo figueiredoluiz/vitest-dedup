@@ -110,11 +110,11 @@ alone. Past the cap the files with the fewest excluded tests are left out of the
 | --- | --- |
 | `helper-export-unreadable` | An imported runner's export could not be resolved, read, or proved to be one function, and the call could not be proved to register nothing; a local helper the call names is declared more than once or reassigned, so the body that runs is not the one a declaration states; or a local helper that is not a `function` declaration (an arrow, a function expression, a parameter) is called and could not be proved to register nothing. |
 | `helper-setup-effects` | An imported runner or a module on its chain has setup, fixture or module effects that were not proved inert, and the call could not be proved to register nothing. |
-| `helper-effects-unproved` | A call, argument or parameter write inside an imported runner has unproved effects, or the arguments or parameter defaults of a call to a local helper run code that may register. |
+| `helper-effects-unproved` | A call, argument or parameter write inside an imported runner has unproved effects, or the arguments or parameter defaults of a call to a local helper run code that may register (a default that calls another parameter runs whatever the caller passed). |
 | `helper-limit` | A helper expansion budget, recursion or depth limit was reached. |
 | `helper-sources-unavailable` | Helper bodies, or the imported constants a table cell reads, are unavailable in a historical revision baseline. |
 | `runner-mocked` | The runner, or a module on its re-export chain, is mocked or mocking is unresolved. |
-| `unsupported-expression` | A title, callback, option or registration expression is outside the supported shapes, or a called local helper is a generator or an async function that awaits. |
+| `unsupported-expression` | A title, callback, option or registration expression is outside the supported shapes, a called local helper is a generator or an async function that awaits, or a call passes a value that cannot bind the helper's destructuring parameter (`null`, `undefined`, or a non-iterable for an array pattern). |
 | `mock-factory-unreadable` | A `vi.mock` factory could not be read. |
 | `fixture-unreadable` | A `test.extend` fixture value could not be read. |
 | `unresolved-context` | Another ambient fact of a test could not be resolved: a dynamic title, an unreadable `.each` table or nested config, or a body deeper than the analyzer's recursion cap (whose behavior trace was cut short and must not be compared). |

@@ -38,7 +38,7 @@ use oxc_ast::AstKind;
 use oxc_ast_visit::{walk, Visit};
 use oxc_parser::Parser;
 use oxc_semantic::{Semantic, SemanticBuilder, SymbolId};
-use oxc_span::SourceType;
+use oxc_span::{SourceType, Span};
 use oxc_syntax::scope::ScopeFlags;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -589,7 +589,7 @@ pub(super) fn call_inputs_register_nothing(
         let argument = supplied
             .get(index)
             .copied()
-            .filter(|argument| !written_undefined(argument));
+            .filter(|argument| !written_undefined(semantic, argument));
         // A default runs only when its argument is `undefined`, which a literal never is.
         let default = parameter
             .initializer
@@ -597,25 +597,22 @@ pub(super) fn call_inputs_register_nothing(
             .filter(|_| argument.is_none_or(|argument| !never_undefined(argument)));
         inputs.extend(default);
         if !matches!(parameter.pattern, BindingPattern::BindingIdentifier(_)) {
-            // Destructuring `undefined` throws, which the walk does not model.
-            if argument.is_none() && default.is_none() {
-                return false;
-            }
             // The pattern reads whichever value it receives: the argument, or the default when
             // that can run.
             destructured.extend(argument);
             destructured.extend(default);
-            pattern_inputs(&parameter.pattern, &mut inputs);
+            pattern_inputs(&parameter.pattern, &mut inputs, &mut destructured);
         }
     }
     if let Some(rest) = &parameters.rest {
         if !matches!(rest.rest.argument, BindingPattern::BindingIdentifier(_)) {
             destructured.extend(supplied.iter().skip(parameters.items.len()).copied());
-            pattern_inputs(&rest.rest.argument, &mut inputs);
+            pattern_inputs(&rest.rest.argument, &mut inputs, &mut destructured);
         }
     }
     let mut scanner = Scanner::new(semantic, program, file);
     scanner.written = Some(written);
+    scanner.helper_parameters = Some(parameters.span);
     for input in supplied.iter().chain(&inputs) {
         if !creates_without_running(semantic, input) {
             scanner.queue.push(Pending::Expression(input));
@@ -628,14 +625,199 @@ pub(super) fn call_inputs_register_nothing(
     !scanner.failed && Proof::default().prove_edges(scanner.edges)
 }
 
-/// Whether `expression` is spelled as `undefined`: the free name, or a `void` expression.
-fn written_undefined(expression: &Expression<'_>) -> bool {
+/// What a binding pattern receives, as far as the source shows it.
+#[derive(Clone, Copy)]
+enum Bound<'p, 'a> {
+    /// `undefined`: no argument, an argument spelled `undefined`, or a key or index a literal
+    /// lacks.
+    Missing,
+    Value(&'p Expression<'a>),
+}
+
+/// Whether some parameter of a call is known to fail to bind: destructuring `undefined` or `null`,
+/// or array-destructuring a value that is not iterable, throws before the helper's body runs.
+/// Only values the source spells out are judged, through literal object and array arguments and
+/// defaults; any other value is assumed to bind.
+pub(super) fn call_binding_fails(
+    semantic: &Semantic<'_>,
+    parameters: &FormalParameters<'_>,
+    arguments: &[Argument<'_>],
+) -> bool {
+    // A spread moves every later argument to a position the source does not show.
+    if arguments
+        .iter()
+        .any(|argument| argument.as_expression().is_none())
+    {
+        return false;
+    }
+    parameters
+        .items
+        .iter()
+        .enumerate()
+        .any(|(index, parameter)| {
+            let received = arguments
+                .get(index)
+                .and_then(Argument::as_expression)
+                .map_or(Bound::Missing, Bound::Value);
+            let received = match (received, parameter.initializer.as_deref()) {
+                (bound, Some(default)) if bound_is_undefined(semantic, bound) => {
+                    Bound::Value(default)
+                }
+                (bound, _) => bound,
+            };
+            pattern_binding_fails(semantic, &parameter.pattern, received)
+        })
+}
+
+/// Whether `bound` is `undefined`, the value that makes a parameter's default run.
+fn bound_is_undefined(semantic: &Semantic<'_>, bound: Bound<'_, '_>) -> bool {
+    match bound {
+        Bound::Missing => true,
+        Bound::Value(value) => written_undefined(semantic, strip_value(value)),
+    }
+}
+
+/// Whether binding `pattern` to `received` is known to throw.
+fn pattern_binding_fails(
+    semantic: &Semantic<'_>,
+    pattern: &BindingPattern<'_>,
+    received: Bound<'_, '_>,
+) -> bool {
+    let value = match received {
+        Bound::Value(value) => Some(strip_value(value)),
+        Bound::Missing => None,
+    };
+    match pattern {
+        BindingPattern::BindingIdentifier(_) => false,
+        BindingPattern::AssignmentPattern(assignment) => {
+            let received = if bound_is_undefined(semantic, received) {
+                Bound::Value(&assignment.right)
+            } else {
+                received
+            };
+            pattern_binding_fails(semantic, &assignment.left, received)
+        }
+        BindingPattern::ObjectPattern(object) => match value {
+            None => true,
+            Some(value) if written_undefined(semantic, value) => true,
+            Some(Expression::NullLiteral(_)) => true,
+            Some(Expression::ObjectExpression(literal)) => {
+                object.properties.iter().any(|property| {
+                    if property.computed {
+                        return false;
+                    }
+                    let Some(name) = property.key.static_name() else {
+                        return false;
+                    };
+                    literal_property(literal, &name).is_some_and(|bound| {
+                        pattern_binding_fails(semantic, &property.value, bound)
+                    })
+                })
+            }
+            Some(_) => false,
+        },
+        BindingPattern::ArrayPattern(array) => match value {
+            None => true,
+            Some(value) if written_undefined(semantic, value) => true,
+            Some(Expression::ObjectExpression(literal)) => {
+                literal.properties.iter().all(|property| {
+                    matches!(property, ObjectPropertyKind::ObjectProperty(property)
+                    if !property.computed && !sets_prototype(property))
+                })
+            }
+            Some(Expression::ArrayExpression(literal)) => {
+                array.elements.iter().enumerate().any(|(index, element)| {
+                    let Some(element) = element else { return false };
+                    // A spread before this index moves it to a position the source does not show.
+                    if literal
+                        .elements
+                        .iter()
+                        .take(index + 1)
+                        .any(|item| item.is_spread())
+                    {
+                        return false;
+                    }
+                    let bound = match literal
+                        .elements
+                        .get(index)
+                        .and_then(|item| item.as_expression())
+                    {
+                        Some(item) => Bound::Value(item),
+                        None => Bound::Missing,
+                    };
+                    pattern_binding_fails(semantic, element, bound)
+                })
+            }
+            // A string is iterable; every other scalar literal and a function is not. A class is
+            // only through a static iterator, so refusing one costs a read, never a test.
+            Some(other) => {
+                matches!(other, Expression::ClassExpression(_))
+                    || (!matches!(other, Expression::StringLiteral(_)) && is_value_literal(other))
+            }
+        },
+    }
+}
+
+/// What an object literal holds under `name`: `None` when unknown (a spread, an accessor or a
+/// computed key could supply it), `Missing` when no own property can.
+fn literal_property<'p, 'a>(
+    literal: &'p oxc_ast::ast::ObjectExpression<'a>,
+    name: &oxc_ast::StaticPropertyName<'_>,
+) -> Option<Bound<'p, 'a>> {
+    let mut found = None;
+    for property in &literal.properties {
+        let ObjectPropertyKind::ObjectProperty(property) = property else {
+            return None;
+        };
+        if property.computed || property.kind != PropertyKind::Init || sets_prototype(property) {
+            return None;
+        }
+        if property.key.static_name().is_some_and(|key| &key == name) {
+            found = Some(&property.value);
+        }
+    }
+    // An absent own key may still be inherited (`toString`); reading it as `undefined` refuses
+    // more, never less.
+    Some(found.map_or(Bound::Missing, Bound::Value))
+}
+
+/// Whether an object-literal entry is `__proto__: value`, which sets the prototype the object
+/// inherits keys and an iterator from instead of defining a key.
+fn sets_prototype(property: &oxc_ast::ast::ObjectProperty<'_>) -> bool {
+    !property.shorthand && !property.method && property.key.is_specific_static_name("__proto__")
+}
+
+/// `expression` without the wrappers that do not change its value.
+fn strip_value<'p, 'a>(expression: &'p Expression<'a>) -> &'p Expression<'a> {
     match expression {
-        Expression::Identifier(identifier) => identifier.name == "undefined",
+        Expression::ParenthesizedExpression(inner) => strip_value(&inner.expression),
+        Expression::TSAsExpression(inner) => strip_value(&inner.expression),
+        Expression::TSSatisfiesExpression(inner) => strip_value(&inner.expression),
+        Expression::TSNonNullExpression(inner) => strip_value(&inner.expression),
+        other => other,
+    }
+}
+
+/// Whether `expression` is spelled as `undefined`: the free name (a local binding of that name
+/// holds whatever it was given), or a `void` expression.
+fn written_undefined(semantic: &Semantic<'_>, expression: &Expression<'_>) -> bool {
+    match expression {
+        Expression::Identifier(identifier) => {
+            identifier.name == "undefined"
+                && identifier.reference_id.get().is_some_and(|reference| {
+                    semantic
+                        .scoping()
+                        .get_reference(reference)
+                        .symbol_id()
+                        .is_none()
+                })
+        }
         Expression::UnaryExpression(unary) => {
             unary.operator == oxc_syntax::operator::UnaryOperator::Void
         }
-        Expression::ParenthesizedExpression(inner) => written_undefined(&inner.expression),
+        Expression::ParenthesizedExpression(inner) => {
+            written_undefined(semantic, &inner.expression)
+        }
         _ => false,
     }
 }
@@ -714,29 +896,38 @@ fn creates_without_running(semantic: &Semantic<'_>, expression: &Expression<'_>)
     }
 }
 
-/// The expressions a binding pattern evaluates while it binds: defaults and computed keys.
-fn pattern_inputs<'p, 'a>(pattern: &'p BindingPattern<'a>, inputs: &mut Vec<&'p Expression<'a>>) {
+/// The expressions a binding pattern evaluates while it binds: defaults go to `inputs`, and a
+/// value the pattern goes on to read or coerce goes to `read` -- a default destructured further
+/// (its getters run) and a computed key (its `toString` runs).
+fn pattern_inputs<'p, 'a>(
+    pattern: &'p BindingPattern<'a>,
+    inputs: &mut Vec<&'p Expression<'a>>,
+    read: &mut Vec<&'p Expression<'a>>,
+) {
     match pattern {
         BindingPattern::BindingIdentifier(_) => {}
         BindingPattern::AssignmentPattern(assignment) => {
             inputs.push(&assignment.right);
-            pattern_inputs(&assignment.left, inputs);
+            if !matches!(assignment.left, BindingPattern::BindingIdentifier(_)) {
+                read.push(&assignment.right);
+            }
+            pattern_inputs(&assignment.left, inputs, read);
         }
         BindingPattern::ObjectPattern(object) => {
             for property in &object.properties {
-                inputs.extend(property.key.as_expression());
-                pattern_inputs(&property.value, inputs);
+                read.extend(property.key.as_expression());
+                pattern_inputs(&property.value, inputs, read);
             }
             if let Some(rest) = &object.rest {
-                pattern_inputs(&rest.argument, inputs);
+                pattern_inputs(&rest.argument, inputs, read);
             }
         }
         BindingPattern::ArrayPattern(array) => {
             for element in array.elements.iter().flatten() {
-                pattern_inputs(element, inputs);
+                pattern_inputs(element, inputs, read);
             }
             if let Some(rest) = &array.rest {
-                pattern_inputs(&rest.argument, inputs);
+                pattern_inputs(&rest.argument, inputs, read);
             }
         }
     }
@@ -1023,6 +1214,9 @@ struct Scanner<'s, 'a> {
     /// the scan is of a call's arguments, and a callback reassigned or a config changed before the
     /// call is not the declaration that was read.
     written: Option<&'s HashSet<SymbolId>>,
+    /// The parameter list of the helper whose call inputs are scanned: following one of its
+    /// parameters is refused (see [`Scanner::follow_symbol`]).
+    helper_parameters: Option<Span>,
     failed: bool,
     /// Whether the scan is of a module's import-time code (see [`Root::ImportTime`]). `vi` and
     /// `expect` used there change what every test in the importing file sees, and no test's
@@ -1061,6 +1255,7 @@ impl<'s, 'a> Scanner<'s, 'a> {
             queue: Vec::new(),
             edges: Vec::new(),
             written: None,
+            helper_parameters: None,
             failed: false,
             import_time: false,
         }
@@ -1532,6 +1727,19 @@ impl<'s, 'a> Scanner<'s, 'a> {
                     return;
                 }
                 self.queue.push(Pending::Declarator(declarator));
+            }
+            // The called helper's own parameter holds what the call passed, which its
+            // declaration does not show: a default that calls one (`hook = register()`) runs
+            // the caller's function.
+            AstKind::FormalParameter(_) | AstKind::FormalParameterRest(_)
+                if self.helper_parameters.is_some_and(|span| {
+                    matches!(
+                        self.semantic.nodes().parent_kind(declaration),
+                        AstKind::FormalParameters(owner) if owner.span == span
+                    )
+                }) =>
+            {
+                self.failed = true;
             }
             AstKind::Function(function) => self.queue.push(Pending::Function(function)),
             AstKind::Class(class) => self.queue.push(Pending::Class(class)),

@@ -143,6 +143,11 @@ impl ExpansionState {
         self.enter(identity)
     }
 
+    /// Whether a local helper with this identity is being expanded, so calling it recurses.
+    pub(super) fn is_active(&self, identity: &(PathBuf, u32)) -> bool {
+        self.active.contains(identity)
+    }
+
     /// Consumes an admission across both registration passes, refusing an exhausted budget.
     fn spend(&mut self) -> Result<(), Refusal> {
         if self.left == 0 {

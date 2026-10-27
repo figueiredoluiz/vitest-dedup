@@ -115,5 +115,9 @@ test('name', ({ expect, skip, task, annotate, signal, onTestFailed, onTestFinish
   `beforeEach`/`afterEach`, not only reachable through `TestContext` destructuring. The imported form
   is unsound under `.concurrent`; the context-bound form is the only one Vitest recommends there.
   See [Hooks](hooks.md) for the hook-table entry and the full caveat.
+- **Unreachable declarations**: a declaration after a `return`, `throw`, `break` or `continue` among
+  its direct siblings, under `if (false)` or in the `else` of `if (true)`, never runs and is not
+  read; a `finally` that jumps (`finally { break out }`) cancels the exit it follows. `return test(...)` and `return describe(...)` register like the call written as a
+  statement.
 
 Back to the [Vitest surface index](../vitest-surface.md).
