@@ -5646,6 +5646,28 @@
       ]
     },
     {
+      "name": "local-helper-forwarded-parameter",
+      "path": "local-helper-forwarded-parameter",
+      "rule": "duplicate-test",
+      "role": "variant",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-10-28",
+      "expectedTests": 1,
+      "expectedIncomplete": true,
+      "expectedUnresolved": 0,
+      "expectedFindings": [],
+      "expectedAbsent": [
+        {
+          "rule": "duplicate-test",
+          "titles": [
+            "hooked > reads",
+            "plain > reads"
+          ]
+        }
+      ]
+    },
+    {
       "name": "local-helper-const-arrow",
       "path": "local-helper-const-arrow",
       "rule": "duplicate-test",

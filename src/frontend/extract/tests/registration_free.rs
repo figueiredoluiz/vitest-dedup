@@ -736,6 +736,7 @@ fn judge_helper_call(
         &oxc_semantic::Semantic<'_>,
         &oxc_ast::ast::FormalParameters<'_>,
         &[oxc_ast::ast::Argument<'_>],
+        oxc_span::Span,
     ) -> bool,
 ) -> bool {
     use oxc_ast::ast::{Expression, Statement};
@@ -772,7 +773,7 @@ fn judge_helper_call(
     let Expression::CallExpression(call) = &statement.expression else {
         panic!("call last");
     };
-    judge(program, &semantic, parameters, &call.arguments)
+    judge(program, &semantic, parameters, &call.arguments, call.span)
 }
 
 /// Whether the call provably evaluates no registration before the helper's body runs.
@@ -781,7 +782,7 @@ fn inputs_register_nothing(prelude: &str, parameters: &str, arguments: &str) -> 
         prelude,
         parameters,
         arguments,
-        |program, semantic, parameters, arguments| {
+        |program, semantic, parameters, arguments, call| {
             let written = super::registration_free::written_bindings(program, semantic);
             super::registration_free::call_inputs_register_nothing(
                 program,
@@ -790,6 +791,7 @@ fn inputs_register_nothing(prelude: &str, parameters: &str, arguments: &str) -> 
                 std::path::Path::new("case.test.ts"),
                 parameters,
                 arguments,
+                call,
             )
         },
     )
@@ -806,7 +808,7 @@ fn binding_fails_after(prelude: &str, parameters: &str, arguments: &str) -> bool
         prelude,
         parameters,
         arguments,
-        |_, semantic, parameters, arguments| {
+        |_, semantic, parameters, arguments, _| {
             super::registration_free::call_binding_fails(semantic, parameters, arguments)
         },
     )

@@ -3270,6 +3270,7 @@ impl<'a> Walker<'a> {
             &self.file.path,
             &function.params,
             &call.arguments,
+            call.span,
         ))
         .then_some(refusal(
             ExclusionReason::HelperEffectsUnproved,
@@ -8811,6 +8812,10 @@ mod tests {
             // A spread or a call the analyzer cannot place may register too.
             ("function declare(label) { test(label, () => {}); } declare(...labels);", "arguments"),
             ("function declare(label) { test(label, () => {}); } declare(getLabel());", "arguments"),
+            // A value forwarded from an enclosing function's parameter or a catch binding is one
+            // the source does not show where the helper reads it.
+            ("const input = { v: 1 }; function declare({ v }) { test('hidden', () => {}); } function forward(options) { declare(options); } forward(input);", "arguments"),
+            ("const input = { v: 1 }; try { throw input; } catch (error) { function declare({ v }) { test('hidden', () => {}); } declare(error); }", "arguments"),
             // A default calls another parameter, whose value only the caller shows.
             ("function declare(register, hook = register()) { test('hidden', () => {}); } declare(() => beforeEach(() => {}));", "arguments"),
             // Binding the parameter throws, so the body never runs.
@@ -8839,6 +8844,10 @@ mod tests {
             "function declare({ a: { b } = {} }) { test('hidden', () => {}); } declare({});",
             "const options = { v: 1 }; function declare({ v }) { test('hidden', () => {}); } declare(options);",
             "describe('d', () => { const undefined = {}; function declare({ v }) { test('hidden', () => {}); } declare(undefined); });",
+            // A forwarded parameter bound to a name is not read, and a passed function's own
+            // parameter is not the call's.
+            "const input = { v: 1 }; function declare(label) { test('hidden', () => {}); } function forward(options) { declare(options); } forward(input);",
+            "function declare({ v }) { test('hidden', () => {}); } const handler = (event) => event; declare({ v: handler });",
         ] {
             let extraction = extract_with(body);
             assert!(!extraction.incomplete, "{body}: {:?}", extraction.diagnostics);

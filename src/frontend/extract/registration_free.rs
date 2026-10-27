@@ -37,8 +37,8 @@ use oxc_ast::ast::{
 use oxc_ast::AstKind;
 use oxc_ast_visit::{walk, Visit};
 use oxc_parser::Parser;
-use oxc_semantic::{Semantic, SemanticBuilder, SymbolId};
-use oxc_span::{SourceType, Span};
+use oxc_semantic::{NodeId, Semantic, SemanticBuilder, SymbolId};
+use oxc_span::{GetSpan, SourceType, Span};
 use oxc_syntax::scope::ScopeFlags;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -573,6 +573,7 @@ pub(super) fn call_inputs_register_nothing(
     file: &Path,
     parameters: &FormalParameters<'_>,
     arguments: &[Argument<'_>],
+    call: Span,
 ) -> bool {
     let mut supplied = Vec::new();
     for argument in arguments {
@@ -612,7 +613,7 @@ pub(super) fn call_inputs_register_nothing(
     }
     let mut scanner = Scanner::new(semantic, program, file);
     scanner.written = Some(written);
-    scanner.helper_parameters = Some(parameters.span);
+    scanner.helper_call = Some((parameters.span, call));
     for input in supplied.iter().chain(&inputs) {
         if !creates_without_running(semantic, input) {
             scanner.queue.push(Pending::Expression(input));
@@ -1214,9 +1215,9 @@ struct Scanner<'s, 'a> {
     /// the scan is of a call's arguments, and a callback reassigned or a config changed before the
     /// call is not the declaration that was read.
     written: Option<&'s HashSet<SymbolId>>,
-    /// The parameter list of the helper whose call inputs are scanned: following one of its
-    /// parameters is refused (see [`Scanner::follow_symbol`]).
-    helper_parameters: Option<Span>,
+    /// The parameter list of the helper whose call inputs are scanned, and the call: following a
+    /// binding whose value is unknown there is refused (see [`Scanner::unknown_at_call`]).
+    helper_call: Option<(Span, Span)>,
     failed: bool,
     /// Whether the scan is of a module's import-time code (see [`Root::ImportTime`]). `vi` and
     /// `expect` used there change what every test in the importing file sees, and no test's
@@ -1255,7 +1256,7 @@ impl<'s, 'a> Scanner<'s, 'a> {
             queue: Vec::new(),
             edges: Vec::new(),
             written: None,
-            helper_parameters: None,
+            helper_call: None,
             failed: false,
             import_time: false,
         }
@@ -1728,16 +1729,10 @@ impl<'s, 'a> Scanner<'s, 'a> {
                 }
                 self.queue.push(Pending::Declarator(declarator));
             }
-            // The called helper's own parameter holds what the call passed, which its
-            // declaration does not show: a default that calls one (`hook = register()`) runs
-            // the caller's function.
-            AstKind::FormalParameter(_) | AstKind::FormalParameterRest(_)
-                if self.helper_parameters.is_some_and(|span| {
-                    matches!(
-                        self.semantic.nodes().parent_kind(declaration),
-                        AstKind::FormalParameters(owner) if owner.span == span
-                    )
-                }) =>
+            AstKind::FormalParameter(_)
+            | AstKind::FormalParameterRest(_)
+            | AstKind::CatchParameter(_)
+                if self.unknown_at_call(declaration) =>
             {
                 self.failed = true;
             }
@@ -1747,6 +1742,25 @@ impl<'s, 'a> Scanner<'s, 'a> {
             AstKind::TSNamespaceDeclaration(namespace) => self.seed_namespace_members(namespace),
             _ => {}
         }
+    }
+
+    /// Whether the parameter or catch binding `declaration` holds a value no declaration shows at
+    /// the helper call: the helper's own parameter holds the call's argument (`hook = register()`
+    /// runs the caller's function), and one of a function or `catch` the call sits in holds what
+    /// that function was called with or what was thrown (`forward(opts) { setup(opts) }`).
+    fn unknown_at_call(&self, declaration: NodeId) -> bool {
+        let Some((parameters, call)) = self.helper_call else {
+            return false;
+        };
+        let nodes = self.semantic.nodes();
+        let owner = nodes.parent_id(declaration);
+        let scope = match nodes.get_node(owner).kind() {
+            AstKind::FormalParameters(list) if list.span == parameters => return true,
+            AstKind::FormalParameters(_) => nodes.parent_kind(owner).span(),
+            AstKind::CatchClause(clause) => clause.span,
+            _ => return false,
+        };
+        scope.start <= call.start && call.end <= scope.end
     }
 
     /// Judges a free name: a Vitest export is judged by the caller, a host global is harmless, an
