@@ -1145,7 +1145,7 @@ impl<'a> Walker<'a> {
             // A nested call is expanded by the same walk under the shared budget and active-call
             // stack, which applies this shape check to its body; a refusal there surfaces as a
             // diagnostic on this frame, so the whole runner is refused with its scope tainted.
-            if self.resolve_local_helper(&call.callee).is_some()
+            if self.resolve_local_helper(call).is_some()
                 || self.runner_origin(&call.callee).is_some()
             {
                 return Ok(Shape::Declares);

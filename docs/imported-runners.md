@@ -55,7 +55,7 @@ the bare ones. One declared inside a nested suite callback is refused.
 
 ### Nested calls
 
-A runner may call another first-party runner or a function declared in its own file. The nested call
+A runner may call another first-party runner, a function declared in its own file, or a `const` arrow or function expression its file initializes before the call. The nested call
 is expanded the same way, under the same depth, admission and source budgets, and a refusal inside
 it refuses the outer runner. Recursion through modules or local helpers is refused.
 

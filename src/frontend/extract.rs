@@ -24,7 +24,7 @@ use oxc_ast::ast::{
     BindingPattern, CallExpression, Expression, ForOfStatement, ForStatementLeft, FormalParameters,
     Function, FunctionType, IdentifierReference, ImportDeclarationSpecifier, LabelIdentifier,
     ObjectExpression, ObjectPropertyKind, Program, Statement, TemplateLiteral, UnaryOperator,
-    VariableDeclarator,
+    VariableDeclarationKind, VariableDeclarator,
 };
 use oxc_ast::AstKind;
 use oxc_ast_visit::{walk, Visit};
@@ -1158,14 +1158,34 @@ struct BindingValue {
 /// the inlined walk and popped by [`Walker::end_helper_expansion`].
 #[derive(Clone, Copy)]
 struct HelperFrame<'a> {
-    /// The helper's declaration, whose `body` is what gets walked.
-    function: &'a Function<'a>,
+    /// The helper whose body is what gets walked.
+    helper: LocalHelper<'a>,
+    /// Where the call that opened this frame starts: one link of the execution chain
+    /// [`Walker::initialized_before_call`] reads.
+    call_start: u32,
     /// How many entries this frame pushed onto [`Walker::param_bindings`], to truncate back to on
     /// the way out.
     bindings: usize,
     /// An explicit throw observed while walking this expansion or a nested expansion.
     /// Unlike a return, it may leave the caller too, so its exit uncertainty must survive.
     saw_throw: bool,
+}
+
+/// A helper this file declares and the walker inlines: a `function` declaration, or the arrow or
+/// function expression a `const` binding holds.
+#[derive(Clone, Copy)]
+struct LocalHelper<'a> {
+    /// Where the callable starts, its expansion identity.
+    start: u32,
+    params: &'a FormalParameters<'a>,
+    body: LocalHelperBody<'a>,
+}
+
+/// A [`LocalHelper`]'s body: a statement list, or a concise arrow's single call.
+#[derive(Clone, Copy)]
+enum LocalHelperBody<'a> {
+    Statements(&'a [Statement<'a>]),
+    Concise(&'a CallExpression<'a>),
 }
 
 /// One conditional exit a statement list left open: the branch later statements land in when
@@ -3088,16 +3108,17 @@ impl<'a> Walker<'a> {
         if self.refuse_redeclared_helper(&call.callee) {
             return;
         }
-        if self.resolve_local_helper(&call.callee).is_some() {
-            self.with_helper_body(call, registry, walk);
+        if self.resolve_local_helper(call).is_some() {
+            self.with_helper_body(call, registry, walk, prepare);
         } else if !self.refuse_unread_local_helper(call) {
             self.imported_helper_call(call, prepare);
         }
     }
 
-    /// Refuses a call to a local binding this walker does not inline (an arrow or function
-    /// expression, a parameter, a value computed elsewhere) unless the call provably registers
-    /// nothing: skipping it would drop whatever it declares silently. Whether it refused.
+    /// Refuses a call to a local binding this walker does not inline (a `let` function, a
+    /// parameter, a `const` read before it is initialized, a value computed elsewhere) unless the
+    /// call provably registers nothing: skipping it would drop whatever it declares silently.
+    /// Whether it refused.
     fn refuse_unread_local_helper(&mut self, call: &CallExpression<'a>) -> bool {
         let Expression::Identifier(ident) = &call.callee else {
             return false;
@@ -3141,7 +3162,7 @@ impl<'a> Walker<'a> {
         }
         self.refuse_helper_expansion(refusal(
             ExclusionReason::HelperExportUnreadable,
-            "the called local helper is not a `function` declaration",
+            "the called local helper is not a `function` declaration or an initialized `const` function",
         ));
         true
     }
@@ -3156,6 +3177,7 @@ impl<'a> Walker<'a> {
         call: &CallExpression<'a>,
         registry: &mut Registry,
         walk: fn(&mut Self, &[Statement<'a>], &mut Registry),
+        prepare: bool,
     ) {
         let Some(frame) = self.begin_helper_expansion(call) else {
             return;
@@ -3173,8 +3195,10 @@ impl<'a> Walker<'a> {
             .last()
             .expect("root hook scope")
             .exit_unexpressible;
-        if let Some(body) = &frame.function.body {
-            walk(self, &body.statements, registry);
+        match frame.helper.body {
+            LocalHelperBody::Statements(statements) => walk(self, statements, registry),
+            LocalHelperBody::Concise(body) if prepare => self.prepare_call(body, registry),
+            LocalHelperBody::Concise(body) => self.classify_call(body, registry),
         }
         // A local return cannot skip caller registrations. Keep the guards and any unresolved
         // hooks recorded in the helper, but end its local exit state at the function boundary.
@@ -3204,18 +3228,18 @@ impl<'a> Walker<'a> {
     /// (silently, when `call` is simply not a local helper; with a diagnostic when it is one this
     /// walker refuses to expand -- see [`Self::refuse_helper_expansion`]).
     fn begin_helper_expansion(&mut self, call: &CallExpression<'a>) -> Option<HelperFrame<'a>> {
-        let (_, function) = self.resolve_local_helper(&call.callee)?;
+        let helper = self.resolve_local_helper(call)?;
         let identity = (
             self.file
                 .path
                 .canonicalize()
                 .unwrap_or_else(|_| self.file.path.clone()),
-            function.span.start,
+            helper.start,
         );
         // A recursive call is refused below for what it is; its inputs read the helper's own
         // parameters, which would otherwise be the reason given.
         if !self.expansion.borrow().is_active(&identity) {
-            if let Some(reason) = self.unwalkable_helper_call(function, call) {
+            if let Some(reason) = self.unwalkable_helper_call(helper, call) {
                 self.refuse_helper_expansion(reason);
                 return None;
             }
@@ -3227,9 +3251,10 @@ impl<'a> Walker<'a> {
         }
 
         let before = self.param_bindings.len();
-        self.bind_helper_parameters(function, call);
+        self.bind_helper_parameters(helper.params, call);
         let frame = HelperFrame {
-            function,
+            helper,
+            call_start: call.span.start,
             bindings: self.param_bindings.len() - before,
             saw_throw: false,
         };
@@ -3383,23 +3408,21 @@ impl<'a> Walker<'a> {
         true
     }
 
-    /// The callee of `expr`, when it names a `function` declaration in *this* file.
+    /// The helper `call` runs, when it is one this file declares and the walker inlines.
     ///
     /// Deliberately narrow, and every restriction is load-bearing:
     ///
     /// - a bare identifier only, resolved through `oxc_semantic` to its binding rather than by
     ///   name -- `ruleTester.run(...)` (a member expression) is not a local helper, and neither is
-    ///   a same-named import, whose declaration node is an import specifier and not a `Function`;
-    /// - a `FunctionType::FunctionDeclaration`, so a `const f = () => {}` binding (whose declaring
-    ///   node is a `VariableDeclarator`) is left alone: a `let`/`var` binding can be reassigned
-    ///   between declaration and call, and proving which function a name holds at call time is the
-    ///   call-graph question this fix deliberately does not open;
-    /// - a body present, which excludes a TypeScript overload signature or `declare function`.
+    ///   a same-named import, whose declaration node is an import specifier;
+    /// - a `FunctionType::FunctionDeclaration` with a body (not an overload signature or
+    ///   `declare function`), or a `const` binding (see [`Self::const_helper`]); a `let`/`var`
+    ///   binding can be reassigned between declaration and call.
     ///
     /// Anything outside that set is not guessed at: [`Self::refuse_unread_local_helper`] refuses
     /// the call unless it provably registers nothing.
-    fn resolve_local_helper(&self, expr: &Expression) -> Option<(SymbolId, &'a Function<'a>)> {
-        let Expression::Identifier(ident) = expr else {
+    fn resolve_local_helper(&self, call: &CallExpression) -> Option<LocalHelper<'a>> {
+        let Expression::Identifier(ident) = &call.callee else {
             return None;
         };
         let semantic: &'a Semantic<'a> = self.semantic;
@@ -3407,16 +3430,98 @@ impl<'a> Walker<'a> {
         let symbol = semantic.scoping().get_reference(reference_id).symbol_id()?;
         // The declaration that runs: an overload set's implementation, none when redeclared.
         let node = registration_free::runtime_declaration(semantic, symbol)?;
-        let AstKind::Function(function) = semantic.nodes().kind(node) else {
-            return None;
-        };
-        if function.r#type != FunctionType::FunctionDeclaration || function.body.is_none() {
-            return None;
+        match semantic.nodes().kind(node) {
+            AstKind::Function(function) => {
+                if function.r#type != FunctionType::FunctionDeclaration {
+                    return None;
+                }
+                Some(LocalHelper {
+                    start: function.span.start,
+                    params: &function.params,
+                    body: LocalHelperBody::Statements(&function.body.as_ref()?.statements),
+                })
+            }
+            AstKind::VariableDeclarator(declarator) => {
+                self.const_helper(symbol, node, declarator, call)
+            }
+            _ => None,
         }
-        Some((symbol, function))
     }
 
-    /// Binds each of `function`'s formal parameters to the const-folded text of the argument this
+    /// The function a `const` binding holds when `call` runs it: the binding's single
+    /// declarator holds an arrow or function expression and has finished evaluating before the
+    /// call executes, so the name cannot hold anything else. A concise arrow is read only when its
+    /// body is a call, the one expression the walker reads.
+    fn const_helper(
+        &self,
+        symbol: SymbolId,
+        node: oxc_semantic::NodeId,
+        declarator: &'a VariableDeclarator<'a>,
+        call: &CallExpression,
+    ) -> Option<LocalHelper<'a>> {
+        let semantic: &'a Semantic<'a> = self.semantic;
+        let AstKind::VariableDeclaration(declaration) = semantic.nodes().parent_kind(node) else {
+            return None;
+        };
+        if declaration.kind != VariableDeclarationKind::Const
+            || declaration.declare
+            || semantic.scoping().symbol_is_mutated(symbol)
+            || !matches!(&declarator.id, BindingPattern::BindingIdentifier(binding)
+                if binding.symbol_id.get() == Some(symbol))
+            || !self.initialized_before_call(symbol, declarator.span.end, call)
+        {
+            return None;
+        }
+        match super::registry::unwrap_transparent(declarator.init.as_ref()?) {
+            Expression::ArrowFunctionExpression(arrow) => Some(LocalHelper {
+                start: arrow.span.start,
+                params: &arrow.params,
+                body: match &arrow.body {
+                    ArrowFunctionBody::FunctionBody(body) => {
+                        LocalHelperBody::Statements(&body.statements)
+                    }
+                    ArrowFunctionBody::CallExpression(body) => LocalHelperBody::Concise(body),
+                    _ => return None,
+                },
+            }),
+            Expression::FunctionExpression(function) => Some(LocalHelper {
+                start: function.span.start,
+                params: &function.params,
+                body: LocalHelperBody::Statements(&function.body.as_ref()?.statements),
+            }),
+            _ => None,
+        }
+    }
+
+    /// Whether the `const` binding `symbol`, whose declarator ends at `declared_end`, has been
+    /// initialized when `call` executes.
+    ///
+    /// A call inside an inlined helper executes where that helper was called, not where it is
+    /// written: `run(); const f = ...; function run() { f() }` reads `f` in its temporal dead
+    /// zone. The execution chain is the open helper frames' call sites, outermost first, then
+    /// `call`. The binding's scope runs in source order, so the binding is initialized when the
+    /// outermost link inside that scope comes after the declarator.
+    fn initialized_before_call(
+        &self,
+        symbol: SymbolId,
+        declared_end: u32,
+        call: &CallExpression,
+    ) -> bool {
+        let semantic: &'a Semantic<'a> = self.semantic;
+        let scoping = semantic.scoping();
+        let scope = semantic
+            .nodes()
+            .kind(scoping.get_node_id(scoping.symbol_scope_id(symbol)))
+            .span();
+        self.helper_frames
+            .iter()
+            .map(|frame| frame.call_start)
+            .chain(std::iter::once(call.span.start))
+            .find(|position| scope.start <= *position && *position < scope.end)
+            .is_some_and(|position| declared_end <= position)
+    }
+
+    /// Binds each of `parameters` to the const-folded text of the argument this
     /// call site passed for it, for [`Walker::fold_title_text`].
     ///
     /// Positional, and therefore refused wholesale the moment the positions stop being knowable:
@@ -3426,8 +3531,12 @@ impl<'a> Walker<'a> {
     /// missing or does not const-fold. Every skip leaves the parameter unbound, which is what
     /// makes a title reading it degrade to [`Title::Dynamic`] instead of rendering a value nobody
     /// proved.
-    fn bind_helper_parameters(&mut self, function: &'a Function<'a>, call: &CallExpression<'a>) {
-        let bound = self.fold_parameter_arguments(&function.params, call);
+    fn bind_helper_parameters(
+        &mut self,
+        parameters: &'a FormalParameters<'a>,
+        call: &CallExpression<'a>,
+    ) {
+        let bound = self.fold_parameter_arguments(parameters, call);
         self.param_bindings.extend(bound);
     }
 
@@ -10888,16 +10997,48 @@ mod tests {
         );
     }
 
+    /// A `const` function the call runs after its declarator is inlined like a `function`
+    /// declaration; one the call reaches in its temporal dead zone is not.
+    #[test]
+    fn a_const_helper_initialized_before_its_call_is_inlined() {
+        for body in [
+            "const declare = () => { test('hidden', () => {}); }; declare();",
+            "const declare = function () { test('hidden', () => {}); }; declare();",
+            "const declare = () => test('hidden', () => {}); declare();",
+            "const declare = (() => { test('hidden', () => {}); }) as () => void; declare();",
+            "function run() { declare(); } const declare = () => { test('hidden', () => {}); }; run();",
+            "describe('d', () => { const declare = () => { test('hidden', () => {}); }; declare(); });",
+        ] {
+            let source = format!(
+                "import {{ describe, test }} from 'vitest';\n{body}\ntest('visible', () => {{}});"
+            );
+            let extraction = extract_source(&source, "case.test.ts", Globals::Disabled);
+            assert!(!extraction.incomplete, "{body}: {:?}", extraction.diagnostics);
+            let tests: Vec<_> = extraction
+                .tests
+                .iter()
+                .filter(|case| case.kind != DeclarationKind::Suite)
+                .collect();
+            assert_eq!(tests.len(), 2, "{body}");
+            assert!(
+                tests
+                    .iter()
+                    .any(|case| matches!(&case.title, Title::Static(text) if text == "hidden")),
+                "{body}"
+            );
+        }
+    }
+
     /// A call to a local binding the walker does not inline is refused when it may register, and
     /// left alone when it provably registers nothing or is never called.
     #[test]
     fn an_unread_local_helper_call_is_refused_unless_it_registers_nothing() {
         let refused = [
-            "const declare = () => { test('hidden', () => {}); }; declare();",
-            "const declare = function () { test('hidden', () => {}); }; declare();",
             "let declare = () => {}; declare = () => { test('hidden', () => {}); }; declare();",
             "function wrap(fn) { fn(); } wrap(() => { test('hidden', () => {}); });",
-            "const declare = () => {}; declare(() => test('hidden', () => {}));",
+            "declare(); const declare = () => { test('hidden', () => {}); };",
+            "run(); const declare = () => { test('hidden', () => {}); }; function run() { declare(); }",
+            "const declare = (() => () => { test('hidden', () => {}); })(); declare();",
         ];
         for body in refused {
             let source =
@@ -10914,6 +11055,7 @@ mod tests {
             "const declare = () => { test('never', () => {}); };",
             "setup();",
             "declare const declare: () => void; declare();",
+            "const declare = () => {}; declare(() => test('never', () => {}));",
         ];
         for body in kept {
             let source =
@@ -10931,7 +11073,7 @@ mod tests {
         // The refusal taints the scope the call runs in, not its siblings.
         let extraction = extract_source(
             "import { describe, test } from 'vitest';\n\
-             describe('d', () => { const declare = () => { test('hidden', () => {}); }; declare(); test('inner', () => {}); });\n\
+             describe('d', () => { let declare = () => { test('hidden', () => {}); }; declare(); test('inner', () => {}); });\n\
              test('outer', () => {});",
             "case.test.ts",
             Globals::Disabled,

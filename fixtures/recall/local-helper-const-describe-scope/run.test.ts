@@ -1,12 +1,12 @@
-// RECALL positive control -- duplicate-test expected, shape: a local `const` helper refused
-// inside a describe, beside a duplicate pair outside it.
+// RECALL positive control -- duplicate-test expected, shape: a local `let` helper refused inside a
+// describe, beside a duplicate pair outside it.
 //
 // The refusal sets aside the scope the call runs in (`inner`), not its siblings: `one` and `two`
 // are still compared and reported.
 import { describe, test, expect } from 'vitest'
 
 describe('group', () => {
-  const declare = (name: string) => {
+  let declare = (name: string) => {
     test(name, () => {
       expect(1).toBe(1)
     })

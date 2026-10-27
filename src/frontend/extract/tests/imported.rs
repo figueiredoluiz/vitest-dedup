@@ -602,8 +602,9 @@ fn default_namespace_spread_and_opaque_nested_callables_are_explicitly_refused()
     let helpers = [
         "export default makeRunner;",
         "export const run = () => setup();",
-        "export function run() { const local = () => test('a', () => {}); local(); }",
         "export function run() { const local = setup(); }",
+        "export function run() { let local = () => test('a', () => {}); local(); }",
+        "export function run() { local(); const local = () => test('a', () => {}); }",
         "export function run(value = test('default', () => {})) { return 2; }",
         "export function run() { return; test('a', () => {}); }",
     ];
@@ -621,6 +622,14 @@ fn default_namespace_spread_and_opaque_nested_callables_are_explicitly_refused()
         assert_eq!(extraction.tests.len(), 0);
         assert!(extraction.incomplete, "{helper}");
     }
+    // A `const` helper the runner initializes before calling it is read like a nested function.
+    let nested = RunnerCase::new(
+        "import { test } from 'vitest'; export function run() { const local = () => test('a', () => {}); local(); }",
+        "run();",
+    );
+    let extraction = nested.extract(Globals::Disabled);
+    assert_eq!(extraction.tests.len(), 1, "{:?}", extraction.diagnostics);
+    assert!(!extraction.incomplete, "{:?}", extraction.diagnostics);
     for method in ["call", "apply"] {
         let ordinary = RunnerCase::new(
             "export function run() { return 2; }",

@@ -1,9 +1,8 @@
-// RECALL control -- duplicate-test absent, shape: a test declared through a local `const` arrow
+// RECALL positive -- duplicate-test expected, shape: a test declared through a local `const` arrow
 // called at collection time.
 //
-// Vitest runs `hidden`, but only `function` declarations are inlined, so the arrow's body is not
-// read. Reporting `visible` alone as complete would hide `hidden` from every finding; the call is
-// refused instead and the file is set aside.
+// The binding is a `const` initialized before the call, so the call runs the arrow's body, which
+// declares `hidden`; it is read like a `function` declaration's and compared with `visible`.
 import { test, expect } from 'vitest'
 
 const declare = () => {

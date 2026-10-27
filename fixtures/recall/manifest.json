@@ -5671,23 +5671,24 @@
       "name": "local-helper-const-arrow",
       "path": "local-helper-const-arrow",
       "rule": "duplicate-test",
-      "role": "variant",
+      "role": "positive",
       "origin": "synthetic",
       "verdict": "generated",
       "classifiedAt": "2026-10-27",
-      "expectedTests": 1,
-      "expectedIncomplete": true,
-      "expectedUnresolved": 1,
-      "expectedFindings": [],
-      "expectedAbsent": [
+      "expectedTests": 2,
+      "expectedIncomplete": false,
+      "expectedUnresolved": 0,
+      "expectedFindings": [
         {
           "rule": "duplicate-test",
+          "severity": "error",
           "titles": [
             "hidden",
             "visible"
           ]
         }
-      ]
+      ],
+      "expectedAbsent": []
     },
     {
       "name": "local-helper-const-describe-scope",
@@ -5752,6 +5753,74 @@
           "titles": [
             "first",
             "second"
+          ]
+        }
+      ],
+      "expectedAbsent": []
+    },
+    {
+      "name": "local-helper-const-concise",
+      "path": "local-helper-const-concise",
+      "rule": "duplicate-test",
+      "role": "positive",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-10-27",
+      "expectedTests": 2,
+      "expectedIncomplete": false,
+      "expectedUnresolved": 0,
+      "expectedFindings": [
+        {
+          "rule": "duplicate-test",
+          "severity": "error",
+          "titles": [
+            "hidden",
+            "visible"
+          ]
+        }
+      ],
+      "expectedAbsent": []
+    },
+    {
+      "name": "local-helper-const-tdz",
+      "path": "local-helper-const-tdz",
+      "rule": "duplicate-test",
+      "role": "variant",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-10-27",
+      "expectedTests": 1,
+      "expectedIncomplete": true,
+      "expectedUnresolved": 1,
+      "expectedFindings": [],
+      "expectedAbsent": [
+        {
+          "rule": "duplicate-test",
+          "titles": [
+            "hidden",
+            "visible"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "local-helper-const-later-call",
+      "path": "local-helper-const-later-call",
+      "rule": "duplicate-test",
+      "role": "positive",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-10-27",
+      "expectedTests": 2,
+      "expectedIncomplete": false,
+      "expectedUnresolved": 0,
+      "expectedFindings": [
+        {
+          "rule": "duplicate-test",
+          "severity": "error",
+          "titles": [
+            "hidden",
+            "visible"
           ]
         }
       ],
