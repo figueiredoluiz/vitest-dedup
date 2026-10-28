@@ -3297,14 +3297,13 @@ impl<'a> Walker<'a> {
             })
             .collect();
         if callbacks.is_empty()
-            || registration_free::arguments_register_nothing(
+            || registration_free::callbacks_register_nothing(
                 self.program,
                 self.semantic,
                 self.written_bindings(),
                 &self.file.path,
-                callbacks,
+                &callbacks,
             )
-            .is_some()
         {
             return;
         }
@@ -9039,11 +9038,18 @@ mod tests {
             "function setup() { [1].forEach(() => test('hidden', () => {})); } setup();",
             // A free callee that is not another runner's registration name.
             "register(() => { test('hidden', () => {}); });",
+            // The callee chooses what a callback's parameters hold.
+            "[test].forEach((fn) => fn('hidden', () => {}));",
+            "[{ declare: test }].forEach(({ declare }) => { declare('hidden', () => {}); });",
+            "[1].forEach(function () { this('hidden', () => {}); }, test);",
+            "[test].forEach(function () { arguments[0]('hidden', () => {}); });",
+            // Even a parameter that is only stored: the proof cannot see what it holds.
+            "const seen = []; [1].forEach((n) => { seen.push(n); });",
         ] {
             assert_visible_refusal(&extract_with(body), body, "inline callback handed");
         }
         for body in [
-            "const seen = []; [1].forEach((n) => { seen.push(n); });",
+            "const seen = []; [1].forEach(() => { seen.push(1); });",
             "setTimeout(() => {}, 0);",
             // Another runner's global, not a Vitest helper.
             "suite('s', () => { test('hidden', () => {}); });",

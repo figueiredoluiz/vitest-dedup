@@ -7625,6 +7625,28 @@
       ]
     },
     {
+      "name": "callback-parameter-registers",
+      "path": "callback-parameter-registers",
+      "rule": "duplicate-test",
+      "role": "variant",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-10-28",
+      "expectedTests": 1,
+      "expectedIncomplete": true,
+      "expectedUnresolved": 1,
+      "expectedFindings": [],
+      "expectedAbsent": [
+        {
+          "rule": "duplicate-test",
+          "titles": [
+            "hidden",
+            "visible"
+          ]
+        }
+      ]
+    },
+    {
       "name": "callback-inert-foreach",
       "path": "callback-inert-foreach",
       "rule": "duplicate-test",

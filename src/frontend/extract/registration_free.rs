@@ -32,7 +32,7 @@ use oxc_ast::ast::{
     FormalParameters, Function, IdentifierReference, ImportDeclarationSpecifier, ImportExpression,
     ImportOrExportKind, ObjectPropertyKind, Program, PropertyKind, Statement,
     StaticMemberExpression, TSEnumDeclaration, TSNamespaceDeclaration, TSNamespaceDeclarationBody,
-    VariableDeclaration, VariableDeclarator,
+    ThisExpression, VariableDeclaration, VariableDeclarator,
 };
 use oxc_ast::AstKind;
 use oxc_ast_visit::{walk, Visit};
@@ -506,14 +506,54 @@ pub(super) fn call_registers_nothing(path: &Path, export: &str) -> Option<Vec<Pa
 
 /// Whether evaluating `arguments`, written in the file at `file`, provably registers nothing: no
 /// registration API is reachable from them, so a helper handed them cannot run one.
-pub(super) fn arguments_register_nothing<'p, 'a: 'p>(
+pub(super) fn arguments_register_nothing(
     program: &Program<'_>,
     semantic: &Semantic<'_>,
     written: &HashSet<SymbolId>,
     file: &Path,
-    arguments: impl IntoIterator<Item = &'p Argument<'a>>,
+    arguments: &[Argument<'_>],
 ) -> Option<Vec<PathBuf>> {
-    evaluation_registers_nothing(program, semantic, written, file, None, arguments)
+    evaluation_registers_nothing(
+        program,
+        semantic,
+        written,
+        file,
+        None,
+        arguments,
+        Vec::new(),
+    )
+}
+
+/// Whether the inline `callbacks` handed to a call this analyzer does not read, written in the
+/// file at `file`, provably register nothing when that call runs them. Their parameters hold
+/// whatever the callee passes (`[test].forEach((fn) => fn(...))`), so following one fails.
+pub(super) fn callbacks_register_nothing<'p, 'a: 'p>(
+    program: &Program<'_>,
+    semantic: &Semantic<'_>,
+    written: &HashSet<SymbolId>,
+    file: &Path,
+    callbacks: &[&'p Argument<'a>],
+) -> bool {
+    let supplied = callbacks
+        .iter()
+        .filter_map(
+            |callback| match callback.as_expression()?.get_inner_expression() {
+                Expression::FunctionExpression(function) => Some(function.params.span),
+                Expression::ArrowFunctionExpression(arrow) => Some(arrow.params.span),
+                _ => None,
+            },
+        )
+        .collect();
+    evaluation_registers_nothing(
+        program,
+        semantic,
+        written,
+        file,
+        None,
+        callbacks.iter().copied(),
+        supplied,
+    )
+    .is_some()
 }
 
 /// Whether calling `callee`, a binding written in the file at `file`, with `arguments` provably
@@ -527,8 +567,16 @@ pub(super) fn local_call_registers_nothing(
     callee: &Expression<'_>,
     arguments: &[Argument<'_>],
 ) -> bool {
-    evaluation_registers_nothing(program, semantic, written, file, Some(callee), arguments)
-        .is_some()
+    evaluation_registers_nothing(
+        program,
+        semantic,
+        written,
+        file,
+        Some(callee),
+        arguments,
+        Vec::new(),
+    )
+    .is_some()
 }
 
 /// Proves an expression the helper walker ignores has no registration effects when evaluated.
@@ -588,7 +636,8 @@ fn ignored_evaluation_registers_nothing<'a>(
 }
 
 /// Scans `callee` (when given) and `arguments` as code that runs in the file at `file`, and proves
-/// the modules they reach; the modules the proof relied on, or `None`.
+/// the modules they reach; the modules the proof relied on, or `None`. `supplied` lists parameter
+/// lists whose values the scan cannot see (see [`Scanner::unknown_at_call`]).
 fn evaluation_registers_nothing<'p, 'a: 'p>(
     program: &Program<'_>,
     semantic: &Semantic<'_>,
@@ -596,9 +645,11 @@ fn evaluation_registers_nothing<'p, 'a: 'p>(
     file: &Path,
     callee: Option<&Expression<'_>>,
     arguments: impl IntoIterator<Item = &'p Argument<'a>>,
+    supplied: Vec<Span>,
 ) -> Option<Vec<PathBuf>> {
     let mut scanner = Scanner::new(semantic, program, file);
     scanner.written = Some(written);
+    scanner.supplied = supplied;
     if let Some(callee) = callee {
         scanner.queue.push(Pending::Expression(callee));
     }
@@ -1274,6 +1325,9 @@ struct Scanner<'s, 'a> {
     /// The parameter list of the helper whose call inputs are scanned, and the call: following a
     /// binding whose value is unknown there is refused (see [`Scanner::unknown_at_call`]).
     helper_call: Option<(Span, Span)>,
+    /// Parameter lists of callbacks handed to a call this analyzer does not read: the callee
+    /// chooses what they hold, so following one is refused.
+    supplied: Vec<Span>,
     failed: bool,
     /// Whether the scan is of a module's import-time code (see [`Root::ImportTime`]). `vi` and
     /// `expect` used there change what every test in the importing file sees, and no test's
@@ -1313,6 +1367,7 @@ impl<'s, 'a> Scanner<'s, 'a> {
             edges: Vec::new(),
             written: None,
             helper_call: None,
+            supplied: Vec::new(),
             failed: false,
             import_time: false,
         }
@@ -1803,13 +1858,19 @@ impl<'s, 'a> Scanner<'s, 'a> {
     /// Whether the parameter or catch binding `declaration` holds a value no declaration shows at
     /// the helper call: the helper's own parameter holds the call's argument (`hook = register()`
     /// runs the caller's function), and one of a function or `catch` the call sits in holds what
-    /// that function was called with or what was thrown (`forward(opts) { setup(opts) }`).
+    /// that function was called with or what was thrown (`forward(opts) { setup(opts) }`). A
+    /// parameter of a callback in [`Scanner::supplied`] holds what the unread callee passes.
     fn unknown_at_call(&self, declaration: NodeId) -> bool {
+        let nodes = self.semantic.nodes();
+        let owner = nodes.parent_id(declaration);
+        if let AstKind::FormalParameters(list) = nodes.get_node(owner).kind() {
+            if self.supplied.contains(&list.span) {
+                return true;
+            }
+        }
         let Some((parameters, call)) = self.helper_call else {
             return false;
         };
-        let nodes = self.semantic.nodes();
-        let owner = nodes.parent_id(declaration);
         let scope = match nodes.get_node(owner).kind() {
             AstKind::FormalParameters(list) if list.span == parameters => return true,
             AstKind::FormalParameters(_) => nodes.parent_kind(owner).span(),
@@ -1817,6 +1878,22 @@ impl<'s, 'a> Scanner<'s, 'a> {
             _ => return false,
         };
         scope.start <= call.start && call.end <= scope.end
+    }
+
+    /// Whether the `this` or `arguments` at `node` belongs to a callback in [`Scanner::supplied`]:
+    /// the nearest enclosing `function` is one, so the unread callee chooses its value. An arrow
+    /// takes both from where it is written; a class body binds its own `this`.
+    fn bound_by_callee(&self, node: NodeId) -> bool {
+        for kind in self.semantic.nodes().ancestor_kinds(node) {
+            match kind {
+                AstKind::Function(function) => {
+                    return self.supplied.contains(&function.params.span);
+                }
+                AstKind::Class(_) => return false,
+                _ => {}
+            }
+        }
+        false
     }
 
     /// Judges a free name: a Vitest export is judged by the caller, a host global is harmless, an
@@ -1855,6 +1932,13 @@ impl<'s, 'a> Scanner<'s, 'a> {
 }
 
 impl<'a> Visit<'a> for Scanner<'_, 'a> {
+    /// A callback's `this` holds what the unread callee binds (`forEach(fn, thisArg)`).
+    fn visit_this_expression(&mut self, this: &ThisExpression) {
+        if self.bound_by_callee(this.node_id.get()) {
+            self.failed = true;
+        }
+    }
+
     /// Judges a name the scanned code reads: a type-only use is erased, a Vitest export is judged by
     /// name, an import becomes an edge, and a local binding is followed to its declaration.
     fn visit_identifier_reference(&mut self, ident: &IdentifierReference<'a>) {
@@ -1868,6 +1952,10 @@ impl<'a> Visit<'a> for Scanner<'_, 'a> {
         }
         let symbol = self.symbol_of(ident);
         let free = symbol.is_none();
+        if free && ident.name == "arguments" && self.bound_by_callee(ident.node_id.get()) {
+            self.failed = true;
+            return;
+        }
         if free && REFLECTIVE.contains(&ident.name.as_str()) {
             self.failed = true;
             return;
