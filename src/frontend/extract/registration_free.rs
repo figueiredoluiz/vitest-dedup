@@ -679,16 +679,12 @@ pub(super) fn call_inputs_register_nothing(
     written: &HashSet<SymbolId>,
     file: &Path,
     parameters: &FormalParameters<'_>,
-    arguments: &[Argument<'_>],
+    arguments: Option<&[&Expression<'_>]>,
     call: Span,
 ) -> bool {
-    let mut supplied = Vec::new();
-    for argument in arguments {
-        let Some(expression) = argument.as_expression() else {
-            return false;
-        };
-        supplied.push(expression);
-    }
+    let Some(supplied) = arguments else {
+        return false;
+    };
     let mut inputs: Vec<&Expression> = Vec::new();
     // Read through a destructuring pattern, so scanned even when the expression itself is inert.
     let mut destructured: Vec<&Expression> = Vec::new();
@@ -733,6 +729,14 @@ pub(super) fn call_inputs_register_nothing(
     !scanner.failed && Proof::default().prove_edges(scanner.edges)
 }
 
+/// The expressions a call passes, by position; `None` when a spread moves later arguments to
+/// positions the source does not show.
+pub(super) fn argument_expressions<'p, 'a>(
+    arguments: &'p [Argument<'a>],
+) -> Option<Vec<&'p Expression<'a>>> {
+    arguments.iter().map(Argument::as_expression).collect()
+}
+
 /// What a binding pattern receives, as far as the source shows it.
 #[derive(Clone, Copy)]
 enum Bound<'p, 'a> {
@@ -749,15 +753,12 @@ enum Bound<'p, 'a> {
 pub(super) fn call_binding_fails(
     semantic: &Semantic<'_>,
     parameters: &FormalParameters<'_>,
-    arguments: &[Argument<'_>],
+    arguments: Option<&[&Expression<'_>]>,
 ) -> bool {
     // A spread moves every later argument to a position the source does not show.
-    if arguments
-        .iter()
-        .any(|argument| argument.as_expression().is_none())
-    {
+    let Some(arguments) = arguments else {
         return false;
-    }
+    };
     parameters
         .items
         .iter()
@@ -765,7 +766,7 @@ pub(super) fn call_binding_fails(
         .any(|(index, parameter)| {
             let received = arguments
                 .get(index)
-                .and_then(Argument::as_expression)
+                .copied()
                 .map_or(Bound::Missing, Bound::Value);
             let received = match (received, parameter.initializer.as_deref()) {
                 (bound, Some(default)) if bound_is_undefined(semantic, bound) => {

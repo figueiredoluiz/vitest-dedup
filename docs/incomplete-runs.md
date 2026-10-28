@@ -110,7 +110,7 @@ alone. Past the cap the files with the fewest excluded tests are left out of the
 | --- | --- |
 | `helper-export-unreadable` | An imported runner's export could not be resolved, read, or proved to be one function, and the call could not be proved to register nothing; a local helper the call names is declared more than once or reassigned, so the body that runs is not the one a declaration states; or a called local helper that is neither a `function` declaration nor a `const` function initialized before the call (a `let` binding, a parameter, a computed value, a generator, a `const` declared in another `switch` case, or a call whose arguments or parameter defaults run code that may register) could not be proved to register nothing. |
 | `helper-setup-effects` | An imported runner or a module on its chain has setup, fixture or module effects that were not proved inert, and the call could not be proved to register nothing. |
-| `helper-effects-unproved` | A call, argument or parameter write inside an imported runner has unproved effects, an expression in a called local helper is not walked and may register tests or hooks, or the arguments or parameter defaults of a call to a local helper run code that may register (a default that calls another parameter runs whatever the caller passed, and a value forwarded from an enclosing function's parameter or a `catch` binding is not shown where the helper reads it); or an inline callback handed to a call the analyzer does not read (`[1, 2].forEach(() => test(...))`) may register. |
+| `helper-effects-unproved` | A call, argument or parameter write inside an imported runner has unproved effects, an expression in a called local helper is not walked and may register tests or hooks, or the arguments or parameter defaults of a call to a local helper run code that may register (a default that calls another parameter runs whatever the caller passed, and a value forwarded from an enclosing function's parameter or a `catch` binding is not shown where the helper reads it); or an inline callback handed to a call the analyzer does not read (`rows.forEach(() => test(...))` over an array it cannot see) may register. |
 | `helper-limit` | A helper expansion budget, recursion or depth limit was reached. |
 | `helper-sources-unavailable` | Helper bodies, or the imported constants a table cell reads, are unavailable in a historical revision baseline. |
 | `runner-mocked` | The runner, or a module on its re-export chain, is mocked or mocking is unresolved. |
@@ -154,8 +154,10 @@ not protect against unbounded input.
 ## Declaration limits
 
 Each file emits at most 10,000 declarations (tests, `.each` rows and suite records, including those
-from imported runners) and unrolls at most 10,000 literal `for...of` iterations. A `.each` table or
-loop array longer than what remains of its limit is skipped without being read. Past either limit
+from imported runners) and unrolls at most 10,000 literal `for...of` and known-array `forEach`
+iterations. Each `forEach` element is also one helper expansion, of which a file has 2,000
+(`helper-limit`). A `.each` table or loop array longer than what remains of its limit is skipped
+without being read. Past either limit
 the file stops emitting and counts as not read in full; the declarations already emitted are
 compared as usual.
 

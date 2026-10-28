@@ -790,7 +790,7 @@ fn inputs_register_nothing(prelude: &str, parameters: &str, arguments: &str) -> 
                 &written,
                 std::path::Path::new("case.test.ts"),
                 parameters,
-                arguments,
+                super::registration_free::argument_expressions(arguments).as_deref(),
                 call,
             )
         },
@@ -809,7 +809,11 @@ fn binding_fails_after(prelude: &str, parameters: &str, arguments: &str) -> bool
         parameters,
         arguments,
         |_, semantic, parameters, arguments, _| {
-            super::registration_free::call_binding_fails(semantic, parameters, arguments)
+            super::registration_free::call_binding_fails(
+                semantic,
+                parameters,
+                super::registration_free::argument_expressions(arguments).as_deref(),
+            )
         },
     )
 }

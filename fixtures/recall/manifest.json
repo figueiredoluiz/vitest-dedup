@@ -7670,6 +7670,37 @@
       "expectedAbsent": []
     },
     {
+      "name": "foreach-known-array",
+      "path": "foreach-known-array",
+      "rule": "duplicate-test",
+      "role": "positive",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-10-28",
+      "expectedTests": 3,
+      "expectedIncomplete": false,
+      "expectedUnresolved": 0,
+      "expectedFindings": [
+        {
+          "rule": "duplicate-test",
+          "severity": "error",
+          "titles": [
+            "loop a",
+            "outside"
+          ]
+        }
+      ],
+      "expectedAbsent": [
+        {
+          "rule": "duplicate-test",
+          "titles": [
+            "loop a",
+            "loop b"
+          ]
+        }
+      ]
+    },
+    {
       "name": "callback-imported-data",
       "path": "callback-imported-data",
       "rule": "duplicate-test",

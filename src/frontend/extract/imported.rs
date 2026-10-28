@@ -757,9 +757,10 @@ impl<'a> Walker<'a> {
                     "the imported runner writes to a parameter",
                 )));
             }
-            child
-                .param_bindings
-                .extend(self.fold_parameter_arguments(parameters, call));
+            child.param_bindings.extend(self.fold_parameter_arguments(
+                parameters,
+                super::registration_free::argument_expressions(&call.arguments).as_deref(),
+            ));
             let (statements, concise) = match &callable {
                 Callable::Function(function) => (
                     function

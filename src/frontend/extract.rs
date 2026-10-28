@@ -20,11 +20,12 @@ use crate::model::{
 };
 use oxc_allocator::Allocator;
 use oxc_ast::ast::{
-    Argument, ArrayExpressionElement, ArrowFunctionBody, AssignmentOperator, AssignmentTarget,
-    BindingPattern, CallExpression, ChainElement, Expression, ForOfStatement, ForStatementLeft,
-    FormalParameters, Function, FunctionType, IdentifierReference, ImportDeclarationSpecifier,
-    LabelIdentifier, ObjectExpression, ObjectPropertyKind, Program, Statement, TemplateLiteral,
-    UnaryOperator, VariableDeclarationKind, VariableDeclarator,
+    Argument, ArrayExpression, ArrayExpressionElement, ArrowFunctionBody, ArrowFunctionExpression,
+    AssignmentOperator, AssignmentTarget, BindingPattern, CallExpression, ChainElement, Expression,
+    ForOfStatement, ForStatementLeft, FormalParameters, Function, FunctionType,
+    IdentifierReference, ImportDeclarationSpecifier, LabelIdentifier, ObjectExpression,
+    ObjectPropertyKind, Program, Statement, StaticMemberExpression, TemplateLiteral, UnaryOperator,
+    VariableDeclarationKind, VariableDeclarator,
 };
 use oxc_ast::AstKind;
 use oxc_ast_visit::{walk, Visit};
@@ -330,9 +331,10 @@ const MAX_HELPER_EXPANSIONS: usize = 2_000;
 /// the file is incomplete. The largest real test file measured declares 297 tests.
 const MAX_DECLARATIONS_PER_FILE: usize = 10_000;
 
-/// How many literal `for...of` iterations one file may unroll. Bounds walks over loop bodies that
-/// declare nothing, which [`MAX_DECLARATIONS_PER_FILE`] cannot see. A loop spends its array's
-/// length before any element is folded, so an over-long array costs nothing to refuse.
+/// How many literal `for...of` and known-array `forEach` iterations one file may unroll. Bounds
+/// walks over loop bodies that declare nothing, which [`MAX_DECLARATIONS_PER_FILE`] cannot see. A
+/// loop spends its array's length before any element is folded, so an over-long array costs
+/// nothing to refuse.
 const MAX_UNROLLED_ITERATIONS: usize = 10_000;
 
 /// Estimates bracket nesting with a lexical masking heuristic, without parsing `source`.
@@ -1145,6 +1147,24 @@ struct LocalHelper<'a> {
 }
 
 impl<'a> LocalHelper<'a> {
+    /// The helper an arrow is; `None` for a concise body that is not a call, the one expression
+    /// the walker reads.
+    fn of_arrow(arrow: &'a ArrowFunctionExpression<'a>) -> Option<Self> {
+        Some(Self {
+            start: arrow.span.start,
+            params: &arrow.params,
+            body: match &arrow.body {
+                ArrowFunctionBody::FunctionBody(body) => {
+                    LocalHelperBody::Statements(&body.statements)
+                }
+                ArrowFunctionBody::CallExpression(body) => LocalHelperBody::Concise(body),
+                _ => return None,
+            },
+            generator: false,
+            asynchronous: arrow.r#async,
+        })
+    }
+
     /// The helper a function with a body is; `None` for an overload signature or `declare`.
     fn of_function(function: &'a Function<'a>) -> Option<Self> {
         Some(Self {
@@ -3215,7 +3235,22 @@ impl<'a> Walker<'a> {
         if self.refuse_redeclared_helper(&call.callee) {
             return;
         }
-        if self.resolve_local_helper(call).is_some() {
+        if let Some((helper, call, array, elements)) = self.known_array_iteration(call) {
+            // As for `for...of`: hooks in the body are guarded by the loop's array, the prepare
+            // pass records them once, and only the declaration walk unrolls, spending the loop
+            // budget.
+            self.push_guard(HookGuardKind::ForOfBody, Some(self.raw_text(array.span)));
+            if prepare {
+                if let Some(&first) = elements.first() {
+                    self.run_helper_body(helper, call, Some(&[first]), registry, walk, prepare);
+                }
+            } else if self.expansion.borrow_mut().admit_iterations(elements.len()) {
+                for element in elements {
+                    self.run_helper_body(helper, call, Some(&[element]), registry, walk, prepare);
+                }
+            }
+            self.pop_guard();
+        } else if self.resolve_local_helper(call).is_some() {
             self.with_helper_body(call, registry, walk, prepare);
         } else if !self.refuse_unread_local_helper(call) {
             self.imported_helper_call(call, prepare);
@@ -3325,7 +3360,25 @@ impl<'a> Walker<'a> {
         walk: fn(&mut Self, &[Statement<'a>], &mut Registry),
         prepare: bool,
     ) {
-        let Some(frame) = self.begin_helper_expansion(call) else {
+        let Some(helper) = self.resolve_local_helper(call) else {
+            return;
+        };
+        let arguments = registration_free::argument_expressions(&call.arguments);
+        self.run_helper_body(helper, call, arguments.as_deref(), registry, walk, prepare);
+    }
+
+    /// Runs `helper` once, as `call` does when it passes `arguments` (`None` when a spread hides
+    /// their positions): opens the frame, walks the body, closes the frame.
+    fn run_helper_body(
+        &mut self,
+        helper: LocalHelper<'a>,
+        call: &CallExpression<'a>,
+        arguments: Option<&[&Expression<'_>]>,
+        registry: &mut Registry,
+        walk: fn(&mut Self, &[Statement<'a>], &mut Registry),
+        prepare: bool,
+    ) {
+        let Some(frame) = self.begin_helper_expansion(helper, call, arguments) else {
             return;
         };
         // A setup call inside this body runs as often as the body does, and where the outermost
@@ -3370,11 +3423,14 @@ impl<'a> Walker<'a> {
         self.end_helper_expansion(frame);
     }
 
-    /// Resolves `call` to a helper this file declares and opens a frame for it, or returns `None`
-    /// (silently, when `call` is simply not a local helper; with a diagnostic when it is one this
-    /// walker refuses to expand -- see [`Self::refuse_helper_expansion`]).
-    fn begin_helper_expansion(&mut self, call: &CallExpression<'a>) -> Option<HelperFrame<'a>> {
-        let helper = self.resolve_local_helper(call)?;
+    /// Opens a frame for `helper` called from `call` with `arguments`, or returns `None` with a
+    /// diagnostic when this walker refuses to expand it -- see [`Self::refuse_helper_expansion`].
+    fn begin_helper_expansion(
+        &mut self,
+        helper: LocalHelper<'a>,
+        call: &CallExpression<'a>,
+        arguments: Option<&[&Expression<'_>]>,
+    ) -> Option<HelperFrame<'a>> {
         let identity = (
             self.file
                 .path
@@ -3385,7 +3441,7 @@ impl<'a> Walker<'a> {
         // A recursive call is refused below for what it is; its inputs read the helper's own
         // parameters, which would otherwise be the reason given.
         if !self.expansion.borrow().is_active(&identity) {
-            if let Some(reason) = self.unwalkable_helper_call(helper, call) {
+            if let Some(reason) = self.unwalkable_helper_call(helper, call, arguments) {
                 self.refuse_helper_expansion(reason);
                 return None;
             }
@@ -3397,7 +3453,7 @@ impl<'a> Walker<'a> {
         }
 
         let before = self.param_bindings.len();
-        self.bind_helper_parameters(helper.params, call);
+        self.bind_helper_parameters(helper.params, arguments);
         let frame = HelperFrame {
             helper,
             call_start: call.span.start,
@@ -3415,6 +3471,7 @@ impl<'a> Walker<'a> {
         &self,
         helper: LocalHelper<'a>,
         call: &CallExpression<'a>,
+        arguments: Option<&[&Expression<'_>]>,
     ) -> Option<Refusal> {
         if helper.generator {
             return Some(refusal(
@@ -3428,7 +3485,7 @@ impl<'a> Walker<'a> {
                 "the called helper is async and awaits, so what follows depends on promise timing",
             ));
         }
-        if registration_free::call_binding_fails(self.semantic, helper.params, &call.arguments) {
+        if registration_free::call_binding_fails(self.semantic, helper.params, arguments) {
             return Some(refusal(
                 ExclusionReason::UnsupportedExpression,
                 "an argument cannot bind the helper's destructuring parameter, so the call throws before the body runs",
@@ -3440,7 +3497,7 @@ impl<'a> Walker<'a> {
             self.written_bindings(),
             &self.file.path,
             helper.params,
-            &call.arguments,
+            arguments,
             call.span,
         ))
         .then_some(refusal(
@@ -3614,24 +3671,108 @@ impl<'a> Walker<'a> {
         {
             return None;
         }
-        let helper = match super::registry::unwrap_transparent(declarator.init.as_ref()?) {
-            Expression::ArrowFunctionExpression(arrow) => LocalHelper {
-                start: arrow.span.start,
-                params: &arrow.params,
-                body: match &arrow.body {
-                    ArrowFunctionBody::FunctionBody(body) => {
-                        LocalHelperBody::Statements(&body.statements)
-                    }
-                    ArrowFunctionBody::CallExpression(body) => LocalHelperBody::Concise(body),
-                    _ => return None,
-                },
-                generator: false,
-                asynchronous: arrow.r#async,
-            },
-            Expression::FunctionExpression(function) => LocalHelper::of_function(function)?,
+        match super::registry::unwrap_transparent(declarator.init.as_ref()?) {
+            Expression::ArrowFunctionExpression(arrow) => LocalHelper::of_arrow(arrow),
+            Expression::FunctionExpression(function) => LocalHelper::of_function(function),
+            _ => None,
+        }
+    }
+
+    /// `array.forEach(callback)` over an array this file spells out: the inline arrow, which the
+    /// call runs once per element as a helper called with that element, and the elements.
+    /// The callback is one [`element_callback`] accepts. `None` leaves the call to the unread-call
+    /// refusal.
+    fn known_array_iteration(
+        &self,
+        call: &CallExpression<'a>,
+    ) -> Option<(
+        LocalHelper<'a>,
+        &'a CallExpression<'a>,
+        &'a ArrayExpression<'a>,
+        Vec<&'a Expression<'a>>,
+    )> {
+        let semantic: &'a Semantic<'a> = self.semantic;
+        let AstKind::CallExpression(call) = semantic.nodes().kind(call.node_id.get()) else {
+            return None;
+        };
+        let (member, arrow) = element_callback(call)?;
+        let helper = LocalHelper::of_arrow(arrow)?;
+        let array = match super::registry::unwrap_transparent(&member.object) {
+            Expression::ArrayExpression(array) => array,
+            Expression::Identifier(ident) => self.const_array(ident, call)?,
             _ => return None,
         };
-        Some(helper)
+        // A spread hides how many elements there are; `forEach` skips a hole.
+        let elements = array
+            .elements
+            .iter()
+            .map(ArrayExpressionElement::as_expression)
+            .collect::<Option<Vec<_>>>()?;
+        Some((helper, call, array, elements))
+    }
+
+    /// The array literal a `const` holds when `call` runs, when nothing else can change it: a
+    /// single non-exported binding initialized before `call`, every reference to which is the
+    /// receiver of a `.forEach` whose callback cannot reach the array ([`element_callback`]), so
+    /// no code mutates the array or passes it anywhere. A callback can still change an object
+    /// element it receives (installing a getter a later destructuring runs), so an array holding
+    /// anything but primitives is read only by its one loop, in the function that creates it.
+    fn const_array(
+        &self,
+        ident: &IdentifierReference,
+        call: &CallExpression,
+    ) -> Option<&'a ArrayExpression<'a>> {
+        let semantic: &'a Semantic<'a> = self.semantic;
+        let scoping = semantic.scoping();
+        let nodes = semantic.nodes();
+        let symbol = scoping
+            .get_reference(ident.reference_id.get()?)
+            .symbol_id()?;
+        let node = registration_free::runtime_declaration(semantic, symbol)?;
+        let AstKind::VariableDeclarator(declarator) = nodes.kind(node) else {
+            return None;
+        };
+        let declaration_node = nodes.parent_id(node);
+        let AstKind::VariableDeclaration(declaration) = nodes.kind(declaration_node) else {
+            return None;
+        };
+        if declaration.kind != VariableDeclarationKind::Const
+            || declaration.declare
+            || matches!(
+                nodes.parent_kind(declaration_node),
+                AstKind::ExportDeclaration(_)
+            )
+            || scoping.symbol_is_mutated(symbol)
+            || !matches!(&declarator.id, BindingPattern::BindingIdentifier(binding)
+                if binding.symbol_id.get() == Some(symbol))
+            || !self.initialized_before_call(symbol, node, declarator.span.end, call)
+            || !scoping
+                .get_resolved_reference_ids(symbol)
+                .iter()
+                .all(|&reference| {
+                    for_each_receiver(semantic, scoping.get_reference(reference).node_id())
+                })
+        {
+            return None;
+        }
+        let Expression::ArrayExpression(array) =
+            super::registry::unwrap_transparent(declarator.init.as_ref()?)
+        else {
+            return None;
+        };
+        let primitive = array.elements.iter().all(|element| {
+            element
+                .as_expression()
+                .map(super::registry::unwrap_transparent)
+                .is_some_and(|value| {
+                    value.is_literal() && !matches!(value, Expression::RegExpLiteral(_))
+                })
+        });
+        (primitive
+            || (scoping.get_resolved_reference_ids(symbol).len() == 1
+                && enclosing_function(semantic, node)
+                    == enclosing_function(semantic, call.node_id.get())))
+        .then_some(array)
     }
 
     /// Whether the `const` binding `symbol`, whose declarator ends at `declared_end`, has been
@@ -3689,9 +3830,9 @@ impl<'a> Walker<'a> {
     fn bind_helper_parameters(
         &mut self,
         parameters: &'a FormalParameters<'a>,
-        call: &CallExpression<'a>,
+        arguments: Option<&[&Expression<'_>]>,
     ) {
-        let bound = self.fold_parameter_arguments(parameters, call);
+        let bound = self.fold_parameter_arguments(parameters, arguments);
         self.param_bindings.extend(bound);
     }
 
@@ -3701,15 +3842,11 @@ impl<'a> Walker<'a> {
     fn fold_parameter_arguments(
         &self,
         parameters: &FormalParameters<'_>,
-        call: &CallExpression<'_>,
+        arguments: Option<&[&Expression<'_>]>,
     ) -> Vec<(SymbolId, BindingValue)> {
-        if call
-            .arguments
-            .iter()
-            .any(|argument| matches!(argument, Argument::SpreadElement(_)))
-        {
+        let Some(arguments) = arguments else {
             return Vec::new();
-        }
+        };
         let mut bound = Vec::new();
         for (index, parameter) in parameters.items.iter().enumerate() {
             let BindingPattern::BindingIdentifier(binding) = &parameter.pattern else {
@@ -3718,10 +3855,8 @@ impl<'a> Walker<'a> {
             let Some(symbol) = binding.symbol_id.get() else {
                 continue;
             };
-            let Some(value) = call
-                .arguments
+            let Some(value) = arguments
                 .get(index)
-                .and_then(Argument::as_expression)
                 .and_then(|argument| self.binding_value_of(argument))
             else {
                 continue;
@@ -4014,6 +4149,69 @@ fn literal_for_of_elements(for_of: &ForOfStatement) -> Option<(SymbolId, Vec<Bin
         return None;
     }
     Some((symbol_id, values))
+}
+
+/// The member and arrow of `receiver.forEach(arrow)` when the arrow cannot reach the array or a
+/// `thisArg`: `forEach` passes `(element, index, array)` and a `thisArg`, and an arrow taking at
+/// most the element and a plain index, as the call's only argument, sees neither.
+fn element_callback<'c, 'a>(
+    call: &'c CallExpression<'a>,
+) -> Option<(
+    &'c StaticMemberExpression<'a>,
+    &'c ArrowFunctionExpression<'a>,
+)> {
+    let Expression::StaticMemberExpression(member) = &call.callee else {
+        return None;
+    };
+    if call.optional || member.optional || member.property.name != "forEach" {
+        return None;
+    }
+    let [argument] = call.arguments.as_slice() else {
+        return None;
+    };
+    let Expression::ArrowFunctionExpression(arrow) =
+        super::registry::unwrap_transparent(argument.as_expression()?)
+    else {
+        return None;
+    };
+    let parameters = &arrow.params;
+    if parameters.rest.is_some()
+        || parameters.items.len() > 2
+        || parameters.items.get(1).is_some_and(|index| {
+            index.initializer.is_some()
+                || !matches!(index.pattern, BindingPattern::BindingIdentifier(_))
+        })
+    {
+        return None;
+    }
+    Some((member, arrow))
+}
+
+/// The function (or the program) whose body `node` runs in.
+fn enclosing_function(semantic: &Semantic<'_>, node: oxc_semantic::NodeId) -> oxc_semantic::NodeId {
+    let nodes = semantic.nodes();
+    nodes
+        .ancestor_ids(node)
+        .find(|&ancestor| {
+            matches!(
+                nodes.kind(ancestor),
+                AstKind::Function(_) | AstKind::ArrowFunctionExpression(_) | AstKind::Program(_)
+            )
+        })
+        .unwrap_or(node)
+}
+
+/// Whether the identifier reference at `node` is the receiver of a `.forEach` call whose callback
+/// cannot reach the array.
+fn for_each_receiver(semantic: &Semantic<'_>, node: oxc_semantic::NodeId) -> bool {
+    let nodes = semantic.nodes();
+    let member = nodes.parent_id(node);
+    let AstKind::StaticMemberExpression(expression) = nodes.kind(member) else {
+        return false;
+    };
+    expression.object.span() == nodes.kind(node).span()
+        && matches!(nodes.parent_kind(member), AstKind::CallExpression(call)
+            if call.callee.span() == expression.span && element_callback(call).is_some())
 }
 
 /// A `describe` callback's body: either an ordinary block, or a concise-body arrow
@@ -9031,25 +9229,25 @@ mod tests {
             )
         };
         for body in [
-            "[1, 2].forEach(() => { test('hidden', () => {}); });",
-            "[1].forEach(() => { beforeEach(() => {}); });",
+            "items.forEach(() => { test('hidden', () => {}); });",
+            "items.forEach(() => { beforeEach(() => {}); });",
             "items.forEach(function () { test('hidden', () => {}); });",
-            "[1].forEach((() => { test('hidden', () => {}); }) as never);",
-            "function setup() { [1].forEach(() => test('hidden', () => {})); } setup();",
+            "items.forEach((() => { test('hidden', () => {}); }) as never);",
+            "function setup() { items.forEach(() => test('hidden', () => {})); } setup();",
             // A free callee that is not another runner's registration name.
             "register(() => { test('hidden', () => {}); });",
             // The callee chooses what a callback's parameters hold.
-            "[test].forEach((fn) => fn('hidden', () => {}));",
-            "[{ declare: test }].forEach(({ declare }) => { declare('hidden', () => {}); });",
+            "items.forEach((fn) => fn('hidden', () => {}));",
+            "items.forEach(({ declare }) => { declare('hidden', () => {}); });",
             "[1].forEach(function () { this('hidden', () => {}); }, test);",
             "[test].forEach(function () { arguments[0]('hidden', () => {}); });",
             // Even a parameter that is only stored: the proof cannot see what it holds.
-            "const seen = []; [1].forEach((n) => { seen.push(n); });",
+            "const seen = []; items.forEach((n) => { seen.push(n); });",
         ] {
             assert_visible_refusal(&extract_with(body), body, "inline callback handed");
         }
         for body in [
-            "const seen = []; [1].forEach(() => { seen.push(1); });",
+            "const seen = []; items.forEach(() => { seen.push(1); });",
             "setTimeout(() => {}, 0);",
             // Another runner's global, not a Vitest helper.
             "suite('s', () => { test('hidden', () => {}); });",
@@ -9068,7 +9266,7 @@ mod tests {
 
         // Refused in the suite the call stands in; a sibling scope stays comparable.
         let extraction = extract_with(
-            "describe('d', () => { [1].forEach(() => test('hidden', () => {})); test('inner', () => {}); });",
+            "describe('d', () => { items.forEach(() => test('hidden', () => {})); test('inner', () => {}); });",
         );
         assert!(extraction.incomplete);
         let unresolved = |title: &str| {
@@ -9082,6 +9280,121 @@ mod tests {
         };
         assert!(unresolved("inner"));
         assert!(!unresolved("visible"));
+    }
+
+    /// `forEach` over an array the file spells out runs its inline arrow once per element, like a
+    /// helper called with that element; an array something else can reach, or a callback that can
+    /// reach the array or a `thisArg`, keeps the unread-call refusal.
+    #[test]
+    fn a_foreach_over_a_known_array_runs_its_callback_per_element() {
+        let extract_with = |body: &str| {
+            extract_source(
+                &format!("import {{ test, beforeEach, describe }} from 'vitest';\n{body}\ntest('visible', () => {{}});"),
+                "case.test.ts",
+                Globals::Disabled,
+            )
+        };
+        let titles = |extraction: &FileExtraction| -> Vec<String> {
+            extraction
+                .tests
+                .iter()
+                .map(|case| match &case.title {
+                    Title::Static(title) => title.clone(),
+                    _ => "<dynamic>".to_owned(),
+                })
+                .collect()
+        };
+        for (body, expected) in [
+            (
+                "const names = ['a', 'b']; names.forEach((name) => { test(`case ${name}`, () => {}); });",
+                &["case a", "case b", "visible"][..],
+            ),
+            (
+                "['a', 'b'].forEach((name) => test(name, () => {}));",
+                &["a", "b", "visible"],
+            ),
+            (
+                "describe('s', () => { (['a'] as const).forEach((name) => { test(name, () => {}); }); });",
+                &["a", "s", "visible"],
+            ),
+            // Unbound parameters leave the titles dynamic, but every element still registers.
+            (
+                "const rows = [{ n: 1 }, { n: 2 }]; rows.forEach(({ n }, i) => { test(`${n} ${i}`, () => {}); });",
+                &["<dynamic>", "<dynamic>", "visible"],
+            ),
+            ("const none: string[] = []; none.forEach((n) => test(n, () => {}));", &["visible"]),
+            (
+                "const seen = []; const rows = [1]; rows.forEach((n) => { seen.push(n); beforeEach(() => {}); });",
+                &["visible"],
+            ),
+            // Same-named arrays in sibling suites are different bindings.
+            (
+                "describe('a', () => { const xs = ['x']; xs.forEach((v) => test(v, () => {})); }); \
+                 describe('b', () => { const xs = ['y']; xs.forEach((v) => test(v, () => {})); });",
+                &["a", "b", "visible", "x", "y"],
+            ),
+        ] {
+            let extraction = extract_with(body);
+            assert!(!extraction.incomplete, "{body}: {:?}", extraction.diagnostics);
+            let mut actual = titles(&extraction);
+            actual.sort();
+            assert_eq!(actual, expected, "{body}");
+        }
+        for (body, reason) in [
+            // Something else can reach the array.
+            ("const xs = ['a']; xs.push('b'); xs.forEach((v) => test(v, () => {}));", "inline callback handed"),
+            ("const xs = ['a']; log(xs); xs.forEach((v) => test(v, () => {}));", "inline callback handed"),
+            ("export const xs = ['a']; xs.forEach((v) => test(v, () => {}));", "inline callback handed"),
+            ("const xs = ['a']; xs.forEach((v) => test(v, () => {})); export { xs };", "inline callback handed"),
+            ("let xs = ['a']; xs.forEach((v) => test(v, () => {}));", "inline callback handed"),
+            ("const o = { xs: ['a'] }; o.xs.forEach((v) => test(v, () => {}));", "inline callback handed"),
+            ("const more = ['b']; ['a', ...more].forEach((v) => test(v, () => {}));", "inline callback handed"),
+            ("xs.forEach((v) => test(v, () => {})); const xs = ['a'];", "inline callback handed"),
+            // The callback can reach the array or a `thisArg`.
+            ("const xs = ['a']; xs.forEach(function (v) { test(v, () => {}); });", "inline callback handed"),
+            ("const xs = ['a']; xs.forEach((v) => test(v, () => {}), null);", "inline callback handed"),
+            // An earlier loop hands each object element to a callback that can change it.
+            ("const xs = [{ a: 1 }]; xs.forEach((r) => {}); xs.forEach(({ a }) => test('t', () => {}));", "inline callback handed"),
+            // A regular expression is an object too.
+            ("const xs = [/a/]; xs.forEach((r) => {}); xs.forEach((r) => test('t', () => {}));", "inline callback handed"),
+            // The loop can run more than once over the same objects.
+            ("const xs = [{ a: 1 }]; function run() { xs.forEach(({ a }) => test('t', () => {})); } run();", "may register"),
+            // Another loop over the array hands it to a callback that can change it.
+            ("const xs = ['a']; xs.forEach(clear); xs.forEach((v) => test(v, () => {}));", "inline callback handed"),
+            ("const xs = ['a']; xs.forEach((v, i, all) => {}); xs.forEach((v) => test(v, () => {}));", "inline callback handed"),
+            ("const xs = ['a']; xs.forEach((v, i, all) => test(v, () => {}));", "inline callback handed"),
+            // What runs around the body.
+            ("const xs = ['a']; xs.forEach(async (v) => { await 0; test(v, () => {}); });", "awaits"),
+            ("const make = () => { test('inner', () => {}); return 1; }; [make()].forEach((v) => {});", "may register"),
+        ] {
+            assert_visible_refusal(&extract_with(body), body, reason);
+        }
+    }
+
+    /// A hook registered in a known-array `forEach` runs once per element, so it is guarded by the
+    /// loop exactly as in a `for...of`: the suite's tests are not compared on an unguarded context.
+    #[test]
+    fn a_hook_in_a_foreach_is_guarded_like_a_for_of() {
+        for source in [
+            "[1, 2].forEach(() => { beforeEach(() => { n++; }); });",
+            "const xs = [1]; xs.forEach(() => { beforeEach(() => { n++; }); });",
+            "for (const x of [1, 2]) { beforeEach(() => { n++; }); }",
+        ] {
+            let extraction = extract_source(
+                &format!(
+                    "import {{ test, beforeEach, describe }} from 'vitest';\nlet n = 0;\n\
+                     describe('d', () => {{ {source} test('t', () => {{}}); }});"
+                ),
+                "case.test.ts",
+                Globals::Disabled,
+            );
+            let case = extraction
+                .tests
+                .iter()
+                .find(|case| case.title == Title::Static("t".to_owned()))
+                .unwrap_or_else(|| panic!("{source}: t extracted"));
+            assert!(case.context.unresolved, "{source}");
+        }
     }
 
     /// A helper call is read only when it registers exactly what its walked body does: inputs
