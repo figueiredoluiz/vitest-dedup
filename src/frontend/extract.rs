@@ -3274,6 +3274,46 @@ impl<'a> Walker<'a> {
         true
     }
 
+    /// Refuses a call this walker neither recognizes nor inlines (`[1, 2].forEach(...)`, a method on
+    /// an imported value) when an inline function or arrow it is handed may register: the callee may
+    /// call it, and skipping the call would drop whatever it declares silently. A callback passed by
+    /// name is not judged.
+    fn refuse_registering_callback(&mut self, call: &CallExpression<'a>) {
+        // Another runner's global (`describe` with Vitest globals off) is not a helper.
+        if let Expression::Identifier(ident) = &call.callee {
+            if self.is_free_reference(ident)
+                && registration_free::REGISTRATION.contains(&ident.name.as_str())
+            {
+                return;
+            }
+        }
+        let callbacks: Vec<&Argument<'a>> = call
+            .arguments
+            .iter()
+            .filter(|argument| {
+                argument
+                    .as_expression()
+                    .is_some_and(|expression| expression.get_inner_expression().is_function())
+            })
+            .collect();
+        if callbacks.is_empty()
+            || registration_free::arguments_register_nothing(
+                self.program,
+                self.semantic,
+                self.written_bindings(),
+                &self.file.path,
+                callbacks,
+            )
+            .is_some()
+        {
+            return;
+        }
+        self.refuse_helper_expansion(refusal(
+            ExclusionReason::HelperEffectsUnproved,
+            "an inline callback handed to a call the analyzer does not read may register",
+        ));
+    }
+
     /// The shape both helper-expansion passes share: open the frame, run one walk over the
     /// helper's statement list, close the frame. `walk` is a plain method (not a closure) so the
     /// borrow of `self` inside it cannot tangle with the frame `begin_helper_expansion` handed
@@ -8977,6 +9017,65 @@ mod tests {
             "{case}: {:?}",
             extraction.diagnostics
         );
+    }
+
+    /// An inline callback handed to a call the walker does not read is refused when it may
+    /// register, in the scope the call stands in; a callback that provably registers nothing and a
+    /// value passed by name leave the file comparable.
+    #[test]
+    fn an_inline_registering_callback_to_an_unread_call_is_refused() {
+        let extract_with = |body: &str| {
+            extract_source(
+                &format!("import {{ test, beforeEach, describe }} from 'vitest';\n{body}\ntest('visible', () => {{}});"),
+                "case.test.ts",
+                Globals::Disabled,
+            )
+        };
+        for body in [
+            "[1, 2].forEach(() => { test('hidden', () => {}); });",
+            "[1].forEach(() => { beforeEach(() => {}); });",
+            "items.forEach(function () { test('hidden', () => {}); });",
+            "[1].forEach((() => { test('hidden', () => {}); }) as never);",
+            "function setup() { [1].forEach(() => test('hidden', () => {})); } setup();",
+            // A free callee that is not another runner's registration name.
+            "register(() => { test('hidden', () => {}); });",
+        ] {
+            assert_visible_refusal(&extract_with(body), body, "inline callback handed");
+        }
+        for body in [
+            "const seen = []; [1].forEach((n) => { seen.push(n); });",
+            "setTimeout(() => {}, 0);",
+            // Another runner's global, not a Vitest helper.
+            "suite('s', () => { test('hidden', () => {}); });",
+            // A value passed by name is not judged.
+            "import { Grammar } from 'grammar'; parser.setLanguage(Grammar);",
+            "const register = () => { test('hidden', () => {}); }; [1].forEach(register);",
+        ] {
+            let extraction = extract_with(body);
+            assert!(
+                !extraction.incomplete,
+                "{body}: {:?}",
+                extraction.diagnostics
+            );
+            assert_eq!(extraction.tests.len(), 1, "{body}");
+        }
+
+        // Refused in the suite the call stands in; a sibling scope stays comparable.
+        let extraction = extract_with(
+            "describe('d', () => { [1].forEach(() => test('hidden', () => {})); test('inner', () => {}); });",
+        );
+        assert!(extraction.incomplete);
+        let unresolved = |title: &str| {
+            extraction
+                .tests
+                .iter()
+                .find(|case| case.title == Title::Static(title.to_owned()))
+                .unwrap_or_else(|| panic!("{title} extracted"))
+                .context
+                .unresolved
+        };
+        assert!(unresolved("inner"));
+        assert!(!unresolved("visible"));
     }
 
     /// A helper call is read only when it registers exactly what its walked body does: inputs

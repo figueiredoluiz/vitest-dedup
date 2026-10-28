@@ -7601,6 +7601,74 @@
           ]
         }
       ]
+    },
+    {
+      "name": "callback-registers-foreach",
+      "path": "callback-registers-foreach",
+      "rule": "duplicate-test",
+      "role": "variant",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-10-28",
+      "expectedTests": 1,
+      "expectedIncomplete": true,
+      "expectedUnresolved": 1,
+      "expectedFindings": [],
+      "expectedAbsent": [
+        {
+          "rule": "duplicate-test",
+          "titles": [
+            "hidden",
+            "visible"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "callback-inert-foreach",
+      "path": "callback-inert-foreach",
+      "rule": "duplicate-test",
+      "role": "positive",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-10-28",
+      "expectedTests": 2,
+      "expectedIncomplete": false,
+      "expectedUnresolved": 0,
+      "expectedFindings": [
+        {
+          "rule": "duplicate-test",
+          "severity": "error",
+          "titles": [
+            "first",
+            "second"
+          ]
+        }
+      ],
+      "expectedAbsent": []
+    },
+    {
+      "name": "callback-imported-data",
+      "path": "callback-imported-data",
+      "rule": "duplicate-test",
+      "role": "positive",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-10-28",
+      "expectedTests": 2,
+      "expectedIncomplete": false,
+      "expectedUnresolved": 0,
+      "expectedFindings": [
+        {
+          "rule": "duplicate-test",
+          "severity": "error",
+          "titles": [
+            "first",
+            "second"
+          ]
+        }
+      ],
+      "expectedAbsent": []
     }
   ],
   "knownFalsePositiveBaseline": 1,

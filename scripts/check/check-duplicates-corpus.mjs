@@ -522,6 +522,9 @@ const DELIBERATE_BLIND_FILES = new Set([
   // A generator helper, whose body a call does not run: refused, so the tests it declares are
   // neither invented nor dropped silently.
   'recall/local-helper-generator/run.test.ts',
+  // An inline `forEach` callback that registers tests is not read: refused so the remaining test is
+  // unresolved.
+  'recall/callback-registers-foreach/run.test.ts',
   // A helper whose destructuring parameter cannot bind its argument: the call throws before the
   // body runs, so it is refused and the remaining test is unresolved.
   'recall/local-helper-null-destructure/run.test.ts',
