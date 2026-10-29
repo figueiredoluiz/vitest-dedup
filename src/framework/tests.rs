@@ -64,7 +64,7 @@ fn neutral_files(root: &Path) -> Vec<std::path::PathBuf> {
                 pending.push(entry.unwrap().path());
             }
         } else if path.extension().is_some_and(|extension| extension == "rs")
-            && !is_unit_test(&path)
+            && !is_unit_test(path.strip_prefix(root).unwrap_or(&path))
         {
             files.push(path);
         }
@@ -72,7 +72,7 @@ fn neutral_files(root: &Path) -> Vec<std::path::PathBuf> {
     files
 }
 
-/// Whether `path` holds unit tests rather than production code.
+/// Whether `path`, relative to the repository, holds unit tests rather than production code.
 fn is_unit_test(path: &Path) -> bool {
     path.file_name().is_some_and(|name| name == "tests.rs")
         || path
@@ -148,6 +148,27 @@ fn the_boundary_check_rejects_a_planted_api_name() {
         "src/framework/vitest/projects/tests/glob_budget.rs"
     )));
     assert!(!is_unit_test(Path::new("src/lang/tree.rs")));
+}
+
+/// Where the repository is checked out does not decide which of its files are unit tests.
+#[test]
+fn a_checkout_under_a_tests_directory_keeps_its_neutral_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("tests").join("checkout");
+    for entry in NEUTRAL {
+        let path = root.join(entry);
+        if entry.ends_with(".rs") {
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, "").unwrap();
+        } else {
+            std::fs::create_dir_all(&path).unwrap();
+            std::fs::write(path.join("code.rs"), "").unwrap();
+            std::fs::write(path.join("tests.rs"), "").unwrap();
+        }
+    }
+    let files = neutral_files(&root);
+    assert_eq!(files.len(), NEUTRAL.len());
+    assert!(files.iter().all(|file| !file.ends_with("tests.rs")));
 }
 
 #[test]
