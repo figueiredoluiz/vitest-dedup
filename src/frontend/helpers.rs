@@ -90,7 +90,7 @@ use super::fingerprint::{
     HelperRendering, ImportOrigin, Mode,
 };
 use super::resolver::{self, Resolved};
-use crate::frontend::js_text::string_text;
+use crate::lang::js_text::string_text;
 use oxc_allocator::Allocator;
 use oxc_ast::ast::{
     ArrowFunctionExpression, BindingPattern, Declaration, ExportDefaultDeclarationKind,

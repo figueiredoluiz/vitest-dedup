@@ -10,6 +10,7 @@ import test from 'node:test'
 import {
   MINIMUM_SCORE,
   MINIMUM_SCORED,
+  NEXT_CORE,
   SCOPE,
   TARGET_SCORE,
   checkMutationScore,
@@ -17,6 +18,7 @@ import {
   isScoreableExit,
   runCli,
   scopeArguments,
+  selectScope,
 } from './check-mutation-score.mjs'
 
 // 9 caught / 10 scored = 90%, 2 unviable, one baseline entry plus one per mutant.
@@ -385,4 +387,17 @@ test('--run scores the report it just produced', () => {
   assert.equal(status, 0)
   assert.match(out[0], /^cargo mutants --file/)
   assert.match(out[1], /^ok: mutation score/)
+})
+
+test('--scope=next-core selects the next core scope and its floors; any other scope is refused', () => {
+  assert.equal(selectScope([]).scope, SCOPE)
+  assert.equal(selectScope(['--scope=next-core']), NEXT_CORE)
+  assert.ok(NEXT_CORE.scope.every(({ file }) => file.startsWith('src/normal')))
+  assert.ok(NEXT_CORE.minimumScore > 0 && NEXT_CORE.minimumScore <= TARGET_SCORE)
+  assert.ok(NEXT_CORE.minimumScored > 0)
+  const printed = runCli(['--print-scope', '--scope=next-core'])
+  assert.equal(printed.out.join(' '), scopeArguments(NEXT_CORE.scope).join(' '))
+  const unknown = runCli(['--print-scope', '--scope=everything'])
+  assert.equal(unknown.status, 1)
+  assert.match(unknown.err.join('\n'), /unknown scope --scope=everything/)
 })

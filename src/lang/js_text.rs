@@ -82,6 +82,7 @@ mod tests {
         read(argument)
     }
 
+    /// The text of the string literal `source` spells, and whether it was borrowed unchanged.
     fn string(source: &str) -> (String, bool) {
         with_expression(source, |expression| {
             let Expression::StringLiteral(literal) = expression else {
@@ -92,6 +93,7 @@ mod tests {
         })
     }
 
+    /// The cooked text of the template `source` spells.
     fn cooked(source: &str) -> Option<String> {
         with_expression(source, |expression| {
             let template = match expression {

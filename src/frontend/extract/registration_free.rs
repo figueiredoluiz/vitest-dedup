@@ -24,8 +24,8 @@
 
 use crate::frontend::auto_imports;
 use crate::frontend::helpers;
-use crate::frontend::js_text::string_text;
 use crate::frontend::resolver::{self, Resolved};
+use crate::lang::js_text::string_text;
 use oxc_allocator::Allocator;
 use oxc_ast::ast::{
     Argument, BindingPattern, Class, Declaration, ExportDefaultDeclarationKind, Expression,

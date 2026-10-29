@@ -1,5 +1,5 @@
 use super::*;
-use crate::frontend::js_text::string_text;
+use crate::lang::js_text::string_text;
 
 /// Extracts, from a file's full source text, each top-level import's local binding name mapped to
 /// `(identity component, name on the exporting side)`. `file` is the path of the file being

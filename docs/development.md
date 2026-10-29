@@ -29,6 +29,13 @@ means (a test, a hook, a table member) instead of spelling the name. Modules lis
 `src/framework/tests.rs` may not contain any name the dialect declares as a string literal; the
 test names the file and literal it rejects.
 
+### The next core
+
+A second analysis core is being built beside the current one, in layers that each read only the
+layer below: `lang` (parsing, scopes, resolution; with `frontend`, the only importer of `oxc_*`),
+`inventory` (registration sites by provenance) and `normal` (normal forms and identities). No run
+reaches it yet; its unit tests and its own mutation scope (`npm run mutants:next-core`) check it.
+
 ### Gates `npm run check` does not run
 
 They are slow: `check:memory`, `check:memory:scaling`, `check:coverage:rust`, `check:mutation`.

@@ -12,7 +12,7 @@
 
 use super::extract::registration_free::{is_registration, registration_names};
 use super::package_supervisor::supervise;
-use crate::frontend::js_text::string_text;
+use crate::lang::js_text::string_text;
 use crate::model::PackageWorkerFailure;
 use oxc_allocator::Allocator;
 use oxc_ast::ast::{

@@ -3,9 +3,27 @@ use super::{current, Chain, HookTiming, Registers, TableRows};
 use std::collections::HashSet;
 use std::path::Path;
 
-/// Framework-neutral source files and directories: no string literal in them may be a name the
-/// dialect declares. New neutral modules join this list as they land.
-const NEUTRAL: &[&str] = &["src/framework.rs"];
+/// Framework-neutral source files and directories: no string literal in their production code
+/// may be a name the dialect declares. Unit tests (`tests.rs`, `tests/`) are exempt: they spell the
+/// API in the sources they analyze. New neutral modules join this list as they land.
+const NEUTRAL: &[&str] = &[
+    "src/framework.rs",
+    "src/lang.rs",
+    "src/lang",
+    "src/inventory.rs",
+    "src/inventory",
+    "src/normal.rs",
+    "src/normal",
+];
+
+/// Literals a neutral file may spell although a dialect declares them, because they mean something
+/// else there: each is JavaScript vocabulary that collides with an API name.
+const COLLISIONS: &[(&str, &str)] = &[
+    // TypeScript's `override` modifier on a class member, dropped from the normal form.
+    ("src/normal/form.rs", "override"),
+    // The `for` keyword, which the parser preflight counts as recursive syntax.
+    ("src/lang/limits.rs", "for"),
+];
 
 /// The string literals in `source`, with `//` comments removed first so prose may name the API.
 fn string_literals(source: &str) -> Vec<String> {
@@ -45,11 +63,21 @@ fn neutral_files(root: &Path) -> Vec<std::path::PathBuf> {
             for entry in std::fs::read_dir(&path).unwrap() {
                 pending.push(entry.unwrap().path());
             }
-        } else if path.extension().is_some_and(|extension| extension == "rs") {
+        } else if path.extension().is_some_and(|extension| extension == "rs")
+            && !is_unit_test(&path)
+        {
             files.push(path);
         }
     }
     files
+}
+
+/// Whether `path` holds unit tests rather than production code.
+fn is_unit_test(path: &Path) -> bool {
+    path.file_name().is_some_and(|name| name == "tests.rs")
+        || path
+            .components()
+            .any(|component| component.as_os_str() == "tests")
 }
 
 /// The names in `literals` that `names` declares.
@@ -70,10 +98,35 @@ fn neutral_modules_spell_no_api_name() {
         names.len()
     );
     let files = neutral_files(Path::new(env!("CARGO_MANIFEST_DIR")));
-    assert!(!files.is_empty(), "no neutral file was scanned");
+    for (file, literal) in COLLISIONS {
+        assert!(
+            names.contains(literal),
+            "{literal} is no longer an API name; drop its exemption"
+        );
+        let source =
+            std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join(file)).unwrap();
+        assert!(
+            string_literals(&source)
+                .iter()
+                .any(|found| found == literal),
+            "{file} no longer spells {literal}; drop its exemption"
+        );
+    }
+    assert!(
+        files.len() >= NEUTRAL.len(),
+        "only {} neutral files were scanned",
+        files.len()
+    );
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     for file in files {
         let literals = string_literals(&std::fs::read_to_string(&file).unwrap());
-        let found = violations(&literals, &names);
+        let relative = file
+            .strip_prefix(root)
+            .unwrap()
+            .to_string_lossy()
+            .replace('\\', "/");
+        let mut found = violations(&literals, &names);
+        found.retain(|literal| !COLLISIONS.contains(&(relative.as_str(), *literal)));
         assert!(
             found.is_empty(),
             "{} spells API names {found:?}; read them from the dialect",
@@ -90,6 +143,11 @@ fn the_boundary_check_rejects_a_planted_api_name() {
     let escaped = string_literals(r#"let text = "say \"hi\""; let other = "describe";"#);
     assert_eq!(escaped, ["say \"hi\"", "describe"]);
     assert_eq!(violations(&escaped, &names), ["describe"]);
+    assert!(is_unit_test(Path::new("src/lang/tests.rs")));
+    assert!(is_unit_test(Path::new(
+        "src/framework/vitest/projects/tests/glob_budget.rs"
+    )));
+    assert!(!is_unit_test(Path::new("src/lang/tree.rs")));
 }
 
 #[test]
@@ -137,6 +195,8 @@ fn the_vitest_dialect_declares_the_documented_api() {
             "scoped",
         ]
     );
+    assert_eq!(DIALECT.scheduling_options, ["timeout", "retry", "repeats"]);
+    assert_eq!(DIALECT.name_observing_matchers, ["Snapshot"]);
     assert_eq!(DIALECT.api_modules, ["vitest"]);
     assert_eq!(DIALECT.in_source_member, Some("vitest"));
 }

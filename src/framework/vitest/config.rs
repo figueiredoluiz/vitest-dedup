@@ -85,8 +85,8 @@
 //!
 //! # Why this module has no dependency on the rest of the crate
 //!
-//! `src/frontend/` is the only module tree permitted to import an `oxc_*` crate
-//! (`AGENTS.md`, "Parser containment"); this module does not need one, since it never builds an
+//! `src/frontend/` and `src/lang/` are the only module trees permitted to import an `oxc_*` crate
+//! (a test in `src/lang/tests.rs` enforces it); this module does not need one, since it never builds an
 //! AST -- a disciplined textual scan is sufficient for the narrow question it answers, and staying
 //! off `oxc_*` avoids even raising the containment question. It also does not import
 //! `crate::config` or `crate::model`: at the time this module was written it was not yet wired
@@ -442,8 +442,9 @@ pub(crate) fn find_workspace_file(root: &Path) -> Option<PathBuf> {
 ///   `{environment:'node'}` and `{ environment: 'node' }` stayed separate anyway -- it never
 ///   delivered the formatting-independence that justified it.
 ///
-/// Normalizing formatting without changing meaning requires a JavaScript lexer. `AGENTS.md`
-/// confines every `oxc_*` crate to `src/frontend/`, so this module cannot have one, and a
+/// Normalizing formatting without changing meaning requires a JavaScript lexer. Parser
+/// containment confines every `oxc_*` crate to `src/frontend/` and `src/lang/`, so this module
+/// cannot have one, and a
 /// hand-rolled approximation is unsound in the direction that COSTS: collapsing something
 /// significant merges two differently-configured directories into one `cross-file-duplicate`
 /// group, which is a false positive. Using the text raw is unsound only in the safe direction --

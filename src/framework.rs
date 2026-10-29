@@ -122,6 +122,12 @@ pub struct Dialect {
     pub namespaces: &'static [Namespace],
     /// Members that can be chained onto a registration.
     pub chain: &'static [ChainMember],
+    /// Keys of a registration's options object that change only how a test is scheduled, never
+    /// what it checks (a timeout, retries).
+    pub scheduling_options: &'static [&'static str],
+    /// Text a matcher's name contains when its assertion records values in a form that prints
+    /// constructor and function names (snapshots).
+    pub name_observing_matchers: &'static [&'static str],
 }
 
 impl Dialect {
@@ -174,6 +180,8 @@ impl Dialect {
             .chain(registrations.iter().map(|registration| registration.name))
             .chain(namespaces.iter().map(|namespace| namespace.name))
             .chain(chain.iter().map(|member| member.name))
+            .chain(self.scheduling_options.iter().copied())
+            .chain(self.name_observing_matchers.iter().copied())
     }
 }
 

@@ -10,7 +10,7 @@
 //! prepared has none, so nothing resolves -- the missing-prerequisite notice already tells the
 //! user to run `nuxt prepare`.
 
-use crate::frontend::js_text::string_text;
+use crate::lang::js_text::string_text;
 use oxc_allocator::Allocator;
 use oxc_ast::ast::{ImportOrExportKind, Statement};
 use oxc_parser::Parser;

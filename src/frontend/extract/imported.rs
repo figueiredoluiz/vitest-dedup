@@ -4,9 +4,9 @@ use super::*;
 use crate::frontend::fingerprint::ImportOrigin;
 use crate::frontend::helpers::export_contract::{resolve_export_chain, resolve_value_export_chain};
 use crate::frontend::helpers::{self, Callable, Export};
-use crate::frontend::js_text::string_text;
 use crate::frontend::registry::imported_constants::{self, Proof};
 use crate::frontend::resolver::{self, Resolved};
+use crate::lang::js_text::string_text;
 use oxc_ast::ast::{Declaration, ExportDefaultDeclarationKind, ImportOrExportKind};
 use std::path::{Path, PathBuf};
 

@@ -106,6 +106,8 @@ pub static DIALECT: Dialect = Dialect {
         member!("override", Chain::FixtureScoping),
         member!("scoped", Chain::FixtureScoping),
     ],
+    scheduling_options: &["timeout", "retry", "repeats"],
+    name_observing_matchers: &["Snapshot"],
 };
 
 /// Vitest's default file globs.

@@ -11,7 +11,7 @@ use super::{
     const_declarator, peeled, unwrap_transparent, FoldScope, ImportedConstants, MAX_VALUE_HOPS,
 };
 use crate::frontend::helpers::{find_value_export, with_parsed_file, ValueExport};
-use crate::frontend::js_text::{cooked_text, string_text};
+use crate::lang::js_text::{cooked_text, string_text};
 use oxc_allocator::{Allocator, CloneIn};
 use oxc_ast::ast::{Argument, Expression, UnaryOperator};
 use oxc_ast::AstKind;

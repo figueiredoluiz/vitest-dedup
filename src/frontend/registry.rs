@@ -34,7 +34,7 @@ use std::path::Path;
 use std::sync::{Mutex, OnceLock};
 
 use super::fingerprint::{escape_literal_delimiters, fingerprint, path_key, FunctionLike};
-use crate::frontend::js_text::{cooked_text, string_text};
+use crate::lang::js_text::{cooked_text, string_text};
 
 /// Whether bare, unimported `test`/`describe`/`it`/hook identifiers should be treated as
 /// Vitest's ambient globals for this file.

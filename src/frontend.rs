@@ -1,4 +1,5 @@
-//! The only module tree permitted to import `oxc_*`.
+//! The parser layer of the current core: with [`crate::lang`], the only module tree permitted to
+//! import `oxc_*`.
 //!
 //! Everything above this boundary consumes [`crate::model`]. Keeping the parser contained is what
 //! makes the pre-1.0 oxc pin survivable: a breaking release is a rewrite of this subtree, not of
@@ -8,7 +9,6 @@ mod auto_imports;
 mod extract;
 mod fingerprint;
 mod helpers;
-mod js_text;
 mod package_manifests;
 mod package_supervisor;
 mod registry;

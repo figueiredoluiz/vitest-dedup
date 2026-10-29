@@ -177,6 +177,30 @@ export const SCOPE = [
   { file: 'src/analysis.rs', minimumMutants: 252 }, // 269 enumerated
 ]
 
+// The normal forms of the next core, measured as their own scope with their own floors: folded into
+// the scope above they would move its number and hide their own. Selected with `--scope next-core`
+// (`npm run mutants:next-core`).
+export const NEXT_CORE = {
+  scope: [
+    { file: 'src/normal.rs', minimumMutants: 70 }, // 74 enumerated
+    { file: 'src/normal/form.rs', minimumMutants: 122 }, // 129 enumerated
+    { file: 'src/normal/identity.rs', minimumMutants: 76 }, // 80 enumerated
+    { file: 'src/normal/rows.rs', minimumMutants: 77 }, // 81 enumerated
+  ],
+  // 2026-10-29: 267 caught, 84 missed, 12 unviable, 0 timeouts in 64 minutes at `--jobs 2`;
+  // 267/351 = 76.07%.
+  minimumScore: 76.0,
+  minimumScored: 320,
+}
+
+/** The scope `argv` selects, with the floors it is checked against. */
+export function selectScope(argv) {
+  const named = argv.find((argument) => argument.startsWith('--scope'))
+  if (named === undefined) return { scope: SCOPE, minimumScore: MINIMUM_SCORE, minimumScored: MINIMUM_SCORED }
+  assert.equal(named, '--scope=next-core', `unknown scope ${named}; the one named scope is --scope=next-core`)
+  return NEXT_CORE
+}
+
 /**
  * Return cargo-mutants --file arguments for a nonempty scope; reject an empty list to prevent
  * an unintended whole-tree run.
@@ -286,7 +310,7 @@ export function isScoreableExit(code) {
  * `.cargo/mutants.toml`'s `additional_cargo_test_args`). Each job builds in its own copy, so
  * this doubles build directories; that is the trade, made for a run that can finish at all. */
 export function runMutants(argv, { spawn = spawnSync } = {}) {
-  const args = [...scopeArguments(), '--jobs', '2']
+  const args = [...scopeArguments(selectScope(argv).scope), '--jobs', '2']
   const result = spawn('cargo', ['mutants', ...args], {
     stdio: 'inherit',
     env: {
@@ -333,8 +357,15 @@ function parseThreshold(raw) {
 export function runCli(argv, { read = readFileSync, spawn = spawnSync } = {}) {
   const out = []
   const err = []
+  let selected
+  try {
+    selected = selectScope(argv)
+  } catch (error) {
+    err.push(error.message)
+    return { status: 1, out, err }
+  }
   if (argv.includes('--print-scope')) {
-    out.push(scopeArguments().join(' '))
+    out.push(scopeArguments(selected.scope).join(' '))
     return { status: 0, out, err }
   }
   if (argv.includes('--run')) {
@@ -347,7 +378,7 @@ export function runCli(argv, { read = readFileSync, spawn = spawnSync } = {}) {
   }
   const positional = argv.filter((argument) => !argument.startsWith('--'))
   const path = positional[0] || join('mutants.out', 'outcomes.json')
-  const minimumScore = positional[1] === undefined ? MINIMUM_SCORE : parseThreshold(positional[1])
+  const minimumScore = positional[1] === undefined ? selected.minimumScore : parseThreshold(positional[1])
   let report
   try {
     report = JSON.parse(read(path, 'utf8'))
@@ -358,14 +389,14 @@ export function runCli(argv, { read = readFileSync, spawn = spawnSync } = {}) {
     return { status: 1, out, err }
   }
   try {
-    checkScope(JSON.parse(read(join(dirname(path), 'mutants.json'), 'utf8')))
+    checkScope(JSON.parse(read(join(dirname(path), 'mutants.json'), 'utf8')), selected.scope)
   } catch (error) {
     err.push(`mutation scope check failed: ${error.message}`)
     return { status: 1, out, err }
   }
   let score
   try {
-    score = checkMutationScore(report, minimumScore)
+    score = checkMutationScore(report, minimumScore, selected.minimumScored)
   } catch (error) {
     err.push(`mutation score check failed: ${error.message}`)
     return { status: 1, out, err }

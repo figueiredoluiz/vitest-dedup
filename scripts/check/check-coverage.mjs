@@ -213,7 +213,7 @@ const RUST_MODULES = {
   'src/frontend/helpers.rs': 98,
   // JavaScript string text: measured at 91.94% (57/62); the 5 uncovered lines are the `panic!`
   // arms of this file's own test helpers, reached only by a malformed test input.
-  'src/frontend/js_text.rs': 91,
+  'src/lang/js_text.rs': 91,
   'src/frontend/registry.rs': 97,
   // Imported table constants: measured at 94.57% (87/92 instrumented lines).
   'src/frontend/registry/imported_constants.rs': 94,
@@ -279,6 +279,22 @@ const RUST_MODULES = {
   // dialect's own tests and by the extractor reading it.
   'src/framework.rs': 100,
   'src/framework/vitest.rs': 100,
+  // The next core, measured when it landed. What stays uncovered is mostly a `None` arm for a
+  // node shape the ESTree serialization never produces (a specifier without `local`, a member
+  // without `property`).
+  'src/lang.rs': 100,
+  'src/lang/build.rs': 97,
+  'src/lang/limits.rs': 96,
+  'src/lang/resolve.rs': 96,
+  'src/lang/scopes.rs': 96,
+  'src/lang/syntax.rs': 93,
+  'src/lang/tree.rs': 97,
+  'src/inventory.rs': 96,
+  'src/inventory/module.rs': 95,
+  'src/normal.rs': 96,
+  'src/normal/form.rs': 90,
+  'src/normal/identity.rs': 90,
+  'src/normal/rows.rs': 90,
 }
 
 // Re-pinned 2026-09-19, after `check-mutation-score.mjs` and then the memory gates' five modules

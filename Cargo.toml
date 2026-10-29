@@ -24,7 +24,7 @@ clap = { version = "4.5", features = ["derive"] }
 globset = "0.4"
 ignore = "0.4"
 oxc_allocator = "=0.155.0"
-oxc_ast = "=0.155.0"
+oxc_ast = { version = "=0.155.0", features = ["serialize"] }
 oxc_ast_visit = "=0.155.0"
 oxc_parser = "=0.155.0"
 oxc_resolver = "11"
@@ -35,7 +35,7 @@ ryu-js = "1.0.3"
 tempfile = "=3.27.0"
 subprocess = "=1.2.1"
 serde = { version = "1.0", features = ["derive"] }
-serde_json = { version = "1.0", features = ["preserve_order"] }
+serde_json = { version = "1.0", features = ["preserve_order", "unbounded_depth"] }
 
 # OS memory readers live in the binary to keep the library free of unsafe code.
 # libc is already locked transitively; Unix builds use it for peak RSS and current residency.

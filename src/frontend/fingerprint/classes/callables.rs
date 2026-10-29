@@ -1,6 +1,6 @@
 //! Owned callable resolution and the metadata that keeps reflections distinct.
 use super::*;
-use crate::frontend::js_text::string_text;
+use crate::lang::js_text::string_text;
 
 impl<'a, 'b, 's, 'm> Serializer<'a, 'b, 's, 'm> {
     /// Classify constructor provenance before point-sensitive instance writes can degrade it.
