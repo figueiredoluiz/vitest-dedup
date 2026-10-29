@@ -20,6 +20,15 @@ extraction; see [Fixtures](../CONTRIBUTING.md#fixtures).
 Every npm gate that runs the analyzer builds `--release --locked` first, so it never measures a
 binary older than the working tree. An up-to-date build is a sub-second no-op.
 
+## Framework seam
+
+Vitest's test API names and default file globs live in `src/framework/vitest.rs`, described as data
+(`Dialect`, `FileDefaults`) and reached through `framework::current()`. Its configuration readers
+live beside it in `src/framework/vitest/`. Code outside the adapter asks the dialect what a name
+means (a test, a hook, a table member) instead of spelling the name. Modules listed as neutral in
+`src/framework/tests.rs` may not contain any name the dialect declares as a string literal; the
+test names the file and literal it rejects.
+
 ### Gates `npm run check` does not run
 
 They are slow: `check:memory`, `check:memory:scaling`, `check:coverage:rust`, `check:mutation`.

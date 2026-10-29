@@ -256,7 +256,7 @@ const RUST_MODULES = {
   // guesswork, so what is left is named rather than merely unmeasured. Measured by this gate at
   // 97.04% (885/912) and 98.89% (2494/2522).
   //
-  // `vitest_config.rs`: 97.64% of its PRODUCTION lines. The 12 that are not covered are two
+  // `framework/vitest/config.rs`: 97.64% of its PRODUCTION lines. The 12 that are not covered are two
   // blocks that no input can reach. `detect_globals`'s `TestObject::Malformed` arm needs a
   // `test: {` whose `}` is missing, but that arm only runs inside an object literal whose own
   // closing brace has already been matched, and brace depth cannot fall from that literal's
@@ -268,13 +268,17 @@ const RUST_MODULES = {
   // test can arrange. The remaining gap to the reported figure is this file's own inline test
   // module -- 12 never-taken `panic!` arms in tests that predate this pass, exactly the effect
   // caveat 1 above describes.
-  'src/vitest_config.rs': 97,
-  // `vitest_projects.rs`: 99.83% of its PRODUCTION lines. The two that are not covered are the
+  'src/framework/vitest/config.rs': 97,
+  // `framework/vitest/projects.rs`: 99.83% of its PRODUCTION lines. The two that are not covered are the
   // `MAX_GLOB_WALK_ENTRIES` break in `expand_project_path` (20,000 filesystem entries to trip,
   // which is not worth putting in a unit test) and the `i >= element.end` guard at the top of
   // `resolve_project_entry`, which re-does a `skip_trivia` that `split_top_level` has already
   // used to filter the element out -- it cannot be true.
-  'src/vitest_projects.rs': 98,
+  'src/framework/vitest/projects.rs': 98,
+  // The framework seam and the Vitest adapter's dialect: every runtime line is exercised by the
+  // dialect's own tests and by the extractor reading it.
+  'src/framework.rs': 100,
+  'src/framework/vitest.rs': 100,
 }
 
 // Re-pinned 2026-09-19, after `check-mutation-score.mjs` and then the memory gates' five modules

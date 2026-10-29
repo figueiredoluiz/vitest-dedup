@@ -10,7 +10,7 @@
 // because it also teaches everyone that this number does not matter.
 //
 // `rust` has since reached the bar (2.48% -> 0.65%, by de-duplicating `analysis.rs`,
-// `vitest_config.rs` and `vitest_projects.rs`) and its threshold is pinned there. The other three
+// `framework/vitest/config.rs` and `framework/vitest/projects.rs`) and its threshold is pinned there. The other three
 // scopes now meet it too; see `TARGET_PERCENTAGE` and the per-scope history below.
 //
 // So this is a ratchet: the threshold is the measured value, the gate fails when the number gets

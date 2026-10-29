@@ -19,7 +19,7 @@
 //!
 //! # Never executes the config
 //!
-//! Same guarantee as `vitest_config.rs`, extended rather than relaxed: every value here is read by
+//! Same guarantee as `config.rs`, extended rather than relaxed: every value here is read by
 //! masking comments/strings and walking brace/bracket structure, never by evaluating JavaScript.
 //! `glob.sync(...)` with a NON-literal pattern, a spread, a ternary, or any other computed value
 //! is treated as unreadable, not approximated.
@@ -39,7 +39,7 @@
 //!
 //! A project whose `globals` or discovery globs cannot be determined resolves that field to
 //! [`crate::vitest_config::GlobalsDetection::Unknown`] / [`GlobPatterns::Unknown`], never to a
-//! guess -- the same reasoning `vitest_config.rs` already documents at length: a wrong `Enabled`
+//! guess -- the same reasoning `config.rs` already documents at length: a wrong `Enabled`
 //! invents findings in a Jest/Playwright file, a wrong `Disabled` silently analyzes nothing. The
 //! same principle extends to *membership*: [`ProjectSet::governing_project`] returns
 //! [`ProjectGovernance::Unknown`], not [`ProjectGovernance::NotIncluded`], whenever an unresolved
@@ -56,7 +56,7 @@
 //! "UNVERIFIED whether
 //! Vitest allows/dedupes a file matched by two projects"). This module picks the **last** project
 //! in declaration order whose test or benchmark discovery channel is known and matches -- the same "later
-//! occurrence wins" rule `vitest_config.rs` already applies to a duplicated object key
+//! occurrence wins" rule `config.rs` already applies to a duplicated object key
 //! (`duplicate_globals_key_uses_the_last_occurrence`), chosen for consistency with that precedent
 //! rather than from any confirmed Vitest semantics. If the last matching project's own
 //! relevant discovery channel is itself unreadable, the file resolves to `Unknown` rather than silently

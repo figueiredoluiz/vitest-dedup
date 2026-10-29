@@ -47,22 +47,30 @@ use std::path::{Path, PathBuf};
 /// Most modules one proof may visit before it refuses.
 const MAX_MODULES: usize = 64;
 
-/// Vitest names that register a test, a suite or a hook.
-pub(in crate::frontend) const REGISTRATION: &[&str] = &[
-    "test",
-    "it",
-    "describe",
-    "suite",
-    "bench",
-    "beforeAll",
-    "beforeEach",
-    "afterAll",
-    "afterEach",
-    "onTestFinished",
-    "onTestFailed",
-    "aroundEach",
-    "aroundAll",
-];
+/// Whether `name` registers a test, a suite, a benchmark or a hook in the framework's API.
+pub(in crate::frontend) fn is_registration(name: &str) -> bool {
+    crate::framework::current()
+        .dialect()
+        .registration(name)
+        .is_some()
+}
+
+/// The names that register a test, a suite, a benchmark or a hook in the framework's API.
+pub(in crate::frontend) fn registration_names() -> impl Iterator<Item = &'static str> {
+    crate::framework::current()
+        .dialect()
+        .registrations
+        .iter()
+        .map(|registration| registration.name)
+}
+
+/// Whether `name` is one of the framework's other API names (`vi`, `vitest`, `expect`).
+fn is_namespace(name: &str) -> bool {
+    crate::framework::current()
+        .dialect()
+        .namespace(name)
+        .is_some()
+}
 
 /// Free names that reach code by name or load code by a computed route.
 const REFLECTIVE: &[&str] = &[
@@ -1415,8 +1423,8 @@ impl<'s, 'a> Scanner<'s, 'a> {
                 // A re-export of `vi` or `expect` read while a module loads is the same effect as
                 // using it there directly.
                 Root::Export(name) | Root::Reexport(name) | Root::ExportIfPresent(name) => {
-                    if REGISTRATION.contains(&name.as_str())
-                        || (self.import_time && matches!(name.as_str(), "vi" | "vitest" | "expect"))
+                    if is_registration(name.as_str())
+                        || (self.import_time && is_namespace(name.as_str()))
                     {
                         self.failed = true;
                     }
@@ -1901,7 +1909,7 @@ impl<'s, 'a> Scanner<'s, 'a> {
     /// auto-import becomes one more module to prove, and anything else is unknown. Returns true
     /// when the name must still be judged as a possible Vitest export.
     fn known_global(&mut self, name: &str) -> bool {
-        if REGISTRATION.contains(&name) || matches!(name, "vi" | "expect" | "vitest") {
+        if is_registration(name) || is_namespace(name) {
             return true;
         }
         if BUILTINS.contains(&name) {
@@ -1967,7 +1975,7 @@ impl<'a> Visit<'a> for Scanner<'_, 'a> {
         if let Some(name) = self.vitest_name(ident) {
             // At import time any read of `vi` or `expect` counts as using it: through an alias, a
             // computed member, destructuring or an argument it reaches the same effects.
-            if REGISTRATION.contains(&name.as_str())
+            if is_registration(name.as_str())
                 || name == "vitest"
                 || name == "*"
                 || (self.import_time && matches!(name.as_str(), "vi" | "vitest" | "expect"))
@@ -2014,9 +2022,9 @@ impl<'a> Visit<'a> for Scanner<'_, 'a> {
             {
                 let property = member.property.name.as_str();
                 // `globalThis.vi` is Vitest's `vi` when globals are enabled.
-                if REGISTRATION.contains(&property)
+                if is_registration(property)
                     || REFLECTIVE.contains(&property)
-                    || (self.import_time && matches!(property, "vi" | "vitest" | "expect"))
+                    || (self.import_time && is_namespace(property))
                 {
                     self.failed = true;
                 }

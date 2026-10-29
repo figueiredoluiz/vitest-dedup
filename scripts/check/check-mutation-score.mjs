@@ -123,7 +123,7 @@ export const MINIMUM_SCORED = 1050
 // Adding a file changes what the score MEANS, so the recorded baseline is re-measured with it rather
 // than compared against the old one. A score is only comparable to another score over the same scope.
 //
-// ## Why `vitest_config.rs` is NOT the next file, measured rather than assumed
+// ## Why `framework/vitest/config.rs` is NOT the next file, measured rather than assumed
 //
 // It was the obvious candidate and the attempt is recorded here because the result is a finding
 // about this gate, not about that file. It is the largest of the remainder -- `cargo mutants --list`

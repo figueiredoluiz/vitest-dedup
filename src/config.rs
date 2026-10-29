@@ -183,12 +183,20 @@ impl Config {
     fn defaults(root: PathBuf) -> Self {
         Self {
             root,
-            include: crate::discovery::DEFAULT_INCLUDE_GLOBS
+            include: crate::framework::current()
+                .file_defaults()
+                .include
                 .iter()
-                .chain(crate::discovery::DEFAULT_BENCHMARK_INCLUDE_GLOBS)
+                .chain(
+                    crate::framework::current()
+                        .file_defaults()
+                        .benchmark_include,
+                )
                 .map(|pattern| (*pattern).to_owned())
                 .collect(),
-            exclude: crate::discovery::DEFAULT_EXCLUDE_GLOBS
+            exclude: crate::framework::current()
+                .file_defaults()
+                .exclude
                 .iter()
                 .map(|pattern| (*pattern).to_owned())
                 .collect(),

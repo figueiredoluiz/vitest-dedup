@@ -12,6 +12,7 @@
 //! read later.
 
 use crate::discovery::{ModuleFlavor, SourceFile};
+use crate::framework::{Chain, HookTiming};
 use crate::frontend::js_text::{cooked_text, string_text};
 use crate::model::{
     Context, DeclarationKind, EachRows, EachTable, ExclusionReason, Fingerprints, FixtureBinding,
@@ -882,7 +883,13 @@ fn collect_mocked_modules(
         let Expression::Identifier(object) = &member.object else {
             return false;
         };
-        if call.optional || member.optional || !matches!(object.name.as_str(), "vi" | "vitest") {
+        if call.optional
+            || member.optional
+            || crate::framework::current()
+                .dialect()
+                .namespace(object.name.as_str())
+                != Some("vi")
+        {
             return false;
         }
         if let Some(symbol) = object
@@ -2722,7 +2729,10 @@ impl<'a> Walker<'a> {
         // `myTest.override(...)`).
         if let [ChainStep::Member(name)] = resolved.steps.as_slice() {
             if hook_kind(name).is_some()
-                || matches!(name.as_str(), "extend" | "override" | "scoped")
+                || matches!(
+                    crate::framework::current().dialect().chain_member(name),
+                    Some(Chain::FixtureExtension | Chain::FixtureScoping)
+                )
             {
                 return;
             }
@@ -3317,7 +3327,7 @@ impl<'a> Walker<'a> {
         // Another runner's global (`describe` with Vitest globals off) is not a helper.
         if let Expression::Identifier(ident) = &call.callee {
             if self.is_free_reference(ident)
-                && registration_free::REGISTRATION.contains(&ident.name.as_str())
+                && registration_free::is_registration(ident.name.as_str())
             {
                 return;
             }
@@ -4079,15 +4089,26 @@ impl<'a> Walker<'a> {
     }
 }
 
-/// Map the four supported lifecycle-hook names to their owned hook kinds, returning None for
-/// other names.
+/// Map a lifecycle-hook name to its owned hook kind, returning None for other names and for the
+/// hooks the model does not represent.
 fn hook_kind(name: &str) -> Option<HookKind> {
-    match name {
-        "beforeAll" => Some(HookKind::BeforeAll),
-        "beforeEach" => Some(HookKind::BeforeEach),
-        "afterEach" => Some(HookKind::AfterEach),
-        "afterAll" => Some(HookKind::AfterAll),
-        _ => None,
+    crate::framework::current()
+        .dialect()
+        .hook(name)
+        .and_then(modeled_hook)
+}
+
+/// The owned hook kind for `hook`: the four scope hooks the model represents, None otherwise.
+pub(in crate::frontend) fn modeled_hook(hook: HookTiming) -> Option<HookKind> {
+    match hook {
+        HookTiming::BeforeAll => Some(HookKind::BeforeAll),
+        HookTiming::BeforeEach => Some(HookKind::BeforeEach),
+        HookTiming::AfterEach => Some(HookKind::AfterEach),
+        HookTiming::AfterAll => Some(HookKind::AfterAll),
+        HookTiming::AroundEach
+        | HookTiming::AroundAll
+        | HookTiming::OnTestFinished
+        | HookTiming::OnTestFailed => None,
     }
 }
 
@@ -4392,17 +4413,25 @@ fn title_is_unresolved(title: &Title) -> bool {
 
 /// Map a declaration member name to its modifier, retaining unsupported names as Unknown.
 fn modifier_for_member(name: &str) -> Modifier {
-    match name {
-        "skip" => Modifier::Skip,
-        "only" => Modifier::Only,
-        "todo" => Modifier::Todo,
-        "fails" => Modifier::Fails,
-        "concurrent" => Modifier::Concurrent,
+    match crate::framework::current().dialect().chain_member(name) {
+        Some(Chain::Skip) => Modifier::Skip,
+        Some(Chain::Focus) => Modifier::Only,
+        Some(Chain::Todo) => Modifier::Todo,
+        Some(Chain::ExpectedFailure) => Modifier::Fails,
+        Some(Chain::Concurrent) => Modifier::Concurrent,
         // [v5 CHANGE] removed in v5, but pre-v5 corpora still contain it (hazard 2) -- it must
         // surface as a real modifier, not be swallowed into `Unknown`.
-        "sequential" => Modifier::Sequential,
-        "shuffle" => Modifier::Shuffle,
-        other => Modifier::Unknown(other.to_owned()),
+        Some(Chain::Sequential) => Modifier::Sequential,
+        Some(Chain::Shuffle) => Modifier::Shuffle,
+        // A call-taking member read without its call is not a modifier this models.
+        Some(
+            Chain::SkipWhen
+            | Chain::RunWhen
+            | Chain::Table(_)
+            | Chain::FixtureExtension
+            | Chain::FixtureScoping,
+        )
+        | None => Modifier::Unknown(name.to_owned()),
     }
 }
 

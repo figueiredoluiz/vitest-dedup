@@ -116,104 +116,12 @@ pub fn read_bounded(path: &Path, limit: u64) -> std::io::Result<Option<String>> 
         .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))
 }
 
-/// Default include patterns, matching Vitest's own `include` defaults.
-///
-/// Vitest documents its default as the extglob pattern `**/*.{test,spec}.?(c|m)[jt]s?(x)`, but
-/// `globset` -- the matcher used everywhere in this project, the same choice CukeDedup made --
-/// does not support extglob optional-groups (`?(...)`). Rather than approximate that syntax, this
-/// enumerates the concrete extensions the optional groups expand to in practice: `js`, `jsx`,
-/// `ts`, `tsx`, and their `.mjs`/`.cjs`/`.mts`/`.cts` module-flavor forms. This intentionally
-/// drops combinations the extglob technically allows but nobody writes, such as `.mjsx`/`.ctsx`.
-pub const DEFAULT_INCLUDE_GLOBS: &[&str] = &[
-    "**/*.test.js",
-    "**/*.test.jsx",
-    "**/*.test.ts",
-    "**/*.test.tsx",
-    "**/*.test.mjs",
-    "**/*.test.mts",
-    "**/*.test.cjs",
-    "**/*.test.cts",
-    "**/*.spec.js",
-    "**/*.spec.jsx",
-    "**/*.spec.ts",
-    "**/*.spec.tsx",
-    "**/*.spec.mjs",
-    "**/*.spec.mts",
-    "**/*.spec.cjs",
-    "**/*.spec.cts",
-];
-
-/// Default type-test include patterns, matching Vitest's `typecheck.include` default.
-///
-/// Vitest documents `['**/*.{test,spec}-d.?(c|m)[jt]s?(x)']` and consults it only when
-/// `typecheck.enabled` is on (default off), so this list gates nothing on its own. Enumerated
-/// rather than extglobbed for the reason [`DEFAULT_INCLUDE_GLOBS`] gives: `globset` does not
-/// implement Vitest's optional groups, and this drops only the combinations nobody writes
-/// (`.test-d.mjsx` and friends).
-pub const DEFAULT_TYPECHECK_INCLUDE_GLOBS: &[&str] = &[
-    "**/*.test-d.js",
-    "**/*.test-d.jsx",
-    "**/*.test-d.ts",
-    "**/*.test-d.tsx",
-    "**/*.test-d.mjs",
-    "**/*.test-d.mts",
-    "**/*.test-d.cjs",
-    "**/*.test-d.cts",
-    "**/*.spec-d.js",
-    "**/*.spec-d.jsx",
-    "**/*.spec-d.ts",
-    "**/*.spec-d.tsx",
-    "**/*.spec-d.mjs",
-    "**/*.spec-d.mts",
-    "**/*.spec-d.cjs",
-    "**/*.spec-d.cts",
-];
-
-/// Default benchmark include patterns, matching Vitest's `benchmark.include` default.
-///
-/// Vitest documents `**/*.{bench,benchmark}.?(c|m)[jt]s?(x)`. As with
-/// [`DEFAULT_INCLUDE_GLOBS`], enumerate the practical extensions because `globset` does not
-/// implement the optional extglob groups Vitest accepts.
-pub const DEFAULT_BENCHMARK_INCLUDE_GLOBS: &[&str] = &[
-    "**/*.bench.js",
-    "**/*.bench.jsx",
-    "**/*.bench.ts",
-    "**/*.bench.tsx",
-    "**/*.bench.mjs",
-    "**/*.bench.mts",
-    "**/*.bench.cjs",
-    "**/*.bench.cts",
-    "**/*.benchmark.js",
-    "**/*.benchmark.jsx",
-    "**/*.benchmark.ts",
-    "**/*.benchmark.tsx",
-    "**/*.benchmark.mjs",
-    "**/*.benchmark.mts",
-    "**/*.benchmark.cjs",
-    "**/*.benchmark.cts",
-];
-
-/// Vitest's `benchmark.exclude` defaults, expressed as directory globs for `globset`.
-pub const DEFAULT_BENCHMARK_EXCLUDE_GLOBS: &[&str] = &[
-    "**/node_modules/**",
-    "**/dist/**",
-    "**/.idea/**",
-    "**/.git/**",
-    "**/.cache/**",
-];
-
-/// Default exclude patterns, applied in addition to `.gitignore` / `.vitest-dedupignore`.
-pub const DEFAULT_EXCLUDE_GLOBS: &[&str] = &[
-    "**/node_modules/**",
-    "**/dist/**",
-    "**/build/**",
-    "**/coverage/**",
-    "**/.idea/**",
-    "**/.git/**",
-    "**/.cache/**",
-    "**/.output/**",
-    "**/.temp/**",
-];
+// The default globs are Vitest's and live in its adapter; re-exported so every existing path stays
+// valid.
+pub use crate::framework::vitest::{
+    DEFAULT_BENCHMARK_EXCLUDE_GLOBS, DEFAULT_BENCHMARK_INCLUDE_GLOBS, DEFAULT_EXCLUDE_GLOBS,
+    DEFAULT_INCLUDE_GLOBS, DEFAULT_TYPECHECK_INCLUDE_GLOBS,
+};
 
 /// The language family selected from a source file's extension.
 ///
@@ -241,7 +149,7 @@ pub enum SourceLanguage {
 /// `.mjs`/`.mts` are unconditionally ESM and `.cjs`/`.cts` are unconditionally CommonJS
 /// regardless of `package.json`. A bare `.js`/`.jsx`/`.ts`/`.tsx` extension is ambiguous: settling
 /// it requires reading `package.json`, which is module-resolution work that belongs in
-/// `frontend` (or a future `vitest_config.rs`), not in file discovery. Carrying `Ambiguous`
+/// `frontend` (or a future reader in `framework::vitest::config`), not in file discovery. Carrying `Ambiguous`
 /// through explicitly means the frontend never has to re-derive "does the extension already know
 /// the answer?" from the raw extension string.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -756,16 +664,20 @@ pub fn classify_source_file(path: &Path) -> Option<(SourceLanguage, ModuleFlavor
 
 /// Return owned test and benchmark inclusion globs used by default discovery.
 fn owned_default_include() -> Vec<String> {
-    DEFAULT_INCLUDE_GLOBS
+    let defaults = crate::framework::current().file_defaults();
+    defaults
+        .include
         .iter()
-        .chain(DEFAULT_BENCHMARK_INCLUDE_GLOBS)
+        .chain(defaults.benchmark_include)
         .map(|pattern| (*pattern).to_owned())
         .collect()
 }
 
 /// Return owned copies of the default discovery exclusion patterns.
 fn owned_default_exclude() -> Vec<String> {
-    DEFAULT_EXCLUDE_GLOBS
+    crate::framework::current()
+        .file_defaults()
+        .exclude
         .iter()
         .map(|pattern| (*pattern).to_owned())
         .collect()

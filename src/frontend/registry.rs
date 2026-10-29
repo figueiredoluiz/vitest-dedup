@@ -16,6 +16,7 @@
 //! callee expression, which Vitest export (if any) it ultimately refers to and what chain of
 //! member accesses and calls sits between the binding and the call being examined.
 
+use crate::framework::Registers;
 use crate::model::{FixtureBinding, FixtureValue};
 use oxc_ast::ast::{
     Argument, ArrayExpressionElement, BinaryOperator, BindingPattern, ChainElement, Expression,
@@ -196,7 +197,9 @@ impl Registry {
     /// Registers runtime Vitest import symbols and skips type-only declarations/specifiers.
     fn register_import(&mut self, import: &ImportDeclaration) {
         if matches!(import.import_kind, oxc_ast::ast::ImportOrExportKind::Type)
-            || string_text(&import.source).as_ref() != "vitest"
+            || !crate::framework::current()
+                .dialect()
+                .is_api_module(string_text(&import.source).as_ref())
         {
             return;
         }
@@ -273,7 +276,8 @@ pub(super) fn is_import_meta_vitest_expr(expr: &Expression) -> bool {
     matches!(
         expr,
         Expression::StaticMemberExpression(member)
-            if matches!(&member.object, Expression::ImportMeta(_)) && member.property.name.as_str() == "vitest"
+            if matches!(&member.object, Expression::ImportMeta(_))
+                && crate::framework::current().dialect().in_source_member == Some(member.property.name.as_str())
     )
 }
 
@@ -285,17 +289,14 @@ pub(super) fn is_import_meta_vitest_expr(expr: &Expression) -> bool {
 /// important: an import of, say, `assert` from `"vitest"` should never be mistaken for a
 /// declaration-relevant binding.
 fn canonicalize(name: &str) -> Option<&'static str> {
-    match name {
-        "test" | "it" => Some("test"),
-        "describe" | "suite" => Some("describe"),
-        "bench" => Some("bench"),
-        "vi" | "vitest" => Some("vi"),
-        "beforeAll" => Some("beforeAll"),
-        "beforeEach" => Some("beforeEach"),
-        "afterEach" => Some("afterEach"),
-        "afterAll" => Some("afterAll"),
-        "expect" => Some("expect"),
-        _ => None,
+    let dialect = crate::framework::current().dialect();
+    let Some(registration) = dialect.registration(name) else {
+        return dialect.namespace(name);
+    };
+    match registration.registers {
+        // Only the hooks the model represents are bindings this registry tracks.
+        Registers::Hook(hook) if super::extract::modeled_hook(hook).is_none() => None,
+        _ => Some(registration.canonical),
     }
 }
 

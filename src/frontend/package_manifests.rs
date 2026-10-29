@@ -10,7 +10,7 @@
 //! Only registration is ruled out. Import-time side effects of a package (patching globals,
 //! polyfills) are not modelled, exactly as they are not for a package the test file imports.
 
-use super::extract::registration_free::REGISTRATION;
+use super::extract::registration_free::{is_registration, registration_names};
 use super::package_supervisor::supervise;
 use crate::frontend::js_text::string_text;
 use crate::model::PackageWorkerFailure;
@@ -440,7 +440,7 @@ struct ScriptScan {
     registers_global: bool,
 }
 
-/// Whether `program` reads one of the [`REGISTRATION`] names as a free name: a reference no
+/// Whether `program` reads one of the [`registration_names`] as a free name: a reference no
 /// binding in the file resolves (so a local `function test` or a parameter named `it` is not one,
 /// and neither is a property, a key or a method). Any read counts, whether the name is called,
 /// tagged, indexed, parenthesised or stored for later, except under `typeof`; a write alone does
@@ -461,9 +461,9 @@ fn reads_registration_global(program: &oxc_ast::ast::Program<'_>) -> bool {
         return true;
     }
     // `declare const test: ...` binds nothing at run time: the name is still the global.
-    if REGISTRATION.iter().any(|name| {
+    if registration_names().any(|name| {
         scoping
-            .get_root_binding((*name).into())
+            .get_root_binding(name.into())
             .is_some_and(|symbol| scoping.symbol_flags(symbol).is_ambient())
     }) {
         return true;
@@ -488,7 +488,7 @@ fn reads_registration_global(program: &oxc_ast::ast::Program<'_>) -> bool {
     let user_of = |id: oxc_semantic::NodeId| nodes.kind(user_id(id));
     for (name, references) in scoping.root_unresolved_references() {
         let name = name.as_str();
-        let registration = REGISTRATION.contains(&name);
+        let registration = is_registration(name);
         if !registration && !matches!(name, "globalThis" | "global" | "window" | "self") {
             continue;
         }
@@ -523,8 +523,7 @@ fn reads_registration_global(program: &oxc_ast::ast::Program<'_>) -> bool {
                             if assign.operator == oxc_ast::ast::AssignmentOperator::Assign
                                 && assign.left.span() == span
                     );
-                !assigned
-                    && property.is_some_and(|property| REGISTRATION.contains(&property.as_ref()))
+                !assigned && property.is_some_and(|property| is_registration(property.as_ref()))
             };
             if counts {
                 return true;
