@@ -183,6 +183,8 @@ pub struct Normalizer<'s> {
     structure: &'s Structure,
     externals: HashMap<SymbolId, String>,
     active: HashSet<SymbolId>,
+    /// How many nodes deep the form being written is, across nested walks.
+    nesting: usize,
 }
 
 impl<'s> Normalizer<'s> {
@@ -201,6 +203,7 @@ impl<'s> Normalizer<'s> {
             structure,
             externals: HashMap::new(),
             active: HashSet::new(),
+            nesting: 0,
         }
     }
 

@@ -778,3 +778,66 @@ fn options_are_what_changes_what_a_test_checks() {
         assert!(!written.is_empty());
     });
 }
+
+/// A test whose callback assigns through a chain `links` long.
+fn chain(title: &str, links: usize) -> String {
+    format!(
+        "test('{title}', () => {{ a = {}1 }})\n",
+        "a = ".repeat(links)
+    )
+}
+
+/// A form is written to a bounded depth, on a stack half a test thread's: deeper code reads as
+/// itself only, and code inside the bound keeps matching.
+#[test]
+fn a_form_deeper_than_its_bound_equals_only_itself() {
+    let main = [
+        format!("{HEADER}let a\n"),
+        chain("near", 200),
+        chain("near again", 200),
+        chain("past", 300),
+        chain("past again", 300),
+        chain("deep", 5_000),
+    ]
+    .concat();
+    let (forms, repeated) = std::thread::Builder::new()
+        .stack_size(1024 * 1024)
+        .spawn(move || {
+            with_normalizer(&main, &[], false, |normalizer, tree, inventory| {
+                let callbacks: HashMap<_, _> = test_callbacks(tree, inventory).collect();
+                let forms: HashMap<_, _> = callbacks
+                    .iter()
+                    .map(|(title, &callback)| (title.clone(), normalizer.of(callback)))
+                    .collect();
+                let repeated = normalizer.of(callbacks["deep"]) == forms["deep"];
+                (forms, repeated)
+            })
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+    assert_eq!(forms.len(), 5);
+    assert_eq!(forms["near"], forms["near again"]);
+    assert_ne!(forms["past"], forms["past again"]);
+    assert!(forms["deep"].contains("(deep "));
+    assert!(repeated);
+}
+
+/// The predicates a form is decided by read code of any depth the parser admits, on the same
+/// half-thread stack: a const's initializer (`creates`, `allocates`) and a function's body
+/// (`binds_this`).
+#[test]
+fn deep_code_is_read_without_recursion() {
+    let negations = "!".repeat(15_000);
+    let main = format!(
+        "{HEADER}const b = {negations}1\ntest('reads', () => {{ b }})\n\
+         test('function', function () {{ {negations}1 }})\n"
+    );
+    let forms = std::thread::Builder::new()
+        .stack_size(1024 * 1024)
+        .spawn(move || forms(&main, &[]))
+        .unwrap()
+        .join()
+        .unwrap();
+    assert_eq!(forms.len(), 2);
+}

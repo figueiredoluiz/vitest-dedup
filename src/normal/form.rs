@@ -25,6 +25,10 @@ const DROPPED: [&str; 12] = [
 /// are what a type test checks.
 const TYPE_KEYS: [&str; 2] = ["typeAnnotation", "returnType"];
 
+/// How many nodes deep a normal form is written. The parser admits far deeper chains on a stack of
+/// its own; a form is written on its caller's stack, where a 2 MiB test thread must hold it.
+pub(super) const MAX_FORM_DEPTH: usize = 256;
+
 /// The fields of `node` that are child nodes or lists of them, for the predicates below.
 fn children(tree: &Tree, node: NodeId) -> Vec<NodeId> {
     let mut out = Vec::new();
@@ -76,13 +80,11 @@ pub(super) fn observes_names(tree: &Tree, node: NodeId, dialect: &Dialect) -> bo
 /// (`test.extend(...)`) creates nothing a test can tell apart, unless its arguments do.
 pub(super) fn creates(normalizer: &Normalizer, node: NodeId) -> bool {
     let tree = normalizer.tree;
-    match tree.kind(node) {
-        "FunctionExpression" | "ArrowFunctionExpression" | "ClassBody" => false,
-        "CallExpression" if normalizer.structure.registration_values.contains(&node) => tree
-            .list(node, "arguments")
-            .into_iter()
-            .flatten()
-            .any(|argument| creates(normalizer, argument)),
+    any_inside(node, |node| match tree.kind(node) {
+        "FunctionExpression" | "ArrowFunctionExpression" | "ClassBody" => Visit::Skip,
+        "CallExpression" if normalizer.structure.registration_values.contains(&node) => {
+            Visit::Into(tree.list(node, "arguments").into_iter().flatten().collect())
+        }
         "CallExpression"
         | "NewExpression"
         | "AwaitExpression"
@@ -90,27 +92,48 @@ pub(super) fn creates(normalizer: &Normalizer, node: NodeId) -> bool {
         | "UpdateExpression"
         | "AssignmentExpression"
         | "YieldExpression"
-        | "ImportExpression" => true,
-        _ => children(tree, node)
-            .into_iter()
-            .any(|child| creates(normalizer, child)),
+        | "ImportExpression" => Visit::Found,
+        _ => Visit::Into(children(tree, node)),
+    })
+}
+
+/// What [`any_inside`] does at a node.
+enum Visit {
+    /// The predicate holds.
+    Found,
+    /// Nothing below this node counts.
+    Skip,
+    /// Look at these nodes next.
+    Into(Vec<NodeId>),
+}
+
+/// Whether `visit` finds a node at or below `node`. A loop rather than recursion: the parser admits
+/// nesting deeper than any caller's stack holds.
+fn any_inside(node: NodeId, visit: impl Fn(NodeId) -> Visit) -> bool {
+    let mut pending = vec![node];
+    while let Some(node) = pending.pop() {
+        match visit(node) {
+            Visit::Found => return true,
+            Visit::Skip => {}
+            Visit::Into(next) => pending.extend(next),
+        }
     }
+    false
 }
 
 /// Whether evaluating `node` makes an object literal, array, function, class or regular expression:
 /// each evaluation is a new object, so two equal initializers are still two identities.
 pub(super) fn allocates(tree: &Tree, node: NodeId) -> bool {
-    match tree.kind(node) {
+    any_inside(node, |node| match tree.kind(node) {
         "ObjectExpression"
         | "ArrayExpression"
         | "FunctionExpression"
         | "ArrowFunctionExpression"
-        | "ClassExpression" => true,
-        "Literal" => matches!(tree.field_of(node, "regex"), Field::Object(_)),
-        _ => children(tree, node)
-            .into_iter()
-            .any(|child| allocates(tree, child)),
-    }
+        | "ClassExpression" => Visit::Found,
+        "Literal" if matches!(tree.field_of(node, "regex"), Field::Object(_)) => Visit::Found,
+        "Literal" => Visit::Skip,
+        _ => Visit::Into(children(tree, node)),
+    })
 }
 
 /// A template element's `raw` or `cooked` text.
@@ -139,14 +162,12 @@ fn tagged(tree: &Tree, literal: NodeId) -> bool {
 
 /// Whether a function body reads the function's own `this`, `arguments`, `super` or `new.target`.
 fn binds_this(tree: &Tree, node: NodeId) -> bool {
-    match tree.kind(node) {
-        "ThisExpression" | "Super" | "MetaProperty" => true,
-        "Identifier" => tree.text(node, "name") == Some("arguments"),
-        "FunctionExpression" | "FunctionDeclaration" | "ClassBody" => false,
-        _ => children(tree, node)
-            .into_iter()
-            .any(|child| binds_this(tree, child)),
-    }
+    any_inside(node, |node| match tree.kind(node) {
+        "ThisExpression" | "Super" | "MetaProperty" => Visit::Found,
+        "Identifier" if tree.text(node, "name") == Some("arguments") => Visit::Found,
+        "Identifier" | "FunctionExpression" | "FunctionDeclaration" | "ClassBody" => Visit::Skip,
+        _ => Visit::Into(children(tree, node)),
+    })
 }
 
 /// JSX text as it renders: lines trimmed where they meet a line break, blank lines dropped.
@@ -234,8 +255,28 @@ impl Normalizer<'_> {
         }
     }
 
-    /// Writes the normal form of a node.
+    /// Writes the normal form of a node. Past [`MAX_FORM_DEPTH`] levels, counted across the nested
+    /// walks of the declarations a form reads, it writes a token only this node writes: deeper code
+    /// can stop a match but never make one.
     pub(super) fn write_node(&mut self, node: NodeId, walk: &mut Walk, out: &mut String) {
+        if self.nesting >= MAX_FORM_DEPTH {
+            let span = self.tree.span(node);
+            let _ = write!(
+                out,
+                "(deep {}:{}:{})",
+                self.path.display(),
+                span.start,
+                span.end
+            );
+            return;
+        }
+        self.nesting += 1;
+        self.write_kind(node, walk, out);
+        self.nesting -= 1;
+    }
+
+    /// [`Self::write_node`] below the depth bound.
+    fn write_kind(&mut self, node: NodeId, walk: &mut Walk, out: &mut String) {
         let tree = self.tree;
         let kind = tree.kind(node);
         match kind {
