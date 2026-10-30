@@ -2321,6 +2321,20 @@ pub enum ExclusionReason {
     /// Some other ambient fact of the test (dynamic title, unreadable `.each` table, unreadable
     /// nested config) could not be resolved.
     UnresolvedContext,
+    /// A test is registered inside a function whose caller decides what it registers.
+    RegisteredInsideFunction,
+    /// A test reads state another test writes, or a hook accumulates.
+    OrderDependentState,
+    /// A test's callback is passed by name, and the analyzer does not read callbacks it is not
+    /// given inline.
+    NamedCallback,
+    /// A spread argument, or a callee the analyzer cannot read, may hide a test's callback.
+    UnreadableCallback,
+    /// A benchmark, which the next engine counts but does not compare yet.
+    UnsupportedBenchmark,
+    /// A wrapper call, a module load or a registration function read as a value registers tests
+    /// the file does not spell.
+    RegisteredElsewhere,
     /// A statement form the walker does not enter (`with`) may hide declarations.
     UnsupportedStatement,
     /// The parser reported errors; the file was read as far as it parsed.
@@ -2352,7 +2366,7 @@ pub enum ExclusionReason {
 
 impl ExclusionReason {
     /// Every code, in the order that breaks ties between a file's reasons.
-    pub const ALL: [Self; 23] = [
+    pub const ALL: [Self; 29] = [
         Self::HelperExportUnreadable,
         Self::HelperSetupEffects,
         Self::HelperEffectsUnproved,
@@ -2363,6 +2377,12 @@ impl ExclusionReason {
         Self::MockFactoryUnreadable,
         Self::FixtureUnreadable,
         Self::UnresolvedContext,
+        Self::RegisteredInsideFunction,
+        Self::OrderDependentState,
+        Self::NamedCallback,
+        Self::UnreadableCallback,
+        Self::UnsupportedBenchmark,
+        Self::RegisteredElsewhere,
         Self::UnsupportedStatement,
         Self::ParseError,
         Self::UnsupportedSource,
@@ -2391,6 +2411,12 @@ impl ExclusionReason {
             Self::MockFactoryUnreadable => "mock-factory-unreadable",
             Self::FixtureUnreadable => "fixture-unreadable",
             Self::UnresolvedContext => "unresolved-context",
+            Self::RegisteredInsideFunction => "registered-inside-function",
+            Self::OrderDependentState => "order-dependent-state",
+            Self::NamedCallback => "named-callback",
+            Self::UnreadableCallback => "unreadable-callback",
+            Self::UnsupportedBenchmark => "unsupported-benchmark",
+            Self::RegisteredElsewhere => "registered-elsewhere",
             Self::UnsupportedStatement => "unsupported-statement",
             Self::ParseError => "parse-error",
             Self::UnsupportedSource => "unsupported-source",

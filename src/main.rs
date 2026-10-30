@@ -243,13 +243,47 @@ fn run() -> Result<ExitCode> {
 }
 
 /// Run the pipeline with an injectable current-RSS reader for deterministic boundary tests.
-fn run_with_rss(args: ParsedArgs, mut resident: impl FnMut() -> Option<u64>) -> Result<ExitCode> {
+fn run_with_rss(args: ParsedArgs, resident: impl FnMut() -> Option<u64>) -> Result<ExitCode> {
+    run_with_engine(args, resident, vitest_dedup::corpus::Engine::selected())
+}
+
+/// [`run_with_rss`] with the engine given: the next engine, or `None` for the current core.
+fn run_with_engine(
+    args: ParsedArgs,
+    mut resident: impl FnMut() -> Option<u64>,
+    mut next_engine: Option<vitest_dedup::corpus::Engine>,
+) -> Result<ExitCode> {
     // The unlocked handle, by type: `Stderr` takes the process lock for each write only, while a
     // `StderrLock` held for the whole run would block any stderr write made on the extraction
     // worker thread that the main thread joins below. Annotated so putting `.lock()` back does not
     // compile.
     let mut stderr: std::io::Stderr = std::io::stderr();
     let config = Config::load(&args.root, args.to_overrides())?;
+
+    // The next engine runs no rule yet, so a mode that filters or records findings would report
+    // a clean run over nothing, and its memory is not measured yet: refused before any work.
+    if next_engine.is_some() {
+        let findings_mode = [
+            ("--baseline", args.baseline.is_some()),
+            ("--update-baseline", args.update_baseline),
+            ("--baseline-from-ref", args.baseline_from_ref.is_some()),
+            ("--changed-since", args.changed_since.is_some()),
+            ("--debug-memory", args.debug_memory),
+        ]
+        .into_iter()
+        .find_map(|(flag, given)| given.then_some(flag));
+        if let Some(flag) = findings_mode {
+            anyhow::bail!(
+                "{flag} is not available under VITEST_DEDUP_ENGINE=next, which runs no rule and \
+                 measures no memory yet"
+            );
+        }
+        writeln!(
+            stderr,
+            "vitest-dedup: VITEST_DEDUP_ENGINE=next reads and excludes tests but runs no rule \
+             yet; no finding is reported"
+        )?;
+    }
 
     // Resolved before any analysis, so an unusable revision, a shallow clone, or a non-repository
     // root fails immediately with exit 2 rather than after a full run. Every one of those would
@@ -563,6 +597,22 @@ fn run_with_rss(args: ParsedArgs, mut resident: impl FnMut() -> Option<u64>) -> 
     let mut seen_helper_sources = std::collections::BTreeSet::new();
     let mut roof = memory_roof(&args);
     for (index, file) in discovered.files.iter().enumerate() {
+        // Whole files only: stopping before a file, once the files read so far reach the budget,
+        // keeps every per-file side effect consistent, so the run is exactly a run over them.
+        // Checked here so the next engine's files, which `continue` below, are held to it too.
+        if index > 0 && roof.exceeded_with_rss(&tests, &mut resident) {
+            let remaining = discovered.files.len() - index;
+            causes.files_over_memory_budget = remaining;
+            for skipped in &discovered.files[index..] {
+                excluded.record(exclusions::unparsed_file(
+                    relativize_test_path(&skipped.path, &config.root),
+                    ExclusionReason::MemoryBudget,
+                    "the memory budget was reached before this file was analyzed",
+                ));
+            }
+            write_roof_diagnostic(&mut stderr, "analysis", &args, files_read, remaining)?;
+            break;
+        }
         // Source text this file adds to `retained_sources`, charged to the memory roof.
         let mut retained_text = 0;
         // A single unreadable file must degrade this file, not the run. `read_to_string` fails on
@@ -709,6 +759,30 @@ fn run_with_rss(args: ParsedArgs, mut resident: impl FnMut() -> Option<u64>) -> 
             diagnostic_files.insert(file.path.clone());
             causes.files_globals_undetermined += 1;
         }
+        if let Some(engine) = next_engine.as_mut() {
+            let setting = vitest_dedup::corpus::Setting {
+                dialect: vitest_dedup::framework::current().dialect(),
+                globals: file_globals == Globals::Enabled,
+                root: &config.root,
+            };
+            let relative = relativize_test_path(&file.path, &config.root);
+            let (entry, partial) = engine.read(
+                &file.path,
+                &relative,
+                &source,
+                setting,
+                args.emit_test_fingerprints,
+                unresolved_globals
+                    .map(|reason| (ExclusionReason::GlobalsUndetermined, reason.to_owned()))
+                    .into_iter()
+                    .collect(),
+            );
+            excluded.extend(entry);
+            causes.files_partially_read += usize::from(partial);
+            // Source kept for the HTML report is held whichever engine read the file.
+            roof.charge(&[], retained_text);
+            continue;
+        }
         let mut extraction = frontend::extract_within(&source, file, file_globals, &config.root);
         if extraction.incomplete {
             causes.files_partially_read += 1;
@@ -782,21 +856,6 @@ fn run_with_rss(args: ParsedArgs, mut resident: impl FnMut() -> Option<u64>) -> 
         relativize_extraction_paths(&mut extraction.tests, &config.root);
         roof.charge(&extraction.tests, retained_text);
         tests.extend(extraction.tests);
-        // Whole files only: stopping here keeps every per-file side effect above consistent, so
-        // the run is exactly a run over the files read so far.
-        let remaining = discovered.files.len() - index - 1;
-        if remaining > 0 && roof.exceeded_with_rss(&tests, &mut resident) {
-            causes.files_over_memory_budget = remaining;
-            for skipped in &discovered.files[index + 1..] {
-                excluded.record(exclusions::unparsed_file(
-                    relativize_test_path(&skipped.path, &config.root),
-                    ExclusionReason::MemoryBudget,
-                    "the memory budget was reached before this file was analyzed",
-                ));
-            }
-            write_roof_diagnostic(&mut stderr, "analysis", &args, files_read, remaining)?;
-            break;
-        }
     }
 
     drop(seen_helper_sources);
@@ -821,10 +880,13 @@ fn run_with_rss(args: ParsedArgs, mut resident: impl FnMut() -> Option<u64>) -> 
     // One canonical definition drives the diagnostic, the machine `testsAnalyzed` field, and the
     // exit code. `tests.len()` also includes `describe`/`suite` containers, which do not execute
     // and therefore cannot turn a zero-test run into a quality result.
-    let total_tests = tests
-        .iter()
-        .filter(|test| analysis::is_executable_declaration(test.kind))
-        .count();
+    let total_tests = match &next_engine {
+        Some(engine) => engine.tests,
+        None => tests
+            .iter()
+            .filter(|test| analysis::is_executable_declaration(test.kind))
+            .count(),
+    };
 
     if discovered.files.is_empty() {
         // S2 (2026-09-27 scan): four repositories analysed zero files and returned
@@ -898,12 +960,15 @@ fn run_with_rss(args: ParsedArgs, mut resident: impl FnMut() -> Option<u64>) -> 
         causes.nothing_read = true;
     }
 
-    let unresolved_tests = tests
-        .iter()
-        .filter(|test| {
-            analysis::is_executable_declaration(test.kind) && !test.context.is_comparable()
-        })
-        .count();
+    let unresolved_tests = match &next_engine {
+        Some(engine) => engine.unresolved,
+        None => tests
+            .iter()
+            .filter(|test| {
+                analysis::is_executable_declaration(test.kind) && !test.context.is_comparable()
+            })
+            .count(),
+    };
 
     // Computed here, before `analyze` takes ownership of `tests`, and only when asked for. The
     // records need `alpha`, `structural`, and `behavior`, all of which a default run already
@@ -967,6 +1032,12 @@ fn run_with_rss(args: ParsedArgs, mut resident: impl FnMut() -> Option<u64>) -> 
     )?;
 
     (result.excluded_files, result.exclusions) = excluded.finish();
+    if let Some(engine) = &next_engine {
+        result.tests_analyzed = engine.tests;
+        result.unresolved_tests = engine.unresolved;
+        result.blind_files = engine.blind_files();
+        result.incomplete_causes.unresolved_contexts = engine.unresolved;
+    }
 
     let timing = discovery_time.zip(parsing_time).zip(analysis_started).map(
         |((discovery, parsing), started)| {
@@ -1028,7 +1099,8 @@ fn run_with_rss(args: ParsedArgs, mut resident: impl FnMut() -> Option<u64>) -> 
         .map(|report| report.with_peak_rss(peak_rss))
         .collect();
     let jsonl_reporter = JsonlReporter::with_fingerprints(hook_fingerprints, test_fingerprints)
-        .with_memory(memory_reports);
+        .with_memory(memory_reports)
+        .with_sites(next_engine.map(|engine| engine.sites).unwrap_or_default());
 
     let exit_code = final_exit_code(args.fail_on_incomplete, args.fail_on_new, &result, &config);
     let terminal_context = TerminalReportContext::new(&config, exit_code).with_timing(timing);

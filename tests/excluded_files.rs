@@ -31,6 +31,11 @@ fn write(root: &Path, name: &str, contents: impl AsRef<[u8]>) {
 
 /// Runs the binary over `root` with the JSON reporter, then again with JSONL.
 fn run(root: &Path, flags: &[&str]) -> Run {
+    run_with(root, flags, &[])
+}
+
+/// [`run`] with `environment` set for both runs.
+fn run_with(root: &Path, flags: &[&str], environment: &[(&str, &str)]) -> Run {
     let output = tempfile::tempdir().unwrap();
     let prefix = output.path().join("report");
     let _json_run = assert_cmd::Command::cargo_bin("vitest-dedup")
@@ -39,6 +44,7 @@ fn run(root: &Path, flags: &[&str]) -> Run {
         .args(["--reporters", "json", "--no-metrics", "--output"])
         .arg(&prefix)
         .args(flags)
+        .envs(environment.iter().copied())
         .output()
         .unwrap();
     let json_text = std::fs::read_to_string(prefix.with_extension("json")).unwrap();
@@ -47,6 +53,7 @@ fn run(root: &Path, flags: &[&str]) -> Run {
         .arg(root)
         .args(["--reporters", "jsonl", "--no-metrics"])
         .args(flags)
+        .envs(environment.iter().copied())
         .output()
         .unwrap();
     let jsonl_text = String::from_utf8(jsonl_run.stdout).unwrap();
@@ -566,6 +573,47 @@ fn an_undetermined_globals_setting_is_globals_undetermined() {
     );
 }
 
+/// The next engine lists an undetermined `globals` too, after its own reasons for the file.
+#[test]
+fn the_next_engine_keeps_an_undetermined_globals_setting() {
+    let directory = tempfile::tempdir().unwrap();
+    write(
+        directory.path(),
+        "vitest.config.ts",
+        "export default { test: { globals: computeIt() } };\n",
+    );
+    write(directory.path(), "g.test.ts", CLEAN);
+    write(
+        directory.path(),
+        "o.test.ts",
+        "import { test, expect } from 'vitest';
+let count = 0;
+test('writes', () => { count = 1; expect(count).toBe(1); });
+test('reads', () => { expect(count).toBe(0); });
+",
+    );
+    let run = run_with(directory.path(), &[], &[("VITEST_DEDUP_ENGINE", "next")]);
+    assert_listed(
+        &run,
+        &[
+            Expect {
+                path: "g.test.ts",
+                reason: "globals-undetermined",
+                others: &[],
+                excluded: 0,
+                total: 1,
+            },
+            Expect {
+                path: "o.test.ts",
+                reason: "order-dependent-state",
+                others: &["globals-undetermined"],
+                excluded: 1,
+                total: 2,
+            },
+        ],
+    );
+}
+
 /// A file that is not UTF-8 is listed as unreadable.
 #[test]
 fn a_file_that_is_not_utf8_is_unreadable() {
@@ -630,6 +678,32 @@ fn files_left_unanalyzed_by_the_memory_budget_are_memory_budget() {
     assert_eq!(run.json["exclusions"]["reasons"][0]["files"], skipped);
 }
 
+/// The next engine is held to the memory budget too: one megabyte is spent before a second file.
+#[test]
+fn the_next_engine_stops_at_the_memory_budget() {
+    let directory = tempfile::tempdir().unwrap();
+    for file in 0..3 {
+        write(
+            directory.path(),
+            &format!("f{file}.test.ts"),
+            format!("import {{ test, expect }} from 'vitest';\ntest('t{file}', () => {{ expect({file}).toBe({file}); }});\n"),
+        );
+    }
+    let run = run_with(
+        directory.path(),
+        &["--max-memory", "1"],
+        &[("VITEST_DEDUP_ENGINE", "next")],
+    );
+    assert_eq!(run.json["incompleteCauses"]["filesOverMemoryBudget"], 2);
+    let reasons: Vec<_> = run.json["excludedFiles"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|entry| entry["reason"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(reasons, ["memory-budget", "memory-budget"]);
+}
+
 /// A required manifest refusal has one stable code across JSON, JSONL and the terminal histogram.
 #[test]
 fn refused_package_metadata_is_reported_without_tainting_independent_files() {
@@ -663,6 +737,195 @@ fn refused_package_metadata_is_reported_without_tainting_independent_files() {
     );
 }
 
+/// The next engine's reasons for a test it leaves unresolved, one file each, beside a clean file
+/// and files whose tests have nothing to compare, which are counted but not listed.
+#[test]
+fn the_next_engine_lists_why_each_test_is_not_compared() {
+    let directory = tempfile::tempdir().unwrap();
+    write(directory.path(), "clean.test.ts", CLEAN);
+    write(
+        directory.path(),
+        "empty.test.ts",
+        "import { test, expect } from 'vitest';
+test('empty', () => {});
+test('kept', () => { expect(1).toBe(1); });
+",
+    );
+    write(
+        directory.path(),
+        "missing.test.ts",
+        "import { test } from 'vitest';
+test('no callback');
+",
+    );
+    write(
+        directory.path(),
+        "inside.test.ts",
+        "import { test, expect } from 'vitest';
+export function later() { test('inside', () => { expect(1).toBe(1); }); }
+test('kept', () => { expect(1).toBe(1); });
+",
+    );
+    write(
+        directory.path(),
+        "named.test.ts",
+        "import { test, expect } from 'vitest';
+function check() { expect(1).toBe(1); }
+test('named', check);
+",
+    );
+    write(
+        directory.path(),
+        "order.test.ts",
+        "import { test, expect } from 'vitest';
+let count = 0;
+test('writes', () => { count = 1; expect(count).toBe(1); });
+test('reads', () => { expect(count).toBe(0); });
+",
+    );
+    write(
+        directory.path(),
+        "spread.test.ts",
+        "import { test, expect } from 'vitest';
+test('spread', ...[() => { expect(1).toBe(1); }]);
+test('kept', () => { expect(1).toBe(1); });
+",
+    );
+    write(
+        directory.path(),
+        "wrapped.test.ts",
+        "import { test, expect } from 'vitest';
+function suite() { test('inner', () => { expect(1).toBe(1); }); }
+suite();
+test('kept', () => { expect(1).toBe(1); });
+",
+    );
+    let run = run_with(directory.path(), &[], &[("VITEST_DEDUP_ENGINE", "next")]);
+    let unresolved = |path, reason, others, excluded, total| Expect {
+        path,
+        reason,
+        others,
+        excluded,
+        total,
+    };
+    assert_listed(
+        &run,
+        &[
+            unresolved("inside.test.ts", "registered-inside-function", &[], 1, 2),
+            unresolved("named.test.ts", "named-callback", &[], 1, 1),
+            unresolved("order.test.ts", "order-dependent-state", &[], 1, 2),
+            unresolved("spread.test.ts", "unreadable-callback", &[], 1, 2),
+            unresolved(
+                "wrapped.test.ts",
+                "registered-inside-function",
+                &["registered-elsewhere"],
+                2,
+                3,
+            ),
+        ],
+    );
+    assert_eq!(run.json["testsAnalyzed"], 14);
+    assert_eq!(run.json["unresolvedTests"], 6);
+    assert_eq!(run.json["incompleteCauses"]["unresolvedContexts"], 6);
+    // Only `named.test.ts` has every test unresolved; `assert_listed` ties the count to the entry.
+    assert_eq!(run.json["blindFiles"], 1);
+    assert_eq!(run.json["findings"], serde_json::json!([]));
+    assert!(run.stderr.contains("runs no rule yet"), "{}", run.stderr);
+}
+
+/// Benchmarks are counted under the next engine and listed as not compared, never dropped.
+#[test]
+fn the_next_engine_counts_benchmarks_as_not_compared() {
+    let directory = tempfile::tempdir().unwrap();
+    write(
+        directory.path(),
+        "work.bench.ts",
+        "import { bench } from 'vitest';
+bench('sqrt', () => { Math.sqrt(5); });
+bench('cbrt', () => { Math.cbrt(5); });
+",
+    );
+    write(directory.path(), "clean.test.ts", CLEAN);
+    let run = run_with(directory.path(), &[], &[("VITEST_DEDUP_ENGINE", "next")]);
+    assert_listed(
+        &run,
+        &[Expect {
+            path: "work.bench.ts",
+            reason: "unsupported-benchmark",
+            others: &[],
+            excluded: 2,
+            total: 2,
+        }],
+    );
+    assert_eq!(run.json["testsAnalyzed"], 3);
+    assert_eq!(run.json["unresolvedTests"], 2);
+}
+
+/// Tests with nothing to compare leave the run complete under the next engine.
+#[test]
+fn the_next_engine_counts_tests_with_nothing_to_compare_without_listing_them() {
+    let directory = tempfile::tempdir().unwrap();
+    write(
+        directory.path(),
+        "trivial.test.ts",
+        "import { test } from 'vitest';
+test('empty', () => {});
+test('no callback');
+test('options only', { timeout: 1000 });
+",
+    );
+    let run = run_with(directory.path(), &[], &[("VITEST_DEDUP_ENGINE", "next")]);
+    assert_eq!(run.json["testsAnalyzed"], 3);
+    assert_eq!(run.json["unresolvedTests"], 0);
+    assert_eq!(run.json["incomplete"], false, "{:#}", run.json);
+    assert_eq!(run.json["excludedFiles"], serde_json::json!([]));
+    assert_eq!(run.json["blindFiles"], 0);
+}
+
+/// Modes that filter or record findings, and memory records, are refused under the next engine,
+/// which runs no rule and measures no memory (`--fail-on-new` needs `--baseline`); another value
+/// of the variable is the default engine.
+#[test]
+fn the_next_engine_refuses_modes_that_need_findings() {
+    let directory = tempfile::tempdir().unwrap();
+    write(directory.path(), "clean.test.ts", CLEAN);
+    let baseline = directory.path().join("baseline.json");
+    for flags in [
+        vec!["--baseline", baseline.to_str().unwrap()],
+        vec![
+            "--baseline",
+            baseline.to_str().unwrap(),
+            "--update-baseline",
+        ],
+        vec!["--baseline-from-ref", "HEAD"],
+        vec!["--changed-since", "HEAD"],
+        vec!["--debug-memory"],
+    ] {
+        let output = assert_cmd::Command::cargo_bin("vitest-dedup")
+            .unwrap()
+            .arg(directory.path())
+            .args(["--reporters", "json,jsonl", "--no-metrics"])
+            .args(&flags)
+            .env("VITEST_DEDUP_ENGINE", "next")
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(output.status.code(), Some(2), "{flags:?}: {stderr}");
+        assert!(
+            stderr.contains("is not available under VITEST_DEDUP_ENGINE=next"),
+            "{flags:?}: {stderr}"
+        );
+        assert!(output.stdout.is_empty(), "{flags:?}");
+    }
+    let default = run_with(directory.path(), &[], &[("VITEST_DEDUP_ENGINE", "current")]);
+    assert!(
+        !default.stderr.contains("runs no rule yet"),
+        "{}",
+        default.stderr
+    );
+    assert_eq!(default.json["testsAnalyzed"], 1);
+}
+
 /// Every code has a scenario here or a named unit test elsewhere.
 #[test]
 fn every_closed_code_has_a_scenario_or_a_named_unit_test() {
@@ -688,6 +951,12 @@ fn every_closed_code_has_a_scenario_or_a_named_unit_test() {
         "unreadable",
         "memory-budget",
         "project-config-unreadable",
+        "registered-inside-function",
+        "order-dependent-state",
+        "named-callback",
+        "unreadable-callback",
+        "unsupported-benchmark",
+        "registered-elsewhere",
     ];
     // `unsupported-source` and `extraction-failed` need a path the CLI cannot reach (an extension
     // outside the classified set, a recovered panic); `helper-sources-unavailable` needs a
@@ -864,4 +1133,29 @@ fn a_hostile_file_name_is_sanitized_in_every_report() {
     assert_eq!(run.json["excludedFiles"][0]["path"], "evilgnp.test.ts");
     assert!(!run.jsonl_text.contains('\u{202e}'));
     assert!(!run.stderr.contains('\u{202e}'));
+}
+
+/// The next engine over the owned fixtures: floors on the work it did, and a ceiling on what it
+/// leaves unresolved, so neither an empty read nor a mass exclusion passes.
+#[test]
+fn the_next_engine_reads_the_owned_fixtures() {
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures");
+    let run = run_with(&fixtures, &[], &[("VITEST_DEDUP_ENGINE", "next")]);
+    let count = |field: &str| run.json[field].as_u64().unwrap();
+    assert!(count("filesAnalyzed") >= 580, "{}", count("filesAnalyzed"));
+    assert!(count("testsAnalyzed") >= 1250, "{}", count("testsAnalyzed"));
+    let unresolved = count("unresolvedTests");
+    assert!(
+        unresolved > 0 && unresolved * 5 <= count("testsAnalyzed"),
+        "{unresolved}"
+    );
+    let failed: Vec<_> = run.json["excludedFiles"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|entry| {
+            ["extraction-failed", "source-limit"].contains(&entry["reason"].as_str().unwrap())
+        })
+        .collect();
+    assert!(failed.is_empty(), "{failed:#?}");
 }

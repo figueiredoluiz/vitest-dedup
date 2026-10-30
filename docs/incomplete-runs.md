@@ -118,6 +118,12 @@ alone. Past the cap the files with the fewest excluded tests are left out of the
 | `mock-factory-unreadable` | A `vi.mock` factory could not be read. |
 | `fixture-unreadable` | A `test.extend` fixture value could not be read. |
 | `unresolved-context` | Another ambient fact of a test could not be resolved: a dynamic title, an unreadable `.each` table or nested config, or a body deeper than the analyzer's recursion cap (whose behavior trace was cut short and must not be compared). |
+| `registered-inside-function` | A test is registered inside a function that is neither a suite callback nor an iteration callback, so what it registers depends on a caller. |
+| `order-dependent-state` | A test reads a binding that another test writes, or that a hook updates from its previous value, and nothing assigns it before each test: equal tests can observe different values depending on which ran first. |
+| `named-callback` | A test's callback is passed by name rather than written inline; the analyzer does not read it. |
+| `unreadable-callback` | A spread argument may hide the callback a test runs. |
+| `unsupported-benchmark` | A benchmark is counted but not compared. |
+| `registered-elsewhere` | A wrapper call, an import of a module that registers while it loads, or a registration function read as a value registers tests the file does not spell. One test is counted per such call, import or read. |
 | `unsupported-statement` | A statement form the walker does not enter, such as `with`, may hide declarations. |
 | `parse-error` | The parser reported errors. |
 | `unsupported-source` | The source type is unsupported. |

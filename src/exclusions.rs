@@ -201,6 +201,20 @@ fn strip_at_boundaries(text: &str, root: &str, separator: char) -> String {
     out
 }
 
+/// An entry for a file of which `tests_excluded` of `tests_total` tests were excluded, for the
+/// reasons given (the first is primary); `None` when there is no reason.
+pub fn counted_file(
+    path: PathBuf,
+    reasons: Vec<(ExclusionReason, String)>,
+    tests_excluded: usize,
+    tests_total: usize,
+) -> Option<ExcludedFile> {
+    let mut file = file_from_reasons(path, reasons)?;
+    file.tests_excluded = tests_excluded;
+    file.tests_total = tests_total;
+    Some(file)
+}
+
 /// An entry for a file that was never parsed (or only partly considered), with no test counts.
 pub fn unparsed_file(path: PathBuf, reason: ExclusionReason, detail: &str) -> ExcludedFile {
     file_from_reasons(path, vec![(reason, detail.to_owned())])

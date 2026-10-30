@@ -4,12 +4,14 @@
 //! key and a cross-file key, or excluded, carrying the [`Exclusion`] that says why: no test is
 //! dropped without one. Rules read this record and never the syntax.
 
+use crate::exclusions;
 use crate::framework::{Dialect, Registers};
 use crate::inventory::{self, SiteKind};
 use crate::lang::{self, Lines, NodeId, Refusal};
+use crate::model::{BlindFile, ExcludedFile, ExclusionReason};
 use crate::normal::{self, digest, Normalizer, Structure};
 use std::collections::{BTreeMap, HashMap};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Why a test is left out of comparison.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -19,16 +21,57 @@ pub enum Exclusion {
     RegisteredInsideFunction,
     /// Its callback has an empty body.
     EmptyBody,
-    /// It has no callback the analysis can read.
+    /// It has no callback: nothing after the title but options or literals, which Vitest marks
+    /// `todo`.
     NoCallback,
+    /// A spread argument, or a callee the analysis cannot read, may hide the callback that runs.
+    UnreadableCallback,
     /// It reads state another test writes, or a hook accumulates.
     OrderDependentState,
     /// Its callback is passed by name, not written inline: whether that binding is reassigned, or
     /// shared with another test, decides what runs.
     NamedCallback,
+    /// It is a benchmark, which the next engine does not compare yet.
+    Benchmark,
     /// A wrapper call, a module load or a registration function read as a value registers it: the
     /// file does not spell the tests, nor how many there are, so one is counted per site.
     RegisteredElsewhere,
+}
+
+impl Exclusion {
+    /// The report's reason code and sentence, for an exclusion that leaves a test unresolved;
+    /// `None` for a test with nothing to compare, which the current core screens as trivial.
+    pub fn reason(self) -> Option<(ExclusionReason, &'static str)> {
+        match self {
+            Self::RegisteredInsideFunction => Some((
+                ExclusionReason::RegisteredInsideFunction,
+                "a test is registered inside a function whose caller decides what it registers",
+            )),
+            Self::OrderDependentState => Some((
+                ExclusionReason::OrderDependentState,
+                "a test reads state another test writes, or a hook accumulates, so it depends on \
+                 which tests ran first",
+            )),
+            Self::UnreadableCallback => Some((
+                ExclusionReason::UnreadableCallback,
+                "a test's callback is hidden behind a spread argument or an unreadable callee",
+            )),
+            Self::NamedCallback => Some((
+                ExclusionReason::NamedCallback,
+                "a test's callback is passed by name, and the analyzer reads only inline callbacks",
+            )),
+            Self::Benchmark => Some((
+                ExclusionReason::UnsupportedBenchmark,
+                "a benchmark is counted but not compared yet",
+            )),
+            Self::RegisteredElsewhere => Some((
+                ExclusionReason::RegisteredElsewhere,
+                "a wrapper call, a module load or a registration function read as a value \
+                 registers tests this file does not spell",
+            )),
+            Self::EmptyBody | Self::NoCallback => None,
+        }
+    }
 }
 
 /// One test, or one row of a test table.
@@ -289,8 +332,18 @@ pub fn file(
             .into_iter()
             .flatten()
             .collect();
+        let unread_callee = modifiers.is_none();
         let (Some(modifiers), Some(callback)) = (modifiers, normalizer.callback(site.node)) else {
-            tests.extend(excluded(Exclusion::NoCallback));
+            // A spread may expand to the callback Vitest runs; only a test with none is a todo.
+            let hidden = unread_callee
+                || arguments
+                    .iter()
+                    .any(|argument| tree.kind(*argument) == "SpreadElement");
+            tests.extend(excluded(if hidden {
+                Exclusion::UnreadableCallback
+            } else {
+                Exclusion::NoCallback
+            }));
             continue;
         };
         if !callback.inline {
@@ -436,6 +489,24 @@ pub fn file(
             exclusion: Some(Exclusion::RegisteredElsewhere),
         });
     }
+    // Benchmarks run and are counted, one excluded case each, until they are compared.
+    for site in found
+        .sites
+        .iter()
+        .filter(|site| site.kind == SiteKind::Registers(Registers::Bench))
+    {
+        let (line, column) = lines.position(source, site.position);
+        tests.push(TestCase {
+            site: site.span.start,
+            line,
+            column,
+            title: site.title.clone(),
+            row: None,
+            key: 0,
+            module_key: 0,
+            exclusion: Some(Exclusion::Benchmark),
+        });
+    }
 
     let mut sites: Vec<SiteRecord> = found
         .loads
@@ -466,6 +537,167 @@ pub fn file(
         sites,
         parse_errors: parsed.parse_errors,
     })
+}
+
+/// The next engine inside the shell's file loop: what it read, summed over the run.
+#[derive(Debug, Default)]
+pub struct Engine {
+    run: Run,
+    /// Tests read, rows counted one each.
+    pub tests: usize,
+    /// Tests left unresolved: excluded for a reason that has a report code.
+    pub unresolved: usize,
+    /// Registration sites, by the file's path relative to the root, when they are kept.
+    pub sites: Vec<(PathBuf, SiteRecord)>,
+    /// Files every test of which is unresolved.
+    blind: Vec<BlindFile>,
+}
+
+/// Why a file's read did not finish.
+#[derive(Debug)]
+enum Failure {
+    /// The thread it runs on could not be started.
+    Start(String),
+    /// It panicked and was recovered.
+    Panicked,
+}
+
+/// The variable that selects the engine, and the value that selects this one.
+const ENGINE_VARIABLE: (&str, &str) = ("VITEST_DEDUP_ENGINE", "next");
+
+impl Engine {
+    /// The engine, when the environment selects it.
+    pub fn selected() -> Option<Self> {
+        let (variable, value) = ENGINE_VARIABLE;
+        std::env::var_os(variable)
+            .is_some_and(|selected| selected == value)
+            .then(Self::default)
+    }
+
+    /// Reads one test file at `path` (`relative` to the root): its exclusion entry, if it has one,
+    /// and whether the file was read only in part. `further` holds reasons the shell found before
+    /// the read (an undetermined `globals`), listed after the engine's own.
+    pub fn read(
+        &mut self,
+        path: &Path,
+        relative: &Path,
+        source: &str,
+        setting: Setting,
+        keep_sites: bool,
+        further: Vec<(ExclusionReason, String)>,
+    ) -> (Option<ExcludedFile>, bool) {
+        // On a stack sized for the parser, as the current core runs: [`crate::lang::limits`].
+        let run = &mut self.run;
+        let read = std::thread::scope(|scope| {
+            std::thread::Builder::new()
+                .name("vitest-dedup-corpus".to_owned())
+                .stack_size(crate::lang::limits::EXTRACTION_STACK_BYTES)
+                .spawn_scoped(scope, move || file(path, source, setting, run))
+                .map_err(|error| Failure::Start(error.to_string()))?
+                .join()
+                .map_err(|_| Failure::Panicked)
+        });
+        self.record(relative, read, keep_sites, further)
+    }
+
+    /// Adds what reading the file at `relative` gave, or why it did not run, with the shell's
+    /// `further` reasons: its exclusion entry, if it has one, and whether it was read only in
+    /// part.
+    fn record(
+        &mut self,
+        relative: &Path,
+        read: Result<Result<FileCorpus, Refusal>, Failure>,
+        keep_sites: bool,
+        further: Vec<(ExclusionReason, String)>,
+    ) -> (Option<ExcludedFile>, bool) {
+        let unparsed = |reason, detail: String| {
+            let mut reasons = vec![(reason, detail)];
+            reasons.extend(further.iter().cloned());
+            let entry = exclusions::counted_file(relative.to_path_buf(), reasons, 0, 0);
+            (entry, true)
+        };
+        let corpus = match read {
+            Ok(Ok(corpus)) => corpus,
+            Ok(Err(refusal)) => {
+                return match refusal {
+                    Refusal::UnsupportedSource => unparsed(
+                        ExclusionReason::UnsupportedSource,
+                        "the file's extension is not a JavaScript or TypeScript source type"
+                            .to_owned(),
+                    ),
+                    Refusal::Fatal => unparsed(
+                        ExclusionReason::ParseError,
+                        "the file could not be parsed".to_owned(),
+                    ),
+                    Refusal::SourceLimit => unparsed(
+                        ExclusionReason::SourceLimit,
+                        "the file is larger or nests deeper than the parser is given".to_owned(),
+                    ),
+                };
+            }
+            // Nothing ran, so the caches are as the previous file left them.
+            Err(Failure::Start(error)) => {
+                return unparsed(
+                    ExclusionReason::ExtractionFailed,
+                    format!("could not start the bounded analysis thread: {error}"),
+                );
+            }
+            Err(Failure::Panicked) => {
+                // A panic may have left the caches half-written. Keys do not depend on what was
+                // read before, so the files after this one key the same from empty caches.
+                self.run = Run::default();
+                return unparsed(
+                    ExclusionReason::ExtractionFailed,
+                    "the file could not be read: the analysis failed and was recovered".to_owned(),
+                );
+            }
+        };
+        let mut reasons: Vec<(ExclusionReason, String)> = Vec::new();
+        if corpus.parse_errors > 0 {
+            reasons.push((
+                ExclusionReason::ParseError,
+                "the parser reported errors; the file was read as far as it parsed".to_owned(),
+            ));
+        }
+        let mut unresolved = 0;
+        for (exclusion, count) in corpus.exclusions() {
+            if let Some((reason, detail)) = exclusion.reason() {
+                unresolved += count;
+                reasons.push((reason, detail.to_owned()));
+            }
+        }
+        reasons.extend(further);
+        self.tests += corpus.tests.len();
+        self.unresolved += unresolved;
+        if unresolved > 0 && unresolved == corpus.tests.len() {
+            self.blind.push(BlindFile {
+                path: relative.to_path_buf(),
+                tests: unresolved,
+            });
+        }
+        if keep_sites {
+            self.sites.extend(
+                corpus
+                    .sites
+                    .into_iter()
+                    .map(|site| (relative.to_path_buf(), site)),
+            );
+        }
+        let entry = exclusions::counted_file(
+            relative.to_path_buf(),
+            reasons,
+            unresolved,
+            corpus.tests.len(),
+        );
+        (entry, corpus.parse_errors > 0)
+    }
+
+    /// Files every test of which is unresolved, the most tests first, then by path.
+    pub fn blind_files(&self) -> Vec<BlindFile> {
+        let mut blind = self.blind.clone();
+        blind.sort_by(|a, b| b.tests.cmp(&a.tests).then_with(|| a.path.cmp(&b.path)));
+        blind
+    }
 }
 
 #[cfg(test)]

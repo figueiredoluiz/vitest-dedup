@@ -1,5 +1,6 @@
-use super::{file, Exclusion, FileCorpus, Run, Setting, TestCase};
+use super::{file, Engine, Exclusion, Failure, FileCorpus, Run, Setting, TestCase};
 use crate::framework::vitest::DIALECT;
+use crate::model::ExclusionReason;
 use std::collections::HashMap;
 use std::fs;
 
@@ -666,4 +667,158 @@ fn a_named_suite_body_writes_at_registration_time() {
         &[],
         &[("reads a", "reads b")],
     );
+}
+
+/// The engine reads a file into one excluded-file entry: unresolved reasons with counts, parse
+/// errors as a partial read, refusals as unparsed, and sites only when asked for.
+#[test]
+fn the_engine_reports_each_file_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let setting = Setting {
+        dialect: &DIALECT,
+        globals: false,
+        root: dir.path(),
+    };
+    let mut engine = Engine::default();
+    let mut read = |name: &str, source: &str, keep_sites| {
+        let path = dir.path().join(name);
+        fs::write(&path, source).unwrap();
+        engine.read(
+            &path,
+            name.as_ref(),
+            source,
+            setting,
+            keep_sites,
+            Vec::new(),
+        )
+    };
+    let (entry, partial) = read(
+        "a.test.ts",
+        "import { test, expect } from 'vitest';
+function check() { expect(1).toBe(1); }
+test('named', check);
+test('empty', () => {});
+test('kept', () => { expect(1).toBe(1); });
+",
+        true,
+    );
+    let entry = entry.unwrap();
+    assert_eq!(entry.reason, ExclusionReason::NamedCallback);
+    assert_eq!((entry.tests_excluded, entry.tests_total), (1, 3));
+    assert!(!partial);
+    let (entry, partial) = read(
+        "b.test.ts",
+        "import { test } from 'vitest';\nx = a ?? b || c;\ntest('e', () => {});\n",
+        false,
+    );
+    assert_eq!(entry.unwrap().reason, ExclusionReason::ParseError);
+    assert!(partial);
+    let (entry, partial) = read("c.test.txt", "test('t', () => {});\n", true);
+    assert_eq!(entry.unwrap().reason, ExclusionReason::UnsupportedSource);
+    assert!(partial);
+    let (entry, partial) = read(
+        "d.test.ts",
+        "import { test } from 'vitest';\ntest('e', () => {});\n",
+        true,
+    );
+    assert!(entry.is_none());
+    assert!(!partial);
+    let deep = format!("x = {}1{};\n", "[".repeat(300), "]".repeat(300));
+    let (entry, _) = read("f.test.ts", &deep, false);
+    assert_eq!(entry.unwrap().reason, ExclusionReason::SourceLimit);
+    // An unterminated file is refused, not read in part.
+    let (entry, _) = read("e.test.ts", "test('t', () => {\n", false);
+    assert_eq!(entry.unwrap().reason, ExclusionReason::ParseError);
+    assert_eq!((engine.tests, engine.unresolved), (5, 1));
+    let sites: Vec<_> = engine
+        .sites
+        .iter()
+        .map(|(path, site)| (path.to_str().unwrap(), site.line))
+        .collect();
+    assert_eq!(
+        sites,
+        [
+            ("a.test.ts", 3),
+            ("a.test.ts", 4),
+            ("a.test.ts", 5),
+            ("d.test.ts", 2)
+        ]
+    );
+    assert!(engine.blind_files().is_empty());
+}
+
+/// A file whose every test is unresolved is blind; the files are listed most tests first.
+#[test]
+fn the_engine_lists_blind_files_most_tests_first() {
+    let dir = tempfile::tempdir().unwrap();
+    let setting = Setting {
+        dialect: &DIALECT,
+        globals: false,
+        root: dir.path(),
+    };
+    let mut engine = Engine::default();
+    for (name, count) in [("a.test.ts", 1), ("b.test.ts", 2)] {
+        let source = format!(
+            "import {{ test, expect }} from 'vitest';\nfunction check() {{ expect(1).toBe(1); }}\n{}",
+            "test('named', check);\n".repeat(count)
+        );
+        let path = dir.path().join(name);
+        engine.read(&path, name.as_ref(), &source, setting, false, Vec::new());
+    }
+    let blind: Vec<_> = engine
+        .blind_files()
+        .into_iter()
+        .map(|file| (file.path.to_str().unwrap().to_owned(), file.tests))
+        .collect();
+    assert_eq!(
+        blind,
+        [("b.test.ts".to_owned(), 2), ("a.test.ts".to_owned(), 1)]
+    );
+}
+
+/// A recovered panic excludes its file and drops the run's caches, which it may have left
+/// half-written; a thread that could not start excludes its file and keeps them.
+#[test]
+fn a_recovered_panic_drops_the_run_caches() {
+    let dir = tempfile::tempdir().unwrap();
+    let setting = Setting {
+        dialect: &DIALECT,
+        globals: false,
+        root: dir.path(),
+    };
+    let fresh = format!("{:?}", Run::default());
+    let mut engine = Engine::default();
+    fs::write(dir.path().join("b.ts"), "export const b = 1;\n").unwrap();
+    let source = "import { test, expect } from 'vitest';\nimport { b } from './b';\ntest('t', () => { expect(b).toBe(1); });\n";
+    let path = dir.path().join("a.test.ts");
+    engine.read(
+        &path,
+        "a.test.ts".as_ref(),
+        source,
+        setting,
+        false,
+        Vec::new(),
+    );
+    assert_ne!(format!("{:?}", engine.run), fresh);
+    // A thread that never started touched nothing: the caches stay.
+    let (entry, partial) = engine.record(
+        "s.test.ts".as_ref(),
+        Err(Failure::Start("refused".to_owned())),
+        false,
+        Vec::new(),
+    );
+    let entry = entry.unwrap();
+    assert_eq!(entry.reason, ExclusionReason::ExtractionFailed);
+    assert!(entry.detail.contains("could not start"), "{}", entry.detail);
+    assert!(partial);
+    assert_ne!(format!("{:?}", engine.run), fresh);
+    let (entry, partial) = engine.record(
+        "p.test.ts".as_ref(),
+        Err(Failure::Panicked),
+        false,
+        Vec::new(),
+    );
+    assert_eq!(entry.unwrap().reason, ExclusionReason::ExtractionFailed);
+    assert!(partial);
+    assert_eq!(format!("{:?}", engine.run), fresh);
 }

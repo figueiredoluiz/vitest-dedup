@@ -11,6 +11,17 @@ fn analyze(
     flags: &[&str],
     resident: impl FnMut() -> Option<u64>,
 ) -> (ExitCode, serde_json::Value) {
+    analyze_on(root, reporters, flags, resident, None)
+}
+
+/// [`analyze`] on the engine given: the next engine, or `None` for the current core.
+fn analyze_on(
+    root: &Path,
+    reporters: &str,
+    flags: &[&str],
+    resident: impl FnMut() -> Option<u64>,
+    engine: Option<vitest_dedup::corpus::Engine>,
+) -> (ExitCode, serde_json::Value) {
     let output = tempfile::tempdir().unwrap();
     let prefix = output.path().join("report");
     let mut args = vec![
@@ -23,7 +34,7 @@ fn analyze(
         prefix.as_os_str().to_owned(),
     ];
     args.extend(flags.iter().map(OsString::from));
-    let code = run_with_rss(ParsedArgs::parse_from(args).unwrap(), resident).unwrap();
+    let code = run_with_engine(ParsedArgs::parse_from(args).unwrap(), resident, engine).unwrap();
     let report = std::fs::read_to_string(prefix.with_extension("json")).unwrap();
     (code, serde_json::from_str(&report).unwrap())
 }
@@ -108,16 +119,32 @@ fn source_retained_for_html_counts_against_the_budget() {
             format!("import {{ test, expect }} from 'vitest';\n{padding}test('case {file}', () => {{ expect({file}).toBe({file}); }});\n"),
         ).unwrap();
     }
-    let (_, json) = analyze(root.path(), "json", &["--max-memory", "1"], || None);
-    assert_eq!(json["incomplete"], false, "{json}");
-    let (_, html) = analyze(root.path(), "json,html", &["--max-memory", "1"], || None);
-    assert!(
-        html["incompleteCauses"]["filesOverMemoryBudget"]
-            .as_u64()
-            .unwrap()
-            > 0,
-        "{html}"
-    );
+    // Both engines: the next one charges the source it retains as the current core does.
+    for next in [false, true] {
+        let engine = || next.then(vitest_dedup::corpus::Engine::default);
+        let (_, json) = analyze_on(
+            root.path(),
+            "json",
+            &["--max-memory", "1"],
+            || None,
+            engine(),
+        );
+        assert_eq!(json["incomplete"], false, "{json}");
+        let (_, html) = analyze_on(
+            root.path(),
+            "json,html",
+            &["--max-memory", "1"],
+            || None,
+            engine(),
+        );
+        assert!(
+            html["incompleteCauses"]["filesOverMemoryBudget"]
+                .as_u64()
+                .unwrap()
+                > 0,
+            "{next}: {html}"
+        );
+    }
 }
 
 /// Imported runner source retained for HTML is charged once whichever file sorts first.
