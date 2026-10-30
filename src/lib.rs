@@ -13,6 +13,7 @@ pub mod atomic_write;
 pub mod cli;
 pub mod config;
 pub(crate) mod confine;
+pub mod corpus;
 pub mod discovery;
 pub mod exclusions;
 pub mod framework;

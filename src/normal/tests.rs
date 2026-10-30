@@ -33,7 +33,7 @@ fn with_normalizer<T>(
         },
         &mut Modules::default(),
     );
-    let structure = Structure::of(&parsed.tree, &found);
+    let structure = Structure::of(&parsed, &found);
     let exports = Exports::default();
     let setting = Setting {
         dialect: &DIALECT,
@@ -1011,7 +1011,7 @@ fn run_forms(files: &[(&str, &str)], orders: &[&[&str]]) -> Vec<HashMap<(String,
                 },
                 &mut Modules::default(),
             );
-            let structure = Structure::of(&parsed.tree, &found);
+            let structure = Structure::of(&parsed, &found);
             let setting = Setting {
                 dialect: &DIALECT,
                 root: dir.path(),

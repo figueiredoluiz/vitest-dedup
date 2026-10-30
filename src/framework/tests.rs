@@ -14,6 +14,8 @@ const NEUTRAL: &[&str] = &[
     "src/inventory",
     "src/normal.rs",
     "src/normal",
+    "src/corpus.rs",
+    "src/corpus",
 ];
 
 /// Literals a neutral file may spell although a dialect declares them, because they mean something

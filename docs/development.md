@@ -33,8 +33,9 @@ test names the file and literal it rejects.
 
 A second analysis core is being built beside the current one, in layers that each read only the
 layer below: `lang` (parsing, scopes, resolution; with `frontend`, the only importer of `oxc_*`),
-`inventory` (registration sites by provenance) and `normal` (normal forms and identities). No run
-reaches it yet; its unit tests and its own mutation scope (`npm run mutants:next-core`) check it.
+`inventory` (registration sites by provenance), `normal` (normal forms and identities) and
+`corpus` (each test keyed for comparison, or excluded with a reason). No run reaches it yet; unit tests
+check every layer, and `normal` has its own mutation scope (`npm run mutants:next-core`).
 
 ### Gates `npm run check` does not run
 

@@ -14,7 +14,7 @@ pub use rows::{Modifiers, Row};
 
 use crate::framework::{Dialect, HookTiming};
 use crate::inventory::Inventory;
-use crate::lang::{Name, NodeId, Parsed, Scopes, Span, SymbolId, Tree};
+use crate::lang::{Declaration, Name, NodeId, Parsed, Scopes, Span, SymbolId, Tree};
 use std::cell::RefCell;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::hash::{DefaultHasher, Hash, Hasher};
@@ -76,8 +76,10 @@ pub struct Structure {
 }
 
 impl Structure {
-    /// The structure an inventory found: which callbacks are suite bodies and which run later.
-    pub fn of(tree: &Tree, inventory: &Inventory) -> Self {
+    /// The structure an inventory found: which callbacks are suite bodies and which run later. A
+    /// callback passed by name is the local function it names.
+    pub fn of(parsed: &Parsed, inventory: &Inventory) -> Self {
+        let tree = &parsed.tree;
         use crate::framework::Registers;
         use crate::inventory::SiteKind;
         let mut structure = Structure {
@@ -91,55 +93,86 @@ impl Structure {
             .map(|site| site.node)
             .collect();
         for site in &inventory.sites {
-            for argument in tree.list(site.node, "arguments").into_iter().flatten() {
-                let callback = tree.inner(argument);
-                if !matches!(
-                    tree.kind(callback),
-                    "ArrowFunctionExpression" | "FunctionExpression"
-                ) {
+            if site.kind == SiteKind::Wrapper {
+                continue;
+            }
+            let titled = !matches!(site.kind, SiteKind::Registers(Registers::Hook(_)));
+            let inline = callback(tree, &parsed.scopes, site.node, titled)
+                .filter(|callback| callback.inline)
+                .and_then(|callback| callback.function);
+            // A function passed by name may be any argument (a timeout can be a binding too): each
+            // local function an argument names counts as code that runs at test time, so what it
+            // writes is seen. It is never a suite body, and a named hook never a reset.
+            let named = || {
+                tree.list(site.node, "arguments")
+                    .into_iter()
+                    .flatten()
+                    .skip(usize::from(titled))
+                    .filter_map(|argument| local_function(tree, &parsed.scopes, argument))
+                    .collect::<Vec<_>>()
+            };
+            let Some(callback) = inline else {
+                // A named suite body runs while the file registers, so it stays registration time.
+                if site.kind == SiteKind::Registers(Registers::Suite) {
                     continue;
                 }
-                match site.kind {
-                    SiteKind::Registers(Registers::Suite) => {
-                        structure.suites.insert(callback, site.node);
+                for function in named() {
+                    structure.run_time.push(tree.span(function));
+                    match site.kind {
+                        SiteKind::Registers(Registers::Hook(timing)) => {
+                            structure.hooks.push(HookBody {
+                                callback: function,
+                                span: tree.span(function),
+                                timing,
+                                scope: None,
+                                unconditional: false,
+                            })
+                        }
+                        _ => structure.tests.push(tree.span(function)),
                     }
-                    SiteKind::Registers(Registers::Hook(timing)) => {
-                        structure.run_time.push(tree.span(callback));
-                        // The nearest function around the hook: a suite's callback, or another
-                        // function, which registers it only for whoever calls it.
-                        let around = tree
-                            .ancestors(site.node)
-                            .find(|&ancestor| tree.is_function(ancestor));
-                        let suite = around.filter(|&function| {
-                            tree.outer_parent(function)
-                                .is_some_and(|call| suite_calls.contains(&call))
-                        });
-                        // Registered whenever the file or its suite runs: a statement directly in
-                        // the program or in the suite's own body, not under a condition or loop.
-                        let body = match around {
-                            Some(function) => tree.child(function, "body"),
-                            None => Some(tree.root()),
-                        };
-                        let unconditional = (around.is_none() || suite.is_some())
-                            && tree
-                                .outer_parent(site.node)
-                                .filter(|statement| tree.kind(*statement) == "ExpressionStatement")
-                                .and_then(|statement| tree.parent(statement))
-                                == body;
-                        structure.hooks.push(HookBody {
-                            callback,
-                            span: tree.span(callback),
-                            timing,
-                            scope: suite.map(|suite| tree.span(suite)),
-                            unconditional,
-                        });
-                    }
-                    SiteKind::Registers(_) => {
-                        structure.run_time.push(tree.span(callback));
-                        structure.tests.push(tree.span(callback));
-                    }
-                    SiteKind::Wrapper => {}
                 }
+                continue;
+            };
+            match site.kind {
+                SiteKind::Registers(Registers::Suite) => {
+                    structure.suites.insert(callback, site.node);
+                }
+                SiteKind::Registers(Registers::Hook(timing)) => {
+                    structure.run_time.push(tree.span(callback));
+                    // The nearest function around the hook: a suite's callback, or another
+                    // function, which registers it only for whoever calls it.
+                    let around = tree
+                        .ancestors(site.node)
+                        .find(|&ancestor| tree.is_function(ancestor));
+                    let suite = around.filter(|&function| {
+                        tree.outer_parent(function)
+                            .is_some_and(|call| suite_calls.contains(&call))
+                    });
+                    // Registered whenever the file or its suite runs: a statement directly in
+                    // the program or in the suite's own body, not under a condition or loop.
+                    let body = match around {
+                        Some(function) => tree.child(function, "body"),
+                        None => Some(tree.root()),
+                    };
+                    let unconditional = (around.is_none() || suite.is_some())
+                        && tree
+                            .outer_parent(site.node)
+                            .filter(|statement| tree.kind(*statement) == "ExpressionStatement")
+                            .and_then(|statement| tree.parent(statement))
+                            == body;
+                    structure.hooks.push(HookBody {
+                        callback,
+                        span: tree.span(callback),
+                        timing,
+                        scope: suite.map(|suite| tree.span(suite)),
+                        unconditional,
+                    });
+                }
+                SiteKind::Registers(_) => {
+                    structure.run_time.push(tree.span(callback));
+                    structure.tests.push(tree.span(callback));
+                }
+                SiteKind::Wrapper => {}
             }
         }
         structure
@@ -168,6 +201,79 @@ struct Walk {
     bound_parameters: bool,
     /// How many type-level nodes enclose the current one.
     in_type: usize,
+}
+
+/// The callback a registration at `site` passes. After the title when `titled` (a hook has none):
+/// the last inline function argument, else the last argument that is not an options object, a
+/// literal (a timeout), a template, an array or a spread. `None` when it passes none.
+pub fn callback(tree: &Tree, scopes: &Scopes, site: NodeId, titled: bool) -> Option<Callback> {
+    let arguments: Vec<NodeId> = tree
+        .list(site, "arguments")
+        .into_iter()
+        .flatten()
+        .skip(usize::from(titled))
+        .collect();
+    if let Some(&argument) = arguments
+        .iter()
+        .rev()
+        .find(|&&argument| tree.is_function(tree.inner(argument)))
+    {
+        return Some(Callback {
+            argument,
+            function: Some(tree.inner(argument)),
+            inline: true,
+        });
+    }
+    let argument = arguments.iter().rev().copied().find(|&argument| {
+        !matches!(
+            tree.kind(tree.inner(argument)),
+            "ObjectExpression"
+                | "ArrayExpression"
+                | "Literal"
+                | "TemplateLiteral"
+                | "SpreadElement"
+        )
+    })?;
+    Some(Callback {
+        argument,
+        function: local_function(tree, scopes, argument),
+        inline: false,
+    })
+}
+
+/// The function a reference to a local binding names: a function declaration, or a `const` bound
+/// to a function expression or arrow.
+fn local_function(tree: &Tree, scopes: &Scopes, reference: NodeId) -> Option<NodeId> {
+    let reference = tree.inner(reference);
+    if tree.kind(reference) != "Identifier" {
+        return None;
+    }
+    let symbol = scopes.symbol_at(tree.span(reference).start)?;
+    match scopes.symbol(symbol).declaration {
+        Declaration::Function(function) => Some(function),
+        Declaration::Variable(declarator)
+            if tree
+                .parent(declarator)
+                .is_some_and(|declaration| tree.text(declaration, "kind") == Some("const")) =>
+        {
+            tree.child(declarator, "init")
+                .map(|init| tree.inner(init))
+                .filter(|&init| tree.is_function(init))
+        }
+        _ => None,
+    }
+}
+
+/// The callback a registration passes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Callback {
+    /// The argument.
+    pub argument: NodeId,
+    /// The function that runs: the inline function, or the local one the argument names; `None`
+    /// when the argument names something declared elsewhere.
+    pub function: Option<NodeId>,
+    /// Whether the function is written in the argument itself.
+    pub inline: bool,
 }
 
 /// Normalizes the nodes of one module.
@@ -257,6 +363,17 @@ impl<'s> Normalizer<'s> {
         let mut out = String::new();
         self.write_node(node, &mut walk, &mut out);
         out
+    }
+
+    /// The callback the test registered at `site` passes; see [`callback`].
+    pub fn callback(&self, site: NodeId) -> Option<Callback> {
+        callback(self.tree, self.scopes, site, true)
+    }
+
+    /// Whether evaluating `node` may create or change an object: a call, `new`, `await` or an
+    /// assignment outside a nested function, a registration function's own call excepted.
+    pub fn creates(&self, node: NodeId) -> bool {
+        form::creates(self, node)
     }
 
     /// The suite callbacks enclosing `node`, outermost first, or `None` when a function that is
