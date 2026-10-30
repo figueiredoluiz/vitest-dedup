@@ -1,9 +1,9 @@
 //! Identities: how a binding declared outside the normalized node is named.
 
-use super::{digest, form, Normalizer, Setting, Structure, Walk, MAX_NESTING};
+use super::{digest, form, Normalizer, Setting, Structure, Walk};
 use crate::lang::{bound_symbols, export_name, Declaration, Imported, NodeId, SymbolId};
-use std::collections::HashMap;
-use std::path::Path;
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
 
 /// Ends the identity of a binding that holds one object (a function, or a `const` that allocates
 /// one): equal declarations are one identity, but each binding is its own object, numbered within
@@ -24,7 +24,15 @@ impl Normalizer<'_> {
             let next = walk.locals.len();
             return format!("${}", walk.locals.entry(symbol).or_insert(next));
         }
-        let mut identity = self.external(symbol, walk.depth);
+        let mut identity = match (self.externals.get(&symbol), &mut self.discovering) {
+            (Some(known), _) => known.clone(),
+            // Listing what a declaration reads: the read is recorded, not followed.
+            (None, Some(found)) => {
+                found.push(symbol);
+                return "?".to_owned();
+            }
+            (None, None) => self.external(symbol),
+        };
         if identity.ends_with(OBJECT) {
             let next = walk.objects.len();
             let number = *walk.objects.entry(symbol).or_insert(next);
@@ -58,21 +66,103 @@ impl Normalizer<'_> {
     /// value: an import by what the module exports, a module- or suite-level declaration by kind,
     /// name and the normal form of what declares it. Anything else (a parameter, a loop variable, a
     /// binding written while tests register) is named by identity, so it equals only itself.
-    pub fn external(&mut self, symbol: SymbolId, depth: usize) -> String {
+    ///
+    /// The identity depends on the declaration alone, never on which reader asked first: what a
+    /// declaration reads is named before it, and a cycle of declarations is named by identity.
+    pub fn external(&mut self, symbol: SymbolId) -> String {
         if let Some(known) = self.externals.get(&symbol) {
             return known.clone();
         }
-        let opaque = format!(
+        if self.resolving {
+            debug_assert!(false, "a declaration read a binding its listing missed");
+            return self.opaque(symbol);
+        }
+        self.resolving = true;
+        self.resolve(symbol);
+        self.resolving = false;
+        self.externals[&symbol].clone()
+    }
+
+    /// The identity of a binding that equals only itself.
+    fn opaque(&self, symbol: SymbolId) -> String {
+        format!(
             "sym:{}:{}",
             self.path.display(),
             self.scopes.symbol(symbol).span.start
-        );
-        if depth >= MAX_NESTING || !self.active.insert(symbol) {
-            return opaque;
+        )
+    }
+
+    /// Names `start` and every unnamed declaration it reads, in an order where each is written
+    /// after what it reads (Tarjan's strongly connected components, iteratively): each declaration
+    /// is written once, on a stack one walk deep, and a component that reads itself is opaque.
+    fn resolve(&mut self, start: SymbolId) {
+        let mut state = Components::default();
+        state.enter(start, self.reads(start));
+        while let Some(visit) = state.visits.last_mut() {
+            if let Some(&read) = visit.reads.get(visit.next) {
+                visit.next += 1;
+                let symbol = visit.symbol;
+                if self.externals.contains_key(&read) {
+                    continue;
+                }
+                match state.order.get(&read) {
+                    Some(&(index, _)) if state.on_open.contains(&read) => {
+                        state.lower(symbol, index)
+                    }
+                    Some(_) => {}
+                    None => {
+                        let reads = self.reads(read);
+                        state.enter(read, reads);
+                    }
+                }
+                continue;
+            }
+            let Visit { symbol, reads, .. } = state.visits.pop().unwrap();
+            let (index, low) = state.order[&symbol];
+            if let Some(parent) = state.visits.last().map(|visit| visit.symbol) {
+                state.lower(parent, low);
+            }
+            if low != index {
+                continue;
+            }
+            let at = state
+                .open
+                .iter()
+                .rposition(|&member| member == symbol)
+                .unwrap();
+            let component: Vec<SymbolId> = state.open.drain(at..).collect();
+            let cyclic = component.len() > 1 || reads.contains(&symbol);
+            for member in component {
+                state.on_open.remove(&member);
+                let identity = if cyclic {
+                    self.opaque(member)
+                } else {
+                    self.named_by_declaration(member)
+                };
+                self.externals.insert(member, identity);
+            }
         }
-        let named = self.declared(symbol, depth).unwrap_or(opaque);
-        self.active.remove(&symbol);
-        self.externals.insert(symbol, named.clone());
+    }
+
+    /// The outside bindings `symbol`'s declaration reads, unnamed ones in the order its walks meet
+    /// them: the walks run with each such read recorded instead of followed.
+    fn reads(&mut self, symbol: SymbolId) -> Vec<SymbolId> {
+        let saved = self.discovering.replace(Vec::new());
+        let nesting = std::mem::take(&mut self.nesting);
+        let _ = self.declared(symbol);
+        self.nesting = nesting;
+        let mut reads = std::mem::replace(&mut self.discovering, saved).unwrap_or_default();
+        let mut seen = HashSet::new();
+        reads.retain(|read| seen.insert(*read));
+        reads
+    }
+
+    /// `symbol`'s identity by its declaration, every read already named; its own walks start at
+    /// depth zero, whoever asked.
+    fn named_by_declaration(&mut self, symbol: SymbolId) -> String {
+        let nesting = std::mem::take(&mut self.nesting);
+        let named = self.declared(symbol).unwrap_or_else(|| self.opaque(symbol));
+        self.nesting = nesting;
         named
     }
 
@@ -105,7 +195,7 @@ impl Normalizer<'_> {
 
     /// The identity [`Self::external`] gives a symbol, by its declaration; `None` when it equals
     /// only itself.
-    fn declared(&mut self, symbol: SymbolId, depth: usize) -> Option<String> {
+    fn declared(&mut self, symbol: SymbolId) -> Option<String> {
         if self.written_while_registering(symbol) {
             return None;
         }
@@ -134,10 +224,13 @@ impl Normalizer<'_> {
                     return Some(format!("api:{canonical}"));
                 }
                 // What a project module exports is named the way its own declarations are, so
-                // equal helpers in two modules are one identity.
-                if let Some(file) = crate::lang::resolve(self.path, source, self.setting.root) {
-                    if let Some(exported) = exported(&file, &imported, depth + 1, self.setting) {
-                        return Some(exported);
+                // equal helpers in two modules are one identity. Inside such a module, its own
+                // imports are named by where they resolve: one module deep, never a cycle.
+                if !self.shallow_imports {
+                    if let Some(file) = crate::lang::resolve(self.path, source, self.setting.root) {
+                        if let Some(exported) = exported(&file, &imported, self.setting) {
+                            return Some(exported);
+                        }
                     }
                 }
                 // Anything else is the file it resolves to (a stylesheet two test files name with
@@ -155,15 +248,9 @@ impl Normalizer<'_> {
                 let id = tree.child(declarator, "id")?;
                 let simple = tree.kind(id) == "Identifier";
                 // A plain binding's pattern is its name, which the identity below already carries.
-                let pattern = if simple {
-                    String::new()
-                } else {
-                    self.at_depth(id, depth + 1)
-                };
+                let pattern = if simple { String::new() } else { self.of(id) };
                 let init_node = tree.child(declarator, "init");
-                let init = init_node
-                    .map(|init| self.at_depth(init, depth + 1))
-                    .unwrap_or_default();
+                let init = init_node.map(|init| self.of(init)).unwrap_or_default();
                 let declared = digest(&format!("{pattern}={init}"));
                 let position = bound_symbols(tree, self.scopes, id)
                     .iter()
@@ -182,7 +269,7 @@ impl Normalizer<'_> {
                 }
                 // Statements outside test bodies that use the binding (`app.use(...)`, a component
                 // that assigns it as a ref) are part of what it is when a test reads it.
-                let uses = digest(&self.registration_uses(symbol, depth));
+                let uses = digest(&self.registration_uses(symbol));
                 // Two `const`s that create nothing are their initializer; two that each create an
                 // object (`vi.fn()`, `ref(0)`) are two objects, told apart by name and module.
                 let creates = init_node.is_none_or(|init| form::creates(self, init));
@@ -200,14 +287,12 @@ impl Normalizer<'_> {
                     ),
                 })
             }
-            Declaration::Function(function) => Some(format!(
-                "fn:{level}:{}{OBJECT}",
-                digest(&self.at_depth(function, depth + 1))
-            )),
-            Declaration::Class(class) => Some(format!(
-                "class:{level}:{name}:{}",
-                digest(&self.at_depth(class, depth + 1))
-            )),
+            Declaration::Function(function) => {
+                Some(format!("fn:{level}:{}{OBJECT}", digest(&self.of(function))))
+            }
+            Declaration::Class(class) => {
+                Some(format!("class:{level}:{name}:{}", digest(&self.of(class))))
+            }
             Declaration::Other(_) => None,
         }
     }
@@ -236,7 +321,7 @@ impl Normalizer<'_> {
     /// The normal forms of the statements outside test and hook bodies that reference `symbol`,
     /// other than its declaration and registrations, in source order, with `symbol` itself
     /// written as `self`.
-    fn registration_uses(&mut self, symbol: SymbolId, depth: usize) -> String {
+    fn registration_uses(&mut self, symbol: SymbolId) -> String {
         let tree = self.tree;
         let declared = self
             .scopes
@@ -274,25 +359,60 @@ impl Normalizer<'_> {
         let substitutions = HashMap::from([(symbol, "self".to_owned())]);
         statements
             .into_iter()
-            .map(|statement| self.substituted(statement, depth + 1, substitutions.clone(), false))
+            .map(|statement| self.substituted(statement, substitutions.clone(), false))
             .collect::<Vec<_>>()
             .join(";")
     }
 }
 
+/// A declaration being visited by [`Normalizer::resolve`]: what it reads and how much of that is
+/// done.
+struct Visit {
+    symbol: SymbolId,
+    reads: Vec<SymbolId>,
+    next: usize,
+}
+
+/// The state of Tarjan's algorithm over declarations.
+#[derive(Default)]
+struct Components {
+    /// Each visited declaration's visit index and lowest index reachable.
+    order: HashMap<SymbolId, (usize, usize)>,
+    /// Declarations visited but not yet in a finished component.
+    open: Vec<SymbolId>,
+    on_open: HashSet<SymbolId>,
+    visits: Vec<Visit>,
+}
+
+impl Components {
+    /// Starts visiting `symbol`, which reads `reads`.
+    fn enter(&mut self, symbol: SymbolId, reads: Vec<SymbolId>) {
+        let index = self.order.len();
+        self.order.insert(symbol, (index, index));
+        self.open.push(symbol);
+        self.on_open.insert(symbol);
+        self.visits.push(Visit {
+            symbol,
+            reads,
+            next: 0,
+        });
+    }
+
+    /// Lowers `symbol`'s lowest reachable index to `index`.
+    fn lower(&mut self, symbol: SymbolId, index: usize) {
+        let low = &mut self.order.get_mut(&symbol).unwrap().1;
+        *low = (*low).min(index);
+    }
+}
+
 /// The identity of what `file` exports as `name`, followed through re-exports; `None` when it is
-/// not a declaration this names, or the modules cycle.
-fn exported(file: &Path, name: &str, depth: usize, setting: Setting) -> Option<String> {
+/// not a declaration this names, or the re-exports cycle without reaching one.
+fn exported(file: &Path, name: &str, setting: Setting) -> Option<String> {
     let key = (file.to_path_buf(), name.to_owned());
     if let Some(known) = setting.exports.known.borrow().get(&key) {
         return known.clone();
     }
-    if depth >= MAX_NESTING {
-        return None;
-    }
-    // Marks the export in progress, so a cycle resolves to `None`.
-    setting.exports.known.borrow_mut().insert(key.clone(), None);
-    let found = export_of(file, name, depth, setting);
+    let found = export_of(file, name, setting);
     setting
         .exports
         .known
@@ -301,13 +421,43 @@ fn exported(file: &Path, name: &str, depth: usize, setting: Setting) -> Option<S
     found
 }
 
-/// Parses `file` and names what it exports as `name`, following one re-export at a time.
-fn export_of(file: &Path, name: &str, depth: usize, setting: Setting) -> Option<String> {
-    let source =
-        crate::discovery::read_bounded(file, crate::discovery::MAX_SOURCE_FILE_BYTES).ok()??;
-    let parsed = crate::lang::parse(file, &source).ok()?;
+/// Follows re-exports from `file`'s `name` to the module that declares it and names the
+/// declaration there. A re-export chain is a lookup, not a walk: one that cycles reaches no
+/// declaration from any of its entries.
+fn export_of(file: &Path, name: &str, setting: Setting) -> Option<String> {
+    let mut at = (file.to_path_buf(), name.to_owned());
+    let mut visited: HashSet<(PathBuf, String)> = HashSet::new();
+    while visited.insert(at.clone()) {
+        let (file, name) = &at;
+        let source = crate::discovery::read_bounded(file, crate::discovery::MAX_SOURCE_FILE_BYTES)
+            .ok()??;
+        let parsed = crate::lang::parse(file, &source).ok()?;
+        match declaration_of(file, name, &parsed, setting)? {
+            Export::Named(identity) => return identity,
+            Export::Reexport(next) => at = next,
+        }
+    }
+    None
+}
+
+/// What a module's export is: named here, or re-exported from another module.
+enum Export {
+    /// Declared in this module: its identity, `None` when it equals only itself.
+    Named(Option<String>),
+    /// Re-exported from another module under a name.
+    Reexport((PathBuf, String)),
+}
+
+/// What `file` (parsed as `parsed`) exports as `name`; `None` when it exports no such name.
+fn declaration_of(
+    file: &Path,
+    name: &str,
+    parsed: &crate::lang::Parsed,
+    setting: Setting,
+) -> Option<Export> {
     let structure = Structure::default();
-    let mut normalizer = Normalizer::new(file, &parsed, setting, &structure);
+    let mut normalizer = Normalizer::new(file, parsed, setting, &structure);
+    normalizer.shallow_imports = true;
     let tree = &parsed.tree;
     let scopes = &parsed.scopes;
     for statement in tree.list(tree.root(), "body").into_iter().flatten() {
@@ -330,7 +480,7 @@ fn export_of(file: &Path, name: &str, depth: usize, setting: Setting) -> Option<
                     };
                     let target = crate::lang::resolve(file, source, setting.root)?;
                     let local = export_name(tree, tree.child(specifier, "local")?);
-                    return exported(&target, &local, depth + 1, setting);
+                    return Some(Export::Reexport((target, local)));
                 }
                 let declared = tree
                     .child(statement, "declaration")
@@ -362,16 +512,18 @@ fn export_of(file: &Path, name: &str, depth: usize, setting: Setting) -> Option<
             }
             "ExportDefaultDeclaration" if name == "default" => {
                 let declaration = tree.child(statement, "declaration")?;
-                return Some(format!(
+                return Some(Export::Named(Some(format!(
                     "export-default:{}",
-                    digest(&normalizer.at_depth(declaration, depth))
-                ));
+                    digest(&normalizer.of(declaration))
+                ))));
             }
             _ => None,
         };
         if let Some(symbol) = symbol {
-            let identity = normalizer.external(symbol, depth);
-            return (!identity.starts_with("sym:")).then_some(identity);
+            let identity = normalizer.external(symbol);
+            return Some(Export::Named(
+                (!identity.starts_with("sym:")).then_some(identity),
+            ));
         }
     }
     None

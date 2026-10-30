@@ -20,9 +20,6 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::{Path, PathBuf};
 
-/// How deep an external declaration's initializer is followed before it is named by identity.
-const MAX_NESTING: usize = 6;
-
 /// A 64-bit digest of `text`, for keys compared within one run.
 pub fn digest(text: &str) -> u64 {
     let mut hasher = DefaultHasher::new();
@@ -157,7 +154,6 @@ impl Structure {
 /// State of one normalization.
 struct Walk {
     root: Span,
-    depth: usize,
     /// The root's own declarations, numbered in order of appearance.
     locals: HashMap<SymbolId, usize>,
     /// Whether the root reads a function's or class's name, which renaming would change.
@@ -182,8 +178,14 @@ pub struct Normalizer<'s> {
     setting: Setting<'s>,
     structure: &'s Structure,
     externals: HashMap<SymbolId, String>,
-    active: HashSet<SymbolId>,
-    /// How many nodes deep the form being written is, across nested walks.
+    /// While a declaration's dependencies are listed, the outside bindings its walks read.
+    discovering: Option<Vec<SymbolId>>,
+    /// Whether identities are being resolved, so every read must already be named.
+    resolving: bool,
+    /// Whether an import is named by where it resolves rather than by what it declares: so in a
+    /// module read for an export, which is not followed further.
+    shallow_imports: bool,
+    /// How many nodes deep the form being written is.
     nesting: usize,
 }
 
@@ -202,33 +204,48 @@ impl<'s> Normalizer<'s> {
             setting,
             structure,
             externals: HashMap::new(),
-            active: HashSet::new(),
+            discovering: None,
+            resolving: false,
+            shallow_imports: false,
             nesting: 0,
         }
     }
 
     /// The normal form of `node`.
     pub fn of(&mut self, node: NodeId) -> String {
-        self.at_depth(node, 0)
-    }
-
-    /// [`Self::of`], `depth` external declarations deep.
-    fn at_depth(&mut self, node: NodeId, depth: usize) -> String {
-        self.substituted(node, depth, HashMap::new(), false)
+        self.substituted(node, HashMap::new(), false)
     }
 
     /// [`Self::of`] with some bindings replaced by the normal form of what they are bound to, and,
     /// when `bound_parameters`, the root's parameters erased because all of them are.
+    ///
+    /// The outside bindings the node reads are named first, each from its own declaration: the
+    /// node's walk then only looks them up, so the stack never holds two walks.
     pub fn substituted(
         &mut self,
         node: NodeId,
-        depth: usize,
+        substitutions: HashMap<SymbolId, String>,
+        bound_parameters: bool,
+    ) -> String {
+        if !self.resolving && self.discovering.is_none() {
+            self.discovering = Some(Vec::new());
+            let _ = self.walk(node, substitutions.clone(), bound_parameters);
+            for read in self.discovering.take().unwrap_or_default() {
+                let _ = self.external(read);
+            }
+        }
+        self.walk(node, substitutions, bound_parameters)
+    }
+
+    /// Writes `node`'s normal form in a walk of its own.
+    fn walk(
+        &mut self,
+        node: NodeId,
         substitutions: HashMap<SymbolId, String>,
         bound_parameters: bool,
     ) -> String {
         let mut walk = Walk {
             root: self.tree.span(node),
-            depth,
             locals: HashMap::new(),
             names_observed: form::observes_names(self.tree, node, self.setting.dialect),
             privates: Vec::new(),

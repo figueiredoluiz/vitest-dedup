@@ -95,7 +95,7 @@ fn site_forms(normalizer: &mut Normalizer, tree: &Tree, site: NodeId) -> Vec<Opt
             .iter()
             .map(|row| {
                 let (bound, every) = normalizer.bind_row(&parameters, row)?;
-                Some(normalizer.substituted(callback, 0, bound, every))
+                Some(normalizer.substituted(callback, bound, every))
             })
             .collect(),
     }
@@ -868,4 +868,199 @@ fn rows_past_the_depth_bound_differ_by_their_cells() {
         .all(|form| form.as_ref().unwrap().contains("(deep ")));
     assert_eq!(forms[0], forms[2]);
     assert_ne!(forms[0], forms[1]);
+}
+
+/// The form of `title` in a file holding `main`, on half a test thread's stack.
+fn form_of(main: &str, title: &str) -> String {
+    let main = main.to_owned();
+    let title = title.to_owned();
+    on_half_stack(move || forms(&main, &[]).remove(&title).unwrap())
+}
+
+/// The identity of each top-level binding of `main`, named in each of `orders` from an empty cache
+/// (the first name of an order names the rest it reads).
+fn identities(main: &str, orders: &[Vec<&str>]) -> Vec<Vec<(String, String)>> {
+    with_normalizer(main, &[], false, |normalizer, _, _| {
+        orders
+            .iter()
+            .map(|order| {
+                normalizer.externals.clear();
+                let mut named: Vec<_> = order
+                    .iter()
+                    .map(|name| {
+                        let symbol = normalizer.scopes.top_level(name).unwrap();
+                        (name.to_string(), normalizer.external(symbol))
+                    })
+                    .collect();
+                named.sort();
+                named
+            })
+            .collect()
+    })
+}
+
+/// A declaration's identity does not depend on which test read it first or how deep that test
+/// was: past the depth bound and along a chain of declarations.
+#[test]
+fn an_identity_does_not_depend_on_its_first_reader() {
+    let shared = format!("const shared = {}1\n", "!".repeat(40));
+    let reader = |title: &str, negations: usize| {
+        format!(
+            "test('{title}', () => {{ expect({}shared).toBe(true) }})\n",
+            "!".repeat(negations)
+        )
+    };
+    let (deep, shallow, again) = (
+        reader("deep", 240),
+        reader("shallow", 0),
+        reader("again", 240),
+    );
+    let alone = form_of(&[HEADER, &shared, &shallow].concat(), "shallow");
+    assert_eq!(
+        form_of(&[HEADER, &shared, &deep, &shallow].concat(), "shallow"),
+        alone
+    );
+    let between = [HEADER, &shared, &deep, &shallow, &again].concat();
+    assert_eq!(form_of(&between, "deep"), form_of(&between, "again"));
+    assert_eq!(
+        form_of(&between, "deep"),
+        form_of(&[HEADER, &shared, &deep].concat(), "deep")
+    );
+    let chain: String = (0..8)
+        .map(|link| format!("const c{link} = !c{}\n", link + 1))
+        .chain(["const c8 = 1\n".to_owned()])
+        .collect();
+    let far = "test('far', () => { expect(c0).toBe(true) })\n";
+    let near = "test('near', () => { expect(c5).toBe(true) })\n";
+    assert_eq!(
+        form_of(&[HEADER, &chain, far, near].concat(), "near"),
+        form_of(&[HEADER, &chain, near].concat(), "near")
+    );
+}
+
+/// Declarations that read each other, or themselves, equal only themselves, whichever is named
+/// first; one that reads into such a cycle from outside it keeps its structure.
+#[test]
+fn a_cycle_of_declarations_is_named_by_identity_from_any_entry() {
+    // `c` reaches the cycle through `b`, already visited when `a` is named first.
+    let main = "const a = () => b() + c()\nconst b = () => a()\nconst c = () => b()\n\
+                const d = () => a()\nconst e = () => 1\nconst f = () => f()\n\
+                const p = () => q()\nconst q = () => r()\nconst r = () => p()\n";
+    let names = ["a", "b", "c", "d", "e", "f", "p", "q", "r"];
+    let orders: Vec<Vec<&str>> = names
+        .iter()
+        .map(|entry| {
+            let mut order = vec![*entry];
+            order.extend(names.iter().filter(|name| *name != entry));
+            order
+        })
+        .collect();
+    let named = identities(main, &orders);
+    for (order, identities) in orders.iter().zip(&named) {
+        assert_eq!(identities, &named[0], "named from {}", order[0]);
+    }
+    let opaque: Vec<_> = named[0]
+        .iter()
+        .filter(|(_, identity)| identity.starts_with("sym:"))
+        .map(|(name, _)| name.as_str())
+        .collect();
+    assert_eq!(opaque, ["a", "b", "c", "f", "p", "q", "r"]);
+}
+
+/// Each declaration is named once however many paths reach it: two functions per level, each
+/// calling both of the next, twenty levels deep, is about a million paths and forty declarations.
+#[test]
+fn repeated_reads_of_a_declaration_name_it_once() {
+    let mut main = String::from(HEADER);
+    for level in 0..20 {
+        let next = level + 1;
+        for side in ["a", "b"] {
+            main.push_str(&format!(
+                "function f{level}{side}() {{ f{next}a(); f{next}b() }}\n"
+            ));
+        }
+    }
+    main.push_str("function f20a() {}\nfunction f20b() {}\ntest('reads', () => { f0a() })\n");
+    let started = std::time::Instant::now();
+    assert!(form_of(&main, "reads").contains("fn:"));
+    assert!(started.elapsed() < std::time::Duration::from_secs(2));
+}
+
+/// The form of every test of the test files each of `orders` names, read in that order in one run
+/// (with its own export cache) over one project holding `files`, by file and title.
+fn run_forms(files: &[(&str, &str)], orders: &[&[&str]]) -> Vec<HashMap<(String, String), String>> {
+    let dir = tempfile::tempdir().unwrap();
+    for (path, content) in files {
+        fs::write(dir.path().join(path), content).unwrap();
+    }
+    let run = |order: &[&str]| {
+        let exports = Exports::default();
+        let mut forms = HashMap::new();
+        for name in order {
+            let path = dir.path().join(name);
+            let source = fs::read_to_string(&path).unwrap();
+            let parsed = parse(&path, &source).unwrap();
+            let found = inventory(
+                &path,
+                &source,
+                &parsed,
+                crate::inventory::Setting {
+                    dialect: &DIALECT,
+                    globals: false,
+                    root: dir.path(),
+                },
+                &mut Modules::default(),
+            );
+            let structure = Structure::of(&parsed.tree, &found);
+            let setting = Setting {
+                dialect: &DIALECT,
+                root: dir.path(),
+                exports: &exports,
+            };
+            let mut normalizer = Normalizer::new(&path, &parsed, setting, &structure);
+            for (title, callback) in test_callbacks(&parsed.tree, &found) {
+                forms.insert((name.to_string(), title), normalizer.of(callback));
+            }
+        }
+        forms
+    };
+    orders.iter().map(|order| run(order)).collect()
+}
+
+/// What a module exports is named the same whichever test file reads it first, across an import
+/// cycle; a module read for an export names its own imports by where they resolve.
+#[test]
+fn an_export_is_named_the_same_whichever_file_reads_it_first() {
+    let files = [
+        ("m.ts", "import { x } from './n'\nexport const helper = () => x()\n"),
+        ("n.ts", "import { helper } from './m'\nexport const x = () => helper()\n"),
+        ("k1.ts", "export const k = () => 1\n"),
+        ("k2.ts", "export const k = () => 1\n"),
+        ("h1.ts", "import { k } from './k1'\nexport const helper = () => k()\n"),
+        ("h2.ts", "import { k } from './k2'\nexport const helper = () => k()\n"),
+        ("h3.ts", "import { k } from './k1'\nexport const helper = () => k()\n"),
+        (
+            "a.test.ts",
+            "import { test } from 'vitest'\nimport { helper } from './m'\n\
+             test('a', () => { helper() })\n",
+        ),
+        (
+            "b.test.ts",
+            "import { test } from 'vitest'\nimport { x } from './n'\nimport { helper as one } from './h1'\n\
+             import { helper as two } from './h2'\nimport { helper as three } from './h3'\n\
+             test('b', () => { x() })\ntest('one', () => { one() })\n\
+             test('two', () => { two() })\ntest('three', () => { three() })\n",
+        ),
+    ];
+    let runs = run_forms(
+        &files,
+        &[&["a.test.ts", "b.test.ts"], &["b.test.ts", "a.test.ts"]],
+    );
+    let (forward, backward) = (&runs[0], &runs[1]);
+    assert_eq!(forward.len(), 5);
+    assert_eq!(forward, backward);
+    let form = |title: &str| &forward[&("b.test.ts".to_owned(), title.to_owned())];
+    // Equal helpers reading the same module are one identity; reading two equal modules, two.
+    assert_eq!(form("one"), form("three"));
+    assert_ne!(form("one"), form("two"));
 }
