@@ -31,6 +31,8 @@ function framePath(frame) {
   return location.startsWith('file://') ? fileURLToPath(location) : location
 }
 
+// This runner's own frames (the `Error` proxy) sit above every registration.
+const PROBE = fileURLToPath(import.meta.url)
 /** Whether a stack frame belongs to Vitest itself or to Node, rather than to code under test. */
 const isRuntimeFrame = (path) => /[\\/]node_modules[\\/](?:@vitest|vitest)[\\/]/.test(path) || !/^[\\/]|^[A-Za-z]:/.test(path)
 
@@ -39,12 +41,15 @@ const isRuntimeFrame = (path) => /[\\/]node_modules[\\/](?:@vitest|vitest)[\\/]/
  * hook function itself, then the first frame below it outside Vitest. That is where the analyzer
  * places a hook too, so a hook declared in a helper module is named by the helper's line, not by
  * the test file's call of the helper. `null` when the error was not created by a hook function:
- * Vitest also creates one for each fixture and test.
+ * Vitest also creates one for each fixture and test, and a test registered by code a hook call runs
+ * (a timeout's `valueOf`) has the hook's frame below its own code's.
  */
 function registration(stack) {
   const frames = String(stack).split('\n')
   const hook = frames.findIndex((frame) => HOOK_FRAME.test(frame))
   if (hook < 0) return null
+  const ownCode = (frame) => POSITION.test(frame) && !isRuntimeFrame(framePath(frame)) && framePath(frame) !== PROBE
+  if (frames.slice(1, hook).some(ownCode)) return null
   const kind = frames[hook].match(HOOK_FRAME)[1]
   const site = frames.slice(hook + 1).find((frame) => POSITION.test(frame) && !isRuntimeFrame(framePath(frame)))
   if (!site) return { kind, file: null, line: null }

@@ -7,7 +7,7 @@ import test from 'node:test'
 import { fileURLToPath } from 'node:url'
 
 import { missingModuleStubs, wholeModuleImports } from './collection-oracle-stubs.mjs'
-import { analyzerRecordsOf, analyzerView, compareDirectory, compareSites, configSource, hookSite, matchKnown, minus, ownConfig, siteView, vitestInstallError, vitestView } from './collection-oracle.mjs'
+import { analyzerRecordsOf, analyzerView, compareDirectory, compareSites, configSource, hookSite, matchKnown, minus, oracleBinary, oracleSetupError, ownConfig, siteView, vitestInstallError, vitestView } from './collection-oracle.mjs'
 
 /** A file the probe collected cleanly, with `over` replacing any field. */
 const collected = (over = {}) => ({
@@ -254,16 +254,23 @@ test('a directory without a config gets the default include; one with a config k
   }
 })
 
-test('the gate requires the installed Vitest to be the pinned one', () => {
+test('the gate requires the installed Vitest to be the pinned one, and the analyzer binary', () => {
   const root = mkdtempSync(join(tmpdir(), 'oracle-pin-'))
+  const binary = join(root, 'vitest-dedup')
   try {
     writeFileSync(join(root, 'package.json'), JSON.stringify({ devDependencies: { vitest: '5.0.5' } }))
     assert.match(vitestInstallError(root), /not found/)
+    assert.match(oracleSetupError(root, binary), /not found: npm ci .*\. The oracle is the pinned Vitest/)
     mkdirSync(join(root, 'node_modules', 'vitest'), { recursive: true })
     writeFileSync(join(root, 'node_modules', 'vitest', 'package.json'), JSON.stringify({ version: '5.0.4' }))
     assert.match(vitestInstallError(root), /installed Vitest is 5\.0\.4, package\.json pins 5\.0\.5/)
     writeFileSync(join(root, 'node_modules', 'vitest', 'package.json'), JSON.stringify({ version: '5.0.5' }))
     assert.equal(vitestInstallError(root), null)
+    assert.match(oracleSetupError(root, binary), /analyzer binary .* not found/)
+    assert.equal(oracleBinary(root, binary), null)
+    writeFileSync(binary, '')
+    assert.equal(oracleSetupError(root, binary), null)
+    assert.equal(oracleBinary(root, binary), binary)
   } finally {
     rmSync(root, { recursive: true, force: true })
   }

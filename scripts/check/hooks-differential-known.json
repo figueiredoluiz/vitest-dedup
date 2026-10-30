@@ -1,0 +1,60 @@
+{
+  "cases": [
+    {
+      "id": "open-alias-of-reassigned-hook-fn",
+      "reason": "A reassigned binding widens wrapper origins only; an API hook origin copied from it (`const alias = hook`) keeps `Hook`, so the helper reads as hooks-only."
+    },
+    {
+      "id": "open-alias-of-reassigned-hook-arrow",
+      "reason": "A reassigned binding widens wrapper origins only; an API hook origin copied from it (`const alias = hook`) keeps `Hook`, so the helper reads as hooks-only."
+    },
+    {
+      "id": "open-alias-of-reassigned-hook-nested",
+      "reason": "A reassigned binding widens wrapper origins only; an API hook origin copied from it (`const alias = hook`) keeps `Hook`, so the helper reads as hooks-only."
+    },
+    {
+      "id": "open-alias-of-reassigned-hook-barrel",
+      "reason": "A reassigned binding widens wrapper origins only; an API hook origin copied from it (`const alias = hook`) keeps `Hook`, so the helper reads as hooks-only."
+    },
+    {
+      "id": "open-alias-of-reassigned-hook-default",
+      "reason": "A reassigned binding widens wrapper origins only; an API hook origin copied from it (`const alias = hook`) keeps `Hook`, so the helper reads as hooks-only."
+    },
+    {
+      "id": "open-alias-of-reassigned-hook-async",
+      "reason": "A reassigned binding widens wrapper origins only; an API hook origin copied from it (`const alias = hook`) keeps `Hook`, so the helper reads as hooks-only."
+    },
+    {
+      "id": "open-global-getter-fn",
+      "reason": "A TypeScript `declare const` gives a global a symbol, so reading it counts as a lexical read that runs nothing; the global may be an accessor that registers a test."
+    },
+    {
+      "id": "open-global-getter-arrow",
+      "reason": "A TypeScript `declare const` gives a global a symbol, so reading it counts as a lexical read that runs nothing; the global may be an accessor that registers a test."
+    },
+    {
+      "id": "open-global-getter-nested",
+      "reason": "A TypeScript `declare const` gives a global a symbol, so reading it counts as a lexical read that runs nothing; the global may be an accessor that registers a test."
+    },
+    {
+      "id": "open-global-getter-barrel",
+      "reason": "A TypeScript `declare const` gives a global a symbol, so reading it counts as a lexical read that runs nothing; the global may be an accessor that registers a test."
+    },
+    {
+      "id": "open-global-getter-default",
+      "reason": "A TypeScript `declare const` gives a global a symbol, so reading it counts as a lexical read that runs nothing; the global may be an accessor that registers a test."
+    },
+    {
+      "id": "open-global-getter-async",
+      "reason": "A TypeScript `declare const` gives a global a symbol, so reading it counts as a lexical read that runs nothing; the global may be an accessor that registers a test."
+    },
+    {
+      "id": "open-destructured-redeclaration-fn",
+      "reason": "`var { run: setup } = ...` redeclares `setup`, but redeclarations are only read from identifier declarations, not from patterns."
+    },
+    {
+      "id": "open-exported-hook-alias-fn",
+      "reason": "`export const setup = beforeEach` crosses modules as a hooks-only wrapper, so an importer's call skips the hook-argument rule and a timeout's `valueOf` runs unseen."
+    }
+  ]
+}

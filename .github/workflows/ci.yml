@@ -173,6 +173,8 @@ jobs:
       # Vitest and compared with the analyzer's extraction (docs/development.md). It shares this
       # job because it needs the same npm ci and release build.
       - run: node scripts/check/check-collection-oracle.mjs
+      # Generated helpers against the next engine's hooks-only claim (docs/development.md).
+      - run: node scripts/check/check-hooks-differential.mjs
 
   # The prose gate. Findings in code fell to nearly zero over four pull requests while findings
   # in *prose* did not, and two of the last ones were mechanical: a fenced block labelled ```json

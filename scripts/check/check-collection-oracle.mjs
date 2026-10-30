@@ -33,8 +33,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { isDeepStrictEqual } from 'node:util'
-import { collectSites, collectWithAnalyzer, collectWithVitest, compareDirectory, compareSites, matchKnown, vitestInstallError } from './lib/collection-oracle.mjs'
-import { defaultBinary } from './lib/run-analyzer.mjs'
+import { collectSites, collectWithAnalyzer, collectWithVitest, compareDirectory, compareSites, matchKnown, oracleBinary } from './lib/collection-oracle.mjs'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
 const KNOWN = join(ROOT, 'scripts', 'check', 'collection-oracle-known.json')
@@ -108,16 +107,8 @@ function selfCheck() {
 
 /** Collects every directory with Vitest and both engines, compares them, and returns the exit code. */
 function main() {
-  const binary = resolve(ROOT, process.argv[2] ?? defaultBinary({ root: ROOT }))
-  const installError = vitestInstallError(ROOT)
-  if (installError) {
-    console.error(`FAIL: ${installError}. The oracle is the pinned Vitest; a missing one measures nothing.`)
-    return 2
-  }
-  if (!existsSync(binary)) {
-    console.error(`FAIL: analyzer binary ${binary} not found. Build it: cargo build --release --locked`)
-    return 2
-  }
+  const binary = oracleBinary(ROOT, process.argv[2])
+  if (binary === null) return 2
   const manifest = JSON.parse(readFileSync(join(ROOT, 'fixtures', 'recall', 'manifest.json'), 'utf8'))
   const dirs = [...FIXTURE_DIRS, ...manifest.cases.map((c) => `fixtures/recall/${c.path}`)]
   const known = JSON.parse(readFileSync(KNOWN, 'utf8')).disagreements

@@ -67,6 +67,16 @@ Known disagreements are listed with their
 reasons in `scripts/check/collection-oracle-known.json`; the gate fails on a disagreement that is not
 listed and on a listed one that no longer occurs, so a fix deletes its entry.
 
+### Hooks-only differential check
+
+`npm run check:hooks-differential` tests the next engine's `hook-wrapper` claim (a helper call that
+registers only hooks) against Vitest on generated cases: each known way a helper's call can run a
+hidden test, in each way a helper is declared and reached, plus bodies the claim admits. A hidden test
+Vitest collects with no site fails, as does an admitted body not read as `hook-wrapper`, a route
+Vitest collects nothing from, and a case Vitest cannot collect. Cases the analyzer gets wrong today
+are listed with reasons in `scripts/check/hooks-differential-known.json`; one that starts passing
+fails, so its entry goes when support lands.
+
 ## Writing documentation
 
 The website syncs these pages, so how they are named shows up there.
