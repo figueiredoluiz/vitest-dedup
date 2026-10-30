@@ -1,6 +1,6 @@
 //! The normal form of a node, and the predicates it is decided by.
 
-use super::{Normalizer, Walk};
+use super::{digest, Normalizer, Walk};
 use crate::framework::Dialect;
 use crate::lang::{Field, Name, NodeId, Tree};
 use serde_json::Value;
@@ -256,23 +256,33 @@ impl Normalizer<'_> {
     }
 
     /// Writes the normal form of a node. Past [`MAX_FORM_DEPTH`] levels, counted across the nested
-    /// walks of the declarations a form reads, it writes a token only this node writes: deeper code
-    /// can stop a match but never make one.
+    /// walks of the declarations a form reads, it writes a token only this node, read with these
+    /// substitutions (a table row's cells), writes: deeper code can stop a match but never make one.
     pub(super) fn write_node(&mut self, node: NodeId, walk: &mut Walk, out: &mut String) {
         if self.nesting >= MAX_FORM_DEPTH {
-            let span = self.tree.span(node);
-            let _ = write!(
-                out,
-                "(deep {}:{}:{})",
-                self.path.display(),
-                span.start,
-                span.end
-            );
-            return;
+            return self.write_deep(node, walk, out);
         }
         self.nesting += 1;
         self.write_kind(node, walk, out);
         self.nesting -= 1;
+    }
+
+    /// The token [`Self::write_node`] writes past the depth bound. Never inlined: the recursion's
+    /// frame stays the size of what it needs below the bound.
+    #[inline(never)]
+    fn write_deep(&self, node: NodeId, walk: &Walk, out: &mut String) {
+        let span = self.tree.span(node);
+        let mut substitutions: Vec<_> = walk.substitutions.iter().collect();
+        substitutions.sort();
+        let context = format!("{substitutions:?}{}", walk.bound_parameters);
+        let _ = write!(
+            out,
+            "(deep {}:{}:{}:{:x})",
+            self.path.display(),
+            span.start,
+            span.end,
+            digest(&context)
+        );
     }
 
     /// [`Self::write_node`] below the depth bound.

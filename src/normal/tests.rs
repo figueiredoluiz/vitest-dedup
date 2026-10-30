@@ -73,6 +73,44 @@ fn test_callbacks<'a>(
         })
 }
 
+/// The forms of the test registered at `site`: one per table row (`None` for a row that cannot
+/// bind), or its callback's alone when it has no table.
+fn site_forms(normalizer: &mut Normalizer, tree: &Tree, site: NodeId) -> Vec<Option<String>> {
+    let callee = tree.child(site, "callee").unwrap();
+    let modifiers = normalizer.modifiers(callee);
+    let callback = tree
+        .list(site, "arguments")
+        .into_iter()
+        .flatten()
+        .last()
+        .unwrap();
+    let parameters: Vec<_> = tree
+        .list(callback, "params")
+        .into_iter()
+        .flatten()
+        .collect();
+    match modifiers.rows {
+        None => vec![Some(normalizer.of(callback))],
+        Some(rows) => rows
+            .iter()
+            .map(|row| {
+                let (bound, every) = normalizer.bind_row(&parameters, row)?;
+                Some(normalizer.substituted(callback, 0, bound, every))
+            })
+            .collect(),
+    }
+}
+
+/// Runs `with` on a thread with half the stack a test thread gets, the budget a form is written in.
+fn on_half_stack<T: Send + 'static>(with: impl FnOnce() -> T + Send + 'static) -> T {
+    std::thread::Builder::new()
+        .stack_size(1024 * 1024)
+        .spawn(with)
+        .unwrap()
+        .join()
+        .unwrap()
+}
+
 /// Asserts the tests titled in `equal` share a normal form and those in `differ` do not.
 fn check(main: &str, files: &[(&str, &str)], equal: &[(&str, &str)], differ: &[(&str, &str)]) {
     let forms = forms(main, files);
@@ -474,33 +512,11 @@ fn literal_table_rows_bind_into_the_callback() {
                 test.for([{}])('inherited', ({ toString }) => { expect(toString).toBe(undefined) })\n\
                 test.for([{ __proto__: base }])('prototype', ({ n }) => { expect(n).toBe(undefined) })";
     with_normalizer(main, &[], true, |normalizer, tree, found| {
-        let mut keyed = Vec::new();
-        for site in &found.sites {
-            let callee = tree.child(site.node, "callee").unwrap();
-            let modifiers = normalizer.modifiers(callee);
-            let callback = tree
-                .list(site.node, "arguments")
-                .into_iter()
-                .flatten()
-                .last()
-                .unwrap();
-            let parameters: Vec<_> = tree
-                .list(callback, "params")
-                .into_iter()
-                .flatten()
-                .collect();
-            match modifiers.rows {
-                None => keyed.push(vec![Some(normalizer.of(callback))]),
-                Some(rows) => keyed.push(
-                    rows.iter()
-                        .map(|row| {
-                            let (bound, every) = normalizer.bind_row(&parameters, row)?;
-                            Some(normalizer.substituted(callback, 0, bound, every))
-                        })
-                        .collect(),
-                ),
-            }
-        }
+        let keyed: Vec<_> = found
+            .sites
+            .iter()
+            .map(|site| site_forms(normalizer, tree, site.node))
+            .collect();
         assert_eq!(
             keyed[0][0], keyed[1][0],
             "the first row is the spelled test"
@@ -800,22 +816,17 @@ fn a_form_deeper_than_its_bound_equals_only_itself() {
         chain("deep", 5_000),
     ]
     .concat();
-    let (forms, repeated) = std::thread::Builder::new()
-        .stack_size(1024 * 1024)
-        .spawn(move || {
-            with_normalizer(&main, &[], false, |normalizer, tree, inventory| {
-                let callbacks: HashMap<_, _> = test_callbacks(tree, inventory).collect();
-                let forms: HashMap<_, _> = callbacks
-                    .iter()
-                    .map(|(title, &callback)| (title.clone(), normalizer.of(callback)))
-                    .collect();
-                let repeated = normalizer.of(callbacks["deep"]) == forms["deep"];
-                (forms, repeated)
-            })
+    let (forms, repeated) = on_half_stack(move || {
+        with_normalizer(&main, &[], false, |normalizer, tree, inventory| {
+            let callbacks: HashMap<_, _> = test_callbacks(tree, inventory).collect();
+            let forms: HashMap<_, _> = callbacks
+                .iter()
+                .map(|(title, &callback)| (title.clone(), normalizer.of(callback)))
+                .collect();
+            let repeated = normalizer.of(callbacks["deep"]) == forms["deep"];
+            (forms, repeated)
         })
-        .unwrap()
-        .join()
-        .unwrap();
+    });
     assert_eq!(forms.len(), 5);
     assert_eq!(forms["near"], forms["near again"]);
     assert_ne!(forms["past"], forms["past again"]);
@@ -833,11 +844,28 @@ fn deep_code_is_read_without_recursion() {
         "{HEADER}const b = {negations}1\ntest('reads', () => {{ b }})\n\
          test('function', function () {{ {negations}1 }})\n"
     );
-    let forms = std::thread::Builder::new()
-        .stack_size(1024 * 1024)
-        .spawn(move || forms(&main, &[]))
-        .unwrap()
-        .join()
-        .unwrap();
+    let forms = on_half_stack(move || forms(&main, &[]));
     assert_eq!(forms.len(), 2);
+}
+
+/// Past the depth bound, rows of one table still differ by their cells: the callback is the same
+/// node for every row, so its token carries what the row binds.
+#[test]
+fn rows_past_the_depth_bound_differ_by_their_cells() {
+    let negations = "!".repeat(300);
+    let main = format!(
+        "{HEADER}test.each([false, true, false])('row %s', value => {{\n  \
+         expect({negations}value).toBe(false)\n}})\n"
+    );
+    let forms = on_half_stack(move || {
+        with_normalizer(&main, &[], false, |normalizer, tree, found| {
+            site_forms(normalizer, tree, found.sites[0].node)
+        })
+    });
+    assert_eq!(forms.len(), 3);
+    assert!(forms
+        .iter()
+        .all(|form| form.as_ref().unwrap().contains("(deep ")));
+    assert_eq!(forms[0], forms[2]);
+    assert_ne!(forms[0], forms[1]);
 }
