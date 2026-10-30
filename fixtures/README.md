@@ -278,3 +278,18 @@ Three conventions specific to this directory:
   and a deleted rule produce identical silence, most negatives here ship with a positive twin:
   `observed-type-args-differ` with `observed-type-args-same`, `observed-mixed-each-table` with
   `observed-uniform-each-table`.
+
+## `fixtures/oracle/` — cases the collection oracle pins
+
+Each directory is a small Vitest project with an `expected.json`, run by `npm run check:oracle` (see
+`docs/development.md`). Adding a case touches only its directory.
+
+- Keep the helper under test, and whatever registers through it, in modules other than the test
+  file. Vitest places a task on the innermost frame in the test file, so a helper defined there
+  puts its tasks on a line with no site whether the analyzer is right or not.
+- A cycle or depth case gets its own directory with one test file: a run shares what it reads of a
+  module, so the result would depend on which file read it first.
+- A task on a line that already has a `test` site is invisible to the site comparison. Pin the
+  `wrapperSites` for such a case.
+- Give each test file one plain inline test, so it is not blind. A file that is blind anyway lists
+  itself in `blindUnderCurrent`.

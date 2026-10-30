@@ -7,7 +7,7 @@ import test from 'node:test'
 import { fileURLToPath } from 'node:url'
 
 import { missingModuleStubs, wholeModuleImports } from './collection-oracle-stubs.mjs'
-import { analyzerRecordsOf, analyzerView, compareDirectory, compareSites, configSource, hookSite, matchKnown, minus, oracleBinary, oracleSetupError, ownConfig, siteView, vitestInstallError, vitestView } from './collection-oracle.mjs'
+import { analyzerRecordsOf, analyzerView, compareDirectory, compareSites, configSource, exclusionView, hookSite, matchKnown, minus, oracleBinary, oracleSetupError, ownConfig, siteView, vitestInstallError, vitestView } from './collection-oracle.mjs'
 
 /** A file the probe collected cleanly, with `over` replacing any field. */
 const collected = (over = {}) => ({
@@ -252,6 +252,18 @@ test('a directory without a config gets the default include; one with a config k
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
+})
+
+test('an exclusion is read per file with every reason, relative to the directory', () => {
+  const records = [
+    { type: 'test', path: 'x' },
+    { type: 'excluded-file', path: '/root/d/a.test.ts', reason: 'first', otherReasons: ['second'], testsExcluded: 2 },
+    { type: 'excluded-file', path: 'b.test.ts', reason: 'only', otherReasons: [], testsExcluded: 1 },
+  ]
+  assert.deepEqual(
+    [...exclusionView(records, '/root/d')],
+    [['a.test.ts', { reasons: ['first', 'second'], testsExcluded: 2 }], ['b.test.ts', { reasons: ['only'], testsExcluded: 1 }]],
+  )
 })
 
 test('the gate requires the installed Vitest to be the pinned one, and the analyzer binary', () => {

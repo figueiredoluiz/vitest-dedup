@@ -93,6 +93,7 @@ import { basename, join } from 'node:path'
 import { report as reportIsolation, run as runIsolation } from './check-fixture-isolation.mjs'
 import { enumerateFixtures, FIXTURE_NAME, parseFixture } from './lib/fixture-directives.mjs'
 import { findCallback, tokenize } from './lib/js-tokens.mjs'
+import { blindCaseFiles, readCases } from './lib/oracle-cases.mjs'
 import { defaultBinary, runAnalyzerJsonl } from './lib/run-analyzer.mjs'
 
 const binary = process.argv[2] ?? defaultBinary()
@@ -613,17 +614,19 @@ function checkBlindFiles(binary, failures) {
     )
   }
 
-  const missing = [...DELIBERATE_BLIND_FILES].filter((path) => !blind.has(path))
-  const extra = [...blind].filter((path) => !DELIBERATE_BLIND_FILES.has(path))
+  // Oracle cases record their own blind files, so adding a case touches no shared list.
+  const deliberate = new Set([...DELIBERATE_BLIND_FILES, ...blindCaseFiles(readCases(process.cwd()).cases)])
+  const missing = [...deliberate].filter((path) => !blind.has(path))
+  const extra = [...blind].filter((path) => !deliberate.has(path))
   if (missing.length > 0 || extra.length > 0) {
     const detail = (label, paths) =>
       paths.length > 0 ? `\n  ${label}:\n${paths.sort().map((p) => `    ${p}`).join('\n')}` : ''
     failures.push(
-      `FAIL blind files: the deliberate set drifted over fixtures/.${detail('no longer blind (recover the decision or update DELIBERATE_BLIND_FILES)', missing)}${detail('newly blind (a fixture went blind for a reason the per-fixture incomplete expectations cannot see)', extra)}`,
+      `FAIL blind files: the deliberate set drifted over fixtures/.${detail('no longer blind (recover the decision or update DELIBERATE_BLIND_FILES or the case\'s blindUnderCurrent)', missing)}${detail('newly blind (a fixture went blind for a reason the per-fixture incomplete expectations cannot see)', extra)}`,
     )
   } else {
     console.log(
-      `blind files: ${blind.size} deliberate, set-equal (pinned by path in DELIBERATE_BLIND_FILES)`,
+      `blind files: ${blind.size} deliberate, set-equal (pinned by path in DELIBERATE_BLIND_FILES and oracle cases)`,
     )
   }
 }

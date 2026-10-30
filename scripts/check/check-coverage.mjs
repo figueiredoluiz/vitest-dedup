@@ -359,6 +359,7 @@ const JS_MODULES = {
   'scripts/check/lib/collection-oracle.mjs': 85,
   'scripts/check/lib/collection-oracle-stubs.mjs': 100,
   'scripts/check/lib/hooks-differential.mjs': 100,
+  'scripts/check/lib/oracle-cases.mjs': 100,
   'scripts/check/lib/external-corpus-retention.mjs': 98,
   // The attribution-leak gate. A pure reader like the two above, and the floor is 100 because this
   // one has a trap worth recording: its name sweep only runs where the untracked benchmark manifest

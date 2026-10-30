@@ -14,6 +14,9 @@
 // places it on (`lib/collection-oracle.mjs`'s `compareSites`). Sites that registered nothing Vitest
 // collected are counted, not failed: those are what the engine's exclusion reasons are for.
 //
+// Owned cases under `fixtures/oracle/` run the same comparisons against their own `expected.json`
+// (`lib/oracle-cases.mjs`).
+//
 // Known disagreements are listed in `collection-oracle-known.json`, each with its reason. The gate
 // fails on a disagreement that is not listed, and on a listed one that no longer occurs: a change
 // that fixes one deletes its entry in the same commit.
@@ -33,7 +36,8 @@ import { existsSync, readFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { isDeepStrictEqual } from 'node:util'
-import { collectSites, collectWithAnalyzer, collectWithVitest, compareDirectory, compareSites, matchKnown, oracleBinary } from './lib/collection-oracle.mjs'
+import { collectNextEngine, collectSites, collectWithAnalyzer, collectWithVitest, compareDirectory, compareSites, matchKnown, oracleBinary } from './lib/collection-oracle.mjs'
+import { judgeCase, readCases } from './lib/oracle-cases.mjs'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
 const KNOWN = join(ROOT, 'scripts', 'check', 'collection-oracle-known.json')
@@ -105,6 +109,32 @@ function selfCheck() {
   })
 }
 
+/**
+ * Runs the owned cases under `fixtures/oracle/`, each against its own `expected.json`.
+ *
+ * @returns {{failures: string[], held: string[], dirs: number, files: number}}
+ */
+function runCases(binary) {
+  const { cases, problems } = readCases(ROOT)
+  const totals = { failures: [...problems], held: [], dirs: cases.length, files: 0 }
+  for (const oracleCase of cases) {
+    const { dir } = oracleCase
+    const vitest = collectWithVitest(ROOT, dir)
+    const next = collectNextEngine(binary, ROOT, dir)
+    const judged = judgeCase(oracleCase, {
+      vitest,
+      located: compareSites(vitest, next.sites),
+      titles: compareDirectory(vitest, collectWithAnalyzer(binary, ROOT, dir)),
+      ...next,
+    })
+    totals.failures.push(...judged.failures)
+    totals.held.push(...judged.held)
+    totals.files += judged.files
+  }
+  if (totals.files === 0) totals.failures.push(`no case file was compared under fixtures/oracle/; a gate that measured nothing fails`)
+  return totals
+}
+
 /** Collects every directory with Vitest and both engines, compares them, and returns the exit code. */
 function main() {
   const binary = oracleBinary(ROOT, process.argv[2])
@@ -143,6 +173,7 @@ function main() {
   }
 
   const selfCheckFailures = selfCheck()
+  const cases = runCases(binary)
   const { unlisted, stale } = matchKnown(found, known)
   const sitesMatched = matchKnown(foundSites, knownSites)
 
@@ -158,7 +189,10 @@ function main() {
       `${totals.unexecuted} of ${totals.sites} sites registered nothing Vitest collected`,
   )
 
-  const failures = [...selfCheckFailures]
+  console.log(`  oracle cases: ${cases.dirs} directories, ${cases.files} files compared, ${cases.held.length} held`)
+  for (const line of cases.held) console.log(`    held: ${line}`)
+
+  const failures = [...selfCheckFailures, ...cases.failures]
   if (probeErrors.length > 0) failures.push(`probe errors (the probe and the collected suites disagree):\n    ${probeErrors.join('\n    ')}`)
   for (const d of unlisted) failures.push(`new disagreement: ${d.dir}/${d.path}: ${d.kind} ${JSON.stringify(d.item)}`)
   for (const d of stale) {

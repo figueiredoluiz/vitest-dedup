@@ -67,6 +67,15 @@ Known disagreements are listed with their
 reasons in `scripts/check/collection-oracle-known.json`; the gate fails on a disagreement that is not
 listed and on a listed one that no longer occurs, so a fix deletes its entry.
 
+The gate also runs the owned cases in `fixtures/oracle/<dir>/`, each with an `expected.json` that
+pins, per file, the tasks Vitest collects, the file's `wrapper` and `hook-wrapper` sites, and what
+the next engine excludes. A pin the analyzer does not meet yet is held: `wrapperSitesToday` or
+`nextToday` records today's value and `waitsOn` says in plain words what it waits on. A held value
+fails the gate the moment the target is met, so the expectation changes with the support; the
+`knownSites` and `knownTitles` lists work the same way as the central list. A directory with no
+usable `expected.json`, a file it does not declare, and a declared file Vitest cannot compare all
+fail, and at least one case file must be compared.
+
 ### Hooks-only differential check
 
 `npm run check:hooks-differential` tests the next engine's `hook-wrapper` claim (a helper call that

@@ -232,7 +232,28 @@ export function analyzerRecordsOf(binary, args, env = {}) {
  * `hook-wrapper` (registers only hooks, so no task) or `module-load`.
  */
 export function collectSites(binary, root, dir) {
-  return siteView(analyzerRecords(binary, root, dir, { VITEST_DEDUP_ENGINE: 'next' }), resolve(root, dir))
+  return collectNextEngine(binary, root, dir).sites
+}
+
+/**
+ * The next engine's view of `dir`: its registration sites, and its exclusions per file.
+ *
+ * @returns {{sites: Map<string, object[]>, exclusions: Map<string, {reasons: string[], testsExcluded: number}>}}
+ */
+export function collectNextEngine(binary, root, dir) {
+  const records = analyzerRecords(binary, root, dir, { VITEST_DEDUP_ENGINE: 'next' })
+  return { sites: siteView(records, resolve(root, dir)), exclusions: exclusionView(records, resolve(root, dir)) }
+}
+
+/** The `excluded-file` records among `records` as `{reasons, testsExcluded}`, per file relative to `absoluteDir`. */
+export function exclusionView(records, absoluteDir) {
+  const exclusions = new Map()
+  for (const record of records) {
+    if (record.type !== 'excluded-file') continue
+    const path = normalizePath(isAbsolute(record.path) ? relative(absoluteDir, record.path) : record.path)
+    exclusions.set(path, { reasons: [record.reason, ...record.otherReasons], testsExcluded: record.testsExcluded })
+  }
+  return exclusions
 }
 
 /** The `site` records among `records`, per file relative to `absoluteDir`. */
