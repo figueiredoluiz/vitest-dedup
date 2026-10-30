@@ -6,7 +6,7 @@
 
 use crate::exclusions;
 use crate::framework::{Dialect, Registers};
-use crate::inventory::{self, SiteKind};
+use crate::inventory::{self, Reach, SiteKind};
 use crate::lang::{self, Lines, NodeId, Refusal};
 use crate::model::{BlindFile, ExcludedFile, ExclusionReason};
 use crate::normal::{self, digest, Normalizer, Structure};
@@ -98,8 +98,8 @@ pub struct TestCase {
 /// A registration site, as the inventory reports it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SiteRecord {
-    /// The dialect's name for what it registers (`describe` for a suite), `wrapper` or
-    /// `module-load`.
+    /// The dialect's name for what it registers (`describe` for a suite), `wrapper`,
+    /// `hook-wrapper` (a wrapper that registers only hooks) or `module-load`.
     pub kind: &'static str,
     /// 1-based line of the position Vitest reports.
     pub line: u32,
@@ -178,7 +178,8 @@ fn site_kind(dialect: &Dialect, kind: SiteKind) -> &'static str {
             .iter()
             .find(|registration| registration.registers == registers)
             .map_or("registration", |registration| registration.canonical),
-        SiteKind::Wrapper => "wrapper",
+        SiteKind::Wrapper(Reach::Tasks) => "wrapper",
+        SiteKind::Wrapper(Reach::Hooks) => "hook-wrapper",
     }
 }
 
@@ -240,7 +241,7 @@ pub fn file(
     for site in found.sites.iter().filter(|site| {
         matches!(
             site.kind,
-            SiteKind::Registers(Registers::Hook(_)) | SiteKind::Wrapper
+            SiteKind::Registers(Registers::Hook(_)) | SiteKind::Wrapper(_)
         )
     }) {
         let Some(suites) = normalizer.suites_around(site.node) else {
@@ -472,7 +473,7 @@ pub fn file(
     let elsewhere = found
         .sites
         .iter()
-        .filter(|site| site.kind == SiteKind::Wrapper)
+        .filter(|site| site.kind == SiteKind::Wrapper(Reach::Tasks))
         .map(|site| site.position)
         .chain(found.loads.iter().copied())
         .chain(found.escapes.iter().map(|escape| escape.offset));

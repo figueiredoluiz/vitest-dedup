@@ -22,8 +22,17 @@ use std::path::{Path, PathBuf};
 pub enum SiteKind {
     /// A test, suite, benchmark or hook.
     Registers(Registers),
-    /// A call of a wrapper, which may register anything.
-    Wrapper,
+    /// A call of a wrapper, and what it may register.
+    Wrapper(Reach),
+}
+
+/// What calling a wrapper may register.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Reach {
+    /// Hooks only: every registration in its body is a hook or a call of a hooks-only wrapper.
+    Hooks,
+    /// Tests, suites or benchmarks, or what the inventory cannot tell.
+    Tasks,
 }
 
 /// How the callee of a site reaches the API.
@@ -111,7 +120,7 @@ const MAX_DEPTH: usize = 8;
 /// project with globals reads free names as the API), shared by every file of one run.
 #[derive(Debug, Default)]
 pub struct Modules {
-    cache: HashMap<(PathBuf, bool), HashSet<String>>,
+    cache: HashMap<(PathBuf, bool), HashMap<String, Reach>>,
     active: HashSet<PathBuf>,
     /// How many lookups the depth limit has cut short. A module whose analysis saw a cut is not
     /// cached: read again from nearer the test file, the limit may not reach it. (A cycle is cut
@@ -132,19 +141,20 @@ pub struct Setting<'a> {
 }
 
 impl Modules {
-    /// The registering exports of the module at `path`, analysed once unless the depth limit cut
-    /// the analysis short.
-    fn exports(&mut self, path: &Path, setting: Setting, depth: usize) -> HashSet<String> {
+    /// The registering exports of the module at `path`, with what each may register, analysed
+    /// once unless the depth limit cut the analysis short. A cut import reads as exporting
+    /// nothing, so no hooks-only answer rests on it (see `Module::closed`).
+    fn exports(&mut self, path: &Path, setting: Setting, depth: usize) -> HashMap<String, Reach> {
         let key = (path.to_path_buf(), setting.globals);
         if let Some(found) = self.cache.get(&key) {
             return found.clone();
         }
         if depth > MAX_DEPTH {
             self.deep_cuts += 1;
-            return HashSet::new();
+            return HashMap::new();
         }
         if !self.active.insert(path.to_path_buf()) {
-            return HashSet::new();
+            return HashMap::new();
         }
         let cuts = self.deep_cuts;
         let exports = crate::discovery::read_bounded(path, crate::discovery::MAX_SOURCE_FILE_BYTES)

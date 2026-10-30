@@ -1,6 +1,8 @@
 //! The inventory of one module.
 
-use super::{Escape, Inventory, Label, Modules, Provenance, Setting, Site, SiteKind, ON_LOAD};
+use super::{
+    Escape, Inventory, Label, Modules, Provenance, Reach, Setting, Site, SiteKind, ON_LOAD,
+};
 use crate::framework::{Chain, Registers};
 use crate::lang::{
     bound_symbols, export_name, property_name, Name, NodeId, Parsed, Span, SymbolId, Tree,
@@ -14,8 +16,8 @@ enum Origin {
     Api(Registers),
     /// The API as a namespace: `import * as v`, the in-source member.
     Namespace,
-    /// A function whose call may register.
-    Wrapper,
+    /// A function whose call may register, and what.
+    Wrapper(Reach),
 }
 
 /// One step of a callee chain, from the root outwards.
@@ -33,14 +35,17 @@ struct Module<'s> {
     parsed: &'s Parsed,
     setting: Setting<'s>,
     origins: HashMap<SymbolId, Origin>,
-    /// Functions of this module whose body holds a registration, by the symbol naming them.
-    wrappers: HashSet<SymbolId>,
+    /// Functions of this module whose body holds a registration, by the symbol naming them, with
+    /// what calling them may register.
+    wrappers: HashMap<SymbolId, Reach>,
     loads: Vec<u32>,
     values: HashSet<NodeId>,
+    /// Bindings a second `var` or function declaration declares again, replacing their value.
+    redeclared: HashSet<SymbolId>,
 }
 
-/// The inventory of a module, and the export names whose value registers when called (with
-/// [`ON_LOAD`] when the module may register while it loads).
+/// The inventory of a module, and the export names whose value registers when called with what
+/// each may register (with [`ON_LOAD`] when the module may register while it loads).
 pub(super) fn analyse(
     path: &Path,
     source: &str,
@@ -48,7 +53,7 @@ pub(super) fn analyse(
     setting: Setting,
     modules: &mut Modules,
     depth: usize,
-) -> (Inventory, HashSet<String>) {
+) -> (Inventory, HashMap<String, Reach>) {
     let mut module = Module {
         path,
         source,
@@ -56,10 +61,12 @@ pub(super) fn analyse(
         parsed,
         setting,
         origins: HashMap::new(),
-        wrappers: HashSet::new(),
+        wrappers: HashMap::new(),
         loads: Vec::new(),
         values: HashSet::new(),
+        redeclared: HashSet::new(),
     };
+    module.redeclared = module.redeclarations();
     module.collect_origins(modules, depth);
     let found = module.registrations();
     let mut exports = module.exports(modules, depth, &found);
@@ -71,7 +78,7 @@ pub(super) fn analyse(
             .iter()
             .any(|(_, span, ..)| !bodies.iter().any(|body| body.contains(*span)))
     {
-        exports.insert(ON_LOAD.to_owned());
+        exports.insert(ON_LOAD.to_owned(), Reach::Tasks);
     }
     let escapes = module.escapes();
     let calls: HashSet<NodeId> = found.iter().map(|(node, ..)| *node).collect();
@@ -140,12 +147,12 @@ impl<'s> Module<'s> {
                 in_source.then_some((Origin::Namespace, Provenance::Direct))
             }
             "Identifier" => match self.parsed.scopes.name_at(tree.span(node).start)? {
-                Name::Reference(Some(symbol)) if self.wrappers.contains(&symbol) => {
-                    Some((Origin::Wrapper, Provenance::Wrapper))
+                Name::Reference(Some(symbol)) if self.wrappers.contains_key(&symbol) => {
+                    Some((Origin::Wrapper(self.wrappers[&symbol]), Provenance::Wrapper))
                 }
                 Name::Reference(Some(symbol)) => self.origins.get(&symbol).map(|origin| {
                     let provenance = match origin {
-                        Origin::Wrapper => Provenance::Wrapper,
+                        Origin::Wrapper(_) => Provenance::Wrapper,
                         _ => Provenance::Direct,
                     };
                     (*origin, provenance)
@@ -212,7 +219,8 @@ impl<'s> Module<'s> {
                         }) =>
                 {
                     steps.reverse();
-                    return Some((Origin::Wrapper, Provenance::Wrapper, steps));
+                    // What it returns is not read: it may register anything.
+                    return Some((Origin::Wrapper(Reach::Tasks), Provenance::Wrapper, steps));
                 }
                 "CallExpression" => {
                     steps.push(Step::Call);
@@ -281,8 +289,14 @@ impl<'s> Module<'s> {
     /// `test.extend({...})`, `v.describe`), or the namespace.
     fn value_origin(&self, node: NodeId) -> Option<Origin> {
         let (origin, _, steps) = self.chain(node)?;
-        if origin == Origin::Wrapper {
-            return Some(Origin::Wrapper);
+        if let Origin::Wrapper(reach) = origin {
+            // An alias of the wrapper keeps its reach; anything derived from it may register tests.
+            let reach = if steps.is_empty() {
+                reach
+            } else {
+                Reach::Tasks
+            };
+            return Some(Origin::Wrapper(reach));
         }
         let (registers, _) = self.apply(origin, &steps)?;
         Some(registers.map_or(Origin::Namespace, Origin::Api))
@@ -298,9 +312,16 @@ impl<'s> Module<'s> {
                 Step::Call => "()".to_owned(),
             })
             .collect();
-        if origin == Origin::Wrapper {
-            // A wrapper, or a value derived from one: calling it may register.
-            return Some((SiteKind::Wrapper, chain, provenance));
+        if let Origin::Wrapper(reach) = origin {
+            // A wrapper, or a value derived from one: calling it may register. Only the call of
+            // the wrapper itself is known to reach what its body does; a member or a call of its
+            // result is any value.
+            let reach = if steps.is_empty() {
+                reach
+            } else {
+                Reach::Tasks
+            };
+            return Some((SiteKind::Wrapper(reach), chain, provenance));
         }
         let (registers, pending) = self.apply(origin, &steps)?;
         let registers = registers?;
@@ -335,11 +356,11 @@ impl<'s> Module<'s> {
             };
             if wrapper_exports
                 .as_ref()
-                .is_some_and(|exports| exports.contains(ON_LOAD))
+                .is_some_and(|exports| exports.contains_key(ON_LOAD))
             {
                 self.loads.push(tree.span(statement).start);
             }
-            if !api && wrapper_exports.as_ref().is_none_or(HashSet::is_empty) {
+            if !api && wrapper_exports.as_ref().is_none_or(HashMap::is_empty) {
                 continue;
             }
             for specifier in tree.list(statement, "specifiers").into_iter().flatten() {
@@ -368,10 +389,11 @@ impl<'s> Module<'s> {
                             self.origins.insert(symbol, Origin::Api(registers));
                         }
                     }
-                    Some(exports) if exports.contains(&name) => {
-                        self.origins.insert(symbol, Origin::Wrapper);
+                    Some(exports) => {
+                        if let Some(&reach) = exports.get(&name) {
+                            self.origins.insert(symbol, Origin::Wrapper(reach));
+                        }
                     }
-                    Some(_) => {}
                 }
             }
         }
@@ -382,7 +404,7 @@ impl<'s> Module<'s> {
     fn collect_aliases(&mut self) {
         let tree = self.tree;
         loop {
-            let before = self.origins.len();
+            let before = self.origins.clone();
             for node in tree.nodes() {
                 if tree.kind(node) != "VariableDeclarator" {
                     continue;
@@ -401,12 +423,16 @@ impl<'s> Module<'s> {
                             continue;
                         };
                         if let Some(origin) = origin {
-                            self.origins.entry(symbol).or_insert(origin);
+                            self.alias(symbol, origin);
                         }
                     }
-                    "ObjectPattern" | "ArrayPattern" if origin == Some(Origin::Wrapper) => {
+                    // A destructured binding holds a member of the wrapper, which may register
+                    // tests whatever the wrapper registers when called.
+                    "ObjectPattern" | "ArrayPattern"
+                        if matches!(origin, Some(Origin::Wrapper(_))) =>
+                    {
                         for symbol in bound_symbols(tree, &self.parsed.scopes, id) {
-                            self.origins.entry(symbol).or_insert(Origin::Wrapper);
+                            self.alias(symbol, Origin::Wrapper(Reach::Tasks));
                         }
                     }
                     "ObjectPattern" if origin == Some(Origin::Namespace) => {
@@ -429,29 +455,287 @@ impl<'s> Module<'s> {
                     _ => {}
                 }
             }
-            if self.origins.len() == before {
+            if self.origins == before {
                 break;
             }
         }
     }
 
+    /// Records that `symbol` holds `origin`. A wrapper alias takes the widest reach seen, since a
+    /// wrapper's reach only grows while the fixpoint runs; any other origin is set once.
+    fn alias(&mut self, symbol: SymbolId, origin: Origin) {
+        let origin = match origin {
+            Origin::Wrapper(_) if self.reassigned(symbol) => Origin::Wrapper(Reach::Tasks),
+            origin => origin,
+        };
+        let entry = self.origins.entry(symbol).or_insert(origin);
+        if let (Origin::Wrapper(held), Origin::Wrapper(reach)) = (*entry, origin) {
+            *entry = Origin::Wrapper(held.max(reach));
+        }
+    }
+
     /// Every registering call, with wrappers found to a fixpoint: a function whose body holds a
-    /// registering call registers when called.
+    /// registering call registers when called. Each starts as hooks-only when every registration
+    /// in it is a hook or a hooks-only wrapper call; then any whose body is not closed may
+    /// register tests, which may open the wrappers calling it, until none changes.
     fn registrations(&mut self) -> Vec<Found> {
         loop {
             let found = self.scan();
-            let before = self.wrappers.len();
+            let before = self.wrappers.clone();
             for (function, symbols) in self.functions() {
-                let body = self.tree.span(function);
-                if found.iter().any(|(_, span, ..)| body.contains(*span)) {
-                    self.wrappers.extend(symbols);
+                let Some(reach) = self.reach(self.tree.span(function), &found) else {
+                    continue;
+                };
+                for symbol in symbols {
+                    let held = self.wrappers.entry(symbol).or_insert(reach);
+                    *held = (*held).max(reach);
                 }
             }
-            let aliases = self.origins.len();
+            let aliases = self.origins.clone();
             self.collect_aliases();
-            if self.wrappers.len() == before && self.origins.len() == aliases {
-                return found;
+            if self.wrappers == before && self.origins == aliases {
+                break;
             }
+        }
+        loop {
+            let open: Vec<SymbolId> = self
+                .functions()
+                .into_iter()
+                .filter(|(function, symbols)| {
+                    symbols
+                        .iter()
+                        .any(|symbol| self.wrappers.get(symbol) == Some(&Reach::Hooks))
+                        && (!self.closed(*function)
+                            || symbols.iter().any(|&symbol| self.reassigned(symbol)))
+                })
+                .flat_map(|(_, symbols)| symbols)
+                .collect();
+            for symbol in &open {
+                self.wrappers.insert(*symbol, Reach::Tasks);
+            }
+            let aliases = self.origins.clone();
+            self.collect_aliases();
+            if open.is_empty() && self.origins == aliases {
+                return self.scan();
+            }
+        }
+    }
+
+    /// Whether `symbol` is assigned or declared again after its declaration, so a call of it may
+    /// run another value.
+    fn reassigned(&self, symbol: SymbolId) -> bool {
+        self.redeclared.contains(&symbol)
+            || self
+                .parsed
+                .scopes
+                .symbol(symbol)
+                .references
+                .iter()
+                .any(|reference| reference.write)
+    }
+
+    /// The bindings declared by more than one `var` or function declaration.
+    fn redeclarations(&self) -> HashSet<SymbolId> {
+        let tree = self.tree;
+        tree.nodes()
+            .filter(|&node| {
+                matches!(
+                    tree.kind(node),
+                    "VariableDeclarator" | "FunctionDeclaration"
+                )
+            })
+            .filter_map(|node| tree.child(node, "id"))
+            .filter(|&id| tree.kind(id) == "Identifier")
+            .filter_map(|id| {
+                let symbol = self.declares(id)?;
+                (self.parsed.scopes.symbol(symbol).span != tree.span(id)).then_some(symbol)
+            })
+            .collect()
+    }
+
+    /// What calling a function whose body is `body` may register, `None` when its body holds no
+    /// registration: hooks only when every registration in it is a hook or a hooks-only wrapper
+    /// call. Whether the body may also run anything else is [`Self::closed`].
+    fn reach(&self, body: Span, found: &[Found]) -> Option<Reach> {
+        found
+            .iter()
+            .filter(|(_, span, ..)| body.contains(*span))
+            .map(|(_, _, kind, ..)| match kind {
+                SiteKind::Registers(Registers::Hook(_)) | SiteKind::Wrapper(Reach::Hooks) => {
+                    Reach::Hooks
+                }
+                SiteKind::Registers(_) | SiteKind::Wrapper(Reach::Tasks) => Reach::Tasks,
+            })
+            .max()
+    }
+
+    /// Whether calling `function` runs nothing but hook registrations and calls of hooks-only
+    /// wrappers: plain parameters, and a body of such calls (with arguments that run nothing),
+    /// declarations and returns of values that run nothing, and blocks and `if`s of those on a
+    /// test that runs nothing. Any other call, read, operator or default may run code that
+    /// registers a test this analysis does not see.
+    fn closed(&self, function: NodeId) -> bool {
+        let tree = self.tree;
+        let plain = tree
+            .list(function, "params")
+            .into_iter()
+            .all(|param| param.is_some_and(|param| tree.kind(param) == "Identifier"));
+        let Some(body) = tree.child(function, "body") else {
+            return false;
+        };
+        if !plain {
+            return false;
+        }
+        // An async function's returned value is resolved, which may read a `then` getter.
+        let returns = !tree.flag(function, "async");
+        if tree.kind(body) != "BlockStatement" {
+            return returns && self.hook_call(body);
+        }
+        self.closed_statement(body, returns)
+    }
+
+    /// Whether running `statement` runs nothing but hook registrations and calls of hooks-only
+    /// wrappers (see [`Self::closed`]).
+    fn closed_statement(&self, statement: NodeId, returns: bool) -> bool {
+        let tree = self.tree;
+        let closed = |field: &str| {
+            tree.child(statement, field)
+                .is_none_or(|statement| self.closed_statement(statement, returns))
+        };
+        match tree.kind(statement) {
+            "ExpressionStatement" => tree
+                .child(statement, "expression")
+                .is_some_and(|call| self.hook_call(call)),
+            "BlockStatement" => tree.list(statement, "body").into_iter().all(|statement| {
+                statement.is_some_and(|statement| self.closed_statement(statement, returns))
+            }),
+            "IfStatement" => {
+                tree.child(statement, "test")
+                    .is_some_and(|test| self.runs_nothing(test))
+                    && closed("consequent")
+                    && closed("alternate")
+            }
+            "FunctionDeclaration"
+            | "EmptyStatement"
+            | "TSTypeAliasDeclaration"
+            | "TSInterfaceDeclaration" => true,
+            "ReturnStatement" => tree
+                .child(statement, "argument")
+                .is_none_or(|value| returns && self.runs_nothing(value)),
+            "VariableDeclaration" => {
+                matches!(tree.text(statement, "kind"), Some("const" | "let" | "var"))
+                    && tree
+                        .list(statement, "declarations")
+                        .into_iter()
+                        .all(|declarator| {
+                            declarator.is_some_and(|declarator| {
+                                tree.child(declarator, "id")
+                                    .is_some_and(|id| tree.kind(id) == "Identifier")
+                                    && tree
+                                        .child(declarator, "init")
+                                        .is_none_or(|value| self.runs_nothing(value))
+                            })
+                        })
+            }
+            _ => false,
+        }
+    }
+
+    /// Whether `node` is a call of a hook or of a hooks-only wrapper whose arguments run nothing.
+    fn hook_call(&self, node: NodeId) -> bool {
+        let tree = self.tree;
+        let call = tree.inner(node);
+        if tree.kind(call) != "CallExpression" || !self.plain_callee(self.callee(call)) {
+            return false;
+        }
+        match self.registration(self.callee(call)) {
+            // The framework reads a hook's arguments (it compares a timeout), which may run a
+            // value's `valueOf`: only functions and literals are passed.
+            Some((SiteKind::Registers(Registers::Hook(_)), ..)) => {
+                tree.list(call, "arguments").into_iter().all(|argument| {
+                    argument.is_some_and(|argument| {
+                        matches!(
+                            tree.kind(tree.inner(argument)),
+                            "Literal" | "FunctionExpression" | "ArrowFunctionExpression"
+                        )
+                    })
+                })
+            }
+            Some((SiteKind::Wrapper(Reach::Hooks), ..)) => self.arguments_run_nothing(call),
+            _ => false,
+        }
+    }
+
+    /// Whether evaluating the arguments of `call`, or a tagged template's substitutions, runs no
+    /// code.
+    fn arguments_run_nothing(&self, call: NodeId) -> bool {
+        let tree = self.tree;
+        match tree.kind(call) {
+            "TaggedTemplateExpression" => tree
+                .child(call, "quasi")
+                .is_some_and(|quasi| tree.list(quasi, "expressions").is_empty()),
+            _ => tree
+                .list(call, "arguments")
+                .into_iter()
+                .all(|argument| argument.is_some_and(|argument| self.runs_nothing(argument))),
+        }
+    }
+
+    /// Whether evaluating callee `node` runs no code and is the binding it was declared as: a
+    /// lexical name never reassigned, the API as a global, or a member of an API namespace.
+    fn plain_callee(&self, node: NodeId) -> bool {
+        let tree = self.tree;
+        let node = tree.inner(node);
+        match tree.kind(node) {
+            "Identifier" => self
+                .read(node)
+                .map_or(self.setting.globals, |symbol| !self.reassigned(symbol)),
+            "MemberExpression" => {
+                !tree.flag(node, "computed")
+                    && tree.child(node, "object").is_some_and(|object| {
+                        let object = tree.inner(object);
+                        tree.kind(object) == "Identifier"
+                            && self.read(object).is_some_and(|symbol| {
+                                self.origins.get(&symbol) == Some(&Origin::Namespace)
+                                    && !self.reassigned(symbol)
+                            })
+                    })
+            }
+            _ => false,
+        }
+    }
+
+    /// Whether evaluating `node` runs no code: a literal, a lexical name, a function, a template without
+    /// substitutions, or an array or object of those (no spread, no computed key).
+    fn runs_nothing(&self, node: NodeId) -> bool {
+        let tree = self.tree;
+        let node = tree.inner(node);
+        match tree.kind(node) {
+            "Literal" | "FunctionExpression" | "ArrowFunctionExpression" => true,
+            // A global may be an accessor; these three are fixed properties of the global object.
+            "Identifier" => {
+                self.read(node).is_some()
+                    || matches!(
+                        tree.text(node, "name"),
+                        Some("undefined" | "NaN" | "Infinity")
+                    )
+            }
+            "TemplateLiteral" => tree.list(node, "expressions").is_empty(),
+            "ArrayExpression" => tree
+                .list(node, "elements")
+                .into_iter()
+                .flatten()
+                .all(|element| self.runs_nothing(element)),
+            "ObjectExpression" => tree.list(node, "properties").into_iter().all(|property| {
+                property.is_some_and(|property| {
+                    tree.kind(property) == "Property"
+                        && !tree.flag(property, "computed")
+                        && tree
+                            .child(property, "value")
+                            .is_some_and(|value| self.runs_nothing(value))
+                })
+            }),
+            _ => false,
         }
     }
 
@@ -476,7 +760,11 @@ impl<'s> Module<'s> {
     fn wrapper_bodies(&self) -> Vec<Span> {
         self.functions()
             .into_iter()
-            .filter(|(_, symbols)| symbols.iter().any(|symbol| self.wrappers.contains(symbol)))
+            .filter(|(_, symbols)| {
+                symbols
+                    .iter()
+                    .any(|symbol| self.wrappers.contains_key(symbol))
+            })
             .map(|(function, _)| self.tree.span(function))
             .collect()
     }
@@ -502,7 +790,11 @@ impl<'s> Module<'s> {
                     "TaggedTemplateExpression" => tree.child(node, "tag")?,
                     _ => return None,
                 };
-                let (kind, chain, provenance) = self.registration(callee)?;
+                let (mut kind, chain, provenance) = self.registration(callee)?;
+                // Arguments are evaluated before the call, and may register anything.
+                if kind == SiteKind::Wrapper(Reach::Hooks) && !self.arguments_run_nothing(node) {
+                    kind = SiteKind::Wrapper(Reach::Tasks);
+                }
                 Some((node, tree.span(node), kind, chain, provenance))
             })
             .collect()
@@ -580,7 +872,7 @@ impl<'s> Module<'s> {
         let bound = self
             .origins
             .keys()
-            .chain(self.wrappers.iter())
+            .chain(self.wrappers.keys())
             .flat_map(|&symbol| scopes.symbol(symbol).references.iter())
             .filter_map(|reference| reference.node);
         let free = tree.nodes().filter(|&node| {
@@ -628,17 +920,35 @@ impl<'s> Module<'s> {
         escapes
     }
 
-    /// Export names whose value registers when called.
-    fn exports(&self, modules: &mut Modules, depth: usize, found: &[Found]) -> HashSet<String> {
+    /// Export names whose value registers when called, with what each may register.
+    fn exports(
+        &self,
+        modules: &mut Modules,
+        depth: usize,
+        found: &[Found],
+    ) -> HashMap<String, Reach> {
         let tree = self.tree;
-        let mut exports = HashSet::new();
-        let registers = |symbol: Option<SymbolId>| {
-            symbol.is_some_and(|symbol| {
-                self.wrappers.contains(&symbol)
-                    || self
-                        .origins
-                        .get(&symbol)
-                        .is_some_and(|origin| *origin != Origin::Namespace)
+        let mut exports: HashMap<String, Reach> = HashMap::new();
+        let mut add = |name: String, reach: Reach| {
+            let held = exports.entry(name).or_insert(reach);
+            *held = (*held).max(reach);
+        };
+        let registers = |symbol: Option<SymbolId>| -> Option<Reach> {
+            let symbol = symbol?;
+            let reach = match self.wrappers.get(&symbol) {
+                Some(&reach) => reach,
+                None => match self.origins.get(&symbol)? {
+                    Origin::Api(Registers::Hook(_)) => Reach::Hooks,
+                    Origin::Api(_) => Reach::Tasks,
+                    Origin::Wrapper(reach) => *reach,
+                    Origin::Namespace => return None,
+                },
+            };
+            // A reassigned binding may hold any value when an importer calls it.
+            Some(if self.reassigned(symbol) {
+                Reach::Tasks
+            } else {
+                reach
             })
         };
         for statement in tree.list(tree.root(), "body").into_iter().flatten() {
@@ -654,12 +964,12 @@ impl<'s> Module<'s> {
                         };
                         let theirs = modules.exports(&file, self.setting, depth + 1);
                         // Re-exporting any name loads the module, and whatever it registers then.
-                        if theirs.contains(ON_LOAD) {
-                            exports.insert(ON_LOAD.to_owned());
+                        if theirs.contains_key(ON_LOAD) {
+                            add(ON_LOAD.to_owned(), Reach::Tasks);
                         }
                         for (local, exported) in specifiers(tree, statement) {
-                            if theirs.contains(&export_name(tree, local)) {
-                                exports.insert(export_name(tree, exported));
+                            if let Some(&reach) = theirs.get(&export_name(tree, local)) {
+                                add(export_name(tree, exported), reach);
                             }
                         }
                         continue;
@@ -679,14 +989,16 @@ impl<'s> Module<'s> {
                             _ => Vec::new(),
                         };
                         for id in ids {
-                            if registers(self.declares(id)) {
-                                exports.extend(tree.text(id, "name").map(str::to_owned));
+                            if let (Some(reach), Some(name)) =
+                                (registers(self.declares(id)), tree.text(id, "name"))
+                            {
+                                add(name.to_owned(), reach);
                             }
                         }
                     }
                     for (local, exported) in specifiers(tree, statement) {
-                        if registers(self.read(local)) {
-                            exports.insert(export_name(tree, exported));
+                        if let Some(reach) = registers(self.read(local)) {
+                            add(export_name(tree, exported), reach);
                         }
                     }
                 }
@@ -700,12 +1012,19 @@ impl<'s> Module<'s> {
                             .child(declaration, "id")
                             .and_then(|id| self.declares(id)),
                     };
-                    let body = tree.span(declaration);
-                    let anonymous = tree.is_function(declaration)
-                        && tree.child(declaration, "id").is_none()
-                        && found.iter().any(|(_, span, ..)| body.contains(*span));
-                    if registers(symbol) || anonymous {
-                        exports.insert("default".to_owned());
+                    let anonymous = (tree.is_function(declaration)
+                        && tree.child(declaration, "id").is_none())
+                    .then(|| {
+                        let reach = self.reach(tree.span(declaration), found)?;
+                        Some(if self.closed(declaration) {
+                            reach
+                        } else {
+                            Reach::Tasks
+                        })
+                    })
+                    .flatten();
+                    if let Some(reach) = registers(symbol).or(anonymous) {
+                        add("default".to_owned(), reach);
                     }
                 }
                 "ExportAllDeclaration" if tree.child(statement, "exported").is_none() => {
@@ -716,12 +1035,11 @@ impl<'s> Module<'s> {
                         continue;
                     };
                     if let Some(file) = crate::lang::resolve(self.path, source, self.setting.root) {
-                        exports.extend(
-                            modules
-                                .exports(&file, self.setting, depth + 1)
-                                .into_iter()
-                                .filter(|name| name != "default"),
-                        );
+                        for (name, reach) in modules.exports(&file, self.setting, depth + 1) {
+                            if name != "default" {
+                                add(name, reach);
+                            }
+                        }
                     }
                 }
                 _ => {}

@@ -621,7 +621,8 @@ struct JsonlSiteRecord {
     record_type: &'static str,
     schema_version: &'static str,
     path: String,
-    /// What it registers, in the framework's own words, or `wrapper` or `module-load`.
+    /// What it registers, in the framework's own words, or `wrapper`, `hook-wrapper` (a wrapper
+    /// that registers only hooks) or `module-load`.
     kind: &'static str,
     line: u32,
     /// The first line a transform's source map may place the site on.

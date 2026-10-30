@@ -228,8 +228,8 @@ export function analyzerRecordsOf(binary, args, env = {}) {
 
 /**
  * The next engine's registration sites for `dir`, per file relative to it: `{kind, line,
- * lineFrom}`, where `kind` is the dialect's name (`test`, `describe`, a hook), `wrapper` or
- * `module-load`.
+ * lineFrom}`, where `kind` is the dialect's name (`test`, `describe`, a hook), `wrapper`,
+ * `hook-wrapper` (registers only hooks, so no task) or `module-load`.
  */
 export function collectSites(binary, root, dir) {
   return siteView(analyzerRecords(binary, root, dir, { VITEST_DEDUP_ENGINE: 'next' }), resolve(root, dir))

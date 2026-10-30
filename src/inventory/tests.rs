@@ -1,4 +1,4 @@
-use super::{inventory, Inventory, Label, Modules, Provenance, Setting, SiteKind};
+use super::{inventory, Inventory, Label, Modules, Provenance, Reach, Setting, SiteKind};
 use crate::framework::vitest::DIALECT;
 use crate::framework::{HookTiming, Registers};
 use crate::lang::{parse, Lines};
@@ -38,7 +38,8 @@ fn sites(main: &str, files: &[(&str, &str)], globals: bool) -> Vec<String> {
                 SiteKind::Registers(Registers::Suite) => "suite".to_owned(),
                 SiteKind::Registers(Registers::Bench) => "bench".to_owned(),
                 SiteKind::Registers(Registers::Hook(timing)) => format!("{timing:?}"),
-                SiteKind::Wrapper => "wrapper".to_owned(),
+                SiteKind::Wrapper(Reach::Tasks) => "wrapper".to_owned(),
+                SiteKind::Wrapper(Reach::Hooks) => "hook-wrapper".to_owned(),
             };
             let (line, column) = lines.position(&source, site.position);
             let provenance = match site.provenance {
@@ -147,7 +148,10 @@ fn wrappers_are_found_to_a_fixpoint_across_modules() {
     let kinds: Vec<_> = found.sites.iter().map(|site| site.kind).collect();
     assert_eq!(
         kinds,
-        [SiteKind::Registers(Registers::Suite), SiteKind::Wrapper]
+        [
+            SiteKind::Registers(Registers::Suite),
+            SiteKind::Wrapper(Reach::Tasks)
+        ]
     );
     assert_eq!(found.sites[1].provenance, Provenance::Wrapper);
     assert_eq!(
@@ -187,7 +191,7 @@ fn a_wrapper_is_called_by_either_name_and_loads_pass_through_re_exports() {
         false,
     );
     assert_eq!(named.sites.len(), 1);
-    assert_eq!(named.sites[0].kind, SiteKind::Wrapper);
+    assert_eq!(named.sites[0].kind, SiteKind::Wrapper(Reach::Tasks));
     let (loaded, _) = inventory_of(
         "import './barrel'",
         &[
@@ -456,5 +460,374 @@ fn every_export_form_carries_a_wrapper() {
     assert!(found
         .sites
         .iter()
-        .all(|site| site.kind == SiteKind::Wrapper));
+        .all(|site| site.kind == SiteKind::Wrapper(Reach::Tasks)));
+}
+
+/// The kind and line of every wrapper call in `main`, in source order.
+fn wrapper_calls(main: &str, files: &[(&str, &str)]) -> Vec<String> {
+    sites(main, files, false)
+        .into_iter()
+        .filter(|site| site.contains("wrapper@"))
+        .map(|site| site.split(':').next().unwrap().to_owned())
+        .collect()
+}
+
+/// A wrapper whose body registers only hooks may register only hooks; one test in it, a call of a
+/// wrapper that registers tests, or a registration function read as a value widens it.
+#[test]
+fn a_wrapper_registers_hooks_only_until_its_body_may_register_a_test() {
+    let header = "import { test, beforeEach, afterEach, describe } from 'vitest'\n";
+    let hooks = "function setup() { beforeEach(() => {}); afterEach(() => {}) }\n";
+    assert_eq!(
+        wrapper_calls(
+            &format!("{header}{hooks}setup()\ndescribe('s', () => {{ setup() }})"),
+            &[]
+        ),
+        ["hook-wrapper@3", "hook-wrapper@4"]
+    );
+    let widened = [
+        "function setup() { beforeEach(() => {}); test('t', () => {}) }\n",
+        "function tests() { test('t', () => {}) }\nfunction setup() { beforeEach(() => {}); tests() }\n",
+        "function setup() { beforeEach(() => {}); [test].forEach((declare) => declare('t', () => {})) }\n",
+    ];
+    for body in widened {
+        let calls = wrapper_calls(&format!("{header}{body}setup()"), &[]);
+        assert_eq!(
+            calls.last().unwrap().split('@').next(),
+            Some("wrapper"),
+            "{body}"
+        );
+    }
+}
+
+/// A wrapper is hooks-only only when its body runs nothing else: each other call, read, operator,
+/// spread or default may run project code that registers a test the analysis does not see.
+#[test]
+fn a_hooks_only_wrapper_runs_nothing_but_hooks() {
+    let files = [
+        (
+            "cases.ts",
+            "import { test } from 'vitest'\nexport function cases() { test('hidden', () => {}) }",
+        ),
+        (
+            "hooks.ts",
+            "import { beforeEach } from 'vitest'\nexport default function () { beforeEach(() => {}) }",
+        ),
+        (
+            "open.ts",
+            "import { beforeEach } from 'vitest'\nexport default (run) => { beforeEach(() => {}); run() }",
+        ),
+    ];
+    assert_eq!(
+        wrapper_calls(
+            "import hooks from './hooks'\nimport open from './open'\nhooks()\nopen(() => {})",
+            &files
+        ),
+        ["hook-wrapper@3", "wrapper@4"]
+    );
+    let header = "import { beforeEach, afterEach, test } from 'vitest'; import * as v from 'vitest'\nimport * as helpers from './cases'\n\
+                  const local = { cases() { test('hidden', () => {}) }, get read() { test('hidden', () => {}); return 0 } }\n";
+    let closed = "function setup(timeout) { let n = 0; const state = { n, list: [n, 'a'], at: `t` }; \
+                  if (timeout) { beforeEach(() => {}, 1000) } else afterEach(() => {}); return state }\nsetup()";
+    assert_eq!(
+        wrapper_calls(&format!("{header}{closed}"), &files),
+        ["hook-wrapper@5"]
+    );
+    let async_closed =
+        "async function setup() { const unset = undefined; v.beforeEach(() => {}); return }\nsetup()";
+    assert_eq!(
+        wrapper_calls(&format!("{header}{async_closed}"), &files),
+        ["hook-wrapper@5"]
+    );
+    for open in [
+        "function setup() { beforeEach(() => {}); helpers.cases() }",
+        "function setup() { beforeEach(() => {}); local.cases() }",
+        "function setup(run) { beforeEach(() => {}); run() }",
+        "function setup(n = helpers.cases()) { beforeEach(() => {}) }",
+        "function setup({ n }) { beforeEach(() => {}) }",
+        "function setup() { beforeEach(() => {}); local.read }",
+        "function setup() { const n = local.read; beforeEach(() => {}) }",
+        "function setup() { beforeEach(() => {}, local.read) }",
+        "function setup() { beforeEach(...[() => {}]) }",
+        "function setup(n) { if (n + 1) beforeEach(() => {}) }",
+        "function setup() { beforeEach(() => {}); return `${local.read}` }",
+        "function setup() { beforeEach(() => {}); for (const n of [0]) {} }",
+        "let setup = () => { beforeEach(() => {}) }; setup = helpers.cases",
+        "function hooks() { beforeEach(() => {}) }; let setup = hooks; setup = helpers.cases",
+        "function setup() { (helpers.cases() ? beforeEach : beforeEach)(() => {}) }",
+        "async function setup() { beforeEach(() => {}); return local }",
+        "let register = beforeEach; register = helpers.cases; function setup() { register(() => {}) }",
+        "const setup = async (n) => beforeEach(() => {}, n)",
+        "function setup() { const config = globalConfig; beforeEach(() => {}, config) }",
+        "let api = v; api = { beforeEach: helpers.cases }; function setup() { api.beforeEach(() => {}) }",
+        "function setup(timeout) { beforeEach(() => {}, timeout) }",
+        "var setup = function () { beforeEach(() => {}) }; var setup = helpers.cases",
+    ] {
+        assert_eq!(
+            wrapper_calls(&format!("{header}{open}\nsetup()"), &files),
+            ["wrapper@5"],
+            "{open}"
+        );
+    }
+}
+
+/// Reach is a fixpoint over recursion: two hooks-only wrappers calling each other stay hooks-only,
+/// and a test in either widens both, whichever is declared first.
+#[test]
+fn recursive_wrappers_take_the_widest_reach_of_their_cycle() {
+    let header = "import { test, beforeEach } from 'vitest'\n";
+    let pair = |extra: &str| {
+        format!(
+            "{header}function a(n) {{ beforeEach(() => {{}}); if (n) b(0) }}\n\
+             function b(n) {{ beforeEach(() => {{}}); {extra}if (n) a(0) }}\n\
+             a(2)\nb(2)"
+        )
+    };
+    assert_eq!(
+        wrapper_calls(&pair(""), &[]),
+        [
+            "hook-wrapper@2",
+            "hook-wrapper@3",
+            "hook-wrapper@4",
+            "hook-wrapper@5"
+        ]
+    );
+    assert_eq!(
+        wrapper_calls(&pair("test('t', () => {}); "), &[]),
+        ["wrapper@2", "wrapper@3", "wrapper@4", "wrapper@5"]
+    );
+}
+
+/// An alias of a wrapper, and a value a call handed a registration function returns, follow the
+/// wrapper's final reach: an alias taken before the wrapper widened is widened with it.
+#[test]
+fn an_alias_follows_its_wrapper_and_a_derived_value_may_register_tests() {
+    let header = "import { it, test, beforeEach } from 'vitest'\n";
+    let calls = wrapper_calls(
+        &format!(
+            "{header}const early = setup\n\
+             function setup() {{ beforeEach(() => {{}}); helper() }}\n\
+             function helper() {{ test('t', () => {{}}) }}\n\
+             early()"
+        ),
+        &[],
+    );
+    assert_eq!(calls.last().map(String::as_str), Some("wrapper@5"));
+    let derived = wrapper_calls(
+        &format!("{header}const filterable = (t) => t\nfilterable(it)('x', () => {{}})"),
+        &[],
+    );
+    assert_eq!(derived, ["wrapper@3"]);
+}
+
+/// What an imported wrapper registers crosses modules and barrel re-exports.
+#[test]
+fn an_imported_wrapper_keeps_its_reach_through_re_exports() {
+    let files = [
+        (
+            "server.ts",
+            "import { beforeAll, afterAll } from 'vitest'\n\
+             export function setupServer() { beforeAll(() => {}); afterAll(() => {}) }",
+        ),
+        (
+            "cases.ts",
+            "import { test } from 'vitest'\nexport function cases() { test('t', () => {}) }",
+        ),
+        (
+            "barrel.ts",
+            "export { setupServer } from './server'\n\
+             export { cases as named } from './cases'\n\
+             export * from './cases'",
+        ),
+        (
+            "aliases.ts",
+            "import { beforeEach } from 'vitest'\nimport { cases } from './cases'\n\
+             export const kept = beforeEach\nlet moved = beforeEach\nmoved = cases\nexport { moved }",
+        ),
+    ];
+    // A hook alias exported as is stays hooks-only; one reassigned may hold anything.
+    assert_eq!(
+        wrapper_calls(
+            "import { kept, moved } from './aliases'\nkept(() => {})\nmoved(() => {})",
+            &files
+        ),
+        ["hook-wrapper@2", "wrapper@3"]
+    );
+    // Arguments are evaluated before the call: one that runs code may register a test.
+    assert_eq!(
+        wrapper_calls(
+            "import { setupServer } from './server'\nimport * as h from './cases'\n\
+             setupServer('a', () => {})\nsetupServer(h.cases())\nsetupServer`${h.cases()}`",
+            &files
+        ),
+        ["hook-wrapper@3", "wrapper@4", "wrapper@5"]
+    );
+    assert_eq!(
+        wrapper_calls(
+            "import { setupServer, cases, named } from './barrel'\nsetupServer()\ncases()\nnamed()",
+            &files
+        ),
+        ["hook-wrapper@2", "wrapper@3", "wrapper@4"]
+    );
+    assert_eq!(
+        wrapper_calls(
+            "import { setupServer } from './server'\nsetupServer()",
+            &files
+        ),
+        ["hook-wrapper@2"]
+    );
+}
+
+/// Only a call of a hooks-only wrapper, or of an alias of it, is hooks-only: a member of it, read
+/// or destructured, or a call of what it returns is any value, which may register a test.
+#[test]
+fn a_member_of_a_hooks_only_wrapper_may_register_tests() {
+    let files = [(
+        "setup.ts",
+        "import { beforeEach, test } from 'vitest'\n\
+         export function setup() { beforeEach(() => {}) }\n\
+         setup.test = test",
+    )];
+    assert_eq!(
+        wrapper_calls(
+            "import { setup } from './setup'\nconst alias = setup\nconst member = setup.test\n\
+             setup()\nalias()\nsetup.test('hidden', () => {})\nmember('also', () => {})",
+            &files
+        ),
+        ["hook-wrapper@4", "hook-wrapper@5", "wrapper@6", "wrapper@7"]
+    );
+    assert_eq!(
+        wrapper_calls(
+            "import { setup } from './setup'\nconst { test: register } = setup\n\
+             const [first] = setup\nsetup()\nregister('hidden', () => {})\nfirst()",
+            &files
+        ),
+        ["hook-wrapper@4", "wrapper@5", "wrapper@6"]
+    );
+}
+
+/// A hooks-only helper calling a function that only reads a registration function as a value may
+/// register tests.
+#[test]
+fn a_helper_reading_a_registration_function_may_register_tests() {
+    let files = [(
+        "cases.ts",
+        "import { beforeEach, test } from 'vitest'\n\
+         function cases() { [test].forEach((t) => t('hidden', () => {})) }\n\
+         export function setup() { beforeEach(() => {}); cases() }\n\
+         export function hooks() { beforeEach(() => {}) }",
+    )];
+    assert_eq!(
+        wrapper_calls(
+            "import { setup, hooks } from './cases'\nsetup()\nhooks()",
+            &files
+        ),
+        ["wrapper@2", "hook-wrapper@3"]
+    );
+}
+
+/// A cycle's members read its head before it is known, so a call of what they could not see is
+/// not hooks-only, in the head, in a module reading it, or in the test file.
+#[test]
+fn a_cycle_head_and_its_readers_may_register_tests() {
+    let files = [
+        (
+            "a.ts",
+            "import { beforeEach, test } from 'vitest'\nimport { b } from './b'\n\
+             export function setup() { beforeEach(() => {}); b() }\n\
+             export function cases() { test('hidden', () => {}) }\n\
+             export function only() { b() }",
+        ),
+        (
+            "b.ts",
+            "import { cases } from './a'\nexport function b() { cases() }",
+        ),
+        (
+            "c.ts",
+            "import { beforeEach } from 'vitest'\nimport { setup } from './a'\n\
+             export function around() { beforeEach(() => {}); setup() }",
+        ),
+        (
+            "plain.ts",
+            "import { beforeEach } from 'vitest'\nexport function hooks() { beforeEach(() => {}) }",
+        ),
+    ];
+    assert_eq!(
+        wrapper_calls("import { setup } from './a'\nsetup()", &files),
+        ["wrapper@2"]
+    );
+    assert_eq!(
+        wrapper_calls("import { around } from './c'\naround()", &files),
+        ["wrapper@2"]
+    );
+    // A test file's own hooks-only helper calling an export the cycle left out may register tests.
+    assert_eq!(
+        wrapper_calls(
+            "import { beforeEach } from 'vitest'\nimport { only } from './a'\n\
+             function setup() { beforeEach(() => {}); only() }\nsetup()",
+            &files
+        ),
+        ["wrapper@4"]
+    );
+    // A test file reading only complete modules keeps its hooks-only calls.
+    assert_eq!(
+        wrapper_calls("import { hooks } from './plain'\nhooks()", &files),
+        ["hook-wrapper@2"]
+    );
+}
+
+/// Modules that import each other read the cycle's head before it is known, so a hooks-only
+/// answer there may hide a test: what they export may register tests, whichever is read first.
+#[test]
+fn a_wrapper_in_an_import_cycle_may_register_tests() {
+    let files = [
+        (
+            "a.ts",
+            "import { beforeEach } from 'vitest'\nimport { b } from './b'\n\
+             export function a(n) { beforeEach(() => {}); if (n) b(n - 1) }",
+        ),
+        (
+            "b.ts",
+            "import { test } from 'vitest'\nimport { a } from './a'\n\
+             export function b(n) { test('t', () => {}); if (n) a(n - 1) }",
+        ),
+    ];
+    for imports in [
+        "import { b } from './b'\nimport { a } from './a'",
+        "import { a } from './a'\nimport { b } from './b'",
+    ] {
+        assert_eq!(
+            wrapper_calls(&format!("{imports}\na(1)"), &files),
+            ["wrapper@3"],
+            "{imports}"
+        );
+    }
+}
+
+/// Past the import depth limit a module reads as registering nothing, so every module whose answer
+/// rests on that cut may register tests.
+#[test]
+fn a_wrapper_past_the_depth_limit_may_register_tests() {
+    let modules: Vec<(String, String)> = (0..12)
+        .map(|n| {
+            let source = if n == 11 {
+                format!("import {{ test }} from 'vitest'\nexport function f{n}() {{ test('t', () => {{}}) }}")
+            } else {
+                format!(
+                    "import {{ beforeEach }} from 'vitest'\nimport {{ f{next} }} from './m{next}'\n\
+                     export function f{n}() {{ beforeEach(() => {{}}); f{next}() }}",
+                    next = n + 1
+                )
+            };
+            (format!("m{n}.ts"), source)
+        })
+        .collect();
+    let files: Vec<(&str, &str)> = modules
+        .iter()
+        .map(|(path, source)| (path.as_str(), source.as_str()))
+        .collect();
+    assert_eq!(
+        wrapper_calls("import { f0 } from './m0'\nf0()", &files),
+        ["wrapper@2"]
+    );
 }

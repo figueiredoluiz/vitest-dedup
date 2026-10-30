@@ -93,7 +93,7 @@ impl Structure {
             .map(|site| site.node)
             .collect();
         for site in &inventory.sites {
-            if site.kind == SiteKind::Wrapper {
+            if matches!(site.kind, SiteKind::Wrapper(_)) {
                 continue;
             }
             let titled = !matches!(site.kind, SiteKind::Registers(Registers::Hook(_)));
@@ -172,7 +172,7 @@ impl Structure {
                     structure.run_time.push(tree.span(callback));
                     structure.tests.push(tree.span(callback));
                 }
-                SiteKind::Wrapper => {}
+                SiteKind::Wrapper(_) => {}
             }
         }
         structure

@@ -822,3 +822,51 @@ fn a_recovered_panic_drops_the_run_caches() {
     assert!(partial);
     assert_eq!(format!("{:?}", engine.run), fresh);
 }
+
+/// A call of a helper that registers only hooks is no excluded case: it registers no test, and
+/// its hooks key the tests of its scope. One edit away, a test in the helper makes the call one
+/// `registered-elsewhere` case.
+#[test]
+fn a_hooks_only_helper_call_is_context_not_an_excluded_test() {
+    let server = |extra: &str| {
+        format!(
+            "import {{ afterEach, beforeEach, test }} from 'vitest'\n\
+             export function setupServer() {{ beforeEach(() => {{}}); afterEach(() => {{}}); {extra} }}\n"
+        )
+    };
+    let main = "import { describe, expect, test } from 'vitest'
+import { setupServer } from './server'
+describe('with', () => {
+  setupServer()
+  test('t', () => { expect(1).toBe(1) })
+})
+describe('without', () => {
+  test('t', () => { expect(1).toBe(1) })
+})
+";
+    let hooks_only = server("");
+    let corpus = corpora(
+        &[("server.ts", &hooks_only), ("a.test.ts", main)],
+        &["a.test.ts"],
+    )
+    .remove(0);
+    assert_eq!(corpus.tests.len(), 2, "{:?}", corpus.tests);
+    assert!(corpus.tests.iter().all(|test| test.exclusion.is_none()));
+    assert_ne!(
+        corpus.tests[0].key, corpus.tests[1].key,
+        "the helper's hooks key its scope"
+    );
+    assert!(corpus.sites.iter().any(|site| site.kind == "hook-wrapper"));
+    let registers = server("test('inside', () => {})");
+    let corpus = corpora(
+        &[("server.ts", &registers), ("a.test.ts", main)],
+        &["a.test.ts"],
+    )
+    .remove(0);
+    assert_eq!(
+        corpus.exclusions().get(&Exclusion::RegisteredElsewhere),
+        Some(&1),
+        "{:?}",
+        corpus.tests
+    );
+}

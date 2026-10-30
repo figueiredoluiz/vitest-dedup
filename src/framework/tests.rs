@@ -25,6 +25,8 @@ const COLLISIONS: &[(&str, &str)] = &[
     ("src/normal/form.rs", "override"),
     // The `for` keyword, which the parser preflight counts as recursive syntax.
     ("src/lang/limits.rs", "for"),
+    // ESTree's field for the condition of an `if`.
+    ("src/inventory/module.rs", "test"),
 ];
 
 /// The string literals in `source`, with `//` comments removed first so prose may name the API.
