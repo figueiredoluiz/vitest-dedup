@@ -678,7 +678,8 @@ fn files_left_unanalyzed_by_the_memory_budget_are_memory_budget() {
     assert_eq!(run.json["exclusions"]["reasons"][0]["files"], skipped);
 }
 
-/// The next engine is held to the memory budget too: one megabyte is spent before a second file.
+/// The next engine stops at the memory budget. Without HTML output it charges no retained bytes,
+/// so the RSS backstop, below the process's startup footprint at one megabyte, stops the run.
 #[test]
 fn the_next_engine_stops_at_the_memory_budget() {
     let directory = tempfile::tempdir().unwrap();
