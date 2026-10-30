@@ -870,3 +870,91 @@ describe('without', () => {
         corpus.tests
     );
 }
+
+/// A participant is named the way a report spells it: the suite path, then the title, when every
+/// segment is spelled; one dynamic segment leaves the whole path unnamed.
+#[test]
+fn full_title_joins_the_suite_path_with_the_title_when_every_segment_is_spelled() {
+    let corpus = corpora(
+        &[(
+            "a.test.ts",
+            "import { test, describe } from 'vitest'
+describe('outer', () => {
+  test('inner', () => { expect(1).toBe(1) })
+  const name = dynamic();
+  describe(name, () => {
+    test('under dynamic', () => { expect(1).toBe(1) })
+  })
+})
+test('plain', () => { expect(1).toBe(1) })
+",
+        )],
+        &["a.test.ts"],
+    )
+    .remove(0);
+    let titles: HashMap<String, Option<String>> = corpus
+        .tests
+        .into_iter()
+        .map(|test| (test.title.unwrap_or_default(), test.full_title))
+        .collect();
+    assert_eq!(titles["inner"].as_deref(), Some("outer > inner"));
+    assert_eq!(
+        titles["under dynamic"], None,
+        "a dynamic suite title leaves the participant unnamed"
+    );
+    assert_eq!(titles["plain"].as_deref(), Some("plain"));
+}
+
+/// An options object marks a case inert the way the chain does, only for a literal `true`.
+#[test]
+fn a_literal_skip_or_todo_option_marks_a_case_inert() {
+    let source = "import { test, expect } from 'vitest'\n\
+                  test('skipped', { skip: true }, () => { expect(1).toBe(1) })\n\
+                  test('planned', { todo: true }, () => { expect(1).toBe(1) })\n\
+                  test('off', { skip: false }, () => { expect(1).toBe(1) })\n\
+                  test('computed', { skip: process.env.CI }, () => { expect(1).toBe(1) })\n\
+                  test('timed', { timeout: 5 }, () => { expect(1).toBe(1) })\n";
+    let corpus = corpora(&[("a.test.ts", source)], &["a.test.ts"]).remove(0);
+    let inert: HashMap<Option<&str>, bool> = corpus
+        .tests
+        .iter()
+        .map(|test| (test.title.as_deref(), test.inert))
+        .collect();
+    assert!(inert[&Some("skipped")] && inert[&Some("planned")]);
+    assert!(!inert[&Some("off")] && !inert[&Some("computed")] && !inert[&Some("timed")]);
+}
+
+/// `skip` and `todo` change nothing a test checks, so they are not keyed -- but a report marks
+/// the participant as inert, so the corpus carries that beside the key.
+#[test]
+fn skip_marks_a_case_inert_without_changing_its_key() {
+    let body = "import { test } from 'vitest'\ntest.skip('same', () => { expect(1).toBe(1) })\ntest.todo('planned')\ntest('eager', () => { expect(1).toBe(1) })\n";
+    let corpus = corpora(&[("a.test.ts", body)], &["a.test.ts"]).remove(0);
+    let inert: HashMap<Option<&str>, bool> = corpus
+        .tests
+        .iter()
+        .map(|test| (test.title.as_deref(), test.inert))
+        .collect();
+    assert!(inert[&Some("same")]);
+    assert!(inert[&Some("planned")]);
+    assert!(!inert[&Some("eager")]);
+    let skipped = corpora(&[("a.test.ts", body)], &["a.test.ts"])
+        .remove(0)
+        .tests
+        .remove(0);
+    let plain = corpora(
+        &[(
+            "a.test.ts",
+            "import { test } from 'vitest'\ntest('same', () => { expect(1).toBe(1) })\n",
+        )],
+        &["a.test.ts"],
+    )
+    .remove(0)
+    .tests
+    .remove(0);
+    assert_eq!(
+        skipped.key, plain.key,
+        "inertness is recorded beside the key, never inside it: skip is not what the test checks"
+    );
+    assert_ne!(skipped.inert, plain.inert);
+}

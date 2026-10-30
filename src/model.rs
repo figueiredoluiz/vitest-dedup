@@ -1152,7 +1152,7 @@ impl Finding {
     ///
     /// Two genuinely different findings in one file can legitimately hash the same: a group of
     /// more than two tests sharing one identical (title, normalized body) is reported as a
-    /// spanning set of pairwise findings (see `analysis/pairs.rs`), and if the *same* title text
+    /// spanning set of pairwise findings (see `src/pairs.rs`), and if the *same* title text
     /// was copy-pasted at every one of those locations, two different pairs drawn from that group
     /// can carry the exact same (path, title) participant set. Excluding location would defeat
     /// the stability property above, and re-including it would defeat the point of a fingerprint
@@ -2796,10 +2796,11 @@ mod tests {
     // --- fingerprint: the accepted collision case --------------------------------------------
 
     #[test]
+    /// Two findings of one rule over participants with the same paths and titles share a fingerprint.
     fn fingerprint_collides_for_two_findings_that_share_an_identical_participant_identity_set() {
         // The documented, accepted collision: a group of more than two tests sharing one
         // identical (title, normalized body) is reported as a spanning set of pairwise findings
-        // (`analysis/pairs.rs`), and if the *same* title text was copy-pasted at every location,
+        // (`src/pairs.rs`), and if the *same* title text was copy-pasted at every location,
         // two different pairs drawn from that group carry the exact same (path, title)
         // participant set. This is pinned as intentional, not a bug: see
         // `Finding::fingerprint`'s doc comment for why location cannot be folded back in without

@@ -119,7 +119,7 @@
 //!
 //! Each equality-keyed rule groups test cases by its own exact key, then hands each group of 2+
 //! members to `pairs::group_outcome`: groups of up to four are reported as a linear spanning set
-//! of pair findings, larger groups collapse into one cluster finding. See `src/analysis/pairs.rs`
+//! of pair findings, larger groups collapse into one cluster finding. See `src/pairs.rs`
 //! for the rationale (mirrors CukeDedup's `analysis::pairs`).
 //!
 //! The parts of that pipeline that are the *same* for every rule live in one place each, so they
@@ -159,8 +159,6 @@
 //! disagreed. See `crate::modes` for what each mode means and why `--changed-since` filters
 //! findings rather than restricting the corpus.
 
-mod pairs;
-
 #[cfg(test)]
 mod tests;
 
@@ -173,7 +171,7 @@ use crate::model::{
     Severity, TestCase, TestFingerprint, Title,
 };
 use crate::modes::{self, Baseline};
-use pairs::{group_and_order, group_outcome, GroupOutcome, PairBudget, SPANNING_GROUP_MAX};
+use crate::pairs::{group_and_order, group_outcome, GroupOutcome, PairBudget, SPANNING_GROUP_MAX};
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -773,54 +771,11 @@ fn analyze_with_budgets(
 
     sort_findings(&mut findings);
 
-    // Modes run here: after every rule, after sorting (so baseline allowance is consumed in a
-    // deterministic order), and *before* the gate inputs below are captured. Inline suppressions
-    // first -- the strongest claim ("this is not debt") must run before the baseline spends any
-    // allowance -- then changed-file scoping, so a baseline's allowance is only spent on findings
-    // that are actually in scope.
-    let mut mode_summary = ModeSummary {
-        suppressions_applied: modes::apply_inline_suppressions(&mut findings, modes.suppressions),
-        ..ModeSummary::default()
-    };
-    if let Some(changed) = modes.changed_files {
-        mode_summary.changed_scope = true;
-        mode_summary.withheld_unchanged = modes::retain_changed_findings(&mut findings, changed);
-        // A changed-files run that withheld something is a narrowed view of the repository, and
-        // saying otherwise would be exactly the false clean bill of health this flag is most
-        // likely to produce. One that withheld nothing is byte-for-byte a full run's report, so it
-        // is not marked incomplete on the strength of a flag alone -- that would cry wolf on every
-        // clean pull request and train people to ignore the signal.
-        causes.withheld_unchanged = mode_summary.withheld_unchanged;
-    }
-    if let Some(baseline) = modes.baseline {
-        mode_summary.baseline_applied = true;
-        let (baselined, new_findings) = modes::apply_baseline(&mut findings, baseline);
-        mode_summary.baselined = baselined;
-        mode_summary.new_findings = new_findings;
-    }
-
-    // Captured before truncation on purpose. See `AnalysisResult::had_error_finding`.
-    //
-    // Baselined findings are skipped: they are recorded, accepted debt, and a gate they still
-    // failed would make `--baseline` decorative. They remain in `findings` and in every report --
-    // excluded from the gate, never from the output.
-    let had_error_finding = findings
-        .iter()
-        .any(|finding| finding.severity == Severity::Error && !finding.baselined);
-    // Captured here, beside `had_error_finding`, for the same reason: this is the threshold's
-    // numerator, and truncation below would shrink it.
-    let error_finding_locations = findings
-        .iter()
-        .filter(|finding| finding.severity == Severity::Error && !finding.baselined)
-        .flat_map(|finding| finding.locations.iter().cloned())
-        .collect::<BTreeSet<_>>()
-        .len();
-    if findings.len() > MAX_FINDINGS {
-        // Recorded as a count rather than a flag: "the display cap dropped 4 findings" and "the
-        // display cap dropped 40,000" are the same bool and very different reports.
-        causes.findings_truncated = findings.len() - MAX_FINDINGS;
-        findings.truncate(MAX_FINDINGS);
-    }
+    let finished = finish_findings(findings, causes, modes);
+    let mode_summary = finished.modes;
+    let causes = finished.causes;
+    let had_error_finding = finished.had_error_finding;
+    let error_finding_locations = finished.error_finding_locations;
 
     // `tests_analyzed` counts executable declarations only -- a `describe`/`suite` is a
     // container, never something that itself gets marked redundant or consolidatable, so counting
@@ -890,12 +845,92 @@ fn analyze_with_budgets(
         blind_files,
         excluded_files: Vec::new(),
         exclusions: Default::default(),
-        findings,
+        findings: finished.findings,
         tests_analyzed: executable_tests_analyzed,
         files_analyzed,
         incomplete_causes: causes,
         modes: mode_summary,
     })
+}
+
+/// What one analysis path's rules produced, after the run modes and the presentation cap have
+/// had their say.
+pub struct FinishedFindings {
+    /// The findings that survive the modes and the presentation cap, in report order.
+    pub findings: Vec<Finding>,
+    /// The incompleteness causes the modes and the cap recorded.
+    pub causes: IncompleteCauses,
+    /// What each mode applied.
+    pub modes: ModeSummary,
+    /// Error-severity findings existed before truncation. See [`AnalysisResult::had_error_finding`].
+    pub had_error_finding: bool,
+    /// Distinct locations error-severity findings carried before truncation.
+    pub error_finding_locations: usize,
+}
+
+/// Applies the run modes to sorted `findings` and captures the quality-gate inputs: what every
+/// analysis path does after its rules have spoken, so the default engine's rules and the next
+/// engine's cannot drift apart about suppressions, gate capture or the presentation cap.
+///
+/// Modes run after sorting (so baseline allowance is consumed in a deterministic order) and
+/// before the gate inputs are captured. Inline suppressions first -- the strongest claim ("this
+/// is not debt") must run before the baseline spends any allowance -- then changed-file scoping,
+/// so a baseline's allowance is only spent on findings that are actually in scope.
+pub fn finish_findings(
+    mut findings: Vec<Finding>,
+    mut causes: IncompleteCauses,
+    modes: RunModes<'_>,
+) -> FinishedFindings {
+    let mut mode_summary = ModeSummary {
+        suppressions_applied: modes::apply_inline_suppressions(&mut findings, modes.suppressions),
+        ..ModeSummary::default()
+    };
+    if let Some(changed) = modes.changed_files {
+        mode_summary.changed_scope = true;
+        mode_summary.withheld_unchanged = modes::retain_changed_findings(&mut findings, changed);
+        // A changed-files run that withheld something is a narrowed view of the repository, and
+        // saying otherwise would be exactly the false clean bill of health this flag is most
+        // likely to produce. One that withheld nothing is byte-for-byte a full run's report, so it
+        // is not marked incomplete on the strength of a flag alone -- that would cry wolf on every
+        // clean pull request and train people to ignore the signal.
+        causes.withheld_unchanged = mode_summary.withheld_unchanged;
+    }
+    if let Some(baseline) = modes.baseline {
+        mode_summary.baseline_applied = true;
+        let (baselined, new_findings) = modes::apply_baseline(&mut findings, baseline);
+        mode_summary.baselined = baselined;
+        mode_summary.new_findings = new_findings;
+    }
+
+    // Captured before truncation on purpose. See `AnalysisResult::had_error_finding`.
+    //
+    // Baselined findings are skipped: they are recorded, accepted debt, and a gate they still
+    // failed would make `--baseline` decorative. They remain in `findings` and in every report --
+    // excluded from the gate, never from the output.
+    let had_error_finding = findings
+        .iter()
+        .any(|finding| finding.severity == Severity::Error && !finding.baselined);
+    // Captured here, beside `had_error_finding`, for the same reason: this is the threshold's
+    // numerator, and truncation below would shrink it.
+    let error_finding_locations = findings
+        .iter()
+        .filter(|finding| finding.severity == Severity::Error && !finding.baselined)
+        .flat_map(|finding| finding.locations.iter().cloned())
+        .collect::<BTreeSet<_>>()
+        .len();
+    if findings.len() > MAX_FINDINGS {
+        // Recorded as a count rather than a flag: "the display cap dropped 4 findings" and "the
+        // display cap dropped 40,000" are the same bool and very different reports.
+        causes.findings_truncated = findings.len() - MAX_FINDINGS;
+        findings.truncate(MAX_FINDINGS);
+    }
+    FinishedFindings {
+        findings,
+        causes,
+        modes: mode_summary,
+        had_error_finding,
+        error_finding_locations,
+    }
 }
 
 /// Whether `result`'s error-severity findings keep the project within `config`'s quality-gate
@@ -2554,7 +2589,7 @@ fn duplicate_test_name_message(members: &[&TestCase]) -> String {
 
 /// The explicit truncation signal required on every cluster finding: names the member count and
 /// how many pairwise findings were not emitted individually.
-fn cluster_truncation_note(member_count: usize) -> String {
+pub(crate) fn cluster_truncation_note(member_count: usize) -> String {
     let full_pairs = member_count * member_count.saturating_sub(1) / 2;
     format!(
         "; {member_count} tests form one cluster, reported as a single finding instead of \
@@ -2566,7 +2601,7 @@ fn cluster_truncation_note(member_count: usize) -> String {
 /// already location-ordered within itself by construction), with rule id and message as final
 /// tie-breakers so two findings that legitimately start at the same location still land in a
 /// fixed order.
-fn sort_findings(findings: &mut [Finding]) {
+pub(crate) fn sort_findings(findings: &mut [Finding]) {
     findings.sort_by(|left, right| {
         left.locations
             .cmp(&right.locations)

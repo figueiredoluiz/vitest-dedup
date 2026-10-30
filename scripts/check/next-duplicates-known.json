@@ -1,0 +1,56 @@
+{
+  "cases": [
+    {
+      "id": "miss|fixtures/duplicates|destructured-selected-sibling.test.ts:16|destructured-selected-sibling.test.ts:17|duplicate-test",
+      "reason": "Selecting one key from an object literal must ignore the unselected siblings; the next engine cannot read destructuring dataflow yet, so the two groups key apart instead of merging."
+    },
+    {
+      "id": "miss|fixtures/duplicates|destructured-selected-sibling.test.ts:18|destructured-selected-sibling.test.ts:19|duplicate-test",
+      "reason": "Selecting one key from an object literal must ignore the unselected siblings; the next engine cannot read destructuring dataflow yet, so the two groups key apart instead of merging."
+    },
+    {
+      "id": "miss|fixtures/duplicates|duplicates-each-composite-cells.test.ts:40|duplicates-each-composite-cells.test.ts:58|duplicate-test",
+      "reason": "The rows' nested `expected` object cell is read three times, and a cell that creates an object is written in only when read at most once (one object per row, not one per read), so the rows key by their whole spelling -- the differing `name` included -- instead of by the substituted body."
+    },
+    {
+      "id": "link|fixtures/duplicates|assigned-class-alias-mutation.test.ts:12|assigned-class-alias-mutation.test.ts:13",
+      "reason": "The two bodies are spelled identically; the default engine abstains because one mutates a class object through an aliased constructor, which it cannot model. The next engine compares them, and the tests run the same: identical text in identical context links."
+    },
+    {
+      "id": "link|fixtures/duplicates|class-mutation-after-instance.test.ts:12|class-mutation-after-instance.test.ts:13",
+      "reason": "The two bodies are spelled identically; the default engine abstains on the class-object mutation they contain. The next engine compares them, and the tests run the same: identical text in identical context links."
+    },
+    {
+      "id": "link|fixtures/duplicates|duplicates-suite-whole-block.test.ts:20|duplicates-suite-whole-block.test.ts:33",
+      "reason": "The two describe blocks are whole copies. The default engine reports the copy once under duplicate-suite and suppresses the per-test pair; the next engine does not port duplicate-suite yet, so the per-test finding stands in for the suite claim."
+    },
+    {
+      "id": "link|fixtures/duplicates|duplicates-suite-whole-block.test.ts:25|duplicates-suite-whole-block.test.ts:38",
+      "reason": "The two describe blocks are whole copies. The default engine reports the copy once under duplicate-suite and suppresses the per-test pair; the next engine does not port duplicate-suite yet, so the per-test finding stands in for the suite claim."
+    },
+    {
+      "id": "link|fixtures/duplicates|external-instance-alias-control.test.ts:14|external-instance-alias-control.test.ts:15",
+      "reason": "The two bodies are spelled identically; the default engine abstains because a class alias reaches an erased wrapper. The next engine compares them, and the tests run the same: identical text in identical context links."
+    },
+    {
+      "id": "link|fixtures/duplicates|external-instance-alias-control.test.ts:16|external-instance-alias-control.test.ts:17",
+      "reason": "The two bodies are spelled identically; the default engine abstains because a class alias reaches an erased wrapper. The next engine compares them, and the tests run the same: identical text in identical context links."
+    },
+    {
+      "id": "link|fixtures/duplicates|external-instance-owned-control.test.ts:10|external-instance-owned-control.test.ts:11",
+      "reason": "The two bodies are spelled identically; the default engine abstains on the conditional writes to a local instance. The next engine compares them, and the tests run the same: identical text in identical context links."
+    },
+    {
+      "id": "link|fixtures/duplicates|hoisted-instance-write.test.ts:11|hoisted-instance-write.test.ts:12",
+      "reason": "The two bodies are spelled identically; the default engine abstains on the deferred instance write. The next engine compares them, and the tests run the same: identical text in identical context links."
+    },
+    {
+      "id": "link|fixtures/duplicates|loop-instance-write.test.ts:12|loop-instance-write.test.ts:13",
+      "reason": "The two bodies are spelled identically; the default engine abstains on the loop state they read. The next engine compares them, and the tests run the same: identical text in identical context links."
+    },
+    {
+      "id": "link|fixtures/duplicates|nested-private-owner-uncertain.test.ts:11|nested-private-owner-uncertain.test.ts:12",
+      "reason": "The two bodies are spelled identically; the default engine abstains while a private callable's owner is unresolved. The next engine compares them, and the tests run the same: identical text in identical context links."
+    }
+  ]
+}

@@ -830,8 +830,48 @@ test('kept', () => { expect(1).toBe(1); });
     assert_eq!(run.json["incompleteCauses"]["unresolvedContexts"], 6);
     // Only `named.test.ts` has every test unresolved; `assert_listed` ties the count to the entry.
     assert_eq!(run.json["blindFiles"], 1);
-    assert_eq!(run.json["findings"], serde_json::json!([]));
-    assert!(run.stderr.contains("runs no rule yet"), "{}", run.stderr);
+    // The one relationship the ported rules claim: three files spell the identical `kept` test,
+    // reported as the spanning set of pairs. Every excluded test above stays out of every group,
+    // and `wrapped.test.ts`'s `kept` keys apart (its wrapper call is module context), so no
+    // finding reaches it.
+    let findings = run.json["findings"].as_array().unwrap();
+    assert_eq!(findings.len(), 2, "{}", run.jsonl_text);
+    let spelling: Vec<(String, Vec<String>)> = findings
+        .iter()
+        .map(|finding| {
+            assert_eq!(finding["rule"], "cross-file-duplicate");
+            assert_eq!(finding["severity"], "warning");
+            (
+                finding["message"].as_str().unwrap().to_owned(),
+                finding["locations"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|location| location["path"].as_str().unwrap().to_owned())
+                    .collect(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        spelling,
+        vec![
+            (
+                "2 tests across 2 files have identical bodies under an equivalent context"
+                    .to_owned(),
+                vec!["empty.test.ts".to_owned(), "inside.test.ts".to_owned()]
+            ),
+            (
+                "2 tests across 2 files have identical bodies under an equivalent context"
+                    .to_owned(),
+                vec!["inside.test.ts".to_owned(), "spread.test.ts".to_owned()]
+            ),
+        ]
+    );
+    assert!(
+        run.stderr.contains("the other rules do not run yet"),
+        "{}",
+        run.stderr
+    );
 }
 
 /// Benchmarks are counted under the next engine and listed as not compared, never dropped.
@@ -883,9 +923,132 @@ test('options only', { timeout: 1000 });
     assert_eq!(run.json["blindFiles"], 0);
 }
 
-/// Modes that filter or record findings, and memory records, are refused under the next engine,
-/// which runs no rule and measures no memory (`--fail-on-new` needs `--baseline`); another value
-/// of the variable is the default engine.
+/// The config's severities rule the next engine's findings the way they rule the default's: a
+/// rule turned off reports nothing and exits clean, an override reaches the findings that stay,
+/// and an error-severity duplicate fails the quality gate.
+#[test]
+fn the_next_engine_honors_the_configured_severities() {
+    let directory = tempfile::tempdir().unwrap();
+    write(
+        directory.path(),
+        "d.test.ts",
+        "import { test, expect } from 'vitest';\ntest('one', () => { expect(1).toBe(1); });\ntest('two', () => { expect(1).toBe(1); });\n",
+    );
+    let run = |flags: &[&str]| {
+        let output_dir = tempfile::tempdir().unwrap();
+        let prefix = output_dir.path().join("report");
+        let output = assert_cmd::Command::cargo_bin("vitest-dedup")
+            .unwrap()
+            .arg(directory.path())
+            .args(["--reporters", "json", "--no-metrics", "--output"])
+            .arg(&prefix)
+            .args(flags)
+            .env("VITEST_DEDUP_ENGINE", "next")
+            .output()
+            .unwrap();
+        let json = serde_json::from_str::<Value>(
+            &std::fs::read_to_string(prefix.with_extension("json")).unwrap(),
+        )
+        .unwrap();
+        (output.status.code(), json)
+    };
+    let (code, json) = run(&[]);
+    assert_eq!(code, Some(1), "an error-severity duplicate fails the gate");
+    assert_eq!(json["findings"][0]["rule"], "duplicate-test");
+    assert_eq!(json["findings"][0]["severity"], "error");
+    let (code, json) = run(&["--rule", "duplicate-test=off"]);
+    assert_eq!(code, Some(0), "{json}");
+    assert_eq!(json["findings"], serde_json::json!([]));
+    let (code, json) = run(&["--rule", "duplicate-test=warning"]);
+    assert_eq!(code, Some(0), "a warning stays under the default threshold");
+    assert_eq!(json["findings"][0]["severity"], "warning");
+}
+
+/// An inert (`.skip`/`.todo`) participant is marked and named the way the default rule names it.
+#[test]
+fn the_next_engine_marks_inert_participants() {
+    let directory = tempfile::tempdir().unwrap();
+    write(
+        directory.path(),
+        "s.test.ts",
+        "import { test, expect } from 'vitest';\ntest.skip('lazy', () => { expect(1).toBe(1); });\ntest('keen', () => { expect(1).toBe(1); });\n",
+    );
+    let run = run_with(directory.path(), &[], &[("VITEST_DEDUP_ENGINE", "next")]);
+    let findings = run.json["findings"].as_array().unwrap();
+    assert_eq!(findings.len(), 1, "{}", run.jsonl_text);
+    assert_eq!(findings[0]["inert"], serde_json::json!([true, false]));
+    assert!(
+        findings[0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("inert (skip/todo) participant(s), still counted as duplicates: lazy"),
+        "{}",
+        findings[0]["message"]
+    );
+}
+
+/// An inline suppression directive suppresses a next-engine finding like any other: it is a
+/// claim about a file's findings, not about how its tests were read.
+#[test]
+fn an_inline_suppression_suppresses_a_next_engine_finding() {
+    let directory = tempfile::tempdir().unwrap();
+    write(
+        directory.path(),
+        "s.test.ts",
+        "import { test, expect } from 'vitest';\n// vitest-dedup-disable-next-line the pair is intentional\ntest('one', () => { expect(1).toBe(1); });\ntest('two', () => { expect(1).toBe(1); });\n",
+    );
+    let run = run_with(directory.path(), &[], &[("VITEST_DEDUP_ENGINE", "next")]);
+    assert_eq!(
+        run.json["findings"],
+        serde_json::json!([]),
+        "{}",
+        run.json_text
+    );
+    assert_eq!(run.json["modes"]["suppressionsApplied"], 1);
+}
+
+/// A suppression sits above where the declaration starts, also when Vitest places the test on a
+/// later line: a multi-line table's location is the call, the way the default engine reports it.
+#[test]
+fn an_inline_suppression_above_a_multi_line_table_suppresses_a_next_engine_finding() {
+    let directory = tempfile::tempdir().unwrap();
+    let table = |title: &str| {
+        format!("test.each([\n  [1, 2],\n  [3, 4],\n])('{title} %i %i', (a, b) => {{ expect(a + b).toBeGreaterThan(0); }});\n")
+    };
+    let source = |comment: &str| {
+        format!(
+            "import {{ test, expect }} from 'vitest';\n{comment}{}{}",
+            table("one"),
+            table("two")
+        )
+    };
+    write(directory.path(), "s.test.ts", source(""));
+    let run = run_with(directory.path(), &[], &[("VITEST_DEDUP_ENGINE", "next")]);
+    let findings = run.json["findings"].as_array().unwrap();
+    assert_eq!(findings.len(), 1, "{}", run.json_text);
+    assert_eq!(
+        findings[0]["locations"][0]["line"], 2,
+        "the location is the declaration's first line: {}",
+        run.json_text
+    );
+    write(
+        directory.path(),
+        "s.test.ts",
+        source("// vitest-dedup-disable-next-line the tables are intentional\n"),
+    );
+    let run = run_with(directory.path(), &[], &[("VITEST_DEDUP_ENGINE", "next")]);
+    assert_eq!(
+        run.json["findings"],
+        serde_json::json!([]),
+        "{}",
+        run.json_text
+    );
+    assert_eq!(run.json["modes"]["suppressionsApplied"], 1);
+}
+
+/// Modes that filter or record findings against recorded ones are refused under the next engine,
+/// which carries no baseline of its match keys and measures no engine memory (`--fail-on-new`
+/// needs `--baseline`); another value of the variable is the default engine.
 #[test]
 fn the_next_engine_refuses_modes_that_need_findings() {
     let directory = tempfile::tempdir().unwrap();
@@ -920,7 +1083,7 @@ fn the_next_engine_refuses_modes_that_need_findings() {
     }
     let default = run_with(directory.path(), &[], &[("VITEST_DEDUP_ENGINE", "current")]);
     assert!(
-        !default.stderr.contains("runs no rule yet"),
+        !default.stderr.contains("VITEST_DEDUP_ENGINE"),
         "{}",
         default.stderr
     );

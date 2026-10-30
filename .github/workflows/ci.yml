@@ -175,6 +175,8 @@ jobs:
       - run: node scripts/check/check-collection-oracle.mjs
       # Generated helpers against the next engine's hooks-only claim (docs/development.md).
       - run: node scripts/check/check-hooks-differential.mjs
+      # The next engine's ported rules against the fixture headers (docs/development.md).
+      - run: node scripts/check/check-next-duplicates.mjs
 
   # The prose gate. Findings in code fell to nearly zero over four pull requests while findings
   # in *prose* did not, and two of the last ones were mechanical: a fenced block labelled ```json

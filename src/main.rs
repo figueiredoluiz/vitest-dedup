@@ -260,8 +260,9 @@ fn run_with_engine(
     let mut stderr: std::io::Stderr = std::io::stderr();
     let config = Config::load(&args.root, args.to_overrides())?;
 
-    // The next engine runs no rule yet, so a mode that filters or records findings would report
-    // a clean run over nothing, and its memory is not measured yet: refused before any work.
+    // The next engine's match keys are its own (the baseline format that would carry them is
+    // still to come), and its memory is not charged yet, so a mode that filters or records
+    // findings would mislead on both ends: refused before any work.
     if next_engine.is_some() {
         let findings_mode = [
             ("--baseline", args.baseline.is_some()),
@@ -274,14 +275,14 @@ fn run_with_engine(
         .find_map(|(flag, given)| given.then_some(flag));
         if let Some(flag) = findings_mode {
             anyhow::bail!(
-                "{flag} is not available under VITEST_DEDUP_ENGINE=next, which runs no rule and \
-                 measures no memory yet"
+                "{flag} is not available under VITEST_DEDUP_ENGINE=next, which carries no \
+                 baseline and measures no engine memory yet"
             );
         }
         writeln!(
             stderr,
-            "vitest-dedup: VITEST_DEDUP_ENGINE=next reads and excludes tests but runs no rule \
-             yet; no finding is reported"
+            "vitest-dedup: VITEST_DEDUP_ENGINE=next runs duplicate-test and cross-file-duplicate \
+             only; the other rules do not run yet"
         )?;
     }
 
@@ -766,6 +767,9 @@ fn run_with_engine(
                 root: &config.root,
             };
             let relative = relativize_test_path(&file.path, &config.root);
+            // Inline suppressions are a claim about a file's findings, not about how its tests
+            // were read, so the next engine's files are scanned like the default path's.
+            inline_suppressions.extend(modes::scan_inline_suppressions(&source, relative.clone()));
             let (entry, partial) = engine.read(
                 &file.path,
                 &relative,
@@ -1017,19 +1021,55 @@ fn run_with_engine(
 
     let parsing_time = parsing_started.map(|started| started.elapsed());
     let analysis_started = metrics_enabled.then(Instant::now);
-    let mut result = analysis::analyze_with_modes(
-        tests,
-        &config,
-        files_read,
-        causes,
-        analysis::RunModes {
-            changed_files: changed_files.as_ref(),
-            // A file baseline and a ref baseline are mutually exclusive by the CLI grammar; one
-            // of these is always `None`.
-            baseline: baseline.as_ref().or(ref_baseline.as_ref()),
-            suppressions: &inline_suppressions,
-        },
-    )?;
+    // The next engine's rules read the corpus it retained once every file has been read; the
+    // default engine's rules read the extracted tests. Both share one tail: modes, gate capture,
+    // the presentation cap, sorted findings.
+    let engine_files = next_engine
+        .as_mut()
+        .map(|engine| std::mem::take(&mut engine.files));
+    let mut result = match engine_files {
+        Some(files) => {
+            let outcome = vitest_dedup::rules::run(&files, &config);
+            causes.pair_budget_exhausted |= outcome.budget_exhausted;
+            let finished = analysis::finish_findings(
+                outcome.findings,
+                causes,
+                analysis::RunModes {
+                    // Modes that filter findings against recorded ones are refused above.
+                    changed_files: None,
+                    baseline: None,
+                    suppressions: &inline_suppressions,
+                },
+            );
+            AnalysisResult {
+                had_error_finding: finished.had_error_finding,
+                error_finding_locations: finished.error_finding_locations,
+                // Overridden from the engine just below, which owns the real counts.
+                unresolved_tests: 0,
+                blind_files: Vec::new(),
+                excluded_files: Vec::new(),
+                exclusions: Default::default(),
+                findings: finished.findings,
+                tests_analyzed: 0,
+                files_analyzed: files_read,
+                incomplete_causes: finished.causes,
+                modes: finished.modes,
+            }
+        }
+        None => analysis::analyze_with_modes(
+            tests,
+            &config,
+            files_read,
+            causes,
+            analysis::RunModes {
+                changed_files: changed_files.as_ref(),
+                // A file baseline and a ref baseline are mutually exclusive by the CLI grammar; one
+                // of these is always `None`.
+                baseline: baseline.as_ref().or(ref_baseline.as_ref()),
+                suppressions: &inline_suppressions,
+            },
+        )?,
+    };
 
     (result.excluded_files, result.exclusions) = excluded.finish();
     if let Some(engine) = &next_engine {

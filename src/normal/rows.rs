@@ -31,6 +31,9 @@ pub struct Modifiers {
     pub fails: bool,
     /// The rows of a table the chain carries, when the file spells it out.
     pub rows: Option<Vec<Row>>,
+    /// Whether the chain keeps the test from running (`skip`, `todo`), the way a report marks a
+    /// participant inert.
+    pub inert: bool,
 }
 
 /// Whether a chain member changes only how a test is scheduled.
@@ -83,6 +86,9 @@ impl Normalizer<'_> {
                         .unwrap_or_default();
                     match dialect.chain_member(name) {
                         Some(Chain::ExpectedFailure) => modifiers.fails = true,
+                        // Recorded, not keyed: `skip`/`todo` change nothing the test checks, but
+                        // a report marks a participant that does not run.
+                        Some(Chain::Skip | Chain::Todo) => modifiers.inert = true,
                         meaning if scheduling(meaning) => {}
                         _ => steps.push(name.to_owned()),
                     }
@@ -191,13 +197,7 @@ impl Normalizer<'_> {
                             .then(|| property_name(tree, property))
                             .flatten();
                         let meaning = name.and_then(|name| dialect.chain_member(name));
-                        let enabled = tree.child(property, "value").is_some_and(|value| {
-                            tree.kind(value) == "Literal"
-                                && matches!(
-                                    tree.field_of(value, "value"),
-                                    crate::lang::Field::Value(Value::Bool(true))
-                                )
-                        });
+                        let enabled = self.enabled(property);
                         let scheduled = scheduling(meaning)
                             || name.is_some_and(|name| dialect.scheduling_options.contains(&name));
                         if meaning == Some(Chain::ExpectedFailure) && enabled {
@@ -211,6 +211,39 @@ impl Normalizer<'_> {
             }
         }
         (options, fails)
+    }
+
+    /// Whether option `property` is a literal `true`.
+    fn enabled(&self, property: NodeId) -> bool {
+        let tree = self.tree;
+        tree.child(property, "value").is_some_and(|value| {
+            tree.kind(value) == "Literal"
+                && matches!(
+                    tree.field_of(value, "value"),
+                    crate::lang::Field::Value(Value::Bool(true))
+                )
+        })
+    }
+
+    /// Whether an options object among `arguments` keeps the test from running, the way
+    /// [`Modifiers::inert`] records it for a chain (`{ skip: true }`, `{ todo: true }`).
+    pub fn inert_options(&self, arguments: &[NodeId]) -> bool {
+        let tree = self.tree;
+        let dialect = self.setting.dialect;
+        arguments
+            .iter()
+            .skip(1)
+            .filter(|&&argument| tree.kind(argument) == "ObjectExpression")
+            .flat_map(|&argument| tree.list(argument, "properties").into_iter().flatten())
+            .any(|property| {
+                let name = (tree.kind(property) == "Property")
+                    .then(|| property_name(tree, property))
+                    .flatten();
+                matches!(
+                    name.and_then(|name| dialect.chain_member(name)),
+                    Some(Chain::Skip | Chain::Todo)
+                ) && self.enabled(property)
+            })
     }
 
     /// The rows of a table literal: a spreading table spreads array rows when every row is one,

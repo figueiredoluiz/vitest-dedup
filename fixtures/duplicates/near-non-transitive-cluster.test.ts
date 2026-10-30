@@ -14,7 +14,7 @@
 //    even loosely.
 //
 // Decision, reached deliberately rather than by default (see src/analysis.rs's `NearDuplicateKey`
-// and the module-level `NearDuplicateTest` doc, and src/analysis/pairs.rs's module doc): this rule
+// and the module-level `NearDuplicateTest` doc, and src/pairs.rs's module doc): this rule
 // groups by EXACT equality of a canonical key (path, equivalent context, equivalent modifiers, and
 // the sorted multiset of `body.behavior` events) -- never a fuzzy "resembles" score. `group_and_order`
 // partitions tests with a `BTreeMap` keyed on that struct, so two tests land in the same group iff

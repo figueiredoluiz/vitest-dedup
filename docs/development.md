@@ -86,6 +86,18 @@ Vitest collects nothing from, and a case Vitest cannot collect. Cases the analyz
 are listed with reasons in `scripts/check/hooks-differential-known.json`; one that starts passing
 fails, so its entry goes when support lands.
 
+### Next-engine duplicate rules
+
+`npm run check:next-duplicates` runs the analyzer under `VITEST_DEDUP_ENGINE=next` over
+`fixtures/duplicates/`, `fixtures/observed/` and `fixtures/mixed/` and judges the two rules the
+next engine ports (`duplicate-test`, `cross-file-duplicate`) pairwise against the fixture
+headers: every pair a positive expectation declares must be linked by its rule, no pair declared
+silent may be linked, and any other linked pair is a failure until it is adjudicated into a
+header or into `scripts/check/next-duplicates-known.json` with a reason. A listed delta that
+stops being observed fails, so its entry goes when the header or the engine moves; a rule the
+next engine does not port reporting a finding fails outright. Floors on fixtures, tests analyzed
+and required pairs keep an empty read from passing.
+
 ## Writing documentation
 
 The website syncs these pages, so how they are named shows up there.

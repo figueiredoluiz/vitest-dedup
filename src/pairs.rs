@@ -19,10 +19,10 @@
 /// pair findings are still more informative to a reader than one cluster summary (each pair names
 /// two concrete locations); at five, the pair list starts to dominate the report without adding
 /// information a cluster summary ("5 tests share this fingerprint") does not already convey.
-pub(super) const SPANNING_GROUP_MAX: usize = 4;
+pub(crate) const SPANNING_GROUP_MAX: usize = 4;
 
 /// How one equality group of 2+ members should be turned into findings.
-pub(super) enum GroupOutcome {
+pub(crate) enum GroupOutcome {
     /// `(left, right)` index pairs forming a spanning set: consecutive members (in the group's
     /// own, already-deterministic order) are linked pairwise, so every member appears in at
     /// least one finding without emitting the full `n * (n - 1) / 2` cross product.
@@ -34,7 +34,7 @@ pub(super) enum GroupOutcome {
 
 /// Decides how `group` (already known to share an equality key, and already sorted into
 /// deterministic order by the caller) should be reported.
-pub(super) fn group_outcome(group: &[usize]) -> GroupOutcome {
+pub(crate) fn group_outcome(group: &[usize]) -> GroupOutcome {
     if group.len() > SPANNING_GROUP_MAX {
         GroupOutcome::Cluster(group.to_vec())
     } else {
@@ -46,7 +46,7 @@ pub(super) fn group_outcome(group: &[usize]) -> GroupOutcome {
 /// order that depends only on the *content* of `items` -- never on the order the caller happened
 /// to supply them in.
 ///
-/// This is what makes [`super::analyze`] deterministic under a shuffled input: grouping itself
+/// This is what makes [`crate::analysis::analyze`] deterministic under a shuffled input: grouping itself
 /// uses a `BTreeMap` (ordered by `K`, not by insertion/hash order), each group's members are then
 /// sorted by `T`'s own `Ord`, and the groups themselves are finally ordered by their first
 /// (smallest) member. For every `TestCase` key used in this module, `T::cmp` sorts by location
@@ -63,7 +63,7 @@ pub(super) fn group_outcome(group: &[usize]) -> GroupOutcome {
 /// `key_fn` returns `None` to exclude an item from grouping entirely (for example, a test with no
 /// body cannot participate in `duplicate-test`); excluded items never appear in any group and are
 /// therefore invisible to every rule that calls this function with that predicate.
-pub(super) fn group_and_order<'a, K, T, KeyFn>(items: &'a [T], key_fn: KeyFn) -> Vec<Vec<usize>>
+pub(crate) fn group_and_order<'a, K, T, KeyFn>(items: &'a [T], key_fn: KeyFn) -> Vec<Vec<usize>>
 where
     K: Ord,
     T: Ord + 'a,
@@ -97,13 +97,13 @@ where
 /// before reporting are not charged. This keeps the budget meaningful (it reflects real reported
 /// relationships) rather than an arbitrary per-group flat fee that a report full of tiny groups
 /// could dodge.
-pub(super) struct PairBudget {
+pub(crate) struct PairBudget {
     remaining: u64,
 }
 
 impl PairBudget {
     /// Creates a budget starting with `limit` units of work available.
-    pub(super) fn new(limit: u64) -> Self {
+    pub(crate) fn new(limit: u64) -> Self {
         Self { remaining: limit }
     }
 
@@ -112,7 +112,7 @@ impl PairBudget {
     /// Returns `false` once the budget is exhausted; the caller must then stop processing further
     /// groups (not just the current one) and mark the analysis result incomplete, per the
     /// project rule that degraded analysis always stays visible rather than silently truncating.
-    pub(super) fn charge(&mut self, amount: u64) -> bool {
+    pub(crate) fn charge(&mut self, amount: u64) -> bool {
         match self.remaining.checked_sub(amount) {
             Some(next) => {
                 self.remaining = next;
@@ -157,6 +157,7 @@ mod tests {
     }
 
     #[test]
+    /// A budget already spent refuses further charges.
     fn pair_budget_refuses_once_exhausted() {
         let mut budget = PairBudget::new(3);
         assert!(budget.charge(2));

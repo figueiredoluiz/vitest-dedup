@@ -127,7 +127,7 @@ const RUST_MODULES = {
   'src/analysis.rs': 84,
   // Atomic publication: measured at 95.45% (21/22 instrumented lines).
   'src/atomic_write.rs': 95,
-  'src/analysis/pairs.rs': 100,
+  'src/pairs.rs': 100,
   'src/cli.rs': 98,
   'src/config.rs': 98,
   // Config-path confinement: measured at 94.40% (118/125 instrumented lines). Uncovered: the
@@ -296,6 +296,7 @@ const RUST_MODULES = {
   'src/normal/identity.rs': 90,
   'src/normal/rows.rs': 90,
   'src/corpus.rs': 99,
+  'src/rules.rs': 100,
 }
 
 // Re-pinned 2026-09-19, after `check-mutation-score.mjs` and then the memory gates' five modules
@@ -360,6 +361,7 @@ const JS_MODULES = {
   'scripts/check/lib/collection-oracle-stubs.mjs': 100,
   'scripts/check/lib/hooks-differential.mjs': 100,
   'scripts/check/lib/oracle-cases.mjs': 100,
+  'scripts/check/lib/next-duplicates.mjs': 100,
   'scripts/check/lib/external-corpus-retention.mjs': 98,
   // The attribution-leak gate. A pure reader like the two above, and the floor is 100 because this
   // one has a trap worth recording: its name sweep only runs where the untracked benchmark manifest
@@ -430,6 +432,7 @@ const JS_NOT_MEASURED = {
   'scripts/check/check-coverage.mjs': 'this file',
   'scripts/check/check-collection-oracle.mjs': 'gate entry point; needs a release binary and the pinned Vitest devDependency, and spawns both per directory',
   'scripts/check/check-hooks-differential.mjs': 'gate entry point; needs a release binary and the pinned Vitest devDependency, and spawns both over the generated cases',
+  'scripts/check/check-next-duplicates.mjs': 'gate entry point; needs a release binary, and spawns it under the next engine over the fixture directories',
   'scripts/check/check-duplicates-corpus.mjs': 'gate entry point; needs a release binary',
   'scripts/check/lib/collection-probe-runner.mjs': 'loaded by Vitest as its test runner inside a Vitest worker, never imported by a node --test suite; the collection oracle gate checks it against a self-check directory',
   'scripts/check/check-duplication.mjs': 'gate entry point; needs jscpd',

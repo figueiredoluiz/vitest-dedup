@@ -6,9 +6,9 @@
 
 use crate::exclusions;
 use crate::framework::{Dialect, Registers};
-use crate::inventory::{self, Reach, SiteKind};
+use crate::inventory::{self, Reach, Site, SiteKind};
 use crate::lang::{self, Lines, NodeId, Refusal};
-use crate::model::{BlindFile, ExcludedFile, ExclusionReason};
+use crate::model::{BlindFile, ExcludedFile, ExclusionReason, Position, Span};
 use crate::normal::{self, digest, Normalizer, Structure};
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
@@ -77,20 +77,21 @@ impl Exclusion {
 /// One test, or one row of a test table.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TestCase {
-    /// Where the registering call starts, in bytes.
-    pub site: u32,
-    /// 1-based line of the position Vitest reports.
-    pub line: u32,
-    /// 1-based UTF-16 column of that position.
-    pub column: u32,
+    /// The registering call.
+    pub span: Span,
     /// The title, when the source spells it.
     pub title: Option<String>,
+    /// The suite path joined with the title the way a report spells a participant, when every
+    /// segment is a literal the source spells.
+    pub full_title: Option<String>,
     /// Which row of its table, when it has one.
     pub row: Option<usize>,
     /// Equal for two tests of one file claimed to be duplicates.
     pub key: u64,
     /// Equal for two tests of different files claimed to be duplicates.
     pub module_key: u64,
+    /// Whether the chain keeps the test from running (`skip`, `todo`).
+    pub inert: bool,
     /// Why it is not compared, if it is not.
     pub exclusion: Option<Exclusion>,
 }
@@ -293,25 +294,60 @@ pub fn file(
         }
     }
 
+    // What each suite spells as its title, by its registering call: the segments of the suite
+    // path a report names a participant by.
+    let suite_titles: HashMap<NodeId, Option<String>> = found
+        .sites
+        .iter()
+        .filter(|site| site.kind == SiteKind::Registers(Registers::Suite))
+        .map(|site| (site.node, site.title.clone()))
+        .collect();
+    // A report location: the registering call, from its first byte, the way the default engine
+    // reports a test, so a suppression comment above the declaration applies to it.
+    let at = |start: u32, end: u32| {
+        let (start_line, start_column) = lines.position(source, start);
+        let (end_line, end_column) = lines.position(source, end);
+        Span {
+            start: Position {
+                line: start_line,
+                column: start_column,
+            },
+            end: Position {
+                line: end_line,
+                column: end_column,
+            },
+            start_byte: start,
+            end_byte: end,
+        }
+    };
+    // A case as its site spells it, before anything keys it.
+    let unkeyed = |site: &Site, exclusion: Option<Exclusion>| TestCase {
+        span: at(site.span.start, site.span.end),
+        title: site.title.clone(),
+        full_title: None,
+        row: None,
+        key: 0,
+        module_key: 0,
+        inert: false,
+        exclusion,
+    };
+
     let mut tests = Vec::new();
     for site in found
         .sites
         .iter()
         .filter(|site| site.kind == SiteKind::Registers(Registers::Test))
     {
-        let (line, column) = lines.position(source, site.position);
-        let record = TestCase {
-            site: site.span.start,
-            line,
-            column,
-            title: site.title.clone(),
-            row: None,
-            key: 0,
-            module_key: 0,
-            exclusion: None,
-        };
+        let mut record = unkeyed(site, None);
         let callee = tree.child(site.node, "callee");
         let modifiers = callee.map(|callee| normalizer.modifiers(callee));
+        let arguments: Vec<NodeId> = tree
+            .list(site.node, "arguments")
+            .into_iter()
+            .flatten()
+            .collect();
+        record.inert = modifiers.as_ref().is_some_and(|modifiers| modifiers.inert)
+            || normalizer.inert_options(&arguments);
         // An excluded test is still one case per row of a table the file spells out.
         let row_count = modifiers
             .as_ref()
@@ -328,11 +364,6 @@ pub fn file(
                 Some(count) => (0..count).map(|index| case(Some(index))).collect(),
             }
         };
-        let arguments: Vec<NodeId> = tree
-            .list(site.node, "arguments")
-            .into_iter()
-            .flatten()
-            .collect();
         let unread_callee = modifiers.is_none();
         let (Some(modifiers), Some(callback)) = (modifiers, normalizer.callback(site.node)) else {
             // A spread may expand to the callback Vitest runs; only a test with none is a todo.
@@ -448,6 +479,21 @@ pub fn file(
                 .collect(),
         };
         let table = modifiers.rows.is_some();
+        // The suite path a report names a participant by: every enclosing suite's spelled title,
+        // then the test's own. One segment the source does not spell leaves it unnamed.
+        let full_title = record.title.clone().and_then(|title| {
+            let mut segments = Vec::with_capacity(suites.len() + 1);
+            for scope in &suites {
+                let spelled = structure
+                    .suites
+                    .get(scope)
+                    .and_then(|call| suite_titles.get(call))
+                    .and_then(|title| title.as_deref())?;
+                segments.push(spelled.to_owned());
+            }
+            segments.push(title);
+            Some(segments.join(" > "))
+        });
         for (index, (bound, every, unbound)) in rows.into_iter().enumerate() {
             let normal_body = normalizer.substituted(body, bound, every);
             // A row whose every parameter is bound is the test it would be written out as.
@@ -463,6 +509,8 @@ pub fn file(
                 row: table.then_some(index),
                 key: digest(&key),
                 module_key: digest(&format!("{key}\u{1}{module_context}")),
+                full_title: full_title.clone(),
+                inert: record.inert,
                 ..record.clone()
             });
         }
@@ -478,15 +526,14 @@ pub fn file(
         .chain(found.loads.iter().copied())
         .chain(found.escapes.iter().map(|escape| escape.offset));
     for start in elsewhere {
-        let (line, column) = lines.position(source, start);
         tests.push(TestCase {
-            site: start,
-            line,
-            column,
+            span: at(start, start),
             title: None,
+            full_title: None,
             row: None,
             key: 0,
             module_key: 0,
+            inert: false,
             exclusion: Some(Exclusion::RegisteredElsewhere),
         });
     }
@@ -496,17 +543,7 @@ pub fn file(
         .iter()
         .filter(|site| site.kind == SiteKind::Registers(Registers::Bench))
     {
-        let (line, column) = lines.position(source, site.position);
-        tests.push(TestCase {
-            site: site.span.start,
-            line,
-            column,
-            title: site.title.clone(),
-            row: None,
-            key: 0,
-            module_key: 0,
-            exclusion: Some(Exclusion::Benchmark),
-        });
+        tests.push(unkeyed(site, Some(Exclusion::Benchmark)));
     }
 
     let mut sites: Vec<SiteRecord> = found
@@ -550,6 +587,10 @@ pub struct Engine {
     pub unresolved: usize,
     /// Registration sites, by the file's path relative to the root, when they are kept.
     pub sites: Vec<(PathBuf, SiteRecord)>,
+    /// Each file's cases, by the file's path relative to the root: what the rules read once
+    /// every file has been read. Charged to the RSS backstop alone until the engine's state is
+    /// measured onto `--max-memory`.
+    pub files: Vec<(PathBuf, Vec<TestCase>)>,
     /// Files every test of which is unresolved.
     blind: Vec<BlindFile>,
 }
@@ -668,9 +709,13 @@ impl Engine {
             }
         }
         reasons.extend(further);
-        self.tests += corpus.tests.len();
+        let case_count = corpus.tests.len();
+        let mut corpus = corpus;
+        self.files
+            .push((relative.to_path_buf(), std::mem::take(&mut corpus.tests)));
+        self.tests += case_count;
         self.unresolved += unresolved;
-        if unresolved > 0 && unresolved == corpus.tests.len() {
+        if unresolved > 0 && unresolved == case_count {
             self.blind.push(BlindFile {
                 path: relative.to_path_buf(),
                 tests: unresolved,
@@ -684,12 +729,8 @@ impl Engine {
                     .map(|site| (relative.to_path_buf(), site)),
             );
         }
-        let entry = exclusions::counted_file(
-            relative.to_path_buf(),
-            reasons,
-            unresolved,
-            corpus.tests.len(),
-        );
+        let entry =
+            exclusions::counted_file(relative.to_path_buf(), reasons, unresolved, case_count);
         (entry, corpus.parse_errors > 0)
     }
 
