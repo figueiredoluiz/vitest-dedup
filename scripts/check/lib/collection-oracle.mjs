@@ -18,7 +18,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'no
 import { tmpdir } from 'node:os'
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import { runAnalyzerJsonl } from './run-analyzer.mjs'
+import { parseJsonl, runAnalyzerJsonl } from './run-analyzer.mjs'
 
 const LIB = dirname(fileURLToPath(import.meta.url))
 const PROBE_RUNNER = join(LIB, 'collection-probe-runner.mjs')
@@ -63,7 +63,7 @@ export function configSource(absoluteDir, cacheDir) {
   // the module exists (`fsModuleCache`), and nothing is written into a shared `node_modules`.
   const probe =
     `{ cacheDir: ${JSON.stringify(cacheDir)}, plugins: [missingModuleStubs(${JSON.stringify(absoluteDir)})], ` +
-    `test: { runner: ${JSON.stringify(PROBE_RUNNER)}, fsModuleCache: false } }`
+    `test: { runner: ${JSON.stringify(PROBE_RUNNER)}, fsModuleCache: false, includeTaskLocation: true } }`
   const own = ownConfig(absoluteDir)
   if (own === null) {
     const test = { root: absoluteDir, dir: absoluteDir, include: [TEST_FILES], exclude: ['**/node_modules/**', '**/target/**'] }
@@ -98,6 +98,7 @@ export function vitestView(records, listedFiles, absoluteDir) {
     }
     files.set(path, {
       tests: record.tests.map((t) => t.title),
+      tasks: record.tasks ?? [],
       hooks: located.map((r) => hookSite({ kind: r.kind, path: local(r.file), line: r.line })),
       suiteHookCount: Object.values(record.suiteHooks).reduce((sum, n) => sum + n, 0),
       registrationCount: record.registrations.length,
@@ -110,7 +111,7 @@ export function vitestView(records, listedFiles, absoluteDir) {
   }
   for (const path of new Set(listedFiles.map(local))) {
     if (!files.has(path)) {
-      files.set(path, { tests: [], hooks: [], suiteHookCount: 0, registrationCount: 0, unlocatedRegistrations: 0, stubReads: [], collectErrors: [], unprobed: true, overlapping: false })
+      files.set(path, { tests: [], tasks: [], hooks: [], suiteHookCount: 0, registrationCount: 0, unlocatedRegistrations: 0, stubReads: [], collectErrors: [], unprobed: true, overlapping: false })
     }
   }
   return files
@@ -198,17 +199,107 @@ export function analyzerView(records, absoluteDir) {
  *   every file with an `excluded-file` record, whose tests the analyzer makes no claim about.
  */
 export function collectWithAnalyzer(binary, root, dir) {
-  let records
+  return analyzerView(analyzerRecords(binary, root, dir), resolve(root, dir))
+}
+
+/**
+ * The analyzer's JSONL records for `dir` with `--emit-test-fingerprints`, under `env` (the next
+ * engine is selected by `VITEST_DEDUP_ENGINE=next`). A directory of lookalikes yields none.
+ */
+function analyzerRecords(binary, root, dir, env = {}) {
+  return analyzerRecordsOf(binary, [resolve(root, dir), '--emit-test-fingerprints'], env)
+}
+
+/**
+ * The JSONL records of a run of `binary` with `args`. Exit 2 with the "extracted no tests" notice
+ * is the analyzer's answer for a directory of lookalikes (Jest, Mocha, `node:test` files): it found
+ * test files and no Vitest test in them. Every other exit 2 stays an operational failure. The
+ * records it printed still stand: a file that only calls a wrapper registers no test of its own
+ * and still has the wrapper's site.
+ */
+export function analyzerRecordsOf(binary, args, env = {}) {
   try {
-    records = runAnalyzerJsonl(binary, [resolve(root, dir), '--emit-test-fingerprints']).records
+    return runAnalyzerJsonl(binary, args, env).records
   } catch (error) {
-    // Exit 2 with this notice is the analyzer's answer for a directory of lookalikes (Jest, Mocha,
-    // `node:test` files): it found test files and no Vitest test in them. Every other exit 2 stays
-    // an operational failure.
     if (!/extracted no tests/.test(String(error.message))) throw error
-    records = []
+    return parseJsonl(error.stdout ?? '')
   }
-  return analyzerView(records, resolve(root, dir))
+}
+
+/**
+ * The next engine's registration sites for `dir`, per file relative to it: `{kind, line,
+ * lineFrom}`, where `kind` is the dialect's name (`test`, `describe`, a hook), `wrapper` or
+ * `module-load`.
+ */
+export function collectSites(binary, root, dir) {
+  return siteView(analyzerRecords(binary, root, dir, { VITEST_DEDUP_ENGINE: 'next' }), resolve(root, dir))
+}
+
+/** The `site` records among `records`, per file relative to `absoluteDir`. */
+export function siteView(records, absoluteDir) {
+  const sites = new Map()
+  for (const record of records) {
+    if (record.type !== 'site') continue
+    const path = normalizePath(isAbsolute(record.path) ? relative(absoluteDir, record.path) : record.path)
+    if (!sites.has(path)) sites.set(path, [])
+    sites.get(path).push({ kind: record.kind, line: record.line, lineFrom: record.lineFrom })
+  }
+  return sites
+}
+
+/** The site kinds a collected task of `kind` may come from. */
+const SITE_KINDS = { test: ['test', 'bench'], suite: ['describe'] }
+/** Every site kind that may account for a collected task. */
+const TASK_SITE_KINDS = new Set([...Object.values(SITE_KINDS).flat(), 'wrapper', 'module-load'])
+
+/**
+ * Matches every test and suite Vitest collected in a compared file to a registration site of its
+ * kind whose lines cover the task's (`lineFrom..line`, where a transform's source map may place a
+ * call of a call), or to a wrapper call on its line, which may register what another module
+ * declares. A task with no line was registered by no frame of the test file: a wrapper or a module
+ * load in the file accounts for it. Files are skipped for the reasons the title comparison skips
+ * them, except the analyzer's exclusions, which say nothing about where sites are.
+ *
+ * @returns {{compared: string[], tasksCompared: number, sites: number, unexecuted: number,
+ *   skipped: Map<string, object[]>, disagreements: {path: string, kind: string, item: string}[]}}
+ */
+export function compareSites(vitestFiles, sites) {
+  const skipped = new Map()
+  const compared = []
+  const disagreements = []
+  let tasksCompared = 0
+  let siteCount = 0
+  let unexecuted = 0
+  for (const [path, vitest] of [...vitestFiles].sort(([a], [b]) => a.localeCompare(b))) {
+    const reason = skipReason(path, vitest, false)
+    if (reason !== null) {
+      if (!skipped.has(reason)) skipped.set(reason, [])
+      skipped.get(reason).push({ path })
+      continue
+    }
+    compared.push(path)
+    // Hook sites register no task.
+    const fileSites = (sites.get(path) ?? []).filter((site) => TASK_SITE_KINDS.has(site.kind))
+    const covers = (site, line) => Math.min(site.lineFrom, site.line) <= line && line <= site.line
+    const used = new Set()
+    for (const task of vitest.tasks) {
+      tasksCompared += 1
+      let site
+      if (task.line === null) {
+        site = fileSites.find((candidate) => candidate.kind === 'wrapper' || candidate.kind === 'module-load')
+      } else {
+        site =
+          fileSites.find((candidate) => SITE_KINDS[task.kind].includes(candidate.kind) && covers(candidate, task.line)) ??
+          fileSites.find((candidate) => candidate.kind === 'wrapper' && covers(candidate, task.line))
+      }
+      if (site) used.add(site)
+      else disagreements.push({ path, kind: 'missing-site', item: `${task.kind}@${task.line}` })
+    }
+    const registering = fileSites.filter((site) => site.kind !== 'module-load')
+    siteCount += registering.length
+    unexecuted += registering.filter((site) => !used.has(site)).length
+  }
+  return { compared, tasksCompared, sites: siteCount, unexecuted, skipped, disagreements }
 }
 
 /** Items of `a` not matched one-for-one in `b`, as a multiset difference. */

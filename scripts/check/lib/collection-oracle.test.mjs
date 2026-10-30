@@ -7,11 +7,12 @@ import test from 'node:test'
 import { fileURLToPath } from 'node:url'
 
 import { missingModuleStubs, wholeModuleImports } from './collection-oracle-stubs.mjs'
-import { analyzerView, compareDirectory, configSource, hookSite, matchKnown, minus, ownConfig, vitestInstallError, vitestView } from './collection-oracle.mjs'
+import { analyzerRecordsOf, analyzerView, compareDirectory, compareSites, configSource, hookSite, matchKnown, minus, ownConfig, siteView, vitestInstallError, vitestView } from './collection-oracle.mjs'
 
 /** A file the probe collected cleanly, with `over` replacing any field. */
 const collected = (over = {}) => ({
   tests: [],
+  tasks: [],
   hooks: [],
   suiteHookCount: over.hooks?.length ?? 0,
   registrationCount: over.hooks?.length ?? 0,
@@ -421,4 +422,68 @@ test('an analyzer path outside the directory is made relative to it, as Vitest n
   assert.deepEqual(Object.fromEntries(view.tests), { 'a.test.ts': ['t'], 'b.test.ts': ['u'] })
   const vitest = new Map([['a.test.ts', collected({ tests: ['t'], hooks: ['beforeEach@../helper.ts:3'] })], ['b.test.ts', collected({ tests: ['u'] })]])
   assert.deepEqual(compareDirectory(vitest, view).disagreements, [])
+})
+
+/** Sites per file from `[kind, line, lineFrom]` triples. */
+const sited = (files) =>
+  new Map(Object.entries(files).map(([path, sites]) => [path, sites.map(([kind, line, lineFrom = line]) => ({ kind, line, lineFrom }))]))
+
+test('each collected test and suite needs a site of its kind on its lines', () => {
+  const vitest = new Map([
+    ['a.test.ts', collected({ tasks: [{ kind: 'suite', line: 1 }, { kind: 'test', line: 2 }, { kind: 'test', line: 5 }, { kind: 'test', line: 9 }] })],
+  ])
+  const result = compareSites(vitest, sited({ 'a.test.ts': [['describe', 1], ['test', 2], ['test', 6, 4], ['beforeEach', 9], ['test', 12]] }))
+  assert.deepEqual(kinds(result), ['missing-site a.test.ts test@9'], 'a hook site registers no task')
+  assert.equal(result.tasksCompared, 4)
+  assert.equal(result.sites, 4, 'hook sites are not counted')
+  assert.equal(result.unexecuted, 1, 'the site on line 12 registered nothing')
+  assert.deepEqual(result.compared, ['a.test.ts'])
+  // The wrong kind on the right line does not match.
+  assert.deepEqual(kinds(compareSites(vitest, sited({ 'a.test.ts': [['test', 1], ['test', 2], ['test', 5], ['test', 9]] }))), ['missing-site a.test.ts suite@1'])
+})
+
+test('a wrapper call covers what it registers, and an unlocated task needs one in the file', () => {
+  const vitest = new Map([['a.test.ts', collected({ tasks: [{ kind: 'test', line: 3 }, { kind: 'suite', line: null }] })]])
+  assert.deepEqual(kinds(compareSites(vitest, sited({ 'a.test.ts': [['wrapper', 3]] }))), [])
+  assert.deepEqual(kinds(compareSites(vitest, sited({ 'a.test.ts': [['wrapper', 3], ['module-load', 1]] }))), [])
+  assert.deepEqual(kinds(compareSites(vitest, sited({ 'a.test.ts': [['test', 3]] }))), ['missing-site a.test.ts suite@null'])
+})
+
+test('site comparison skips what title comparison skips, except the analyzer exclusions', () => {
+  const vitest = new Map([
+    ['bad.test.ts', collected({ tasks: [{ kind: 'test', line: 1 }], collectErrors: ['boom'] })],
+    ['../out.test.ts', collected({ tasks: [{ kind: 'test', line: 1 }] })],
+    ['ok.test.ts', collected({ tasks: [{ kind: 'test', line: 1 }] })],
+  ])
+  const result = compareSites(vitest, sited({ 'ok.test.ts': [['test', 1]] }))
+  assert.deepEqual(result.compared, ['ok.test.ts'])
+  assert.deepEqual([...result.skipped.keys()].sort(), ['outside-root', 'uncollectable'])
+})
+
+test('site records become sites per file relative to the directory', () => {
+  const sites = siteView(
+    [
+      { type: 'site', path: 'a.test.ts', kind: 'test', line: 2, lineFrom: 1 },
+      { type: 'test', path: 'a.test.ts' },
+      { type: 'site', path: '/root/dir/sub/b.test.ts', kind: 'describe', line: 4, lineFrom: 4 },
+    ],
+    '/root/dir',
+  )
+  assert.deepEqual(Object.fromEntries(sites), {
+    'a.test.ts': [{ kind: 'test', line: 2, lineFrom: 1 }],
+    'sub/b.test.ts': [{ kind: 'describe', line: 4, lineFrom: 4 }],
+  })
+})
+
+test('a run that finds no test of its own keeps the records it printed; another failure still throws', () => {
+  // A stand-in analyzer, run through Node itself so the test runs on every platform.
+  const analyzer = (notice) => [
+    '-e',
+    `console.log(JSON.stringify({ type: 'site', kind: 'wrapper' })); console.error(${JSON.stringify(notice)}); process.exit(2)`,
+    // Ends Node's options, so the `--reporters jsonl` the run appends reaches the script.
+    '--',
+  ]
+  const records = analyzerRecordsOf(process.execPath, analyzer('discovered 1 test file(s) but extracted no tests.'))
+  assert.deepEqual(records, [{ type: 'site', kind: 'wrapper' }])
+  assert.throws(() => analyzerRecordsOf(process.execPath, analyzer('could not read the project')), /exited 2/)
 })

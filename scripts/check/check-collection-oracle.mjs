@@ -9,6 +9,11 @@
 // hook declaration sites. A disagreement is something Vitest collected that the analyzer never
 // read, or something the analyzer recorded that Vitest never registers.
 //
+// The same collection also checks the next engine's inventory (`VITEST_DEDUP_ENGINE=next`): every
+// test and suite Vitest collected must have a registration site of its kind on the line Vitest
+// places it on (`lib/collection-oracle.mjs`'s `compareSites`). Sites that registered nothing Vitest
+// collected are counted, not failed: those are what the engine's exclusion reasons are for.
+//
 // Known disagreements are listed in `collection-oracle-known.json`, each with its reason. The gate
 // fails on a disagreement that is not listed, and on a listed one that no longer occurs: a change
 // that fixes one deletes its entry in the same commit.
@@ -28,7 +33,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { isDeepStrictEqual } from 'node:util'
-import { collectWithAnalyzer, collectWithVitest, compareDirectory, matchKnown, vitestInstallError } from './lib/collection-oracle.mjs'
+import { collectSites, collectWithAnalyzer, collectWithVitest, compareDirectory, compareSites, matchKnown, vitestInstallError } from './lib/collection-oracle.mjs'
 import { defaultBinary } from './lib/run-analyzer.mjs'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
@@ -47,6 +52,10 @@ const FIXTURE_DIRS = [
 const MIN_FILES_COMPARED = 374
 const MIN_TESTS_COMPARED = 842
 const MIN_HOOK_SITES_COMPARED = 95
+// The same floor for the next engine's inventory, whose registration sites are compared with the
+// line Vitest places each collected test and suite on.
+const MIN_SITE_FILES_COMPARED = 546
+const MIN_SITE_TASKS_COMPARED = 1465
 
 // What the probe must report for the self-check directories, checked before anything is compared:
 // hooks that do not register (`if (false)`, after `return`), one registered per loop iteration,
@@ -97,6 +106,7 @@ function selfCheck() {
   })
 }
 
+/** Collects every directory with Vitest and both engines, compares them, and returns the exit code. */
 function main() {
   const binary = resolve(ROOT, process.argv[2] ?? defaultBinary({ root: ROOT }))
   const installError = vitestInstallError(ROOT)
@@ -112,7 +122,9 @@ function main() {
   const dirs = [...FIXTURE_DIRS, ...manifest.cases.map((c) => `fixtures/recall/${c.path}`)]
   const known = JSON.parse(readFileSync(KNOWN, 'utf8')).disagreements
 
-  const totals = { files: 0, tests: 0, hooks: 0 }
+  const totals = { files: 0, tests: 0, hooks: 0, siteFiles: 0, tasks: 0, sites: 0, unexecuted: 0 }
+  const knownSites = JSON.parse(readFileSync(KNOWN, 'utf8')).siteDisagreements ?? []
+  const foundSites = []
   // Every file not compared, per bucket, with what kept it out (Vitest's first collection error,
   // the first stub read): listed when a floor fails, because a smaller comparison is otherwise
   // reported only as a lower count.
@@ -120,7 +132,14 @@ function main() {
   const probeErrors = []
   const found = []
   for (const dir of dirs) {
-    const result = compareDirectory(collectWithVitest(ROOT, dir), collectWithAnalyzer(binary, ROOT, dir))
+    const vitest = collectWithVitest(ROOT, dir)
+    const located = compareSites(vitest, collectSites(binary, ROOT, dir))
+    totals.siteFiles += located.compared.length
+    totals.tasks += located.tasksCompared
+    totals.sites += located.sites
+    totals.unexecuted += located.unexecuted
+    foundSites.push(...located.disagreements.map((d) => ({ dir, ...d })))
+    const result = compareDirectory(vitest, collectWithAnalyzer(binary, ROOT, dir))
     totals.files += result.compared.length
     totals.tests += result.testsCompared
     totals.hooks += result.hooksCompared
@@ -134,6 +153,7 @@ function main() {
 
   const selfCheckFailures = selfCheck()
   const { unlisted, stale } = matchKnown(found, known)
+  const sitesMatched = matchKnown(foundSites, knownSites)
 
   console.log(
     `collection oracle: ${dirs.length} directories, ${totals.files} files compared, ` +
@@ -141,6 +161,11 @@ function main() {
       `(${found.length - unlisted.length} known)`,
   )
   console.log(`  not compared: ${[...buckets].map(([bucket, entries]) => `${bucket} ${entries.length}`).join(', ')}`)
+  console.log(
+    `  next-engine sites: ${totals.siteFiles} files, ${totals.tasks} collected tests and suites, ` +
+      `${foundSites.length} without a site (${foundSites.length - sitesMatched.unlisted.length} known); ` +
+      `${totals.unexecuted} of ${totals.sites} sites registered nothing Vitest collected`,
+  )
 
   const failures = [...selfCheckFailures]
   if (probeErrors.length > 0) failures.push(`probe errors (the probe and the collected suites disagree):\n    ${probeErrors.join('\n    ')}`)
@@ -148,6 +173,12 @@ function main() {
   for (const d of stale) {
     failures.push(`listed disagreement no longer occurs (delete it from collection-oracle-known.json): ${d.dir}/${d.path}: ${d.kind} ${JSON.stringify(d.item)}`)
   }
+  for (const d of sitesMatched.unlisted) failures.push(`new site disagreement: ${d.dir}/${d.path}: ${d.kind} ${d.item}`)
+  for (const d of sitesMatched.stale) {
+    failures.push(`listed site disagreement no longer occurs (delete it from collection-oracle-known.json): ${d.dir}/${d.path}: ${d.kind} ${d.item}`)
+  }
+  if (totals.siteFiles < MIN_SITE_FILES_COMPARED) failures.push(`compared sites in ${totals.siteFiles} files, floor is ${MIN_SITE_FILES_COMPARED}`)
+  if (totals.tasks < MIN_SITE_TASKS_COMPARED) failures.push(`compared ${totals.tasks} collected tests and suites with sites, floor is ${MIN_SITE_TASKS_COMPARED}`)
   if (totals.files < MIN_FILES_COMPARED) failures.push(`compared ${totals.files} files, floor is ${MIN_FILES_COMPARED}`)
   if (totals.tests < MIN_TESTS_COMPARED) failures.push(`compared ${totals.tests} tests, floor is ${MIN_TESTS_COMPARED}`)
   if (totals.hooks < MIN_HOOK_SITES_COMPARED) failures.push(`compared ${totals.hooks} hook sites, floor is ${MIN_HOOK_SITES_COMPARED}`)

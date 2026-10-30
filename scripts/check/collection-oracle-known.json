@@ -42,5 +42,56 @@
       "item": "orders: second check",
       "reason": "Deliberate: the analyzer skips files git ignores; Vitest does not read .gitignore."
     }
+  ],
+  "siteDisagreements": [
+    {
+      "dir": "fixtures/recall/framework-package-parenthesised-registration",
+      "path": "users.test.ts",
+      "kind": "missing-site",
+      "item": "test@10",
+      "reason": "A package under node_modules registers this test when the file calls it; the next engine does not read package code (out of scope by design), so no site in the test file accounts for it."
+    },
+    {
+      "dir": "fixtures/recall/framework-package-global-newline-registration",
+      "path": "users.test.ts",
+      "kind": "missing-site",
+      "item": "test@9",
+      "reason": "A package under node_modules registers this test when the file calls it; the next engine does not read package code (out of scope by design), so no site in the test file accounts for it."
+    },
+    {
+      "dir": "fixtures/recall/framework-nested-repository-ignore-control",
+      "path": "project/api/orders.test.ts",
+      "kind": "missing-site",
+      "item": "test@11",
+      "reason": "Discovery honours the nested repository's ignore file, which Vitest does not read, so the analyzer never reads this file."
+    },
+    {
+      "dir": "fixtures/recall/framework-nested-repository-ignore-control",
+      "path": "project/api/orders.test.ts",
+      "kind": "missing-site",
+      "item": "test@15",
+      "reason": "Discovery honours the nested repository's ignore file, which Vitest does not read, so the analyzer never reads this file."
+    },
+    {
+      "dir": "fixtures/recall/duplicate-each-row-imported-constants",
+      "path": "values.test.ts",
+      "kind": "missing-site",
+      "item": "test@38",
+      "reason": "Vitest places the rows of a tagged-template table on line 38 of a 30-line file: its source map for the call is wrong, so no line of the file can match."
+    },
+    {
+      "dir": "fixtures/recall/duplicate-each-row-imported-constants",
+      "path": "values.test.ts",
+      "kind": "missing-site",
+      "item": "test@38",
+      "reason": "Vitest places the rows of a tagged-template table on line 38 of a 30-line file: its source map for the call is wrong, so no line of the file can match."
+    },
+    {
+      "dir": "fixtures/recall/callback-parameter-registers",
+      "path": "run.test.ts",
+      "kind": "missing-site",
+      "item": "test@10",
+      "reason": "The registration function is passed as a value (`[test].forEach((declare) => declare(...))`): the inventory reports it as an escape and does not follow what the parameter registers."
+    }
   ]
 }

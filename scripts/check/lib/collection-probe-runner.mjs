@@ -5,8 +5,10 @@
 // files statically in Vitest 5 and never loads a runner, so it cannot be the oracle.
 //
 // One JSON line per collected file is appended to `$VITEST_DEDUP_ORACLE_OUT`:
-//   {file, project, tests: [{title, mode}], registrations: [{kind, file, line}], suiteHooks: {kind: n},
-//    stubReads: ['specifier#export'], collectErrors: [message]}
+//   {file, project, tests: [{title, mode}], tasks: [{kind, line}], registrations: [{kind, file, line}],
+//    suiteHooks: {kind: n}, stubReads: ['specifier#export'], collectErrors: [message]}
+// `tasks` is every collected test and suite with the line Vitest places it on in the test file
+// (`includeTaskLocation`), `null` when no frame of the test file registered it.
 // `registrations` is every hook registration in source order, read from the `STACK_TRACE_ERROR`
 // each hook function creates (only `beforeAll`/`beforeEach` keep it reachable on the hook, so the
 // error is observed at construction instead). `suiteHooks` counts the same hooks from the
@@ -70,13 +72,17 @@ function observeRegistrationErrors(observe) {
   }
 }
 
-/** Every test under `suite` with its `' > '`-joined title path, and the suites' hook counts. */
-function walk(suite, path, tests, suiteHooks) {
+/**
+ * Every test under `suite` with its `' > '`-joined title path, every test and suite with its line,
+ * and the suites' hook counts.
+ */
+function walk(suite, path, tests, tasks, suiteHooks) {
   const hooks = TestRunner.getSuiteHooks(suite) ?? {}
   for (const kind of KINDS) suiteHooks[kind] += hooks[kind]?.length ?? 0
   for (const task of suite.tasks ?? []) {
     const title = [...path, task.name]
-    if (task.type === 'suite') walk(task, title, tests, suiteHooks)
+    tasks.push({ kind: task.type === 'suite' ? 'suite' : 'test', line: task.location?.line ?? null })
+    if (task.type === 'suite') walk(task, title, tests, tasks, suiteHooks)
     else tests.push({ title: title.join(' > '), mode: task.mode })
   }
 }
@@ -122,14 +128,16 @@ export default class CollectionProbeRunner extends TestRunner {
     if (!OUT) throw new Error('VITEST_DEDUP_ORACLE_OUT is not set')
     for (const file of files) {
       const tests = []
+      const tasks = []
       const suiteHooks = Object.fromEntries(KINDS.map((kind) => [kind, 0]))
-      walk(file, [], tests, suiteHooks)
+      walk(file, [], tests, tasks, suiteHooks)
       appendFileSync(
         OUT,
         JSON.stringify({
           file: file.filepath,
           project: file.projectName ?? '',
           tests,
+          tasks,
           registrations: this.registrations.get(file)?.sink ?? [],
           stubReads: [...new Set(this.registrations.get(file)?.stubReads ?? [])],
           suiteHooks,

@@ -45,6 +45,7 @@ export function isCompletedAnalysisExit(status) {
  * @param {string} binary - path to the vitest-dedup binary.
  * @param {string[]} args - CLI arguments *excluding* `--reporters jsonl`, which this function
  *   always appends as the last flags.
+ * @param {Record<string, string>} [env] - variables set for the run, over the inherited ones.
  * @returns {{records: object[], stderr: string}} `records` is every non-blank stdout line parsed
  *   as JSON, in order. `stderr` is the raw stderr text, for callers that want to surface
  *   diagnostics (e.g. the unresolved-context warning) even on a successful run.
@@ -52,9 +53,10 @@ export function isCompletedAnalysisExit(status) {
  *   signal, or exited with a code other than 0 or 1. The message names the actual exit code and
  *   includes stderr, so a crash is never confused with "zero findings" or "findings exist".
  */
-export function runAnalyzerJsonl(binary, args) {
+export function runAnalyzerJsonl(binary, args, env = {}) {
   const result = spawnSync(binary, [...args, '--reporters', 'jsonl'], {
     encoding: 'utf8',
+    env: { ...process.env, ...env },
     maxBuffer: 256 << 20,
   })
 
@@ -63,16 +65,22 @@ export function runAnalyzerJsonl(binary, args) {
   if (!isCompletedAnalysisExit(result.status)) {
     const signalNote = result.signal ? ` (signal ${result.signal})` : ''
     const stderrNote = result.stderr && result.stderr.trim() ? `\n${result.stderr.trim()}` : ''
-    throw new Error(
+    const error = new Error(
       `${binary} exited ${result.status}${signalNote} -- an operational failure, not "zero ` +
         `findings" or "findings exist". Only exit codes 0 and 1 are accepted.${stderrNote}`,
     )
+    // What the run printed before failing, for a caller that accepts one specific exit 2.
+    error.stdout = result.stdout ?? ''
+    throw error
   }
 
-  const records = result.stdout
+  return { records: parseJsonl(result.stdout), stderr: result.stderr ?? '' }
+}
+
+/** The records of a JSONL report. */
+export function parseJsonl(stdout) {
+  return stdout
     .split('\n')
     .filter((line) => line.trim() !== '')
     .map((line) => JSON.parse(line))
-
-  return { records, stderr: result.stderr ?? '' }
 }
