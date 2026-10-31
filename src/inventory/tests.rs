@@ -650,10 +650,8 @@ fn a_binding_rewritten_any_way_may_register_tests() {
         ["wrapper@5"]
     );
     assert_eq!(
-        wrapper_calls(&format!("{header}hook`${{cases()}}`"), &files)
-            .last()
-            .map(String::as_str),
-        Some("wrapper@4")
+        wrapper_calls(&format!("{header}hook`${{cases()}}`"), &files),
+        ["wrapper@4", "wrapper@4"]
     );
     // `declare` gives a name no value, in each of its forms.
     for declared in [
