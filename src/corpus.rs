@@ -567,10 +567,18 @@ pub fn file(
         // or a class the trace cannot prove — excludes every row of the body, because a trace
         // with a hole is not evidence of similarity in either direction.
         let mut traced: Vec<(String, crate::behavior::Trace, normal::CallbackForm)> = Vec::new();
+        // The trace walks the function itself, not the argument as written: a parenthesized or
+        // type-wrapped callback would otherwise read as a body with no statements in it.
+        let traced_body = function.unwrap_or(body);
         for (bound, every, _) in &rows {
             let normal_body = normalizer.substituted(body, bound.clone(), *every);
-            let (trace, callback_form) =
-                crate::behavior::trace(&mut normalizer, &parsed, body, bound.clone(), *every);
+            let (trace, callback_form) = crate::behavior::trace(
+                &mut normalizer,
+                &parsed,
+                traced_body,
+                bound.clone(),
+                *every,
+            );
             traced.push((normal_body, trace, callback_form));
         }
         if traced.iter().any(|(_, trace, _)| !trace.complete) {

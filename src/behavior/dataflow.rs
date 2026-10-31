@@ -244,7 +244,31 @@ fn try_register_inline(
     {
         return;
     }
+    // Moving the initializer to the read must not move it past a declaration it reads: the
+    // original order would crash on the uninitialized binding, the moved one would run.
+    if reads_declared_in(
+        tree,
+        scan.scopes,
+        init,
+        &scan.statements[decl_index + 1..*use_index],
+    ) {
+        return;
+    }
     dataflow.inline.insert(symbol, init);
+}
+
+/// Whether anything the expression `within` reads is declared in `gap`: substituting `within`
+/// for a read past those statements would evaluate it after their declarations run, turning a
+/// crash into a run or the reverse.
+fn reads_declared_in(tree: &Tree, scopes: &Scopes, within: NodeId, gap: &[NodeId]) -> bool {
+    tree.descendants(within)
+        .filter(|node| tree.kind(*node) == "Identifier")
+        .filter_map(|node| scopes.symbol_at(tree.span(node).start))
+        .any(|symbol| {
+            let declared = scopes.symbol(symbol).span;
+            gap.iter()
+                .any(|statement| tree.span(*statement).contains(declared))
+        })
 }
 
 /// Registers destructuring candidates for one `const { … } = o` declarator: the name tag for

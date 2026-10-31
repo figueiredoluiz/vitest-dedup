@@ -940,6 +940,16 @@ impl<'s> Walker<'_, 's> {
         let tree = self.tree();
         match tree.kind(callee) {
             "Identifier" => {
+                // A read of an inlined local stands for its initializer, here too: `const f =
+                // getFn(); f()` evaluates exactly what `getFn()()` does, in the same order, so
+                // the two spell the same path.
+                if let Some(init) = self
+                    .symbol_at(callee)
+                    .and_then(|symbol| self.dataflow.inline.get(&symbol))
+                    .copied()
+                {
+                    return self.call_path(init, depth + 1);
+                }
                 // A member-substituted read stands for `object.property`, spelled as a path.
                 if let Some((object, property)) = self
                     .symbol_at(callee)
@@ -1028,14 +1038,21 @@ impl<'s> Walker<'_, 's> {
         for name in links.iter().rev() {
             modifiers.push(*entry.modifiers.iter().find(|modifier| *modifier == name)?);
         }
-        let subject = tree
+        let subject_shape = tree
             .list(base, "arguments")
             .into_iter()
             .flatten()
             .next()
-            .filter(|argument| tree.kind(*argument) != "SpreadElement");
-        let subject_shape = subject
-            .map(|subject| self.structural_shape(subject))
+            .map(|subject| {
+                if tree.kind(subject) == "SpreadElement" {
+                    match tree.child(subject, "argument") {
+                        Some(inner) => format!("...{}", self.structural_shape(inner)),
+                        None => "...?".to_owned(),
+                    }
+                } else {
+                    self.structural_shape(subject)
+                }
+            })
             .unwrap_or_else(|| "()".to_owned());
         let mut qualifier = entry.label.to_owned();
         if let Some(member) = qualifier_member {

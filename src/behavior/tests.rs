@@ -58,10 +58,12 @@ fn events(
             if !callback.inline {
                 return None;
             }
+            // The trace walks the function itself, not the argument as written: a parenthesized
+            // or type-wrapped callback would otherwise read as a body with no statements in it.
             let (events, complete, form) = trace_text(
                 &mut normalizer,
                 &parsed,
-                callback.argument,
+                callback.function.unwrap_or(callback.argument),
                 HashMap::new(),
                 false,
             );
@@ -435,4 +437,70 @@ fn substance_is_observable() {
     );
     assert_eq!(of(&events, "one").len(), 1);
     assert_eq!(of(&events, "two").len(), 2);
+}
+
+/// A parenthesized or type-wrapped callback traces as the function it wraps: its events and its
+/// form are the plain spelling's.
+#[test]
+fn a_wrapped_callback_traces_as_the_function_it_wraps() {
+    let events = events(
+        r#"
+        test('plain', async () => { g(); });
+        test('paren', (async () => { g(); }));
+        test('paren-other', (async () => { h(); }));
+    "#,
+        &[],
+    );
+    assert_eq!(of(&events, "plain"), of(&events, "paren"));
+    assert_ne!(of(&events, "paren"), of(&events, "paren-other"));
+}
+
+/// An inlined local reads as its initializer in a callee position too: the extracted and the
+/// written-out calls spell the same path.
+#[test]
+fn an_inlined_local_expands_in_a_callee_path() {
+    let events = events(
+        r#"
+        test('extracted-call', () => { const f = getFn(); f(); });
+        test('written-call', () => { getFn()(); });
+        test('extracted-object', () => { const o = getObj(); o.a(); });
+        test('written-object', () => { getObj().a(); });
+    "#,
+        &[],
+    );
+    assert_eq!(of(&events, "extracted-call"), of(&events, "written-call"));
+    assert_eq!(
+        of(&events, "extracted-object"),
+        of(&events, "written-object")
+    );
+}
+
+/// A spread subject renders: two assertions over different spreads stay apart.
+#[test]
+fn an_assertion_subject_renders_its_spread() {
+    let events = events(
+        r#"
+        test('a', () => { expect(...a).toBe(1); });
+        test('b', () => { expect(...b).toBe(1); });
+    "#,
+        &[],
+    );
+    assert_ne!(of(&events, "a"), of(&events, "b"));
+}
+
+/// Substituting an initializer for its read must not move it past a declaration it reads: the
+/// crash-order and run-order bodies stay apart, while a pure declaration between still inlines.
+#[test]
+fn inlining_never_moves_a_read_past_its_declaration() {
+    let events = events(
+        r#"
+        test('crash-order', () => { const x = f(z); let z = 1; g(x); });
+        test('run-order', () => { let z = 1; const x = f(z); g(x); });
+        test('pure-before', () => { const y = f(); let w = 1; g(y); });
+        test('pure-after', () => { let w = 1; const y = f(); g(y); });
+    "#,
+        &[],
+    );
+    assert_ne!(of(&events, "crash-order"), of(&events, "run-order"));
+    assert_eq!(of(&events, "pure-before"), of(&events, "pure-after"));
 }
