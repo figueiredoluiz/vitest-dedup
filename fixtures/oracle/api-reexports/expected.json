@@ -1,0 +1,87 @@
+{
+  "files": {
+    "barrel.test.ts": {
+      "tasks": 1,
+      "wrapperSites": [],
+      "next": {}
+    },
+    "named.test.ts": {
+      "tasks": 2,
+      "wrapperSites": [],
+      "next": {}
+    },
+    "namespace.test.ts": {
+      "tasks": 1,
+      "wrapperSites": [],
+      "next": {}
+    },
+    "star-after-type.test.ts": {
+      "tasks": 1,
+      "wrapperSites": [],
+      "next": {}
+    },
+    "star-first.test.ts": {
+      "tasks": 1,
+      "wrapperSites": [],
+      "next": {}
+    },
+    "star-package.test.ts": {
+      "tasks": 1,
+      "wrapperSites": [
+        "wrapper@4",
+        "wrapper@5"
+      ],
+      "next": {
+        "reasons": [
+          "registered-elsewhere"
+        ],
+        "testsExcluded": 2
+      }
+    },
+    "star-second.test.ts": {
+      "tasks": 1,
+      "wrapperSites": [
+        "wrapper@4",
+        "wrapper@5"
+      ],
+      "next": {
+        "reasons": [
+          "registered-elsewhere"
+        ],
+        "testsExcluded": 2
+      }
+    },
+    "star-spelled.test.ts": {
+      "tasks": 1,
+      "wrapperSites": [
+        "wrapper@6"
+      ],
+      "next": {
+        "reasons": [
+          "registered-elsewhere"
+        ],
+        "testsExcluded": 1
+      }
+    },
+    "star.test.ts": {
+      "tasks": 1,
+      "wrapperSites": [],
+      "next": {}
+    },
+    "type-named.test.ts": {
+      "tasks": 1,
+      "wrapperSites": [],
+      "next": {}
+    },
+    "type-only.test.ts": {
+      "tasks": 1,
+      "wrapperSites": [],
+      "next": {}
+    }
+  },
+  "blindUnderCurrent": [
+    "star-spelled.test.ts",
+    "type-named.test.ts",
+    "type-only.test.ts"
+  ]
+}
