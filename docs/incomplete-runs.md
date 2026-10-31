@@ -122,6 +122,7 @@ alone. Past the cap the files with the fewest excluded tests are left out of the
 | `order-dependent-state` | A test reads a binding that another test writes, or that a hook updates from its previous value, and nothing assigns it before each test: equal tests can observe different values depending on which ran first. |
 | `named-callback` | A test's callback is passed by name rather than written inline; the analyzer does not read it. |
 | `unreadable-callback` | A spread argument may hide the callback a test runs. |
+| `incomplete-trace` | A test's body is deeper than the behavior trace walks, or holds a class whose behavior the trace cannot prove: what the test does was not read to the end. |
 | `unsupported-benchmark` | A benchmark is counted but not compared. |
 | `registered-elsewhere` | A wrapper call, an import of a module that registers while it loads, or a registration function read as a value registers tests the file does not spell. One test is counted per such call, import or read. A call of a helper found to register only hooks is not counted: it registers no test, and its hooks are part of the context of the tests around it. |
 | `unsupported-statement` | A statement form the walker does not enter, such as `with`, may hide declarations. |

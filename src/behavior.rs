@@ -200,13 +200,7 @@ impl<'s> Walker<'_, 's> {
             self.walk_expr(body, false, 0);
             return;
         }
-        if tree.kind(body) != "BlockStatement" {
-            return;
-        }
-        let statements: Vec<NodeId> = tree.list(body, "body").into_iter().flatten().collect();
-        for statement in statements {
-            self.walk_stmt(statement, false, 0);
-        }
+        self.walk_block(body, false, 0);
     }
 
     /// Collects statement behavior, carrying deferred-execution state into nested expressions.
@@ -645,12 +639,18 @@ impl<'s> Walker<'_, 's> {
             self.walk_expr(body, true, depth);
             return;
         }
+        self.walk_block(body, true, depth);
+    }
+
+    /// Walks a block body's statements in order, carrying the caller's deferred state.
+    fn walk_block(&mut self, body: NodeId, deferred: bool, depth: u32) {
+        let tree = self.tree();
         if tree.kind(body) != "BlockStatement" {
             return;
         }
         let statements: Vec<NodeId> = tree.list(body, "body").into_iter().flatten().collect();
         for statement in statements {
-            self.walk_stmt(statement, true, depth);
+            self.walk_stmt(statement, deferred, depth);
         }
     }
 
@@ -747,6 +747,20 @@ impl<'s> Walker<'_, 's> {
         self.walk_arguments(call, deferred, depth + 1);
     }
 
+    /// One argument's event shape: a spread renders with an explicit `...` prefix — erasing it
+    /// would make `render(...adminProps)` and `render(...guestProps)` indistinguishable — and
+    /// everything else as its own shape.
+    fn argument_shape(&mut self, argument: NodeId) -> String {
+        let tree = self.tree();
+        if tree.kind(argument) != "SpreadElement" {
+            return self.shape(argument);
+        }
+        match tree.child(argument, "argument") {
+            Some(inner) => format!("...{}", self.shape(inner)),
+            None => "...?".to_owned(),
+        }
+    }
+
     /// The data arguments of a call, rendered into its behavior event as a JSON array. Without
     /// them, `wrapper.find('.name-text')` and `wrapper.find('.unit-value')` emit the identical
     /// event, and two tests querying different things carry the same trace — the largest single
@@ -761,16 +775,7 @@ impl<'s> Walker<'_, 's> {
         }
         let shapes: Vec<String> = arguments
             .into_iter()
-            .map(|argument| {
-                if tree.kind(argument) == "SpreadElement" {
-                    match tree.child(argument, "argument") {
-                        Some(inner) => format!("...{}", self.shape(inner)),
-                        None => "...?".to_owned(),
-                    }
-                } else {
-                    self.shape(argument)
-                }
-            })
+            .map(|argument| self.argument_shape(argument))
             .collect();
         format!(
             " args={}",
@@ -1083,16 +1088,7 @@ impl<'s> Walker<'_, 's> {
         tree.list(call, "arguments")
             .into_iter()
             .flatten()
-            .map(|argument| {
-                if tree.kind(argument) == "SpreadElement" {
-                    match tree.child(argument, "argument") {
-                        Some(inner) => format!("...{}", self.shape(inner)),
-                        None => "...?".to_owned(),
-                    }
-                } else {
-                    self.shape(argument)
-                }
-            })
+            .map(|argument| self.argument_shape(argument))
             .collect()
     }
 

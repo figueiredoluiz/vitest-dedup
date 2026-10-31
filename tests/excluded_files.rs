@@ -786,6 +786,16 @@ test('reads', () => { expect(count).toBe(0); });
     );
     write(
         directory.path(),
+        "unprovable.test.ts",
+        "import { test } from 'vitest';
+test('unprovable', () => {
+  class C { [key]() {} }
+  new C();
+});
+",
+    );
+    write(
+        directory.path(),
         "spread.test.ts",
         "import { test, expect } from 'vitest';
 test('spread', ...[() => { expect(1).toBe(1); }]);
@@ -816,6 +826,7 @@ test('kept', () => { expect(1).toBe(1); });
             unresolved("named.test.ts", "named-callback", &[], 1, 1),
             unresolved("order.test.ts", "order-dependent-state", &[], 1, 2),
             unresolved("spread.test.ts", "unreadable-callback", &[], 1, 2),
+            unresolved("unprovable.test.ts", "incomplete-trace", &[], 1, 1),
             unresolved(
                 "wrapped.test.ts",
                 "registered-inside-function",
@@ -825,11 +836,12 @@ test('kept', () => { expect(1).toBe(1); });
             ),
         ],
     );
-    assert_eq!(run.json["testsAnalyzed"], 14);
-    assert_eq!(run.json["unresolvedTests"], 6);
-    assert_eq!(run.json["incompleteCauses"]["unresolvedContexts"], 6);
-    // Only `named.test.ts` has every test unresolved; `assert_listed` ties the count to the entry.
-    assert_eq!(run.json["blindFiles"], 1);
+    assert_eq!(run.json["testsAnalyzed"], 15);
+    assert_eq!(run.json["unresolvedTests"], 7);
+    assert_eq!(run.json["incompleteCauses"]["unresolvedContexts"], 7);
+    // `named.test.ts` and `unprovable.test.ts` have every test unresolved; `assert_listed` ties
+    // each count to its entry.
+    assert_eq!(run.json["blindFiles"], 2);
     // The one relationship the ported rules claim: three files spell the identical `kept` test,
     // reported as the spanning set of pairs. Every excluded test above stays out of every group,
     // and `wrapped.test.ts`'s `kept` keys apart (its wrapper call is module context), so no
@@ -1119,6 +1131,7 @@ fn every_closed_code_has_a_scenario_or_a_named_unit_test() {
         "order-dependent-state",
         "named-callback",
         "unreadable-callback",
+        "incomplete-trace",
         "unsupported-benchmark",
         "registered-elsewhere",
     ];

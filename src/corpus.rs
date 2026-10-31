@@ -371,9 +371,9 @@ pub fn file(
         }
     };
     // A case as its site spells it, before anything keys it.
-    let unkeyed = |site: &Site, exclusion: Option<Exclusion>| TestCase {
-        span: at(site.span.start, site.span.end),
-        title: site.title.clone(),
+    let unkeyed_case = |span: Span, title: Option<String>, exclusion: Option<Exclusion>| TestCase {
+        span,
+        title,
         full_title: None,
         name: None,
         row: None,
@@ -387,6 +387,13 @@ pub fn file(
         callback_form: normal::CallbackForm::Interchangeable,
         inert: false,
         exclusion,
+    };
+    let unkeyed = |site: &Site, exclusion: Option<Exclusion>| {
+        unkeyed_case(
+            at(site.span.start, site.span.end),
+            site.title.clone(),
+            exclusion,
+        )
     };
 
     let mut tests = Vec::new();
@@ -666,23 +673,11 @@ pub fn file(
         .chain(found.loads.iter().copied())
         .chain(found.escapes.iter().map(|escape| escape.offset));
     for start in elsewhere {
-        tests.push(TestCase {
-            span: at(start, start),
-            title: None,
-            full_title: None,
-            name: None,
-            row: None,
-            row_class: None,
-            key: 0,
-            module_key: 0,
-            body: 0,
-            trace: Vec::new(),
-            similarity_key: 0,
-            subsumption_key: 0,
-            callback_form: normal::CallbackForm::Interchangeable,
-            inert: false,
-            exclusion: Some(Exclusion::RegisteredElsewhere),
-        });
+        tests.push(unkeyed_case(
+            at(start, start),
+            None,
+            Some(Exclusion::RegisteredElsewhere),
+        ));
     }
     // Benchmarks run and are counted, one excluded case each, until they are compared.
     for site in found

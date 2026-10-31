@@ -6,12 +6,9 @@
 //! be proved by that test failing alone.
 
 use super::trace_text;
-use crate::framework::vitest::DIALECT;
-use crate::inventory::{inventory, Modules, SiteKind};
-use crate::lang::parse;
-use crate::normal::{CallbackForm, Exports, Normalizer, Setting, Structure};
+use crate::inventory::SiteKind;
+use crate::normal::CallbackForm;
 use std::collections::HashMap;
-use std::fs;
 
 /// The text events of every inline test callback of `main`, by title, in a project holding
 /// `files`, with the callback form beside them and whether the trace completed.
@@ -19,57 +16,33 @@ fn events(
     main: &str,
     files: &[(&str, &str)],
 ) -> HashMap<String, (Vec<String>, bool, CallbackForm)> {
-    let dir = tempfile::tempdir().unwrap();
-    for (path, content) in files {
-        let path = dir.path().join(path);
-        fs::create_dir_all(path.parent().unwrap()).unwrap();
-        fs::write(path, content).unwrap();
-    }
+    // Vitest collects nothing from a bare `test` when globals are off, so the fixture imports it.
     let main = format!("import {{ test }} from 'vitest';\n{main}");
-    let path = dir.path().join("a.test.ts");
-    fs::write(&path, &main).unwrap();
-    let parsed = parse(&path, &main).unwrap();
-    let found = inventory(
-        &path,
-        &main,
-        &parsed,
-        crate::inventory::Setting {
-            dialect: &DIALECT,
-            globals: false,
-            root: dir.path(),
-        },
-        &mut Modules::default(),
-    );
-    let structure = Structure::of(&parsed, &found);
-    let exports = Exports::default();
-    let setting = Setting {
-        dialect: &DIALECT,
-        root: dir.path(),
-        exports: &exports,
-    };
-    let mut normalizer = Normalizer::new(&path, &parsed, setting, &structure);
-    found
-        .sites
-        .iter()
-        .filter(|site| site.kind == SiteKind::Registers(crate::framework::Registers::Test))
-        .filter_map(|site| {
-            let title = site.title.clone()?;
-            let callback = normalizer.callback(site.node)?;
-            if !callback.inline {
-                return None;
-            }
-            // The trace walks the function itself, not the argument as written: a parenthesized
-            // or type-wrapped callback would otherwise read as a body with no statements in it.
-            let (events, complete, form) = trace_text(
-                &mut normalizer,
-                &parsed,
-                callback.function.unwrap_or(callback.argument),
-                HashMap::new(),
-                false,
-            );
-            Some((title, (events, complete, form)))
-        })
-        .collect()
+    crate::testing::project(&main, files, false, |_, parsed, found, normalizer| {
+        found
+            .sites
+            .iter()
+            .filter(|site| site.kind == SiteKind::Registers(crate::framework::Registers::Test))
+            .filter_map(|site| {
+                let title = site.title.clone()?;
+                let callback = normalizer.callback(site.node)?;
+                if !callback.inline {
+                    return None;
+                }
+                // The trace walks the function itself, not the argument as written: a
+                // parenthesized or type-wrapped callback would otherwise read as a body with no
+                // statements in it.
+                let (events, complete, form) = trace_text(
+                    normalizer,
+                    parsed,
+                    callback.function.unwrap_or(callback.argument),
+                    HashMap::new(),
+                    false,
+                );
+                Some((title, (events, complete, form)))
+            })
+            .collect()
+    })
 }
 
 /// The events of the test titled `title`, when its trace completed.

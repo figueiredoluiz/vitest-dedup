@@ -168,16 +168,7 @@ fn collect_pattern(
         }
         "ObjectPattern" => {
             for property in tree.list(pattern, "properties").into_iter().flatten() {
-                if tree.kind(property) != "Property" || tree.flag(property, "computed") {
-                    continue;
-                }
-                let Some(key) = tree.child(property, "key") else {
-                    continue;
-                };
-                if tree.kind(key) != "Identifier" {
-                    continue;
-                }
-                let Some(name) = tree.text(key, "name") else {
+                let Some(name) = plain_property_key(tree, property) else {
                     continue;
                 };
                 let child = if path.is_empty() {
@@ -289,16 +280,7 @@ fn try_register_members(
             .symbol_at(tree.span(init).start)
             .is_some_and(|symbol| !scan.root.contains(scopes.symbol(symbol).span));
     for property in tree.list(pattern, "properties").into_iter().flatten() {
-        if tree.kind(property) != "Property" || tree.flag(property, "computed") {
-            continue;
-        }
-        let Some(key) = tree.child(property, "key") else {
-            continue;
-        };
-        if tree.kind(key) != "Identifier" {
-            continue;
-        }
-        let Some(name) = tree.text(key, "name") else {
+        let Some(name) = plain_property_key(tree, property) else {
             continue;
         };
         // A nested pattern or a default is not supported: the value must be the binding itself.
@@ -400,6 +382,19 @@ fn is_unsafe_nesting(kind: &str) -> bool {
             | "FunctionExpression"
             | "ArrowFunctionExpression"
     )
+}
+
+/// The name a non-computed object-pattern property binds from, when its key is written as an
+/// identifier. A quoted key is arbitrary author-controlled text that could spell the event
+/// grammar's own punctuation, so it is declined whole.
+fn plain_property_key(tree: &Tree, property: NodeId) -> Option<&str> {
+    if tree.kind(property) != "Property" || tree.flag(property, "computed") {
+        return None;
+    }
+    let key = tree.child(property, "key")?;
+    (tree.kind(key) == "Identifier")
+        .then(|| tree.text(key, "name"))
+        .flatten()
 }
 
 /// Whether a statement could observably change program state: a deliberately broad

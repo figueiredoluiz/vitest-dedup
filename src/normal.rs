@@ -222,6 +222,34 @@ pub struct Walk {
     pub(crate) inline: HashMap<SymbolId, NodeId>,
 }
 
+impl Walk {
+    /// A walk over `root`: its own declarations numbered by appearance, outside bindings named by
+    /// what declares them. `trace` selects the trace's two naming policies; the other policy
+    /// fields start off.
+    fn new(
+        root: Span,
+        names_observed: bool,
+        substitutions: HashMap<SymbolId, String>,
+        bound_parameters: bool,
+        trace: bool,
+    ) -> Self {
+        Self {
+            root,
+            locals: HashMap::new(),
+            names_observed,
+            privates: Vec::new(),
+            substitutions,
+            objects: HashMap::new(),
+            bound_parameters,
+            in_type: 0,
+            trace,
+            structural: false,
+            suffixes: HashMap::new(),
+            inline: HashMap::new(),
+        }
+    }
+}
+
 /// The callback a registration at `site` passes. After the title when `titled` (a hook has none):
 /// the last inline function argument, else the last argument that is not an options object, a
 /// literal (a timeout), a template, an array or a spread. `None` when it passes none.
@@ -404,20 +432,13 @@ impl<'s> Normalizer<'s> {
         substitutions: HashMap<SymbolId, String>,
         bound_parameters: bool,
     ) -> Walk {
-        Walk {
-            root: self.tree.span(node),
-            locals: HashMap::new(),
-            names_observed: form::observes_names(self.tree, node, self.setting.dialect),
-            privates: Vec::new(),
+        Walk::new(
+            self.tree.span(node),
+            form::observes_names(self.tree, node, self.setting.dialect),
             substitutions,
-            objects: HashMap::new(),
             bound_parameters,
-            in_type: 0,
-            trace: true,
-            structural: false,
-            suffixes: HashMap::new(),
-            inline: HashMap::new(),
-        }
+            true,
+        )
     }
 
     /// The normal form of `node`, written in a walk the caller drives and shares across calls, so
@@ -477,20 +498,13 @@ impl<'s> Normalizer<'s> {
         substitutions: HashMap<SymbolId, String>,
         bound_parameters: bool,
     ) -> String {
-        let mut walk = Walk {
-            root: self.tree.span(node),
-            locals: HashMap::new(),
-            names_observed: form::observes_names(self.tree, node, self.setting.dialect),
-            privates: Vec::new(),
+        let mut walk = Walk::new(
+            self.tree.span(node),
+            form::observes_names(self.tree, node, self.setting.dialect),
             substitutions,
-            objects: HashMap::new(),
             bound_parameters,
-            in_type: 0,
-            trace: false,
-            structural: false,
-            suffixes: HashMap::new(),
-            inline: HashMap::new(),
-        };
+            false,
+        );
         let mut out = String::new();
         self.write_node(node, &mut walk, &mut out);
         out
