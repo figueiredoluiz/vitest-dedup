@@ -32,12 +32,22 @@ const MAX_SCAN_DEPTH: u32 = 256;
 /// The dataflow substitutions one body's trace reads, computed once per body.
 #[derive(Debug, Default)]
 pub(super) struct Dataflow {
-    /// A local whose one read stands for its own initializer, by symbol.
-    pub inline: HashMap<SymbolId, NodeId>,
+    /// A local whose one read stands for its own initializer, by symbol, with the statement
+    /// indices the pruning pass reads.
+    pub inline: HashMap<SymbolId, Inline>,
     /// A destructured local whose reads stand for `object.property`, by symbol.
     pub member: HashMap<SymbolId, (NodeId, String)>,
     /// The `:prop:` suffix a destructured local's rendering carries, by symbol.
     pub names: HashMap<SymbolId, String>,
+}
+
+/// A single-use inlining candidate: the initializer, the statement that declares it, and the
+/// statement whose read stands for it.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct Inline {
+    pub init: NodeId,
+    pub declaration_index: usize,
+    pub read_index: usize,
 }
 
 impl Dataflow {
@@ -49,7 +59,9 @@ impl Dataflow {
 
     /// The initializer a read of `symbol` stands for, when inlined.
     pub fn init_of(&self, symbol: Option<SymbolId>) -> Option<NodeId> {
-        symbol.and_then(|symbol| self.inline.get(&symbol)).copied()
+        symbol
+            .and_then(|symbol| self.inline.get(&symbol))
+            .map(|inline| inline.init)
     }
 }
 
@@ -120,6 +132,32 @@ pub(super) fn analyze(parsed: &Parsed, body: NodeId) -> Dataflow {
             ),
             _ => {}
         }
+    }
+    // Do not absorb an effectful initializer through another inlined declaration. Keeping the
+    // inner initializer as its own events lets the trace compose extraction with setup
+    // reordering; fully chaining would fold the inner call into the read while an earlier effect
+    // correctly blocks that movement, so a normalization meant to bridge extraction defeats the
+    // reordering normalization. This is exact: each candidate has one resolved read in one flat
+    // statement, and that statement either is another candidate's declaration or it is not.
+    let inline_declarations: Vec<usize> = dataflow
+        .inline
+        .values()
+        .map(|inline| inline.declaration_index)
+        .collect();
+    let absorbed: Vec<SymbolId> = dataflow
+        .inline
+        .iter()
+        .filter_map(|(&symbol, inline)| {
+            (expression_has_effect(tree, inline.init, 0)
+                && inline_declarations.contains(&inline.read_index)
+                && body_list[..inline.declaration_index]
+                    .iter()
+                    .any(|statement| statement_has_effect(tree, *statement, 0)))
+            .then_some(symbol)
+        })
+        .collect();
+    for symbol in absorbed {
+        dataflow.inline.remove(&symbol);
     }
     // A symbol a canonicalization claimed keeps that claim; the name suffix fills only the rest.
     for (symbol, path) in names {
@@ -245,7 +283,14 @@ fn try_register_inline(
     ) {
         return;
     }
-    dataflow.inline.insert(symbol, init);
+    dataflow.inline.insert(
+        symbol,
+        Inline {
+            init,
+            declaration_index: decl_index,
+            read_index: *use_index,
+        },
+    );
 }
 
 /// Whether anything the expression `within` reads is declared in `gap`: substituting `within`
@@ -446,10 +491,10 @@ pub(super) fn expression_has_effect(tree: &Tree, expression: NodeId, depth: u32)
                 // A hole coerces through `undefined` only in trivial positions; the
                 // over-approximation refuses it.
                 None => true,
+                // A spread executes the iterator protocol even on an inert operand, so it is
+                // effectful whole: an initializer must not move across it.
                 Some(element) => match tree.kind(element) {
-                    "SpreadElement" => tree
-                        .child(element, "argument")
-                        .is_some_and(|argument| expression_has_effect(tree, argument, depth + 1)),
+                    "SpreadElement" => true,
                     _ => expression_has_effect(tree, element, depth + 1),
                 },
             }),

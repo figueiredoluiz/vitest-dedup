@@ -491,3 +491,123 @@ fn a_read_under_a_condition_is_never_inlined() {
     );
     assert_ne!(of(&events, "extracted"), of(&events, "written"));
 }
+
+/// An unbraced control-flow body is a statement: its calls are behavior, and the braced spelling
+/// is the same sequence.
+#[test]
+fn an_unbraced_body_keeps_its_behavior() {
+    let events = events(
+        r#"
+        test('unbraced-a', () => { if (c) foo(); });
+        test('unbraced-b', () => { if (c) bar(); });
+        test('braced-a', () => { if (c) { foo(); } });
+    "#,
+        &[],
+    );
+    assert_ne!(of(&events, "unbraced-a"), of(&events, "unbraced-b"));
+    assert_eq!(of(&events, "unbraced-a"), of(&events, "braced-a"));
+}
+
+/// A constructor event keeps its ordered arguments: two constructions over different literals
+/// never share an event.
+#[test]
+fn a_constructor_event_keeps_its_arguments() {
+    let events = events(
+        r#"
+        test('a', () => { new URL('/a', base); });
+        test('b', () => { new URL('/b', base); });
+        test('twin', () => { new URL('/a', base); });
+    "#,
+        &[],
+    );
+    assert_ne!(of(&events, "a"), of(&events, "b"));
+    assert_eq!(of(&events, "a"), of(&events, "twin"));
+}
+
+/// A static block's statements are definition-time behavior, read from the list they are.
+#[test]
+fn a_static_block_keeps_its_statements() {
+    let events = events(
+        r#"
+        test('a', () => { class C { static { g(); } } new C(); });
+        test('b', () => { class C { static { h(); } } new C(); });
+    "#,
+        &[],
+    );
+    assert_ne!(of(&events, "a"), of(&events, "b"));
+}
+
+/// A spread runs the iterator protocol even on an inert operand: an initializer does not move
+/// across one, so the two orders stay apart.
+#[test]
+fn a_spread_blocks_inlining_across_it() {
+    let events = events(
+        r#"
+        test('before', () => { const x = f(); const a = [...items]; g(x); });
+        test('after', () => { const a = [...items]; const x = f(); g(x); });
+    "#,
+        &[],
+    );
+    assert_ne!(of(&events, "before"), of(&events, "after"));
+}
+
+/// A computed terminal link reads a value, not an assertion name: it is no chain event, so the
+/// dynamic member and the literal member stay apart.
+#[test]
+fn a_computed_terminal_link_is_no_chain_event() {
+    let events = events(
+        r#"
+        test('computed', () => { expect(false)[ok]; });
+        test('literal', () => { expect(false).ok; });
+    "#,
+        &[],
+    );
+    assert_ne!(of(&events, "computed"), of(&events, "literal"));
+    assert!(
+        !of(&events, "computed")
+            .iter()
+            .any(|event| event.starts_with("assert:chain:")),
+        "the computed member records no chain event: {:?}",
+        of(&events, "computed")
+    );
+}
+
+/// A bigint, a regexp and null are three different assertion subjects.
+#[test]
+fn structural_subjects_keep_bigint_and_regexp_kinds() {
+    let events = events(
+        r#"
+        test('bigint', () => { expect(1n).toBeTruthy(); });
+        test('regexp', () => { expect(/a/).toBeTruthy(); });
+        test('null', () => { expect(null).toBeTruthy(); });
+    "#,
+        &[],
+    );
+    assert_ne!(of(&events, "bigint"), of(&events, "null"));
+    assert_ne!(of(&events, "regexp"), of(&events, "null"));
+}
+
+/// An effectful initializer is not absorbed through another inlined declaration: the composed
+/// chain keeps its own events instead of folding away. Pinned whole, because the property is the
+/// trace, not one event in it.
+#[test]
+fn an_effectful_initializer_is_not_absorbed_through_another_inlining() {
+    let events = events(
+        r#"
+        test('composed', () => { effect(); const x = g(); const y = x(); h(y); });
+    "#,
+        &[],
+    );
+    // The absorbed candidate is pruned: its initializer stays an event of its own, and the read
+    // site names the local instead of folding the initializer into itself.
+    assert_eq!(
+        of(&events, "composed"),
+        [
+            "call:g:effect",
+            "call:g:g",
+            "call:g:h args=[\"(CallExpression arguments:[] callee:$0 optional:false \
+             typeArguments:null)\"]",
+            "call:$0",
+        ]
+    );
+}

@@ -364,7 +364,16 @@ impl Normalizer<'_> {
             }
             "Literal" => {
                 if walk.structural {
-                    let _ = write!(out, "L<{}>", literal_kind(value(tree, node, "value")));
+                    // A bigint or a regexp carries no JSON `value`, so its kind comes from the
+                    // field that holds it: `1n`, `/a/` and `null` are three different subjects.
+                    let kind = if !is_empty(tree.field_of(node, "regex")) {
+                        "regexp"
+                    } else if !is_empty(tree.field_of(node, "bigint")) {
+                        "bigint"
+                    } else {
+                        literal_kind(value(tree, node, "value"))
+                    };
+                    let _ = write!(out, "L<{kind}>");
                 } else {
                     let literal = value(tree, node, "value");
                     let _ = write!(out, "L{literal}");

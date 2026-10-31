@@ -108,7 +108,11 @@ pub(crate) fn trace_text<'s>(
         let substituted = normalizer.member_form(&rendered, &property);
         walk.substitutions.insert(symbol, substituted);
     }
-    walk.inline = dataflow.inline.clone();
+    walk.inline = dataflow
+        .inline
+        .iter()
+        .map(|(symbol, inline)| (*symbol, inline.init))
+        .collect();
     let root = walk.root;
     let mut walker = Walker {
         normalizer,
@@ -413,7 +417,8 @@ impl<'s> Walker<'_, 's> {
             | "FunctionDeclaration"
             | "SwitchStatement"
             | "VariableDeclaration"
-            | "ClassDeclaration" => self.walk_stmt(part, deferred, depth),
+            | "ClassDeclaration"
+            | "ExpressionStatement" => self.walk_stmt(part, deferred, depth),
             "ArrowFunctionExpression" | "FunctionExpression" => self.deferred_body(part, depth),
             _ => self.walk_expr(part, deferred, depth),
         }
@@ -815,7 +820,15 @@ impl<'s> Walker<'_, 's> {
         if !self.complete {
             return;
         }
-        self.push(deferred, format!("new:{shape}"));
+        // The event keeps the callee, its ordered arguments and its type arguments: `new
+        // URL('/a', base)` and the '/b' variant do different work, and without the arguments the
+        // trace would erase it.
+        let mut event = format!("new:{shape}");
+        if let Some(type_arguments) = tree.child(expression, "typeArguments") {
+            event.push_str(&self.shape(type_arguments));
+        }
+        event.push_str(&self.arguments_fragment(expression, depth + 1));
+        self.push(deferred, event);
         self.walk_under_members(callee, deferred, depth + 1);
         self.walk_arguments(expression, deferred, depth + 1);
     }
@@ -892,9 +905,13 @@ impl<'s> Walker<'_, 's> {
         for element in elements {
             match tree.kind(element) {
                 "StaticBlock" => {
-                    if let Some(block) = tree.child(element, "body") {
-                        effects.push(format!("static-block:{}", self.shape(block)));
-                    }
+                    let statements: Vec<String> = tree
+                        .list(element, "body")
+                        .into_iter()
+                        .flatten()
+                        .map(|statement| self.shape(statement))
+                        .collect();
+                    effects.push(format!("static-block:{}", statements.join(";")));
                 }
                 "MethodDefinition" | "PropertyDefinition" | "AccessorProperty" => {
                     if tree.flag(element, "computed") {
@@ -951,7 +968,7 @@ impl<'s> Walker<'_, 's> {
                 if let Some(init) = self
                     .symbol_at(callee)
                     .and_then(|symbol| self.dataflow.inline.get(&symbol))
-                    .copied()
+                    .map(|inline| inline.init)
                 {
                     return self.call_path(init, depth + 1);
                 }
@@ -1141,6 +1158,12 @@ impl<'s> Walker<'_, 's> {
             return None;
         }
         let tree = self.tree();
+        // A computed terminal link reads a value, not a name: `expect(false)[ok]` is no more the
+        // `ok` assertion than any other dynamic member, and spelling it as one would make two
+        // different assertions share an event.
+        if tree.flag(member, "computed") {
+            return None;
+        }
         let mut links = vec![tree
             .child(member, "property")
             .and_then(|property| tree.text(property, "name"))?
