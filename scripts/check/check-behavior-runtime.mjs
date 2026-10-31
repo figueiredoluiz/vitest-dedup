@@ -1,0 +1,106 @@
+// Runtime oracle for the behavior trace's await/.then splice: the claims the canonicalization
+// rests on, measured against the pinned Vitest rather than assumed from reading.
+//
+// The collection oracle compares what Vitest collects; it cannot see an outcome. The claims this
+// gate checks are outcome claims — a returned chain's continuation is the test's own behavior, an
+// unreturned chain is not awaited, and a rejection handler observes a path no `await` reaches —
+// so `fixtures/behavior-runtime/cases.test.ts` runs under the real Vitest and each named test's
+// status must equal the one `expected.json` pins.
+//
+// Floors (a gate that measured nothing fails): every case in `expected.json` matched a result,
+// and the run carried at least one pass and one fail — a Vitest that silently reported nothing
+// would otherwise read as agreement.
+//
+// Usage: `node scripts/check/check-behavior-runtime.mjs`
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { createRequire } from "node:module";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
+import { runAsGate } from "./lib/gate-main.mjs";
+
+const HERE = dirname(fileURLToPath(import.meta.url));
+const ROOT = resolve(HERE, "..", "..");
+const DIR = "fixtures/behavior-runtime";
+const require = createRequire(join(ROOT, "package.json"));
+const { version: vitestVersion } = require("vitest/package.json");
+
+/** @returns {{ status: number, lines: string[] }} */
+export function runCli() {
+  const expected = JSON.parse(
+    readFileSync(join(ROOT, DIR, "expected.json"), "utf8"),
+  );
+  const work = mkdtempSync(join(tmpdir(), "vitest-dedup-behavior-runtime-"));
+  try {
+    const result = spawnSync(
+      process.execPath,
+      [
+        join(ROOT, "node_modules", "vitest", "vitest.mjs"),
+        "run",
+        "--reporter=json",
+        "--outputFile",
+        join(work, "out.json"),
+        resolve(ROOT, DIR, "cases.test.ts"),
+      ],
+      { cwd: ROOT, encoding: "utf8", maxBuffer: 64 << 20, timeout: 300_000 },
+    );
+    if (!result.status && !exists(join(work, "out.json"))) {
+      return { status: 1, lines: [`vitest run produced no report (exit ${result.status}): ${result.stderr ?? ""}`.slice(-2000)] };
+    }
+    const report = JSON.parse(readFileSync(join(work, "out.json"), "utf8"));
+    const outcomes = new Map();
+    for (const file of report.testResults ?? []) {
+      for (const assertion of file.assertionResults ?? []) {
+        outcomes.set(assertion.fullName ?? assertion.title, assertion.status);
+      }
+    }
+    const lines = [`vitest ${vitestVersion}, node ${process.version}`];
+    const failures = [];
+    let passes = 0;
+    let fails = 0;
+    for (const [name, wanted] of Object.entries(expected.cases)) {
+      const got = outcomes.get(name);
+      if (got === undefined) {
+        failures.push(`${name}: no result; vitest reported ${outcomes.size} cases`);
+        continue;
+      }
+      // The JSON reporter spells an outcome `passed` or `failed`; the expectation files say so too.
+      const normalized = got === "passed" ? "pass" : got === "failed" ? "fail" : got;
+      if (normalized !== wanted) {
+        failures.push(`${name}: expected ${wanted}, vitest reported ${got}`);
+      }
+      lines.push(`  ${got}: ${name}`);
+      if (normalized === "pass") passes += 1;
+      if (normalized === "fail") fails += 1;
+    }
+    const extra = [...outcomes.keys()].filter((name) => !(name in expected.cases));
+    for (const name of extra) {
+      failures.push(`${name}: reported but not in expected.json; the fixture and its expectations move together`);
+    }
+    if (passes === 0 || fails === 0) {
+      failures.push(`the run measured ${passes} pass(es) and ${fails} fail(s); a run that measured nothing proves nothing`);
+    }
+    lines.push(
+      failures.length === 0
+        ? `ok: ${outcomes.size} runtime case(s) measured under vitest ${vitestVersion}.`
+        : `FAIL: ${failures.length} runtime case(s) disagree.`,
+    );
+    return { status: failures.length === 0 ? 0 : 1, lines: [...lines, ...failures] };
+  } finally {
+    rmSync(work, { recursive: true, force: true });
+  }
+}
+
+/** Whether a file exists. */
+function exists(path) {
+  try {
+    readFileSync(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+runAsGate(import.meta.url, runCli, "behavior trace runtime claims");
