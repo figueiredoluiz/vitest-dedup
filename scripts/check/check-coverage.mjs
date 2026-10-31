@@ -298,10 +298,16 @@ const RUST_MODULES = {
   'src/normal/rows.rs': 90,
   'src/normal/row_identity.rs': 95,
   'src/normal/titles.rs': 93,
+  // Active suite admission: measured at 98.08% (51/52 lines).
+  'src/normal/suites.rs': 98,
   'src/corpus.rs': 99,
+  // Whole-suite collection: measured at 93.60% (117/125 lines).
+  'src/corpus/suites.rs': 93,
   'src/rules.rs': 100,
   'src/rules/names.rs': 100,
   'src/rules/rows.rs': 100,
+  // Suite reporting and child suppression: measured at 99.00% (99/100 lines).
+  'src/rules/suites.rs': 99,
 }
 
 // Re-pinned 2026-09-19, after `check-mutation-score.mjs` and then the memory gates' five modules

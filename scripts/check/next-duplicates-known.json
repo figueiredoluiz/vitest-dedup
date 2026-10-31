@@ -21,14 +21,6 @@
       "reason": "The two bodies are spelled identically; the default engine abstains on the class-object mutation they contain. The next engine compares them, and the tests run the same: identical text in identical context links."
     },
     {
-      "id": "link|fixtures/duplicates|duplicates-suite-whole-block.test.ts:20|duplicates-suite-whole-block.test.ts:33",
-      "reason": "The two describe blocks are whole copies. The default engine reports the copy once under duplicate-suite and suppresses the per-test pair; the next engine does not port duplicate-suite yet, so the per-test finding stands in for the suite claim."
-    },
-    {
-      "id": "link|fixtures/duplicates|duplicates-suite-whole-block.test.ts:25|duplicates-suite-whole-block.test.ts:38",
-      "reason": "The two describe blocks are whole copies. The default engine reports the copy once under duplicate-suite and suppresses the per-test pair; the next engine does not port duplicate-suite yet, so the per-test finding stands in for the suite claim."
-    },
-    {
       "id": "link|fixtures/duplicates|external-instance-alias-control.test.ts:14|external-instance-alias-control.test.ts:15",
       "reason": "The two bodies are spelled identically; the default engine abstains because a class alias reaches an erased wrapper. The next engine compares them, and the tests run the same: identical text in identical context links."
     },
@@ -69,30 +61,6 @@
       "reason": "False positive: two projects with different environments share a test. Waits on the cross-file environment key."
     },
     {
-      "id": "recall-extra|duplicate-suite-globals-config|duplicate-test|auth.test.ts:16,auth.test.ts:6",
-      "reason": "`duplicate-suite` is not ported, so the tests of a copied suite are reported one by one."
-    },
-    {
-      "id": "recall-extra|duplicate-suite-globals-config|duplicate-test|auth.test.ts:10,auth.test.ts:20",
-      "reason": "`duplicate-suite` is not ported, so the tests of a copied suite are reported one by one."
-    },
-    {
-      "id": "recall-extra|duplicate-suite-nested|duplicate-test|auth.test.ts:20,auth.test.ts:30",
-      "reason": "`duplicate-suite` is not ported, so the tests of a copied suite are reported one by one."
-    },
-    {
-      "id": "recall-extra|duplicate-suite-nested|duplicate-test|auth.test.ts:24,auth.test.ts:34",
-      "reason": "`duplicate-suite` is not ported, so the tests of a copied suite are reported one by one."
-    },
-    {
-      "id": "recall-absent|duplicate-suite-positive|duplicate-test|auth.test.ts:21,auth.test.ts:31",
-      "reason": "`duplicate-suite` is not ported, so the tests of a copied suite are reported one by one."
-    },
-    {
-      "id": "recall-extra|duplicate-suite-positive|duplicate-test|auth.test.ts:25,auth.test.ts:35",
-      "reason": "`duplicate-suite` is not ported, so the tests of a copied suite are reported one by one."
-    },
-    {
       "id": "recall-miss|duplicate-test-bench|duplicate-test|parses a short document,reads a small config",
       "reason": "Benchmarks are excluded until they are compared."
     },
@@ -111,42 +79,6 @@
     {
       "id": "recall-absent|duplicate-test-written-each-parameter-negative|duplicate-test|parse.test.ts:18,parse.test.ts:23",
       "reason": "False positive: a row parameter that is reassigned is still substituted by its row."
-    },
-    {
-      "id": "recall-absent|mixed-cross-file-and-suite|duplicate-test|ledger.test.ts:20,ledger.test.ts:26",
-      "reason": "`duplicate-suite` is not ported, so the tests of a copied suite are reported one by one."
-    },
-    {
-      "id": "recall-absent|mixed-duplicate-suite-suppresses-children|duplicate-test|billing.test.ts:22,billing.test.ts:32",
-      "reason": "`duplicate-suite` is not ported, so the tests of a copied suite are reported one by one."
-    },
-    {
-      "id": "recall-absent|mixed-duplicate-suite-suppresses-children|duplicate-test|billing.test.ts:26,billing.test.ts:36",
-      "reason": "`duplicate-suite` is not ported, so the tests of a copied suite are reported one by one."
-    },
-    {
-      "id": "recall-absent|mixed-near-duplicate-and-suite|duplicate-test|main.test.ts:18,main.test.ts:24",
-      "reason": "`duplicate-suite` is not ported, so the tests of a copied suite are reported one by one."
-    },
-    {
-      "id": "recall-absent|mixed-parameterization-and-suite|duplicate-test|main.test.ts:19,main.test.ts:25",
-      "reason": "`duplicate-suite` is not ported, so the tests of a copied suite are reported one by one."
-    },
-    {
-      "id": "recall-absent|mixed-subsumed-and-suite|duplicate-test|main.test.ts:19,main.test.ts:25",
-      "reason": "`duplicate-suite` is not ported, so the tests of a copied suite are reported one by one."
-    },
-    {
-      "id": "recall-absent|mixed-suite-and-each-row|duplicate-test|main.test.ts:18,main.test.ts:24",
-      "reason": "`duplicate-suite` is not ported, so the tests of a copied suite are reported one by one."
-    },
-    {
-      "id": "recall-absent|mixed-suite-and-redundant-hook|duplicate-test|billing.test.ts:30,billing.test.ts:46",
-      "reason": "`duplicate-suite` is not ported, so the tests of a copied suite are reported one by one."
-    },
-    {
-      "id": "recall-extra|mixed-suite-copy-with-internal-duplicates|duplicate-test|billing.test.ts:25,billing.test.ts:31",
-      "reason": "`duplicate-suite` is not ported, so the tests of a copied suite are reported one by one."
     },
     {
       "id": "recall-miss|framework-runner-default-const|duplicate-test|page lowercases,page slug is lowercase",
@@ -246,10 +178,6 @@
     },
     {
       "id": "recall-miss|describe-return-tail|duplicate-test|suite > first,visible",
-      "reason": "False positive: a test after `return` never registers, and the inventory still counts it."
-    },
-    {
-      "id": "recall-absent|describe-return-tail|duplicate-test|run.test.ts:12,run.test.ts:8",
       "reason": "False positive: a test after `return` never registers, and the inventory still counts it."
     },
     {
@@ -473,12 +401,8 @@
       "reason": "The next engine counts a helper's call and the tests its file spells; the default engine inlines what the helper registers."
     },
     {
-      "id": "recall-tests|local-helper-return-tail|all|4",
+      "id": "recall-tests|local-helper-return-tail|all|3",
       "reason": "The next engine counts a helper's call and the tests its file spells; the default engine inlines what the helper registers."
-    },
-    {
-      "id": "recall-tests|describe-return-tail|all|3",
-      "reason": "False positive: a test after `return` never registers, and the inventory still counts it."
     },
     {
       "id": "recall-tests|local-helper-null-destructure|all|3",
@@ -621,68 +545,8 @@
       "reason": "The default engine expands a `forEach` over a known array per element; the next engine counts its registration and the test beside it."
     },
     {
-      "id": "recall-extra|duplicate-suite-globals-config|duplicate-test-name|auth.test.ts:16,auth.test.ts:6|[\"login > accepts valid credentials\",\"login > accepts valid credentials\"]",
-      "reason": "The default engine reports the copied suite once and suppresses its child name findings; the next engine does not port suite suppression yet."
-    },
-    {
-      "id": "recall-extra|duplicate-suite-globals-config|duplicate-test-name|auth.test.ts:10,auth.test.ts:20|[\"login > rejects a bad password\",\"login > rejects a bad password\"]",
-      "reason": "The default engine reports the copied suite once and suppresses its child name findings; the next engine does not port suite suppression yet."
-    },
-    {
-      "id": "recall-extra|duplicate-suite-nested|duplicate-test-name|auth.test.ts:20,auth.test.ts:30|[\"auth > credentials > accepts valid credentials\",\"auth > credentials > accepts valid credentials\"]",
-      "reason": "The default engine reports the copied suite once and suppresses its child name findings; the next engine does not port suite suppression yet."
-    },
-    {
-      "id": "recall-extra|duplicate-suite-nested|duplicate-test-name|auth.test.ts:24,auth.test.ts:34|[\"auth > credentials > rejects a bad password\",\"auth > credentials > rejects a bad password\"]",
-      "reason": "The default engine reports the copied suite once and suppresses its child name findings; the next engine does not port suite suppression yet."
-    },
-    {
-      "id": "recall-absent|duplicate-suite-positive|duplicate-test-name|auth.test.ts:21,auth.test.ts:31|[\"login > accepts valid credentials\",\"login > accepts valid credentials\"]",
-      "reason": "The default engine reports the copied suite once and suppresses its child name findings; the next engine does not port suite suppression yet."
-    },
-    {
-      "id": "recall-extra|duplicate-suite-positive|duplicate-test-name|auth.test.ts:25,auth.test.ts:35|[\"login > rejects a bad password\",\"login > rejects a bad password\"]",
-      "reason": "The default engine reports the copied suite once and suppresses its child name findings; the next engine does not port suite suppression yet."
-    },
-    {
       "id": "recall-miss|duplicate-test-name-function-title|duplicate-test-name|parsesAnEmptyDocument,parsesAnEmptyDocument",
       "reason": "The functions supply titles for todos, which have no callback; the next engine excludes these cases until title comparison has separate eligibility."
-    },
-    {
-      "id": "recall-extra|mixed-cross-file-and-suite|duplicate-test-name|ledger.test.ts:20,ledger.test.ts:26|[\"audit > stamps the ledger page\",\"audit > stamps the ledger page\"]",
-      "reason": "The default engine reports the copied suite once and suppresses its child name findings; the next engine does not port suite suppression yet."
-    },
-    {
-      "id": "recall-extra|mixed-duplicate-suite-suppresses-children|duplicate-test-name|billing.test.ts:22,billing.test.ts:32|[\"billing > applies tax to a subtotal\",\"billing > applies tax to a subtotal\"]",
-      "reason": "The default engine reports the copied suite once and suppresses its child name findings; the next engine does not port suite suppression yet."
-    },
-    {
-      "id": "recall-extra|mixed-duplicate-suite-suppresses-children|duplicate-test-name|billing.test.ts:26,billing.test.ts:36|[\"billing > renders an invoice total\",\"billing > renders an invoice total\"]",
-      "reason": "The default engine reports the copied suite once and suppresses its child name findings; the next engine does not port suite suppression yet."
-    },
-    {
-      "id": "recall-extra|mixed-near-duplicate-and-suite|duplicate-test-name|main.test.ts:18,main.test.ts:24|[\"taxes > applies tax to a subtotal\",\"taxes > applies tax to a subtotal\"]",
-      "reason": "The default engine reports the copied suite once and suppresses its child name findings; the next engine does not port suite suppression yet."
-    },
-    {
-      "id": "recall-extra|mixed-parameterization-and-suite|duplicate-test-name|main.test.ts:19,main.test.ts:25|[\"taxes > applies tax to a subtotal\",\"taxes > applies tax to a subtotal\"]",
-      "reason": "The default engine reports the copied suite once and suppresses its child name findings; the next engine does not port suite suppression yet."
-    },
-    {
-      "id": "recall-extra|mixed-subsumed-and-suite|duplicate-test-name|main.test.ts:19,main.test.ts:25|[\"taxes > applies tax to a subtotal\",\"taxes > applies tax to a subtotal\"]",
-      "reason": "The default engine reports the copied suite once and suppresses its child name findings; the next engine does not port suite suppression yet."
-    },
-    {
-      "id": "recall-extra|mixed-suite-and-each-row|duplicate-test-name|main.test.ts:18,main.test.ts:24|[\"taxes > applies tax to a subtotal\",\"taxes > applies tax to a subtotal\"]",
-      "reason": "The default engine reports the copied suite once and suppresses its child name findings; the next engine does not port suite suppression yet."
-    },
-    {
-      "id": "recall-extra|mixed-suite-and-redundant-hook|duplicate-test-name|billing.test.ts:30,billing.test.ts:46|[\"billing > orders > reads the meter\",\"billing > orders > reads the meter\"]",
-      "reason": "The default engine reports the copied suite once and suppresses its child name findings; the next engine does not port suite suppression yet."
-    },
-    {
-      "id": "recall-extra|mixed-suite-copy-with-internal-duplicates|duplicate-test-name|billing.test.ts:25,billing.test.ts:31|[\"billing > applies tax to a subtotal\",\"billing > applies tax to a subtotal\"]",
-      "reason": "The default engine reports the copied suite once and suppresses its child name findings; the next engine does not port suite suppression yet."
     },
     {
       "id": "recall-miss|duplicate-each-row-describe-each|duplicate-each-row|admin permissions,admin permissions",
@@ -751,6 +615,18 @@
     {
       "id": "recall-miss|duplicate-each-row-imported-constants|duplicate-each-row|tags fast,tags fast",
       "reason": "The next-engine row value proof does not resolve imported constants, bigint values or tagged tables; these repeated rows remain unproved."
+    },
+    {
+      "id": "recall-tests|duplicate-suite-computed-condition|all|3",
+      "reason": "The next engine reads a bracket condition as the dotted form, whose skipped children still report; the default engine cannot read it."
+    },
+    {
+      "id": "recall-extra|duplicate-suite-computed-condition|duplicate-test|run.test.ts:13,run.test.ts:7",
+      "reason": "The next engine reads a bracket condition as the dotted form, whose skipped children still report; the default engine cannot read it."
+    },
+    {
+      "id": "recall-extra|duplicate-suite-computed-condition|duplicate-test-name|run.test.ts:13,run.test.ts:7|[\"skipped > child\",\"skipped > child\"]",
+      "reason": "The next engine reads a bracket condition as the dotted form, whose skipped children still report; the default engine cannot read it."
     }
   ]
 }

@@ -7722,6 +7722,48 @@
         }
       ],
       "expectedAbsent": []
+    },
+    {
+      "name": "duplicate-suite-computed-condition",
+      "path": "duplicate-suite-computed-condition",
+      "rule": "duplicate-suite",
+      "role": "negative",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-10-31",
+      "expectedFindings": [],
+      "expectedTests": 1,
+      "expectedIncomplete": true,
+      "expectedAbsent": [
+        {
+          "rule": "duplicate-suite",
+          "titles": [
+            "skipped",
+            "skipped"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "duplicate-suite-after-return",
+      "path": "duplicate-suite-after-return",
+      "rule": "duplicate-suite",
+      "role": "negative",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-10-31",
+      "expectedFindings": [],
+      "expectedTests": 1,
+      "expectedIncomplete": false,
+      "expectedAbsent": [
+        {
+          "rule": "duplicate-suite",
+          "titles": [
+            "outer > inner",
+            "outer > inner"
+          ]
+        }
+      ]
     }
   ],
   "knownFalsePositiveBaseline": 1,

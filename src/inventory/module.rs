@@ -5,8 +5,8 @@ use super::{
 };
 use crate::framework::{Chain, Registers};
 use crate::lang::{
-    bound_symbols, export_name, property_name, Declaration, Name, NodeId, Parsed, Span, SymbolId,
-    Tree,
+    bound_symbols, export_name, member_name, property_name, Declaration, Name, NodeId, Parsed,
+    Span, SymbolId, Tree,
 };
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -219,15 +219,8 @@ impl<'s> Module<'s> {
                     return Some((Origin::Api(registers), Provenance::Direct, steps));
                 }
                 "MemberExpression" => {
-                    let property = tree.child(node, "property")?;
-                    let name = if tree.flag(node, "computed") {
-                        // `cases['with organization']`
-                        let key = tree.inner(property);
-                        (tree.kind(key) == "Literal").then(|| tree.text(key, "value"))??
-                    } else {
-                        tree.text(property, "name")?
-                    };
-                    steps.push(Step::Member(name));
+                    // `cases['with organization']` reads as `cases.name` does.
+                    steps.push(Step::Member(member_name(tree, node)?));
                     node = tree.child(node, "object")?;
                 }
                 // `filterable(it)`: what a call handed a registration function returns may
@@ -906,6 +899,9 @@ impl<'s> Module<'s> {
                     _ => return None,
                 };
                 let (mut kind, chain, provenance) = self.registration(callee)?;
+                if self.unreachable(node) {
+                    return None;
+                }
                 // Arguments are evaluated before the call, and may register anything.
                 let inert = match kind {
                     SiteKind::Wrapper(Reach::Hooks) => self.arguments_run_nothing(node),
@@ -918,6 +914,33 @@ impl<'s> Module<'s> {
                 Some((node, tree.span(node), kind, chain, provenance))
             })
             .collect()
+    }
+
+    /// Whether `node`, or a function expression holding it, follows a `return` or `throw` in a
+    /// statement list. The walk stops at a function declaration, which is hoisted and may be
+    /// called. Only blocks are read, so any other way past a statement stays reachable.
+    fn unreachable(&self, node: NodeId) -> bool {
+        let tree = self.tree;
+        let mut inner = node;
+        for outer in tree.ancestors(node) {
+            if tree.kind(outer) == "FunctionDeclaration" {
+                return false;
+            }
+            if matches!(tree.kind(outer), "BlockStatement" | "Program")
+                && tree
+                    .list(outer, "body")
+                    .into_iter()
+                    .flatten()
+                    .take_while(|&statement| statement != inner)
+                    .any(|statement| {
+                        matches!(tree.kind(statement), "ReturnStatement" | "ThrowStatement")
+                    })
+            {
+                return true;
+            }
+            inner = outer;
+        }
+        false
     }
 
     /// The callee of a call, or the tag of a tagged template.
