@@ -28,6 +28,9 @@ pub enum Exclusion {
     NoCallback,
     /// A spread argument, or a callee the analysis cannot read, may hide the callback that runs.
     UnreadableCallback,
+    /// Its body is deeper than the behavior trace walks, or holds a class whose behavior the
+    /// trace cannot prove: what it does was not read to the end.
+    IncompleteTrace,
     /// It reads state another test writes, or a hook accumulates.
     OrderDependentState,
     /// Its callback is passed by name, not written inline: whether that binding is reassigned, or
@@ -53,6 +56,11 @@ impl Exclusion {
                 ExclusionReason::OrderDependentState,
                 "a test reads state another test writes, or a hook accumulates, so it depends on \
                  which tests ran first",
+            )),
+            Self::IncompleteTrace => Some((
+                ExclusionReason::IncompleteTrace,
+                "a test's body is deeper than the behavior trace walks, or holds a class the \
+                 trace cannot prove",
             )),
             Self::UnreadableCallback => Some((
                 ExclusionReason::UnreadableCallback,
@@ -97,6 +105,20 @@ pub struct TestCase {
     pub key: u64,
     /// Equal for two tests of different files claimed to be duplicates.
     pub module_key: u64,
+    /// The normal body's digest: equal for equal text, differing whenever the bodies do, so a
+    /// rule that keys on behavior can require the bodies to differ first.
+    pub body: u64,
+    /// The body's behavior trace, one 128-bit digest per event in source order.
+    pub trace: Vec<u128>,
+    /// Equal for two tests of one file the near-duplicate rule may pair: chain, expected
+    /// failure, options, unbound row cells, context and callback form — everything two
+    /// near-duplicates must agree on before their events are compared at all.
+    pub similarity_key: u64,
+    /// Equal for two tests of one file the subsumed rule may pair: context and callback form.
+    pub subsumption_key: u64,
+    /// Whether the callback's arrow and `function` forms act on the same object, and which was
+    /// written when they do not.
+    pub callback_form: normal::CallbackForm,
     /// Whether the chain keeps the test from running (`skip`, `todo`).
     pub inert: bool,
     /// Why it is not compared, if it is not.
@@ -353,17 +375,29 @@ pub fn file(
         }
     };
     // A case as its site spells it, before anything keys it.
-    let unkeyed = |site: &Site, exclusion: Option<Exclusion>| TestCase {
-        span: at(site.span.start, site.span.end),
-        title: site.title.clone(),
+    let unkeyed_case = |span: Span, title: Option<String>, exclusion: Option<Exclusion>| TestCase {
+        span,
+        title,
         full_title: None,
         name: None,
         row: None,
         row_class: None,
         key: 0,
         module_key: 0,
+        body: 0,
+        trace: Vec::new(),
+        similarity_key: 0,
+        subsumption_key: 0,
+        callback_form: normal::CallbackForm::Interchangeable,
         inert: false,
         exclusion,
+    };
+    let unkeyed = |site: &Site, exclusion: Option<Exclusion>| {
+        unkeyed_case(
+            at(site.span.start, site.span.end),
+            site.title.clone(),
+            exclusion,
+        )
     };
 
     let mut tests = Vec::new();
@@ -540,7 +574,31 @@ pub fn file(
                 normal::row_identity::suite_prefix_known(&parsed, call, setting.dialect)
             })
         });
-        for (index, (bound, every, unbound)) in rows.into_iter().enumerate() {
+        // Each row's body, rendered flat and traced: an incomplete trace — a walk past its bound,
+        // or a class the trace cannot prove — excludes every row of the body, because a trace
+        // with a hole is not evidence of similarity in either direction.
+        let mut traced: Vec<(String, crate::behavior::Trace, normal::CallbackForm)> = Vec::new();
+        // The trace walks the function itself, not the argument as written: a parenthesized or
+        // type-wrapped callback would otherwise read as a body with no statements in it.
+        let traced_body = function.unwrap_or(body);
+        for (bound, every, _) in &rows {
+            let normal_body = normalizer.substituted(body, bound.clone(), *every);
+            let (trace, callback_form) = crate::behavior::trace(
+                &mut normalizer,
+                &parsed,
+                traced_body,
+                bound.clone(),
+                *every,
+            );
+            traced.push((normal_body, trace, callback_form));
+        }
+        if traced.iter().any(|(_, trace, _)| !trace.complete) {
+            tests.extend(excluded(Exclusion::IncompleteTrace));
+            continue;
+        }
+        for (index, ((_, _, unbound), (normal_body, trace, callback_form))) in
+            rows.iter().zip(traced).enumerate()
+        {
             let name =
                 name_prefix
                     .clone()
@@ -579,9 +637,8 @@ pub fn file(
                 }
                 Some(digest(&identity))
             })();
-            let normal_body = normalizer.substituted(body, bound, every);
             // A row whose every parameter is bound is the test it would be written out as.
-            let chain = if table && every {
+            let chain = if table && rows[index].1 {
                 &modifiers.untabled
             } else {
                 &modifiers.chain
@@ -589,11 +646,19 @@ pub fn file(
             let key = format!(
                 "{chain}{fails}\u{1}{options}\u{1}{unbound}\u{1}{normal_body}\u{1}{context}"
             );
+            let form = callback_form.token();
             tests.push(TestCase {
                 row: table.then_some(index),
                 row_class,
                 key: digest(&key),
                 module_key: digest(&format!("{key}\u{1}{module_context}")),
+                body: digest(&normal_body),
+                trace: trace.events,
+                similarity_key: digest(&format!(
+                    "{chain}{fails}\u{1}{options}\u{1}{unbound}\u{1}{context}\u{1}{form}"
+                )),
+                subsumption_key: digest(&format!("{context}\u{1}{form}")),
+                callback_form,
                 full_title: full_title.clone(),
                 name,
                 inert: record.inert,
@@ -612,18 +677,11 @@ pub fn file(
         .chain(found.loads.iter().copied())
         .chain(found.escapes.iter().map(|escape| escape.offset));
     for start in elsewhere {
-        tests.push(TestCase {
-            span: at(start, start),
-            title: None,
-            full_title: None,
-            name: None,
-            row: None,
-            row_class: None,
-            key: 0,
-            module_key: 0,
-            inert: false,
-            exclusion: Some(Exclusion::RegisteredElsewhere),
-        });
+        tests.push(unkeyed_case(
+            at(start, start),
+            None,
+            Some(Exclusion::RegisteredElsewhere),
+        ));
     }
     // Benchmarks run and are counted, one excluded case each, until they are compared.
     for site in found

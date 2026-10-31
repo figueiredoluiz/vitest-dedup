@@ -10,6 +10,7 @@
 
 pub mod analysis;
 pub mod atomic_write;
+pub mod behavior;
 pub mod cli;
 pub mod config;
 pub(crate) mod confine;
@@ -29,5 +30,7 @@ pub mod pairs;
 pub mod prerequisites;
 pub mod reporters;
 pub mod rules;
+#[cfg(test)]
+pub(crate) mod testing;
 pub use framework::vitest::config as vitest_config;
 pub use framework::vitest::projects as vitest_projects;

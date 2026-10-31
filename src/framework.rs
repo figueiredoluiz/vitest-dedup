@@ -117,6 +117,23 @@ pub type RenderTitle = fn(
     usize,
 ) -> Option<String>;
 
+/// An assertion entry point: the base the framework's assertions hang off, and the chain members
+/// around it whose presence changes what the assertion claims.
+#[derive(Debug)]
+pub struct AssertionEntry {
+    /// The name as written (`expect`).
+    pub name: &'static str,
+    /// How the behavior trace spells the entry (`expect`, also for `expect.soft`).
+    pub label: &'static str,
+    /// Members of the base that qualify the entry without changing which assertion runs
+    /// (`soft`, `poll`); each is spelled after the label in event text.
+    pub qualifiers: &'static [&'static str],
+    /// Members between the base and the matcher that alter the assertion's meaning (`not`,
+    /// `resolves`, `rejects`). A chain carrying anything else is not an assertion of the
+    /// call-matcher form; the property-chain form records its links verbatim instead.
+    pub modifiers: &'static [&'static str],
+}
+
 /// One framework's test API, described as data.
 #[derive(Debug)]
 pub struct Dialect {
@@ -132,6 +149,8 @@ pub struct Dialect {
     pub registrations: &'static [Registration],
     /// Other API names: utility namespaces and the assertion entry point.
     pub namespaces: &'static [Namespace],
+    /// The assertion entries the behavior trace recognizes.
+    pub assertions: &'static [AssertionEntry],
     /// Members that can be chained onto a registration.
     pub chain: &'static [ChainMember],
     /// Keys of a registration's options object that change only how a test is scheduled, never
@@ -173,6 +192,11 @@ impl Dialect {
             .iter()
             .find(|namespace| namespace.name == name)
             .map(|namespace| namespace.canonical)
+    }
+
+    /// The assertion entry the name `name` spells, if it is one.
+    pub fn assertion(&self, name: &str) -> Option<&'static AssertionEntry> {
+        self.assertions.iter().find(|entry| entry.name == name)
     }
 
     /// Whether `module` is one of the modules the API is imported from.

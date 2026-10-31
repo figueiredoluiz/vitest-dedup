@@ -1,0 +1,9 @@
+{
+  "what": "runtime outcomes the behavior trace's await/.then splice rests on, measured under the pinned Vitest by check:behavior-runtime",
+  "cases": {
+    "returned chain runs as part of the test": "fail",
+    "awaited twin": "fail",
+    "unreturned chain is not awaited": "pass",
+    "rejection handler observes the rejected path": "pass"
+  }
+}

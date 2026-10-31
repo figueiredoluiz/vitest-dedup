@@ -188,22 +188,71 @@ impl Structure {
 }
 
 /// State of one normalization.
-struct Walk {
-    root: Span,
+pub struct Walk {
+    /// The span of the node being written: what separates its own declarations, numbered by
+    /// appearance, from outside bindings named by what declares them.
+    pub(crate) root: Span,
     /// The root's own declarations, numbered in order of appearance.
     locals: HashMap<SymbolId, usize>,
     /// Whether the root reads a function's or class's name, which renaming would change.
     names_observed: bool,
     /// Private names each enclosing class body declares, innermost last.
     privates: Vec<Vec<String>>,
-    /// Bindings replaced by the normal form of what they are bound to (a table row's cells).
-    substitutions: HashMap<SymbolId, String>,
-    /// Outside bindings that each hold one object, numbered in order of appearance.
+    /// Bindings replaced by the normal form of what they are bound to (a table row's cells; the
+    /// trace's member-access substitutions).
+    pub(crate) substitutions: HashMap<SymbolId, String>,
+    /// Outside bindings that each hold one object, numbered in order of appearance. The trace's
+    /// policy turns the numbering off: its events render one at a time, and an ordinal taken at
+    /// first render would make two tests whose setups run in opposite orders key apart.
     objects: HashMap<SymbolId, usize>,
     /// Whether the root's parameters are all bound, so it reads as a callback that takes none.
     bound_parameters: bool,
     /// How many type-level nodes enclose the current one.
     in_type: usize,
+    /// The trace's naming policy: an outside binding that holds one object is named by its
+    /// declaration alone, without this walk's ordinal.
+    pub(crate) trace: bool,
+    /// A literal renders as its kind, not its value (an assertion subject's shape).
+    pub(crate) structural: bool,
+    /// Text appended to a symbol's rendering wherever it appears (a destructured binding's
+    /// property path). A suffix can only tell two events apart, never make them equal.
+    pub(crate) suffixes: HashMap<SymbolId, String>,
+    /// Locals whose one read stands for their own initializer (the trace's single-use inlining):
+    /// the read renders the initializer's form, at the position the read occupies, with the
+    /// numbering the walk has reached by then.
+    pub(crate) inline: HashMap<SymbolId, NodeId>,
+    /// Local classes the trace renders by their content wherever a read names them, so two
+    /// constructions over different classes never share a shape.
+    pub(crate) classes: HashMap<SymbolId, NodeId>,
+}
+
+impl Walk {
+    /// A walk over `root`: its own declarations numbered by appearance, outside bindings named by
+    /// what declares them. `trace` selects the trace's two naming policies; the other policy
+    /// fields start off.
+    fn new(
+        root: Span,
+        names_observed: bool,
+        substitutions: HashMap<SymbolId, String>,
+        bound_parameters: bool,
+        trace: bool,
+    ) -> Self {
+        Self {
+            root,
+            locals: HashMap::new(),
+            names_observed,
+            privates: Vec::new(),
+            substitutions,
+            objects: HashMap::new(),
+            bound_parameters,
+            in_type: 0,
+            trace,
+            structural: false,
+            suffixes: HashMap::new(),
+            inline: HashMap::new(),
+            classes: HashMap::new(),
+        }
+    }
 }
 
 /// The callback a registration at `site` passes. After the title when `titled` (a hook has none):
@@ -279,6 +328,38 @@ pub struct Callback {
     pub inline: bool,
 }
 
+/// Whether a body's arrow and `function` forms act on the same object, and which was written when
+/// they do not. A behaviour-keyed rule agrees on this before it compares events at all: it is a
+/// property of the function enclosing what the test does, not something the test does.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum CallbackForm {
+    /// Neither form reads the function's own `this`, `arguments`, `super` or `new.target`, and it
+    /// is not a generator: the two spellings run the same code.
+    Interchangeable,
+    /// An arrow whose body reads what only a `function` binds: the two forms differ.
+    Arrow,
+    /// A `function` (or a generator) whose body reads what only a `function` binds.
+    Function,
+}
+
+impl CallbackForm {
+    /// The token the comparison keys spell.
+    pub fn token(self) -> &'static str {
+        match self {
+            Self::Interchangeable => "same",
+            Self::Arrow => "arrow",
+            Self::Function => "function",
+        }
+    }
+}
+
+/// Which form was written, before the body's own reads decide whether it matters.
+#[derive(Clone, Copy, Debug)]
+enum Written {
+    Arrow,
+    Function,
+}
+
 /// Normalizes the nodes of one module.
 pub struct Normalizer<'s> {
     path: &'s Path,
@@ -346,6 +427,80 @@ impl<'s> Normalizer<'s> {
         self.walk(node, substitutions, bound_parameters)
     }
 
+    /// A walk a caller drives and shares across renders, naming by the policy the trace reads:
+    /// locals numbered at first appearance in what the caller renders, outside objects by their
+    /// declaration. `node` is the root whose own declarations the walk numbers (the callback's
+    /// function node, for a trace) and whose name observations it reads.
+    pub(crate) fn body_walk(
+        &self,
+        node: NodeId,
+        substitutions: HashMap<SymbolId, String>,
+        bound_parameters: bool,
+    ) -> Walk {
+        Walk::new(
+            self.tree.span(node),
+            form::observes_names(self.tree, node, self.setting.dialect),
+            substitutions,
+            bound_parameters,
+            true,
+        )
+    }
+
+    /// The normal form of `node`, written in a walk the caller drives and shares across calls, so
+    /// every name the caller renders comes from one numbering. Each call is its own depth count:
+    /// past the writer's depth bound the position token keeps a deeper node able to stop a match
+    /// but never to make one.
+    pub fn form_of(&mut self, node: NodeId, walk: &mut Walk) -> String {
+        let mut out = String::new();
+        let saved = std::mem::replace(&mut self.nesting, 0);
+        self.write_node(node, walk, &mut out);
+        self.nesting = saved;
+        out
+    }
+
+    /// The flat form of a member read, spelled the way the writer spells one, for a substitution
+    /// the tree does not hold: a destructured read standing for `object.property` renders exactly
+    /// as the member access written out would.
+    pub(crate) fn member_form(&mut self, object_form: &str, property: &str) -> String {
+        format!(
+            "(MemberExpression computed:false object:{object_form} optional:false \
+             property:#{property})"
+        )
+    }
+
+    /// Whether a callback's arrow and `function` forms mean the same thing here, and which one was
+    /// written. An arrow does not bind `this`/`arguments` and a `function` does, so a body that
+    /// reads either acts on a different object in the two forms; a generator could be constructed
+    /// or have its `prototype` read, which an arrow cannot.
+    pub fn callback_form(&self, function: NodeId) -> CallbackForm {
+        let tree = self.tree;
+        let written = match tree.kind(function) {
+            "ArrowFunctionExpression" => Written::Arrow,
+            _ => Written::Function,
+        };
+        let interchangeable = tree
+            .child(function, "body")
+            .is_some_and(|body| !form::binds_this(tree, body))
+            && !tree.flag(function, "generator");
+        match interchangeable {
+            true => CallbackForm::Interchangeable,
+            false => match written {
+                Written::Arrow => CallbackForm::Arrow,
+                Written::Function => CallbackForm::Function,
+            },
+        }
+    }
+
+    /// Whether a body reads the function's own `this`, `arguments`, `super` or `new.target`.
+    pub fn binds_this(&self, body: NodeId) -> bool {
+        form::binds_this(self.tree, body)
+    }
+
+    /// The dialect every form reads its framework knowledge from.
+    pub fn dialect(&self) -> &'s Dialect {
+        self.setting.dialect
+    }
+
     /// Writes `node`'s normal form in a walk of its own.
     fn walk(
         &mut self,
@@ -353,16 +508,13 @@ impl<'s> Normalizer<'s> {
         substitutions: HashMap<SymbolId, String>,
         bound_parameters: bool,
     ) -> String {
-        let mut walk = Walk {
-            root: self.tree.span(node),
-            locals: HashMap::new(),
-            names_observed: form::observes_names(self.tree, node, self.setting.dialect),
-            privates: Vec::new(),
+        let mut walk = Walk::new(
+            self.tree.span(node),
+            form::observes_names(self.tree, node, self.setting.dialect),
             substitutions,
-            objects: HashMap::new(),
             bound_parameters,
-            in_type: 0,
-        };
+            false,
+        );
         let mut out = String::new();
         self.write_node(node, &mut walk, &mut out);
         out

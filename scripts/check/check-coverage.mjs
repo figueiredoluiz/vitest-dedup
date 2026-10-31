@@ -308,6 +308,12 @@ const RUST_MODULES = {
   'src/rules/rows.rs': 100,
   // Suite reporting and child suppression: measured at 99.00% (99/100 lines).
   'src/rules/suites.rs': 99,
+  // The behavior trace: measured at 84.78% (802/946 lines), its first recorded floor.
+  'src/behavior.rs': 84,
+  // Trace-only dataflow normalizations: measured at 89.70% (392/437 lines).
+  'src/behavior/dataflow.rs': 89,
+  // Test-only fixture harness: measured at 100.00% (35/35 lines).
+  'src/testing.rs': 100,
 }
 
 // Re-pinned 2026-09-19, after `check-mutation-score.mjs` and then the memory gates' five modules
@@ -380,6 +386,10 @@ const JS_MODULES = {
   // CI -- which does not -- reached 84.2% and failed. The number was real and its scope was not
   // checked. The fix was not a lower floor but a test that builds a manifest in a temporary root, so
   // both branches are driven wherever the suite runs and the two environments agree.
+  // The runtime oracle. Its suite drives every judgment through an injected run; what stays
+  // uncovered is the real spawn and its report read, exercised by the gate itself in
+  // `npm run check` — the same shape the collection oracle's floor absorbs.
+  'scripts/check/check-behavior-runtime.mjs': 76,
   'scripts/check/check-name-leak.mjs': 100,
   // The entry point every pure-reader gate shares. Its whole body is the three decisions a gate
   // would otherwise each make alone -- a throw is a failure, failures go to stderr, an imported
@@ -469,6 +479,7 @@ const JS_TEST_FILES = [
   'scripts/check/check-doc-accuracy.test.mjs',
   'scripts/check/check-mutation-score.test.mjs',
   'scripts/check/check-name-leak.test.mjs',
+  'scripts/check/check-behavior-runtime.test.mjs',
   'scripts/check/check-secret-scan.test.mjs',
   '.github/actions/vitest-dedup/index.test.mjs',
 ]

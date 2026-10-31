@@ -4,8 +4,8 @@
 //! The names here are the ones `docs/vitest-surface.md` documents.
 
 use super::{
-    Chain, ChainMember, Dialect, FileDefaults, Framework, HookTiming, Namespace, Registers,
-    Registration, TableRows,
+    AssertionEntry, Chain, ChainMember, Dialect, FileDefaults, Framework, HookTiming, Namespace,
+    Registers, Registration, TableRows,
 };
 
 pub mod config;
@@ -92,6 +92,12 @@ pub static DIALECT: Dialect = Dialect {
             canonical: "expect",
         },
     ],
+    assertions: &[AssertionEntry {
+        name: "expect",
+        label: "expect",
+        qualifiers: &["soft", "poll"],
+        modifiers: &["not", "resolves", "rejects"],
+    }],
     chain: &[
         member!("skip", Chain::Skip),
         member!("only", Chain::Focus),

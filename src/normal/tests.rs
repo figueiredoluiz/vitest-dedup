@@ -13,35 +13,9 @@ fn with_normalizer<T>(
     globals: bool,
     with: impl FnOnce(&mut Normalizer, &Tree, &Inventory) -> T,
 ) -> T {
-    let dir = tempfile::tempdir().unwrap();
-    for (path, content) in files {
-        let path = dir.path().join(path);
-        fs::create_dir_all(path.parent().unwrap()).unwrap();
-        fs::write(path, content).unwrap();
-    }
-    let path = dir.path().join("a.test.tsx");
-    fs::write(&path, main).unwrap();
-    let parsed = parse(&path, main).unwrap();
-    let found = inventory(
-        &path,
-        main,
-        &parsed,
-        crate::inventory::Setting {
-            dialect: &DIALECT,
-            globals,
-            root: dir.path(),
-        },
-        &mut Modules::default(),
-    );
-    let structure = Structure::of(&parsed, &found);
-    let exports = Exports::default();
-    let setting = Setting {
-        dialect: &DIALECT,
-        root: dir.path(),
-        exports: &exports,
-    };
-    let mut normalizer = Normalizer::new(&path, &parsed, setting, &structure);
-    with(&mut normalizer, &parsed.tree, &found)
+    crate::testing::project(main, files, globals, |_, parsed, found, normalizer| {
+        with(normalizer, &parsed.tree, found)
+    })
 }
 
 /// The normal form of each test callback of `main`, by title, in a project holding `files`.
