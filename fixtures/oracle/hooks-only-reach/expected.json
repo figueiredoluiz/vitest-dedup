@@ -1,0 +1,59 @@
+{
+  "files": {
+    "member.test.ts": {
+      "tasks": 4,
+      "wrapperSites": [
+        "hook-wrapper@8",
+        "wrapper@9",
+        "wrapper@10"
+      ],
+      "next": {
+        "reasons": [
+          "registered-elsewhere"
+        ],
+        "testsExcluded": 2
+      }
+    },
+    "result-call.test.ts": {
+      "tasks": 3,
+      "wrapperSites": [
+        "hook-wrapper@6",
+        "wrapper@7",
+        "hook-wrapper@7"
+      ],
+      "next": {
+        "reasons": [
+          "registered-elsewhere"
+        ],
+        "testsExcluded": 1
+      }
+    },
+    "escape-callee.test.ts": {
+      "tasks": 3,
+      "wrapperSites": [
+        "wrapper@6"
+      ],
+      "next": {
+        "reasons": [
+          "registered-elsewhere"
+        ],
+        "testsExcluded": 1
+      }
+    },
+    "closed.test.ts": {
+      "tasks": 2,
+      "wrapperSites": [
+        "hook-wrapper@7",
+        "hook-wrapper@8",
+        "hook-wrapper@9"
+      ],
+      "next": {}
+    }
+  },
+  "blindUnderCurrent": [
+    "closed.test.ts",
+    "escape-callee.test.ts",
+    "member.test.ts",
+    "result-call.test.ts"
+  ]
+}

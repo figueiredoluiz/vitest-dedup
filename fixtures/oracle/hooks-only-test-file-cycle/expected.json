@@ -1,0 +1,19 @@
+{
+  "files": {
+    "case.test.ts": {
+      "tasks": 3,
+      "wrapperSites": [
+        "wrapper@9"
+      ],
+      "next": {
+        "reasons": [
+          "registered-elsewhere"
+        ],
+        "testsExcluded": 2
+      }
+    }
+  },
+  "blindUnderCurrent": [
+    "case.test.ts"
+  ]
+}

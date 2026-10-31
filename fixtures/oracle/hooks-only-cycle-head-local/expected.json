@@ -1,0 +1,25 @@
+{
+  "files": {
+    "case.test.ts": {
+      "tasks": 3,
+      "wrapperSites": [
+        "wrapper@11"
+      ],
+      "next": {
+        "reasons": [
+          "registered-elsewhere"
+        ],
+        "testsExcluded": 1
+      }
+    }
+  },
+  "knownSites": [
+    {
+      "path": "case.test.ts",
+      "kind": "missing-site",
+      "item": "test@7",
+      "reason": "Vitest places the test on the `only()` call, which has no site: a cycle cut `only` out of its module's exports.",
+      "waitsOn": "exports that survive an import cycle"
+    }
+  ]
+}
