@@ -38,12 +38,26 @@ pub enum Reach {
 }
 
 /// What an export of a module holds, for the modules importing it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Export {
     /// The API's namespace, which nothing replaces.
     Namespace,
+    /// A registration function the API's module exports, re-exported as it is.
+    Api(Registers),
     /// A function or value that registers when called.
     Wrapper(Reach),
+}
+
+impl Export {
+    /// What a name holds when it is reached twice: the widest reach of two wrappers, and anything
+    /// else that disagrees may be either.
+    fn widest(self, other: Self) -> Self {
+        match (self, other) {
+            (Self::Wrapper(left), Self::Wrapper(right)) => Self::Wrapper(left.max(right)),
+            (left, right) if left == right => left,
+            _ => Self::Wrapper(Reach::Tasks),
+        }
+    }
 }
 
 /// How the callee of a site reaches the API.

@@ -945,7 +945,7 @@ impl<'s> Walker<'_, 's> {
     /// Whether the trace can prove a class's behavior from its content. It cannot when a key is
     /// computed from anything but a literal (its value, and when it evaluates, are unproved), or
     /// when a `with` statement may bind arbitrary names. This is the bounded port of the current
-    /// core's `class_unresolved`: a dependency it cannot name is an abstention, never a claim.
+    /// engine's `class_unresolved`: a dependency it cannot name is an abstention, never a claim.
     fn class_provable(&self, class: NodeId) -> bool {
         class_provable(self.tree(), class)
     }

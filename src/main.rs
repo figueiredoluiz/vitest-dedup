@@ -281,7 +281,7 @@ fn run_with_engine(
         }
         writeln!(
             stderr,
-            "vitest-dedup: VITEST_DEDUP_ENGINE=next runs duplicate-test, duplicate-test-name, duplicate-each-row and cross-file-duplicate \
+            "vitest-dedup: VITEST_DEDUP_ENGINE=next runs duplicate-test, duplicate-test-name, duplicate-each-row, duplicate-suite and cross-file-duplicate \
              only; the other rules do not run yet"
         )?;
     }
@@ -1026,7 +1026,12 @@ fn run_with_engine(
         .map(|engine| std::mem::take(&mut engine.files));
     let mut result = match engine_files {
         Some(files) => {
-            let outcome = vitest_dedup::rules::run(&files, &config);
+            let outcome = vitest_dedup::rules::run_with_suites(
+                &files,
+                &next_engine.as_ref().expect("selected engine").suites,
+                &config,
+                &inline_suppressions,
+            );
             causes.pair_budget_exhausted |= outcome.budget_exhausted;
             let finished = analysis::finish_findings(
                 outcome.findings,
@@ -1395,6 +1400,36 @@ mod tests {
         .unwrap();
         std::fs::write(root.join("src/thing.ts"), AMBIENT_IN_SOURCE_TEST).unwrap();
         std::fs::write(root.join("src/companion.test.ts"), ORDINARY_TEST).unwrap();
+    }
+
+    /// The next-engine notice names every rule the engine runs: a rule it leaves out reads as not
+    /// running beside its own findings.
+    #[test]
+    fn the_next_engine_notice_names_the_rules_it_runs() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(
+            directory.path().join("a.test.ts"),
+            "import { describe, test, expect } from 'vitest'\n\
+             describe('s', () => { test('t', () => { expect(1).toBe(1) }) })\n\
+             describe('s', () => { test('t', () => { expect(1).toBe(1) }) })\n",
+        )
+        .unwrap();
+        let output = assert_cmd::Command::cargo_bin("vitest-dedup")
+            .unwrap()
+            .arg(directory.path())
+            .env("VITEST_DEDUP_ENGINE", "next")
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        for rule in [
+            "duplicate-test,",
+            "duplicate-test-name",
+            "duplicate-each-row",
+            "duplicate-suite",
+            "cross-file-duplicate",
+        ] {
+            assert!(stderr.contains(rule), "{rule} missing from: {stderr}");
+        }
     }
 
     /// The `--fail-on-incomplete` re-run the unresolved-globals tests end with: the same

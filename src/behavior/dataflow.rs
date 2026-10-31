@@ -1,6 +1,6 @@
 //! The dataflow normalizations only the trace reads.
 //!
-//! Three canonicalizations and one naming tag, each a bounded port of the current core's
+//! Three canonicalizations and one naming tag, each a bounded port of the current engine's
 //! `dataflow.rs` onto the owned tree. All stay out of the flat normal form on purpose:
 //! `duplicate-test` reports at Error as an established claim, and each precondition here is
 //! necessary but not sufficient for equivalence — which is why they serve only the

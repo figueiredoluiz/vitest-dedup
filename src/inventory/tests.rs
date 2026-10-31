@@ -879,6 +879,7 @@ fn a_star_forwards_the_namespace_only_as_the_only_source_of_the_name() {
     for visible in [
         "export * from './api'",
         "export * from './api'\nexport const other = 1",
+        "export * from './api'\nexport * from './noop'",
     ] {
         assert_eq!(found(visible), ["test@2"], "{visible}");
     }
@@ -899,7 +900,6 @@ fn a_star_forwards_the_namespace_only_as_the_only_source_of_the_name() {
         "export * from './api'\ntype o = number\nexport type { o as kept }".to_owned(),
         "export * from './api'\nexport declare const kept: number".to_owned(),
         "export * from './noop'\nexport * from './api'".to_owned(),
-        "export * from './api'\nexport * from './noop'".to_owned(),
     ] {
         assert_eq!(found(&spelled), ["wrapper@2"], "{spelled}");
     }
@@ -918,6 +918,163 @@ fn a_star_forwards_the_namespace_only_as_the_only_source_of_the_name() {
         wrapper_calls("import { run } from './barrel'\nrun()", &files),
         ["wrapper@2"]
     );
+}
+
+/// What follows a `return` or `throw` in its statement list never runs, so it registers nothing;
+/// a function declared there is hoisted, and any other way past a statement stays reachable.
+#[test]
+fn a_statement_after_an_exit_registers_nothing() {
+    let header = "import { describe, test } from 'vitest'\n";
+    let found = |source: &str| -> Vec<String> {
+        sites(&format!("{header}{source}"), &[], false)
+            .into_iter()
+            .map(|site| site.split(':').next().unwrap().to_owned())
+            .collect()
+    };
+    let t = "test('t', () => {})";
+    for dead in [
+        format!("describe('s', () => {{ return; {t} }})"),
+        format!("describe('s', () => {{ throw new Error('x'); {t} }})"),
+        format!("describe('s', () => {{ return; {{ {t} }} }})"),
+        format!("describe('s', () => {{ return; if (1) {{ {t} }} }})"),
+        format!("describe('s', () => {{ return; describe('d', () => {{ {t} }}) }})"),
+        format!("describe('s', () => {{ return; const run = () => {{ {t} }}; run() }})"),
+    ] {
+        assert_eq!(found(&dead), ["suite@2"], "{dead}");
+    }
+    assert_eq!(
+        wrapper_calls(
+            &format!("{header}function setup() {{ return; {t} }}\nsetup()"),
+            &[]
+        ),
+        Vec::<String>::new()
+    );
+    for live in [
+        format!("describe('s', () => {{ {t}; return }})"),
+        format!("describe('s', () => {{ if (1) return; {t} }})"),
+        format!("describe('s', () => {{ try {{ return }} finally {{ {t} }} }})"),
+        format!("describe('s', () => {{ switch (1) {{ case 1: return; {t} }} }})"),
+    ] {
+        assert_eq!(found(&live), ["suite@2", "test@2"], "{live}");
+    }
+    assert_eq!(
+        wrapper_calls(
+            &format!("{header}function setup() {{ helper(); return; function helper() {{ {t} }} }}\nsetup()"),
+            &[]
+        ),
+        ["wrapper@2", "wrapper@3"]
+    );
+}
+
+/// A name re-exported directly from the API's module is the API in its importers, unless another
+/// source wins it: a name spelled beside the star, or a star before it. Nothing else adds a site.
+#[test]
+fn the_api_re_exported_from_its_own_module_is_the_api() {
+    let found = |utility: &str, read: &str| -> Vec<String> {
+        let files = [
+            ("utility.ts", utility),
+            ("barrel.ts", "export * from './utility'"),
+            ("named.ts", "export { test as check } from './utility'"),
+            ("other.ts", "export const value = 1"),
+            ("holder.ts", "export function test() {}"),
+        ];
+        sites(read, &files, false)
+            .into_iter()
+            .map(|site| site.split(':').next().unwrap().to_owned())
+            .collect()
+    };
+    let call = "import { test } from './utility'\ntest('x', () => {})";
+    for (utility, read, site) in [
+        ("export { test } from 'vitest'", call, "test@2"),
+        ("export { it as test } from 'vitest'", call, "test@2"),
+        ("export * from 'vitest'", call, "test@2"),
+        (
+            "export * from 'vitest'\nexport * from './other'",
+            call,
+            "test@2",
+        ),
+        (
+            "export * from 'vitest'\nexport * from './holder'",
+            call,
+            "test@2",
+        ),
+        (
+            "export type * from './other'\nexport * from 'vitest'",
+            call,
+            "test@2",
+        ),
+        (
+            "export * from 'vitest'\nexport const other = 1",
+            call,
+            "test@2",
+        ),
+        (
+            "export * from 'vitest'",
+            "import { beforeEach } from './utility'\nbeforeEach(() => {})",
+            "BeforeEach@2",
+        ),
+        (
+            "export * from 'vitest'",
+            "import { test } from './barrel'\ntest('x', () => {})",
+            "test@2",
+        ),
+        (
+            "export { test } from 'vitest'",
+            "import { check } from './named'\ncheck('x', () => {})",
+            "test@2",
+        ),
+        (
+            "export * as api from 'vitest'",
+            "import { api } from './utility'\napi.test('x', () => {})",
+            "test@2",
+        ),
+        (
+            "export * from './other'\nexport * from 'vitest'",
+            call,
+            "wrapper@2",
+        ),
+        (
+            "export * from 'react'\nexport * from 'vitest'",
+            call,
+            "wrapper@2",
+        ),
+        (
+            "export * from 'vitest'\nexport function test() {}",
+            call,
+            "wrapper@2",
+        ),
+        (
+            "export * from 'vitest'\ntype o = 1\nexport { o as test }",
+            call,
+            "wrapper@2",
+        ),
+    ] {
+        assert_eq!(found(utility, read), [site], "{utility}");
+    }
+    for (utility, read) in [
+        (
+            "export { expect, vi } from 'vitest'",
+            "import { expect } from './utility'\nexpect(1)",
+        ),
+        (
+            "export * from 'vitest'",
+            "import { expect } from './utility'\nexpect(1)",
+        ),
+        (
+            "export * as api from 'vitest'",
+            "import { api } from './utility'\napi.expect(1)",
+        ),
+        ("export { test } from 'other'", call),
+        ("export type { test } from 'vitest'", call),
+        ("export { type test } from 'vitest'", call),
+        ("export type * from 'vitest'", call),
+        (
+            "export type * as api from 'vitest'",
+            "import { api } from './utility'\napi.test('x', () => {})",
+        ),
+    ] {
+        assert_eq!(found(utility, read), Vec::<String>::new(), "{utility}");
+    }
 }
 
 /// A hook read as a global is the API until the module writes that global, under any spelling of

@@ -328,8 +328,8 @@ test('a known miss is not required, and consumes the finding that meets it', () 
 })
 
 test('expectations waiting on a port are counted per rule, without the ported rules or `none`', () => {
-  const expectations = [{ rule: 'duplicate-suite' }, { rule: 'duplicate-suite' }, { rule: 'redundant-hook' }, { rule: 'duplicate-test' }, { rule: 'none' }]
-  assert.deepEqual(pendingByRule(expectations), { 'duplicate-suite': 2, 'redundant-hook': 1 })
+  const expectations = [{ rule: 'near-duplicate-test' }, { rule: 'near-duplicate-test' }, { rule: 'redundant-hook' }, { rule: 'duplicate-test' }, { rule: 'duplicate-suite' }, { rule: 'none' }]
+  assert.deepEqual(pendingByRule(expectations), { 'near-duplicate-test': 2, 'redundant-hook': 1 })
 })
 
 test('a known entry needs an id and a reason', () => {

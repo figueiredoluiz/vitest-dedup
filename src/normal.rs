@@ -10,6 +10,7 @@ mod form;
 mod identity;
 pub(crate) mod row_identity;
 mod rows;
+mod suites;
 pub(crate) mod titles;
 
 pub use rows::{Modifiers, Row};

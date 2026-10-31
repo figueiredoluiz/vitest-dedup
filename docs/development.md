@@ -90,7 +90,7 @@ fails, so its entry goes when support lands.
 
 `npm run check:next-duplicates` runs the analyzer under `VITEST_DEDUP_ENGINE=next` over
 `fixtures/duplicates/`, `fixtures/observed/` and `fixtures/mixed/` and judges the rules the
-next engine ports (`duplicate-test`, `duplicate-test-name`, `duplicate-each-row`, `cross-file-duplicate`) pairwise against the fixture
+next engine ports (`duplicate-test`, `duplicate-test-name`, `duplicate-each-row`, `duplicate-suite`, `cross-file-duplicate`) pairwise against the fixture
 headers: every pair a positive expectation declares must be linked by its rule, no pair declared
 silent may be linked, and any other linked pair is a failure until it is adjudicated into a
 header or into `scripts/check/next-duplicates-known.json` with a reason. A listed delta that
@@ -105,6 +105,13 @@ The experimental name rule compares proven title segments in one file and render
 literal table titles. It preserves the corpus's existing exclusions, including empty callbacks and
 todos. Unknown title values, unsupported formatting and suite-table titles do not anchor name
 findings. Distinct rendered titles across copied tables remain separate findings.
+
+The experimental suite rule compares complete inline blocks with matching literal title paths,
+modifiers, options and enclosing setup. It excludes uncertain activation, table-derived suites,
+inert suites and blocks containing excluded tests. Suite containers do not increase test counts.
+Reported copies suppress cross-copy test and name findings; within-copy and unrelated findings
+remain visible. Nested suite copies remain independent suite findings. Mixed child clusters stay
+visible when they also contain unrelated or within-copy evidence.
 
 The experimental row rule compares rows within one declaration using proven inputs, rendered
 names and equivalent callback/context keys. It supports directly written tables of primitive

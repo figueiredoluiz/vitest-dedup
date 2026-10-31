@@ -1,0 +1,14 @@
+{
+  "files": {
+    "cases.test.ts": {
+      "tasks": 6,
+      "wrapperSites": [],
+      "next": {}
+    },
+    "conditions.test.ts": {
+      "tasks": 32,
+      "wrapperSites": [],
+      "next": {}
+    }
+  }
+}

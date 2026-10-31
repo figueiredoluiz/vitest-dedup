@@ -20,6 +20,19 @@ pub fn property_name(tree: &Tree, property: NodeId) -> Option<&str> {
     }
 }
 
+/// The static name a member expression reads: `.name`, or a string key in brackets.
+pub fn member_name(tree: &Tree, member: NodeId) -> Option<&str> {
+    let property = tree.child(member, "property")?;
+    if tree.flag(member, "computed") {
+        let key = tree.inner(property);
+        (tree.kind(key) == "Literal")
+            .then(|| tree.text(key, "value"))
+            .flatten()
+    } else {
+        tree.text(property, "name")
+    }
+}
+
 /// Every symbol a binding pattern declares, in source order.
 pub fn bound_symbols(tree: &Tree, scopes: &Scopes, pattern: NodeId) -> Vec<SymbolId> {
     let mut symbols = Vec::new();
