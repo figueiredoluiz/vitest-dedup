@@ -41,6 +41,20 @@
       "kind": "missing-test",
       "item": "orders: second check",
       "reason": "Deliberate: the analyzer skips files git ignores; Vitest does not read .gitignore."
+    },
+    {
+      "dir": "fixtures/duplicates",
+      "path": "not-duplicate-concise-suite-body.test.ts",
+      "kind": "missing-test",
+      "item": "alpha > reads the mode",
+      "reason": "A concise suite body sequences its tests, and the default engine reads block bodies only."
+    },
+    {
+      "dir": "fixtures/duplicates",
+      "path": "not-duplicate-concise-suite-body.test.ts",
+      "kind": "missing-test",
+      "item": "beta > reads the mode",
+      "reason": "A concise suite body sequences its tests, and the default engine reads block bodies only."
     }
   ],
   "siteDisagreements": [

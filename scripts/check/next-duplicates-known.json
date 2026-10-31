@@ -51,6 +51,14 @@
     {
       "id": "link|fixtures/duplicates|nested-private-owner-uncertain.test.ts:11|nested-private-owner-uncertain.test.ts:12",
       "reason": "The two bodies are spelled identically; the default engine abstains while a private callable's owner is unresolved. The next engine compares them, and the tests run the same: identical text in identical context links."
+    },
+    {
+      "id": "extra|fixtures/duplicates|not-cross-file-suite-collection-setup-a.test.ts:15|not-cross-file-suite-collection-setup-b.test.ts:15",
+      "reason": "Setup a describe body runs at collection reaches the whole file, and the module context does not read it yet."
+    },
+    {
+      "id": "link|fixtures/duplicates|not-duplicate-concise-suite-body.test.ts:13|not-duplicate-concise-suite-body.test.ts:17",
+      "reason": "A concise suite body sequences its setup, and the suite context reads block bodies only."
     }
   ]
 }
