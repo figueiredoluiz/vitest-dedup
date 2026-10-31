@@ -611,3 +611,62 @@ fn an_effectful_initializer_is_not_absorbed_through_another_inlining() {
         ]
     );
 }
+
+/// A generator continuation's body never runs when called: it is not the awaited spelling's
+/// twin, and no splice claims it is.
+#[test]
+fn a_generator_continuation_is_never_spliced() {
+    let events = events(
+        r#"
+        test('spliced?', () => { return f().then(function* () { g(); }); });
+        test('deferred', () => { return f().then(function* () { g(); }); h(); });
+    "#,
+        &[],
+    );
+    // The generator body's events stay deferred, and no await marker is spliced in.
+    let spliced = of(&events, "spliced?");
+    assert!(
+        !spliced.iter().any(|event| event == "await"),
+        "no await marker without execution: {spliced:?}"
+    );
+    assert!(
+        !spliced.iter().any(|event| event == "call:g:g"),
+        "the generator body never ran: {spliced:?}"
+    );
+    assert!(
+        spliced
+            .iter()
+            .any(|event| event.starts_with("deferred-call:g:g")),
+        "the body stays deferred: {spliced:?}"
+    );
+}
+
+/// An effect that evaluates before the read, inside the read's own statement, blocks inlining:
+/// moving the initializer there reverses two observable evaluations.
+#[test]
+fn an_effect_before_the_read_within_its_statement_blocks_inlining() {
+    let events = events(
+        r#"
+        test('extracted', () => { const x = mark(1); consume(mark(2), x); });
+        test('written', () => { consume(mark(2), mark(1)); });
+    "#,
+        &[],
+    );
+    assert_ne!(of(&events, "extracted"), of(&events, "written"));
+}
+
+/// A computed object key evaluates when the literal does: its events are in the sequence, so the
+/// two orders stay apart and an initializer does not move across one.
+#[test]
+fn a_computed_key_is_behavior_and_blocks_inlining() {
+    let events = events(
+        r#"
+        test('before', () => { const x = mark(1); const o = { [mark(2)]: 1 }; g(x); });
+        test('after', () => { const o = { [mark(2)]: 1 }; const x = mark(1); g(x); });
+        test('twin', () => { const x = mark(1); const o = { [mark(2)]: 1 }; g(x); });
+    "#,
+        &[],
+    );
+    assert_eq!(of(&events, "before"), of(&events, "twin"));
+    assert_ne!(of(&events, "before"), of(&events, "after"));
+}

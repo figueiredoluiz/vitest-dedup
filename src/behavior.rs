@@ -479,6 +479,9 @@ impl<'s> Walker<'_, 's> {
         if !tree.is_function(*argument)
             || !tree.list(*argument, "params").is_empty()
             || tree.flag(*argument, "expression")
+            // A generator called returns an iterator: its body never runs here, so the spliced
+            // statements would claim behavior the runtime does not have.
+            || tree.flag(*argument, "generator")
         {
             return None;
         }
@@ -616,6 +619,13 @@ impl<'s> Walker<'_, 's> {
                     .collect();
                 for property in properties {
                     if tree.kind(property) == "Property" {
+                        // A computed key evaluates when the literal does, before its value: its
+                        // events belong to the sequence, or two orders would share one trace.
+                        if tree.flag(property, "computed") {
+                            if let Some(key) = tree.child(property, "key") {
+                                self.walk_expr(key, deferred, depth + 1);
+                            }
+                        }
                         if let Some(value) = tree.child(property, "value") {
                             self.walk_expr(value, deferred, depth + 1);
                         }

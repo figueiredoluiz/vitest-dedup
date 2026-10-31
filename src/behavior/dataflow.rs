@@ -261,7 +261,7 @@ fn try_register_inline(
     };
     // A local read twice may exist precisely so an effectful initializer runs once; the trace
     // never assumes purity, so it never duplicates a twice-read initializer.
-    let [use_index] = reads.as_slice() else {
+    let [(use_index, read_span)] = reads.as_slice() else {
         return;
     };
     if *use_index <= decl_index {
@@ -271,6 +271,11 @@ fn try_register_inline(
         .iter()
         .any(|statement| statement_has_effect(tree, *statement, 0))
     {
+        return;
+    }
+    // The initializer must not move past an effect that evaluates before the read inside the
+    // read's own statement either.
+    if an_effect_precedes(tree, scan.statements[*use_index], *read_span) {
         return;
     }
     // Moving the initializer to the read must not move it past a declaration it reads: the
@@ -344,7 +349,7 @@ fn try_register_members(
         let Some(reads) = read_statement_indices(tree, scopes, scan.statements, symbol) else {
             continue;
         };
-        let Some(&last_use) = reads.iter().max() else {
+        let Some(&(last_use, _)) = reads.iter().max_by_key(|(index, _)| *index) else {
             continue; // never read: nothing to substitute.
         };
         if last_use <= decl_index {
@@ -369,7 +374,7 @@ fn read_statement_indices(
     scopes: &Scopes,
     statements: &[NodeId],
     symbol: SymbolId,
-) -> Option<Vec<usize>> {
+) -> Option<Vec<(usize, Span)>> {
     let mut indices = Vec::new();
     for (index, statement) in statements.iter().enumerate() {
         let span = tree.span(*statement);
@@ -380,10 +385,39 @@ fn read_statement_indices(
             if !directly_in(tree, reference.span, *statement) {
                 return None;
             }
-            indices.push(index);
+            indices.push((index, reference.span));
         }
     }
     Some(indices)
+}
+
+/// Whether anything effectful evaluates before the read inside its own statement: an effect leaf
+/// starting earlier and not containing the read. The initializer would move past it, reversing
+/// two observable evaluations — `const x = mark(1); consume(mark(2), x)` does not read as
+/// `consume(mark(2), mark(1))` just because both spell the same events.
+fn an_effect_precedes(tree: &Tree, statement: NodeId, read: Span) -> bool {
+    tree.descendants(statement)
+        .filter(|node| is_effect_leaf(tree, *node))
+        .any(|node| {
+            let span = tree.span(node);
+            span.start < read.start && !span.contains(read)
+        })
+}
+
+/// The expression kinds that are themselves an evaluation, not a container of one: everything
+/// else the effect scan reaches through.
+fn is_effect_leaf(tree: &Tree, node: NodeId) -> bool {
+    matches!(
+        tree.kind(node),
+        "CallExpression"
+            | "NewExpression"
+            | "AwaitExpression"
+            | "YieldExpression"
+            | "UpdateExpression"
+            | "AssignmentExpression"
+            | "ImportExpression"
+            | "TaggedTemplateExpression"
+    )
 }
 
 /// Whether `reference`'s walk from its identifier up to `statement` crosses no branch, loop,
@@ -503,9 +537,18 @@ pub(super) fn expression_has_effect(tree: &Tree, expression: NodeId, depth: u32)
             .into_iter()
             .flatten()
             .any(|property| match tree.kind(property) {
-                "Property" => tree
-                    .child(property, "value")
-                    .is_some_and(|value| expression_has_effect(tree, value, depth + 1)),
+                "Property" => {
+                    // A computed key evaluates when the literal does, so it can carry an effect
+                    // just as its value can.
+                    let key = tree.flag(property, "computed")
+                        && tree
+                            .child(property, "key")
+                            .is_some_and(|key| expression_has_effect(tree, key, depth + 1));
+                    let value = tree
+                        .child(property, "value")
+                        .is_some_and(|value| expression_has_effect(tree, value, depth + 1));
+                    key || value
+                }
                 _ => true,
             }),
         "MemberExpression" => {
