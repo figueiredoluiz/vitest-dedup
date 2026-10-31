@@ -4,6 +4,8 @@
 //! key and a cross-file key, or excluded, carrying the [`Exclusion`] that says why: no test is
 //! dropped without one. Rules read this record and never the syntax.
 
+mod suites;
+
 use crate::exclusions;
 use crate::framework::{Dialect, Registers};
 use crate::inventory::{self, Reach, Site, SiteKind};
@@ -74,7 +76,7 @@ impl Exclusion {
     }
 }
 
-/// One test, or one row of a test table.
+/// One test, one row of a test table, or a suite in the separate suite population.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TestCase {
     /// The registering call.
@@ -122,6 +124,8 @@ pub struct SiteRecord {
 pub struct FileCorpus {
     /// Its tests, in source order, rows in table order.
     pub tests: Vec<TestCase>,
+    /// Comparable whole suites, separate from executable tests and exclusion counts.
+    pub suites: Vec<TestCase>,
     /// Its registration sites and module loads.
     pub sites: Vec<SiteRecord>,
     /// Parse errors the parser recovered from.
@@ -654,7 +658,17 @@ pub fn file(
             chain: site.chain.join("."),
         }
     }));
+    let suites = suites::collect(
+        &parsed,
+        &found,
+        &structure,
+        &contexts,
+        &tests,
+        &mut normalizer,
+        (setting, source),
+    );
     Ok(FileCorpus {
+        suites,
         tests,
         sites,
         parse_errors: parsed.parse_errors,
@@ -675,6 +689,8 @@ pub struct Engine {
     /// every file has been read. Charged to the RSS backstop alone until the engine's state is
     /// measured onto `--max-memory`.
     pub files: Vec<(PathBuf, Vec<TestCase>)>,
+    /// Comparable suite containers, retained separately from the executable population.
+    pub suites: Vec<(PathBuf, Vec<TestCase>)>,
     /// Files every test of which is unresolved.
     blind: Vec<BlindFile>,
 }
@@ -797,6 +813,8 @@ impl Engine {
         let mut corpus = corpus;
         self.files
             .push((relative.to_path_buf(), std::mem::take(&mut corpus.tests)));
+        self.suites
+            .push((relative.to_path_buf(), std::mem::take(&mut corpus.suites)));
         self.tests += case_count;
         self.unresolved += unresolved;
         if unresolved > 0 && unresolved == case_count {

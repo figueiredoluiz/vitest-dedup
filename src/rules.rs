@@ -15,6 +15,7 @@ use std::path::{Path, PathBuf};
 
 mod names;
 mod rows;
+mod suites;
 
 /// The files of one run, as the engine retained them: each path relative to the analysis root,
 /// its cases in source order, rows in table order.
@@ -71,9 +72,37 @@ pub fn run(files: &Files, config: &Config) -> Outcome {
 /// [`run`] with the pair budget given, so a test can drive exhaustion without a corpus that
 /// reaches the real cap.
 pub fn run_with_budget(files: &Files, config: &Config, max_pair_comparisons: u64) -> Outcome {
+    run_with_suites_and_budget(files, &[], config, &[], max_pair_comparisons)
+}
+
+/// Runs suite and test rules together, preserving inline-suppressed suites' child findings.
+pub fn run_with_suites(
+    files: &Files,
+    suites: &Files,
+    config: &Config,
+    suppressions: &[crate::modes::InlineSuppression],
+) -> Outcome {
+    run_with_suites_and_budget(
+        files,
+        suites,
+        config,
+        suppressions,
+        crate::analysis::MAX_PAIR_COMPARISONS,
+    )
+}
+
+/// Shared bounded pass; suite containers never enter the executable-test rules.
+fn run_with_suites_and_budget(
+    files: &Files,
+    suites: &Files,
+    config: &Config,
+    suppressions: &[crate::modes::InlineSuppression],
+    max_pair_comparisons: u64,
+) -> Outcome {
     let mut findings = Vec::new();
     let mut budget = PairBudget::new(max_pair_comparisons);
-    let mut budget_exhausted = false;
+    let (twins, mut budget_exhausted) =
+        suites::run(suites, config, suppressions, &mut budget, &mut findings);
 
     let duplicate_severity = config.severity(Rule::DuplicateTest);
     if duplicate_severity != Severity::Off {
@@ -130,6 +159,7 @@ pub fn run_with_budget(files: &Files, config: &Config, max_pair_comparisons: u64
         );
     }
 
+    twins.suppress(&mut findings);
     crate::analysis::sort_findings(&mut findings);
     Outcome {
         findings,

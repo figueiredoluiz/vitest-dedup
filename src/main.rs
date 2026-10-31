@@ -1026,7 +1026,12 @@ fn run_with_engine(
         .map(|engine| std::mem::take(&mut engine.files));
     let mut result = match engine_files {
         Some(files) => {
-            let outcome = vitest_dedup::rules::run(&files, &config);
+            let outcome = vitest_dedup::rules::run_with_suites(
+                &files,
+                &next_engine.as_ref().expect("selected engine").suites,
+                &config,
+                &inline_suppressions,
+            );
             causes.pair_budget_exhausted |= outcome.budget_exhausted;
             let finished = analysis::finish_findings(
                 outcome.findings,
