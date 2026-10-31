@@ -20,7 +20,7 @@
 import { describeMatcher, findingMatches } from './recall-runner.mjs'
 
 /** The rules the next engine runs. */
-export const PORTED_RULES = new Set(['duplicate-test', 'duplicate-test-name', 'cross-file-duplicate'])
+export const PORTED_RULES = new Set(['duplicate-test', 'duplicate-test-name', 'duplicate-each-row', 'cross-file-duplicate'])
 
 /** The identity one participant is matched by, the way the spike evaluator matched: file:line. */
 function endpoint(participant) {
@@ -124,20 +124,23 @@ export function expectationEdges(fixtures) {
   return { required, declared, forbidden: forbidden.filter((f) => !requiredEdges.has(f.edge)) }
 }
 
+/** Rules whose reported titles must match the runtime rendering, even at identical locations. */
+const renderedRule = (rule) => rule === 'duplicate-test-name' || rule === 'duplicate-each-row'
+
 /** The sorted `path:line` of a finding's locations. */
 const locationsOf = (finding) => finding.locations.map((location) => `${location.path}:${location.line}`).sort()
 
 /**
- * Body findings retain their source pattern; name findings carry exact rendered titles, which
+ * Body findings retain their source pattern; name and row findings carry exact rendered titles, which
  * must be checked even when two different title groups share the same declaration locations.
  */
-const readable = (expected) => (expected.locations && expected.rule !== 'duplicate-test-name' ? { ...expected, titles: undefined } : expected)
+const readable = (expected) => (expected.locations && !renderedRule(expected.rule) ? { ...expected, titles: undefined } : expected)
 
-/** A name finding's title distinguishes two row groups at the same pair of declarations. */
-const findingIdentity = (finding) => locationsOf(finding).join(',') + (finding.rule === 'duplicate-test-name' ? `|${JSON.stringify(finding.titles)}` : '')
+/** A rendered title distinguishes two name or row groups at the same pair of declarations. */
+const findingIdentity = (finding) => locationsOf(finding).join(',') + (renderedRule(finding.rule) ? `|${JSON.stringify(finding.titles)}` : '')
 
-/** Missing name groups also stay distinct when their expected declaration locations agree. */
-const matcherIdentity = (expected) => (expected.locations ?? expected.titles ?? []).join(',') + (expected.rule === 'duplicate-test-name' && expected.locations && expected.titles ? `|${JSON.stringify(expected.titles)}` : '')
+/** Missing name and row groups also stay distinct when their expected declaration locations agree. */
+const matcherIdentity = (expected) => (expected.locations ?? expected.titles ?? []).join(',') + (renderedRule(expected.rule) && expected.locations && expected.titles ? `|${JSON.stringify(expected.titles)}` : '')
 
 /**
  * Judges one recall case: its ported expectations against what the next engine reported.

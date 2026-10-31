@@ -70,16 +70,7 @@ fn assert_owned_names(source: &str, path: &str, tests: usize, excluded: usize, e
             .count(),
         excluded
     );
-    let config = crate::config::Config {
-        root: ".".into(),
-        include: Vec::new(),
-        include_is_explicit: false,
-        exclude: Vec::new(),
-        rules: Default::default(),
-        threshold: 100,
-        source: "test".to_owned(),
-    };
-    let outcome = crate::rules::run(&[(path.into(), corpus.tests)], &config);
+    let outcome = owned_findings(path, corpus);
     let names: Vec<_> = outcome
         .findings
         .iter()
@@ -1024,4 +1015,125 @@ fn owned_name_formats_match_runtime_without_widening_unknowns() {
             "namedTitle",
         ],
     );
+}
+
+/// The owned runtime source pins input equality, observability and rendering as final findings.
+#[test]
+fn owned_duplicate_rows_require_proven_inputs_and_keep_every_group() {
+    let source = include_str!("../../fixtures/oracle/duplicate-rows/cases.test.ts");
+    let corpus = corpora(&[("cases.test.ts", source)], &["cases.test.ts"]).remove(0);
+    assert_eq!(corpus.tests.len(), 75);
+    assert_eq!(
+        corpus
+            .tests
+            .iter()
+            .filter(|case| case.exclusion.is_some())
+            .count(),
+        2
+    );
+    assert_eq!(
+        corpus
+            .tests
+            .iter()
+            .filter(|case| case.row.is_some())
+            .count(),
+        75
+    );
+    let proven_rows = corpus
+        .tests
+        .iter()
+        .filter(|case| case.row_class.is_some())
+        .count();
+    let outcome = owned_findings("cases.test.ts", corpus);
+    let rows: Vec<_> = outcome
+        .findings
+        .iter()
+        .filter(|finding| finding.rule == crate::model::Rule::DuplicateEachRow)
+        .collect();
+    let expected = [
+        ("scalar 1", 2),
+        ("ignored 1", 2),
+        ("rest repeat", 2),
+        ("whole 3 4", 2),
+        ("object", 2),
+        ("groups 1", 2),
+        ("groups 2", 2),
+        ("spanning", 2),
+        ("spanning", 2),
+        ("cluster", 5),
+        ("primitive 7", 2),
+        ("literal array", 2),
+        ("empty row", 2),
+        ("unicode é😀", 2),
+        ("whole const 1", 2),
+    ];
+    assert_eq!(rows.len(), expected.len(), "{rows:#?}");
+    assert_eq!(proven_rows, 51);
+    for (finding, (title, count)) in rows.iter().zip(expected) {
+        assert_eq!(finding.locations.len(), count);
+        assert_eq!(finding.titles, vec![title; count]);
+        assert!(finding
+            .locations
+            .iter()
+            .all(|location| location == &finding.locations[0]));
+    }
+}
+
+/// Run rules over already-counted owned cases with the built-in severities.
+fn owned_findings(path: &str, corpus: FileCorpus) -> crate::rules::Outcome {
+    let config = crate::config::Config {
+        root: ".".into(),
+        include: Vec::new(),
+        include_is_explicit: false,
+        exclude: Vec::new(),
+        rules: Default::default(),
+        threshold: 100,
+        source: "test".to_owned(),
+    };
+    crate::rules::run(&[(path.into(), corpus.tests)], &config)
+}
+
+/// A derived suite table has no proven prefix yet; a direct suite retains row detection.
+#[test]
+fn row_names_refuse_derived_suite_prefixes() {
+    let source = format!("{HEADER}\nconst suite = describe.each(['a', 'b']);\n\
+        suite('scope %s', () => {{ test.each([[1], [1]])('row', value => expect(value).toBe(1)) }});\n\
+        describe('scope', () => {{ test.each([[1], [1]])('row', value => expect(value).toBe(1)) }});\n\
+        import {{ suite as imported }} from './suite';\n\
+        imported('imported %s', () => {{ test.each([[1], [1]])('row', value => expect(value).toBe(1)) }});");
+    let corpus = corpora(
+        &[
+            ("cases.test.ts", &source),
+            (
+                "suite.ts",
+                "import { describe } from 'vitest'; export const suite = describe.each(['a', 'b'])",
+            ),
+        ],
+        &["cases.test.ts"],
+    )
+    .remove(0);
+    assert_eq!(corpus.tests.len(), 7);
+    assert_eq!(
+        corpus
+            .tests
+            .iter()
+            .filter(|case| case.exclusion == Some(Exclusion::RegisteredElsewhere))
+            .count(),
+        1
+    );
+    assert_eq!(
+        corpus
+            .tests
+            .iter()
+            .filter(|case| case.row.is_some())
+            .count(),
+        6
+    );
+    let findings = owned_findings("cases.test.ts", corpus).findings;
+    let rows: Vec<_> = findings
+        .iter()
+        .filter(|finding| finding.rule == crate::model::Rule::DuplicateEachRow)
+        .collect();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].titles, ["scope > row", "scope > row"]);
 }

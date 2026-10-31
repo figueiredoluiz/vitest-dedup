@@ -90,7 +90,7 @@ fails, so its entry goes when support lands.
 
 `npm run check:next-duplicates` runs the analyzer under `VITEST_DEDUP_ENGINE=next` over
 `fixtures/duplicates/`, `fixtures/observed/` and `fixtures/mixed/` and judges the rules the
-next engine ports (`duplicate-test`, `duplicate-test-name`, `cross-file-duplicate`) pairwise against the fixture
+next engine ports (`duplicate-test`, `duplicate-test-name`, `duplicate-each-row`, `cross-file-duplicate`) pairwise against the fixture
 headers: every pair a positive expectation declares must be linked by its rule, no pair declared
 silent may be linked, and any other linked pair is a failure until it is adjudicated into a
 header or into `scripts/check/next-duplicates-known.json` with a reason. A listed delta that
@@ -105,6 +105,15 @@ The experimental name rule compares proven title segments in one file and render
 literal table titles. It preserves the corpus's existing exclusions, including empty callbacks and
 todos. Unknown title values, unsupported formatting and suite-table titles do not anchor name
 findings. Distinct rendered titles across copied tables remain separate findings.
+
+The experimental row rule compares rows within one declaration using proven inputs, rendered
+names and equivalent callback/context keys. It supports directly written tables of primitive
+values and shallow literal rows. Fixed-parameter arrow callbacks may ignore trailing cells;
+rest parameters, destructuring and ordinary functions retain the whole row. Unknown/effectful
+cells, nested reference values, suite tables, imported/member constants and unresolved title
+formatting remain unsupported. In particular, dollar substitutions, string `%i` conversions and
+whole null rows cannot anchor row findings yet. Strings and keys containing the replacement
+character are also refused until the owned tree exposes lossless JavaScript code-unit identity. Existing corpus exclusions still apply.
 
 ## Writing documentation
 

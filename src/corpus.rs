@@ -89,6 +89,8 @@ pub struct TestCase {
     pub name: Option<Vec<String>>,
     /// Which row of its table, when it has one.
     pub row: Option<usize>,
+    /// Declaration-local class of proven callback inputs and a supported rendered row title.
+    pub row_class: Option<u64>,
     /// Equal for two tests of one file claimed to be duplicates.
     pub key: u64,
     /// Equal for two tests of different files claimed to be duplicates.
@@ -353,6 +355,7 @@ pub fn file(
         full_title: None,
         name: None,
         row: None,
+        row_class: None,
         key: 0,
         module_key: 0,
         inert: false,
@@ -528,6 +531,11 @@ pub fn file(
             .map(|scope| suite_names.get(structure.suites.get(scope)?)?.clone())
             .collect();
         let pattern = normal::titles::title(&parsed, site.node);
+        let row_prefix_known = suites.iter().all(|scope| {
+            structure.suites.get(scope).is_some_and(|&call| {
+                normal::row_identity::suite_prefix_known(&parsed, call, setting.dialect)
+            })
+        });
         for (index, (bound, every, unbound)) in rows.into_iter().enumerate() {
             let name =
                 name_prefix
@@ -549,6 +557,24 @@ pub fn file(
                         segments.push(title);
                         Some(segments)
                     });
+            let row_class = (|| {
+                if !row_prefix_known {
+                    return None;
+                }
+                let row = modifiers.rows.as_ref()?.get(index)?;
+                let identity = normal::row_identity::identity(&parsed, row, function?)?;
+                let (arguments, fields) = normal::titles::row(&parsed, row);
+                let rendered = (setting.dialect.render_row_title)(
+                    pattern.as_deref()?,
+                    &arguments,
+                    fields.as_ref(),
+                    index,
+                )?;
+                if name.as_ref()?.last()? != &rendered {
+                    return None;
+                }
+                Some(digest(&identity))
+            })();
             let normal_body = normalizer.substituted(body, bound, every);
             // A row whose every parameter is bound is the test it would be written out as.
             let chain = if table && every {
@@ -561,6 +587,7 @@ pub fn file(
             );
             tests.push(TestCase {
                 row: table.then_some(index),
+                row_class,
                 key: digest(&key),
                 module_key: digest(&format!("{key}\u{1}{module_context}")),
                 full_title: full_title.clone(),
@@ -587,6 +614,7 @@ pub fn file(
             full_title: None,
             name: None,
             row: None,
+            row_class: None,
             key: 0,
             module_key: 0,
             inert: false,

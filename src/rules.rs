@@ -14,6 +14,7 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 mod names;
+mod rows;
 
 /// The files of one run, as the engine retained them: each path relative to the analysis root,
 /// its cases in source order, rows in table order.
@@ -102,6 +103,7 @@ pub fn run_with_budget(files: &Files, config: &Config, max_pair_comparisons: u64
     }
 
     budget_exhausted |= !names::run(files, config, &mut budget, &mut findings);
+    budget_exhausted |= !rows::run(files, config, &mut budget, &mut findings);
 
     let cross_file_severity = config.severity(Rule::CrossFileDuplicate);
     if cross_file_severity != Severity::Off {
@@ -173,11 +175,20 @@ fn one_per_file(group: &[usize], entries: &[Entry<'_>]) -> Vec<usize> {
 }
 
 /// The declarations `members` stand for: two copied tables pair row by row, and every row pair is
-/// the same claim about the same calls, so one finding speaks for them all.
-fn declarations<'a>(members: &[Entry<'a>]) -> Vec<(&'a Path, u32)> {
+/// the same claim about the same calls, so one finding speaks for them all. Row findings instead
+/// retain row indices: each repeated case within the declaration is a separate claim.
+fn declarations<'a>(rule: Rule, members: &[Entry<'a>]) -> Vec<(&'a Path, u32, Option<usize>)> {
     members
         .iter()
-        .map(|member| (member.path, member.case.span.start_byte))
+        .map(|member| {
+            (
+                member.path,
+                member.case.span.start_byte,
+                (rule == Rule::DuplicateEachRow)
+                    .then_some(member.case.row)
+                    .flatten(),
+            )
+        })
         .collect()
 }
 
@@ -202,7 +213,7 @@ fn emit(
                     .into_iter()
                     .map(|(left, right)| [entries[left], entries[right]])
                     .filter(|members| {
-                        claimed.insert((declarations(members), name_claim(rule, members)))
+                        claimed.insert((declarations(rule, members), name_claim(rule, members)))
                     })
                     .collect();
                 if !budget.charge(pairs.len() as u64) {
@@ -214,7 +225,7 @@ fn emit(
             }
             GroupOutcome::Cluster(members) => {
                 let members: Vec<Entry> = members.iter().map(|&index| entries[index]).collect();
-                if !claimed.insert((declarations(&members), name_claim(rule, &members))) {
+                if !claimed.insert((declarations(rule, &members), name_claim(rule, &members))) {
                     continue;
                 }
                 if !budget.charge((members.len() - 1) as u64) {
@@ -246,7 +257,7 @@ fn over(rule: Rule, severity: Severity, members: &[Entry<'_>], message: String) 
         titles: members
             .iter()
             .map(|member| {
-                if rule == Rule::DuplicateTestName {
+                if matches!(rule, Rule::DuplicateTestName | Rule::DuplicateEachRow) {
                     member
                         .case
                         .name

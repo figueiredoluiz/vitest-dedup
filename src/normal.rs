@@ -8,6 +8,7 @@
 
 mod form;
 mod identity;
+pub(crate) mod row_identity;
 mod rows;
 pub(crate) mod titles;
 

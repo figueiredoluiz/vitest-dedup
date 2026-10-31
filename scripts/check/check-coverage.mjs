@@ -296,10 +296,12 @@ const RUST_MODULES = {
   'src/normal/form.rs': 90,
   'src/normal/identity.rs': 90,
   'src/normal/rows.rs': 90,
+  'src/normal/row_identity.rs': 95,
   'src/normal/titles.rs': 93,
   'src/corpus.rs': 99,
   'src/rules.rs': 100,
   'src/rules/names.rs': 100,
+  'src/rules/rows.rs': 100,
 }
 
 // Re-pinned 2026-09-19, after `check-mutation-score.mjs` and then the memory gates' five modules

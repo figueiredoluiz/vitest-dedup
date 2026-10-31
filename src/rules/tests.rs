@@ -20,6 +20,7 @@ fn case(line: u32, site: u32, key: u64, module_key: u64) -> TestCase {
         full_title: Some(format!("t{line}")),
         name: Some(vec![format!("t{line}")]),
         row: None,
+        row_class: None,
         key,
         module_key,
         inert: false,
@@ -585,4 +586,83 @@ fn name_clusters_keep_every_title_and_ignore_input_order() {
         &config,
     );
     assert_eq!(expected.findings, reversed.findings);
+}
+
+/// Rows share a declaration and input class; unrelated rules cannot consume this test's budget.
+fn row_population(size: usize) -> Vec<TestCase> {
+    (0..size)
+        .map(|index| {
+            let mut row = case(5, 100, 1, 1);
+            row.row = Some(index);
+            row.row_class = Some(0);
+            row
+        })
+        .collect()
+}
+
+/// Every dimension in the row proof is required; body or name equality alone is insufficient.
+#[test]
+fn row_rule_partitions_by_all_proof_dimensions() {
+    let config = config_with(&[(Rule::DuplicateEachRow, Severity::Error)]);
+    let base = row_population(2);
+    let finding = run(&[file("a.test.ts", base.clone())], &config);
+    assert_eq!(finding.findings.len(), 1);
+    assert_eq!(finding.findings[0].rule, Rule::DuplicateEachRow);
+    assert_eq!(finding.findings[0].severity, Severity::Error);
+    for dimension in 0..8 {
+        let mut rows = base.clone();
+        match dimension {
+            0 => rows[1].row_class = None,
+            1 => rows[1].row_class = Some(1),
+            2 => rows[1].row = None,
+            3 => rows[1].name = None,
+            4 => rows[1].name = Some(vec!["different".into()]),
+            5 => rows[1].key = 2,
+            6 => rows[1].exclusion = Some(Exclusion::EmptyBody),
+            _ => rows[1].span.start_byte = 200,
+        }
+        let findings = run(&[file("a.test.ts", rows)], &config).findings;
+        assert!(
+            findings
+                .iter()
+                .all(|finding| finding.rule != Rule::DuplicateEachRow),
+            "dimension {dimension}"
+        );
+    }
+    let findings = run(
+        &[
+            file("a.test.ts", vec![base[0].clone()]),
+            file("b.test.ts", vec![base[1].clone()]),
+        ],
+        &config,
+    )
+    .findings;
+    assert!(findings
+        .iter()
+        .all(|finding| finding.rule != Rule::DuplicateEachRow));
+    let disabled = config_with(&[(Rule::DuplicateEachRow, Severity::Off)]);
+    assert!(run(&[file("a.test.ts", base)], &disabled)
+        .findings
+        .is_empty());
+}
+
+/// A whole row group must fit before emission, for spanning pairs and clusters alike.
+#[test]
+fn row_rule_preserves_spanning_edges_clusters_and_budget() {
+    let config = config_with(&[]);
+    for (size, expected) in [(3, 2), (5, 1)] {
+        let mut cases = row_population(size);
+        let files = [file("a.test.ts", cases.clone())];
+        let short = run_with_budget(&files, &config, size as u64 - 2);
+        assert!(short.budget_exhausted);
+        assert!(short.findings.is_empty());
+        let enough = run_with_budget(&files, &config, size as u64 - 1);
+        assert!(!enough.budget_exhausted);
+        assert_eq!(enough.findings.len(), expected);
+        cases.reverse();
+        assert_eq!(
+            run(&[file("a.test.ts", cases)], &config).findings,
+            enough.findings
+        );
+    }
 }

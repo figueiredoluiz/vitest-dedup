@@ -342,18 +342,20 @@ test('a known entry needs an id and a reason', () => {
   ])
 })
 
-test('name findings require exact titles even when locations match', () => {
-  const expected = { rule: 'duplicate-test-name', locations: ['a.test.ts:3', 'a.test.ts:6'], titles: ['row 1', 'row 1'] }
-  const record = { ...located('duplicate-test-name', [3, 6]), titles: ['row 1', 'row 1'] }
-  const testCase = { name: 'names', expectedTests: 4, expectedFindings: [expected, { ...expected, titles: ['row 2', 'row 2'] }] }
-  assert.deepEqual(judgeRecall(testCase, [summary(4), record, { ...record, titles: ['row 2', 'row 2'] }]).failures, [])
-  const missing = judgeRecall(testCase, [summary(4)])
-  assert.equal(new Set(missing.failures.map(failure => failure.id)).size, 2)
-  const collapsed = judgeRecall(testCase, [summary(4), record])
-  assert.equal(collapsed.failures.length, 1)
-  assert.match(collapsed.failures[0].id, /^recall-miss/)
-  const wrong = judgeRecall(testCase, [summary(4), record, { ...record, titles: ['row 3', 'row 3'] }])
-  assert.equal(wrong.failures.length, 2)
-  const extra = judgeRecall({ name: 'names', expectedTests: 4 }, [summary(4), record, { ...record, titles: ['row 2', 'row 2'] }])
-  assert.equal(new Set(extra.failures.map(failure => failure.id)).size, 2)
-})
+for (const rule of ['duplicate-test-name', 'duplicate-each-row']) {
+  test(`${rule} findings require exact titles even when locations match`, () => {
+    const expected = { rule, locations: ['a.test.ts:3', 'a.test.ts:6'], titles: ['row 1', 'row 1'] }
+    const record = { ...located(rule, [3, 6]), titles: ['row 1', 'row 1'] }
+    const testCase = { name: 'names', expectedTests: 4, expectedFindings: [expected, { ...expected, titles: ['row 2', 'row 2'] }] }
+    assert.deepEqual(judgeRecall(testCase, [summary(4), record, { ...record, titles: ['row 2', 'row 2'] }]).failures, [])
+    const missing = judgeRecall(testCase, [summary(4)])
+    assert.equal(new Set(missing.failures.map(failure => failure.id)).size, 2)
+    const collapsed = judgeRecall(testCase, [summary(4), record])
+    assert.equal(collapsed.failures.length, 1)
+    assert.match(collapsed.failures[0].id, /^recall-miss/)
+    const wrong = judgeRecall(testCase, [summary(4), record, { ...record, titles: ['row 3', 'row 3'] }])
+    assert.equal(wrong.failures.length, 2)
+    const extra = judgeRecall({ name: 'names', expectedTests: 4 }, [summary(4), record, { ...record, titles: ['row 2', 'row 2'] }])
+    assert.equal(new Set(extra.failures.map(failure => failure.id)).size, 2)
+  })
+}

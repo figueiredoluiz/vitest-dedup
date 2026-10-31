@@ -122,6 +122,8 @@ pub type RenderTitle = fn(
 pub struct Dialect {
     /// Renders a row title only when the supplied values establish its runtime text.
     pub render_title: RenderTitle,
+    /// The bounded title proof used by row comparison while broader rendering is being ported.
+    pub render_row_title: RenderTitle,
     /// Modules whose imports are the API.
     pub api_modules: &'static [&'static str],
     /// The `import.meta` member that carries the API in source files, when the framework has one.

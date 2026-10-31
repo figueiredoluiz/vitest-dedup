@@ -135,3 +135,19 @@ fn format(value: Option<&Value>, directive: char) -> Option<String> {
         _ => None,
     }
 }
+
+/// Refuses the unresolved named-field and string integer conversions for row equality.
+/// The name rule retains its existing rendering until its separate formatter correction.
+pub(super) fn render_row(
+    pattern: &str,
+    arguments: &[Option<Value>],
+    fields: Option<&Map<String, Value>>,
+    index: usize,
+) -> Option<String> {
+    if pattern.contains(['$', '\u{FFFD}'])
+        || (pattern.contains("%i") && arguments.iter().flatten().any(Value::is_string))
+    {
+        return None;
+    }
+    render(pattern, arguments, fields, index)
+}

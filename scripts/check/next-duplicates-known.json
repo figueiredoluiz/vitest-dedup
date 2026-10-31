@@ -683,6 +683,74 @@
     {
       "id": "recall-extra|mixed-suite-copy-with-internal-duplicates|duplicate-test-name|billing.test.ts:25,billing.test.ts:31|[\"billing > applies tax to a subtotal\",\"billing > applies tax to a subtotal\"]",
       "reason": "The default engine reports the copied suite once and suppresses its child name findings; the next engine does not port suite suppression yet."
+    },
+    {
+      "id": "recall-miss|duplicate-each-row-describe-each|duplicate-each-row|admin permissions,admin permissions",
+      "reason": "The next engine does not expand suite tables; it cannot establish the repeated suite rows or their rendered names."
+    },
+    {
+      "id": "recall-miss|duplicate-each-row-const-member|duplicate-each-row|parse.test.ts:18,parse.test.ts:18|[\"records at level 3\",\"records at level 3\"]",
+      "reason": "The bounded next-engine row value proof does not resolve member reads from const objects, so level.value and the literal remain unproved."
+    },
+    {
+      "id": "recall-miss|duplicate-each-row-global-constants|duplicate-each-row|reads undefined,reads undefined",
+      "reason": "The next-engine row value proof does not yet model undefined, NaN or infinities; it refuses their row identities and formatted titles."
+    },
+    {
+      "id": "recall-miss|duplicate-each-row-global-constants|duplicate-each-row|reads NaN,reads NaN",
+      "reason": "The next-engine row value proof does not yet model undefined, NaN or infinities; it refuses their row identities and formatted titles."
+    },
+    {
+      "id": "recall-miss|duplicate-each-row-global-constants|duplicate-each-row|reads Infinity,reads Infinity",
+      "reason": "The next-engine row value proof does not yet model undefined, NaN or infinities; it refuses their row identities and formatted titles."
+    },
+    {
+      "id": "recall-miss|duplicate-each-row-global-constants|duplicate-each-row|reads -Infinity,reads -Infinity",
+      "reason": "The next-engine row value proof does not yet model undefined, NaN or infinities; it refuses their row identities and formatted titles."
+    },
+    {
+      "id": "recall-miss|duplicate-each-row-global-signed-zero|duplicate-each-row|signed -0,signed -0",
+      "reason": "The next-engine title renderer conservatively refuses signed-zero substitution; equal negative-zero rows therefore have no rendered title proof."
+    },
+    {
+      "id": "recall-miss|duplicate-each-row-imported-constants|duplicate-each-row|reads fast,reads fast",
+      "reason": "The next-engine row value proof does not resolve imported constants, bigint values or tagged tables; these repeated rows remain unproved."
+    },
+    {
+      "id": "recall-miss|duplicate-each-row-imported-constants|duplicate-each-row|reads quick,reads quick",
+      "reason": "The next-engine row value proof does not resolve imported constants, bigint values or tagged tables; these repeated rows remain unproved."
+    },
+    {
+      "id": "recall-miss|duplicate-each-row-imported-constants|duplicate-each-row|reads -2,reads -2",
+      "reason": "The next-engine row value proof does not resolve imported constants, bigint values or tagged tables; these repeated rows remain unproved."
+    },
+    {
+      "id": "recall-miss|duplicate-each-row-imported-constants|duplicate-each-row|reads 10n,reads 10n",
+      "reason": "The next-engine row value proof does not resolve imported constants, bigint values or tagged tables; these repeated rows remain unproved."
+    },
+    {
+      "id": "recall-miss|duplicate-each-row-imported-constants|duplicate-each-row|reads true,reads true",
+      "reason": "The next-engine row value proof does not resolve imported constants, bigint values or tagged tables; these repeated rows remain unproved."
+    },
+    {
+      "id": "recall-miss|duplicate-each-row-imported-constants|duplicate-each-row|reads false,reads false",
+      "reason": "The next-engine row value proof does not resolve imported constants, bigint values or tagged tables; these repeated rows remain unproved."
+    },
+    {
+      "id": "recall-miss|duplicate-each-row-imported-constants|duplicate-each-row|reads null,reads null",
+      "reason": "The next-engine row value proof does not resolve imported constants, bigint values or tagged tables; these repeated rows remain unproved."
+    },
+    {
+      "id": "recall-miss|duplicate-each-row-imported-constants|duplicate-each-row|reads tpl,reads tpl",
+      "reason": "The next-engine row value proof does not resolve imported constants, bigint values or tagged tables; these repeated rows remain unproved."
+    },
+    {
+      "id": "recall-miss|duplicate-each-row-imported-constants|duplicate-each-row|reads loc,reads loc",
+      "reason": "The next-engine row value proof does not resolve imported constants, bigint values or tagged tables; these repeated rows remain unproved."
+    },
+    {
+      "id": "recall-miss|duplicate-each-row-imported-constants|duplicate-each-row|tags fast,tags fast",
+      "reason": "The next-engine row value proof does not resolve imported constants, bigint values or tagged tables; these repeated rows remain unproved."
     }
   ]
 }

@@ -53,7 +53,12 @@ pub(crate) fn row(parsed: &Parsed, row: &Row) -> (Vec<Option<Value>>, Option<Map
 
 /// Reads literal construction and immutable scalar consts only; arbitrary execution, object
 /// aliases and custom coercion are unknown. Depth and total visits bound even cyclic initializers.
-fn value(parsed: &Parsed, node: NodeId, depth: usize, budget: &mut usize) -> Option<Value> {
+pub(super) fn value(
+    parsed: &Parsed,
+    node: NodeId,
+    depth: usize,
+    budget: &mut usize,
+) -> Option<Value> {
     if depth >= 32 || *budget == 0 {
         return None;
     }
