@@ -222,16 +222,21 @@ file reporter and, under `--update-baseline`, the baseline file.
 
 ## Git hooks
 
-The local hooks select checks from changed paths. CI and the explicit `verify:fast` and
-`verify:full` commands keep their existing behavior. Each hook prints its selected scope.
+The local hooks select checks from changed paths, running only what a change can affect. CI and
+the explicit `verify:fast` and `verify:full` commands stay whole. Each hook prints its selected
+scope.
 
 | Changed surface | Pre-commit | Pre-push |
 | --- | --- | --- |
 | Root README/contributing/changelog/security Markdown, LICENSE, `docs/**/*.md`, `skills/**/*.md` | Static checks | Static checks |
+| `.github/` outside the Action, such as workflows | Static checks, npm tests and developer tests | Same |
 | `.github/actions/vitest-dedup/` | Static checks and Action tests | Same, plus duplication and JS coverage |
 | `npm/` | Static checks, npm tests and package validation | Same, plus duplication and JS coverage |
-| `scripts/dev/verify.mjs`, its test, `.githooks/pre-commit` and `.githooks/pre-push` | Static checks and developer/check-helper tests | Same, plus duplication and JS coverage |
-| Rust, fixtures, dependency manifests, workflows, other paths, or unknown push scope | Existing compilation-free fast checks | Existing full checks, including Rust coverage |
+| `scripts/dev/`, `.githooks/pre-commit` and `.githooks/pre-push` | Static checks and developer/check-helper tests | Same, plus duplication and JS coverage |
+| `scripts/check/` | Static checks and developer/check-helper tests | Same, plus the release build, corpus gates, duplication and JS coverage |
+| `fixtures/` | Static checks and developer/check-helper tests | Same, plus Rust tests, which read fixtures, the release build, corpus gates, duplication and JS coverage |
+| Rust sources, `Cargo.toml`, `Cargo.lock` | Static checks, format and developer/check-helper tests | Same, plus Clippy, rustdoc, Rust tests, the corpus gates, duplication and Rust coverage |
+| Dependency manifests, other paths, or unknown push scope | Compilation-free fast checks | Full checks, including Rust coverage |
 
 Static checks include touched-function docstrings, Action pins, release workflow/version consistency,
 documentation accuracy, repository names and shipped skills. Pre-commit still scans the staged index
@@ -273,21 +278,25 @@ are local safeguards; CI remains authoritative and Git can bypass them.
 
 - Commands run sequentially with complete output saved under the common Git directory's
   `delivery-check-logs/`; a failure prints at most the last 100 lines.
-- A repository lock prevents two instances of this runner from sharing Cargo concurrently; other
-  Cargo invocations must still be serialized by hand. A killed process can leave
-  `delivery-check.lock` behind. Inspect its recorded PID and remove it only after confirming that
-  process and the checks it spawned (Cargo, Node) have all exited: the next hook run clears the
-  shared export directory, which a surviving check could still be reading.
+- Two hook runs can verify at once, each in its own lane with its own export directory and Cargo
+  cache, so separate worktrees and sessions do not block each other. A further run queues for up to
+  30 minutes. The manual `verify:fast` and `verify:full` profiles use lane 0 only, because they
+  build in the checkout's own cache. Other Cargo invocations are not coordinated. A killed process
+  can leave `delivery-check.lock` or `delivery-check.lock.1` behind. Inspect its recorded PID and
+  remove it only after confirming that process and the checks it spawned (Cargo, Node) have all
+  exited: the next run in that lane clears its export directory, which a surviving check could
+  still be reading.
 - By default, worktrees share the main checkout's `target/` and `target/llvm-cov-target/`, and
   explicit Cargo target environment variables are respected by the manual profiles. An existing
   target directory pointing elsewhere is rejected, and a cache nested inside the checkout's
   `target/` is refused before any directory is created; choose `target/` itself or an external
   cache.
-- Hook snapshots build in `hook-snapshot/<repository>/` beneath that cache, never in the
-  checkout's own cache and never in a configured coverage or separate build directory: a test
-  binary bakes the path it was built in, and Cargo would otherwise hand a binary built in a deleted
-  snapshot to the next checkout run, or to another clone sharing the cache. Every snapshot of a
-  repository is exported to the same private directory under `XDG_RUNTIME_DIR`, or the system
+- Hook snapshots build in `hook-snapshot/<repository>/` beneath that cache, and the second lane in
+  `hook-snapshot/<repository>-1/`, never in the checkout's own cache and never in a configured
+  coverage or separate build directory: a test binary bakes the path it was built in, and Cargo
+  would otherwise hand a binary built in a deleted snapshot to the next checkout run, or to another
+  clone sharing the cache. The first run in a new lane builds from cold. Every snapshot in a lane
+  is exported to the same private directory under `XDG_RUNTIME_DIR`, or the system
   temporary directory without one, so a reused artifact always points at the current export; the
   export stays outside the checkout because Cargo reads configuration files, and the discovery
   walker ignore files, from every ancestor directory (the walker's `.gitignore` lookup stops at a

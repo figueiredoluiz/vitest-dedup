@@ -13,6 +13,13 @@ const OID = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/
 const GIT_ENV = ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_COMMON_DIR', 'GIT_PREFIX', 'GIT_OBJECT_DIRECTORY', 'GIT_ALTERNATE_OBJECT_DIRECTORIES', 'GIT_CONFIG_PARAMETERS', 'GIT_CONFIG_COUNT']
 // Node's default 1 MiB output limit ends a run with ENOBUFS on a large pure-move diff, so raise it.
 const GIT_MAX_BUFFER = 256 * 1024 * 1024
+// How many verifications may run at once, each with its own export directory and Cargo cache.
+export const LANES = 2
+const POLL_MS = 5_000
+const QUEUE_MS = 30 * 60 * 1000
+
+/** Block this synchronous runner for `ms`. */
+export const pause = ms => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
 
 /**
  * Run Git in the selected repository, capturing output and propagating failures.
@@ -101,29 +108,61 @@ function changedPaths(root, { update, env = process.env } = {}) {
   } catch { return null }
 }
 
-/** Classify only known independent surfaces; unknown paths keep full verification. */
+/** Classify each path by the surface it can affect; an unknown path keeps full verification. */
 export function hookScope(paths) {
   if (paths === null) return ['full']
   const scopes = new Set()
   for (const path of paths) {
     if (/^(?:README|CONTRIBUTING|CHANGELOG|SECURITY)\.md$/.test(path) || path === 'LICENSE' || /^(?:docs|skills)\/.+\.md$/.test(path)) scopes.add('docs')
     else if (path.startsWith('.github/actions/vitest-dedup/')) scopes.add('action')
+    else if (path.startsWith('.github/')) scopes.add('ci')
     else if (path.startsWith('npm/')) scopes.add('npm')
-    else if (/^(?:scripts\/dev\/verify(?:\.test)?\.mjs|\.githooks\/pre-(?:commit|push))$/.test(path)) scopes.add('tooling')
+    else if (path.startsWith('scripts/dev/') || /^\.githooks\/pre-(?:commit|push)$/.test(path)) scopes.add('tooling')
+    else if (path.startsWith('scripts/check/')) scopes.add('gates')
+    else if (path.startsWith('fixtures/')) scopes.add('fixtures')
+    else if (/^(?:src|tests|examples|benches)\/.+\.rs$/.test(path) || /^Cargo\.(?:toml|lock)$/.test(path)) scopes.add('rust')
     else return ['full']
   }
   return [...scopes].sort()
 }
 
-/** Select local hook checks while preserving the explicit manual profiles and CI. */
+/** The gates that run the analyzer over the owned corpora, with the binary they read. */
+const CORPUS_GATES = [
+  ['cargo', 'build', '--release', '--locked'],
+  ...['check:corpus', 'check:recall', 'verify:titles', 'check:oracle', 'check:behavior-runtime', 'check:hooks-differential', 'check:next-duplicates'].map(gate => ['npm', 'run', gate]),
+]
+
+/**
+ * Select local hook checks by what the change can affect, keeping `verify:full` and CI whole.
+ * Pre-commit stays compilation-free. Pre-push adds the compiled checks of a surface: Rust gets
+ * lints, tests, the corpus gates and its coverage, and skips what packages or wraps the binary.
+ * Consumers decide this, not file types: Rust tests read most of `fixtures/`, so a fixture runs
+ * them, and `npm/test` reads the workflows, so a workflow runs that.
+ */
 export function hookCommands(mode, paths, docDiff) {
   const scopes = hookScope(paths)
   if (scopes.includes('full')) return commands(mode === 'pre-commit' ? 'fast' : 'full', mode === 'pre-push' || rustChanged(paths ?? []), docDiff)
+  const has = scope => scopes.includes(scope)
+  const push = mode === 'pre-push'
   const steps = staticCommands(docDiff)
-  if (scopes.includes('action')) steps.push(['npm', 'run', 'test:action'])
-  if (scopes.includes('npm')) steps.push(['npm', 'test'], ['npm', 'run', 'pack:check'])
-  if (scopes.includes('tooling')) steps.push(['npm', 'run', 'test:dev-checks'], ['npm', 'run', 'test:check-lib'])
-  if (mode === 'pre-push' && scopes.some(scope => scope !== 'docs')) steps.push(['npm', 'run', 'check:duplication'], ['npm', 'run', 'check:coverage:js'])
+  if (has('rust')) steps.push(['cargo', 'fmt', '--all', '--check'])
+  if (has('action')) steps.push(['npm', 'run', 'test:action'])
+  if (has('npm') || has('ci')) steps.push(['npm', 'test'])
+  if (has('npm')) steps.push(['npm', 'run', 'pack:check'])
+  if (['ci', 'tooling', 'gates', 'fixtures', 'rust'].some(has)) steps.push(['npm', 'run', 'test:dev-checks'])
+  if (['tooling', 'gates', 'fixtures', 'rust'].some(has)) steps.push(['npm', 'run', 'test:check-lib'])
+  if (!push) return steps
+  if (has('rust')) {
+    steps.push(
+      ['cargo', 'clippy', '--all-targets', '--all-features', '--locked'],
+      ['cargo', 'doc', '--no-deps', '--document-private-items', '--locked'],
+    )
+  }
+  if (has('rust') || has('fixtures')) steps.push(['cargo', 'test', '--all-targets', '--all-features', '--locked'])
+  if (['rust', 'gates', 'fixtures'].some(has)) steps.push(...CORPUS_GATES)
+  if (['action', 'npm', 'tooling', 'gates', 'fixtures', 'rust'].some(has)) steps.push(['npm', 'run', 'check:duplication'])
+  if (['action', 'npm', 'tooling', 'gates', 'fixtures'].some(has)) steps.push(['npm', 'run', 'check:coverage:js'])
+  if (rustChanged(paths)) steps.push(['npm', 'run', 'check:coverage:rust'])
   return steps
 }
 
@@ -347,26 +386,39 @@ export function withNodeModules(snapshot, root, body) {
 }
 
 /**
- * Serialize verification using a lock directory in the common Git directory.
- * Record the owner PID and remove an acquired lock when the synchronous body finishes.
- * Stale locks require manual recovery after confirming the recorded process exited.
+ * Hold one of the repository's verification lanes for `body`.
+ * A lane is a lock directory in the common Git directory, and lane 0 keeps the historical name, so
+ * a driver from an older commit still excludes it. When every lane is taken the run waits, because
+ * a refused commit or push costs more than the queue. A killed process leaves its lane taken:
+ * inspect the recorded PID and remove the directory only after confirming it exited.
  * @template T
  * @param {string} common Common Git directory shared by repository worktrees.
- * @param {() => T} body Synchronous verification operation.
+ * @param {(lane: number) => T} body Synchronous verification operation, given its lane.
+ * @param {object} [options] Lane count, how long to wait, and sleep/print adapters.
  * @returns {T} The body's result.
- * @throws {Error} If the lock exists; body errors propagate after cleanup.
+ * @throws {Error} If every lane stays taken; body errors propagate after cleanup.
  */
-export function withLock(common, body) {
-  const lock = join(common, 'delivery-check.lock')
-  try { mkdirSync(lock) }
-  catch (error) {
-    if (error.code !== 'EEXIST') throw error
-    throw new Error(`Repository verification is already running. Lock: ${lock}. If its recorded process and the checks it spawned have all exited, remove the stale lock and retry.`)
+export function withLock(common, body, { lanes = LANES, waitMs = 0, sleep = pause, print = () => {} } = {}) {
+  const path = lane => join(common, lane === 0 ? 'delivery-check.lock' : `delivery-check.lock.${lane}`)
+  /** Take the first free lane, or report that there is none. */
+  const take = () => {
+    for (let lane = 0; lane < lanes; lane++) {
+      try { mkdirSync(path(lane)); return lane }
+      catch (error) { if (error.code !== 'EEXIST') throw error }
+    }
+    return null
   }
+  let lane = take()
+  if (lane === null && waitMs > 0) print(`All ${lanes} verification lanes are busy; waiting.`)
+  for (let waited = 0; lane === null && waited < waitMs; waited += POLL_MS) {
+    sleep(POLL_MS)
+    lane = take()
+  }
+  if (lane === null) throw new Error(`Repository verification is already running in every lane. Locks: ${Array.from({ length: lanes }, (_, index) => path(index)).join(', ')}. If a lock's recorded process and the checks it spawned have all exited, remove that stale lock and retry.`)
   try {
-    writeFileSync(join(lock, 'owner'), `pid=${process.pid}\n`)
-    return body()
-  } finally { rmSync(lock, { recursive: true, force: true }) }
+    writeFileSync(join(path(lane), 'owner'), `pid=${process.pid}\n`)
+    return body(lane)
+  } finally { rmSync(path(lane), { recursive: true, force: true }) }
 }
 
 /**
@@ -409,7 +461,8 @@ export function main(args = process.argv.slice(2), { env = process.env, input, c
   const cache = env.CARGO_TARGET_DIR ? resolve(root, env.CARGO_TARGET_DIR) : join(dirname(common), 'target')
   const logs = join(common, 'delivery-check-logs', `${Date.now()}-${process.pid}`)
   const runEnv = { ...env, CARGO_TARGET_DIR: cache, CARGO_LLVM_COV_TARGET_DIR: env.CARGO_LLVM_COV_TARGET_DIR ? resolve(root, env.CARGO_LLVM_COV_TARGET_DIR) : join(cache, 'llvm-cov-target') }
-  withLock(common, () => {
+  // A manual run builds in the checkout's own cache, which a second run must not share.
+  withLock(common, lane => {
     if (mode === 'fast' || mode === 'full') {
       withTargetCache(root, cache, () => check(root, commands(mode), { env: runEnv, logRoot: logs, print }))
       return
@@ -427,16 +480,20 @@ export function main(args = process.argv.slice(2), { env = process.env, input, c
     // by their path relative to the workspace root and judges freshness by mtime, so a test binary
     // built in one export could be reused by a later export with older files, carrying the first
     // export's baked `CARGO_MANIFEST_DIR`; one path makes a reused artifact point at the current
-    // export, and the lock above keeps two runs from sharing it. The directory sits where the
+    // export, and the lane's lock keeps two runs from sharing it. The directory sits where the
     // temporary one always did, outside the checkout: Cargo reads configuration and the discovery
     // walker reads ignore files from every ancestor, so an export under the checkout or the home
     // directory would see the caller's unstaged `.cargo/config.toml` or `~/.gitignore`. The
     // user's runtime directory is private where a shared `/tmp` is not.
+    //
+    // Each lane repeats all of that for itself: its own export path and cache, so two lanes share
+    // no artifact. Lane 0 keeps the historical paths.
     const key = repositoryKey(common)
-    const hookCache = join(cache, 'hook-snapshot', key)
+    const slot = lane === 0 ? key : `${key}-${lane}`
+    const hookCache = join(cache, 'hook-snapshot', slot)
     const coverage = join(hookCache, 'llvm-cov-target')
     const hookEnv = { ...runEnv, CARGO_TARGET_DIR: hookCache, CARGO_BUILD_BUILD_DIR: hookCache, CARGO_LLVM_COV_TARGET_DIR: coverage, CARGO_LLVM_COV_BUILD_DIR: coverage }
-    const work = join(env.XDG_RUNTIME_DIR || tmpdir(), `vitest-dedup-hook-${key}`)
+    const work = join(env.XDG_RUNTIME_DIR || tmpdir(), `vitest-dedup-hook-${slot}`)
     for (const [i, update] of revisions.entries()) {
       const { revision } = update
       print(revision ? `Verifying proposed commit ${revision}` : 'Verifying the staged index')
@@ -449,7 +506,7 @@ export function main(args = process.argv.slice(2), { env = process.env, input, c
         withNodeModules(snapshot, root, () => withTargetCache(snapshot, hookCache, () => check(snapshot, hookCommands(mode, paths, docDiff), { env: hookEnv, logRoot: join(logs, String(i)), print })))
       }, env, work)
     }
-  })
+  }, { lanes: mode === 'fast' || mode === 'full' ? 1 : LANES, waitMs: QUEUE_MS, print })
   print(`Verification complete. Logs: ${logs}`)
 }
 
