@@ -410,6 +410,9 @@ impl<'s> Module<'s> {
                         Some(Export::Namespace) => {
                             self.origins.insert(symbol, Origin::Namespace);
                         }
+                        Some(&Export::Api(registers)) => {
+                            self.origins.insert(symbol, Origin::Api(registers));
+                        }
                         Some(&Export::Wrapper(reach)) => {
                             self.origins.insert(symbol, Origin::Wrapper(reach));
                         }
@@ -1115,19 +1118,14 @@ impl<'s> Module<'s> {
     ) -> HashMap<String, Export> {
         let tree = self.tree;
         let spelled = self.spelled_exports();
-        let stars = tree
-            .list(tree.root(), "body")
-            .into_iter()
-            .flatten()
-            .filter(|&statement| {
-                tree.kind(statement) == "ExportAllDeclaration"
-                    && tree.child(statement, "exported").is_none()
-            })
-            .count();
+        let dialect = self.setting.dialect;
+        // Stars read so far: the first star holding a name wins it, and this table does not record
+        // a name one holds without registering.
+        let mut stars = 0;
         let mut exports: HashMap<String, Export> = HashMap::new();
         let mut add = |name: String, export: Export| {
             let held = exports.entry(name).or_insert(export);
-            *held = (*held).max(export);
+            *held = held.widest(export);
         };
         let registers = |symbol: Option<SymbolId>| -> Option<Export> {
             let symbol = symbol?;
@@ -1148,12 +1146,23 @@ impl<'s> Module<'s> {
             })
         };
         for statement in tree.list(tree.root(), "body").into_iter().flatten() {
+            if type_only(tree, statement) {
+                continue;
+            }
             match tree.kind(statement) {
                 "ExportNamedDeclaration" => {
                     let source = tree
                         .child(statement, "source")
                         .and_then(|s| tree.text(s, "value"));
                     if let Some(source) = source {
+                        if dialect.is_api_module(source) {
+                            for (local, exported) in specifiers(tree, statement) {
+                                if let Some(registers) = self.api(&export_name(tree, local)) {
+                                    add(export_name(tree, exported), Export::Api(registers));
+                                }
+                            }
+                            continue;
+                        }
                         let Some(file) = crate::lang::resolve(self.path, source, self.setting.root)
                         else {
                             continue;
@@ -1224,30 +1233,42 @@ impl<'s> Module<'s> {
                         add("default".to_owned(), export);
                     }
                 }
-                "ExportAllDeclaration" if tree.child(statement, "exported").is_none() => {
+                "ExportAllDeclaration" => {
                     let Some(source) = tree
                         .child(statement, "source")
                         .and_then(|s| tree.text(s, "value"))
                     else {
                         continue;
                     };
-                    if let Some(file) = crate::lang::resolve(self.path, source, self.setting.root) {
+                    let name = tree.child(statement, "exported");
+                    if let (Some(name), true) = (name, dialect.is_api_module(source)) {
+                        add(export_name(tree, name), Export::Namespace);
+                    }
+                    if name.is_some() {
+                        continue;
+                    }
+                    let forwarded = |name: &str, export: Export| match export {
+                        Export::Wrapper(_) => export,
+                        _ if stars == 0 && !spelled.contains(name) => export,
+                        _ => Export::Wrapper(Reach::Tasks),
+                    };
+                    if dialect.is_api_module(source) {
+                        for registration in dialect.registrations {
+                            let export =
+                                forwarded(registration.name, Export::Api(registration.registers));
+                            add(registration.name.to_owned(), export);
+                        }
+                    } else if let Some(file) =
+                        crate::lang::resolve(self.path, source, self.setting.root)
+                    {
                         for (name, export) in modules.exports(&file, self.setting, depth + 1) {
-                            if name == "default" {
-                                continue;
+                            if name != "default" {
+                                let export = forwarded(&name, export);
+                                add(name, export);
                             }
-                            // The namespace only when nothing else may be the name's source.
-                            let only_source = stars == 1 && !spelled.contains(&name);
-                            add(
-                                name,
-                                if export == Export::Namespace && !only_source {
-                                    Export::Wrapper(Reach::Tasks)
-                                } else {
-                                    export
-                                },
-                            );
                         }
                     }
+                    stars += 1;
                 }
                 _ => {}
             }
@@ -1285,11 +1306,17 @@ impl<'s> Module<'s> {
     }
 }
 
+/// Whether an export statement or specifier is erased: it loads nothing and exports no value.
+fn type_only(tree: &Tree, node: NodeId) -> bool {
+    tree.text(node, "exportKind") == Some("type")
+}
+
 /// The `(local, exported)` names of an export statement's specifiers.
 fn specifiers(tree: &Tree, statement: NodeId) -> Vec<(NodeId, NodeId)> {
     tree.list(statement, "specifiers")
         .into_iter()
         .flatten()
+        .filter(|&specifier| !type_only(tree, specifier))
         .filter_map(|specifier| {
             Some((
                 tree.child(specifier, "local")?,
