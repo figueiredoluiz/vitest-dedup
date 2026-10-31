@@ -220,6 +220,9 @@ pub struct Walk {
     /// the read renders the initializer's form, at the position the read occupies, with the
     /// numbering the walk has reached by then.
     pub(crate) inline: HashMap<SymbolId, NodeId>,
+    /// Local classes the trace renders by their content wherever a read names them, so two
+    /// constructions over different classes never share a shape.
+    pub(crate) classes: HashMap<SymbolId, NodeId>,
 }
 
 impl Walk {
@@ -246,6 +249,7 @@ impl Walk {
             structural: false,
             suffixes: HashMap::new(),
             inline: HashMap::new(),
+            classes: HashMap::new(),
         }
     }
 }

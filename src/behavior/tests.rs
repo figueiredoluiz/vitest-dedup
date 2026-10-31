@@ -670,3 +670,43 @@ fn a_computed_key_is_behavior_and_blocks_inlining() {
     assert_eq!(of(&events, "before"), of(&events, "twin"));
     assert_ne!(of(&events, "before"), of(&events, "after"));
 }
+
+/// A class a shape names renders by its content: two constructions over different classes never
+/// share an assertion's shape, while a renamed copy still links.
+#[test]
+fn a_class_inside_a_shape_renders_by_content() {
+    let events = events(
+        r#"
+        test('a', () => { class C { m() { return success(); } } expect(new C().m()).toBe(1); });
+        test('b', () => { class C { m() { return failure(); } } expect(new C().m()).toBe(1); });
+        test('twin', () => { class D { m() { return success(); } } expect(new D().m()).toBe(1); });
+    "#,
+        &[],
+    );
+    assert_ne!(of(&events, "a"), of(&events, "b"));
+    assert_eq!(of(&events, "a"), of(&events, "twin"));
+}
+
+/// A member chain evaluates from its object inward, and a computed key after the object it reads
+/// from: `object()[key()]` runs `object()` first.
+#[test]
+fn a_member_chain_keeps_its_evaluation_order() {
+    let events = events(
+        r#"
+        test('order', () => { object()[key()](); });
+        test('swapped', () => { key(); object(); call(); });
+    "#,
+        &[],
+    );
+    assert_ne!(of(&events, "order"), of(&events, "swapped"));
+    let order = of(&events, "order");
+    let object_at = order
+        .iter()
+        .position(|event| event == "call:g:object")
+        .unwrap();
+    let key_at = order
+        .iter()
+        .position(|event| event == "call:g:key")
+        .unwrap();
+    assert!(object_at < key_at, "object() runs first: {order:?}");
+}

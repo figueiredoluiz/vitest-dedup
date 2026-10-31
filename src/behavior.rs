@@ -29,6 +29,28 @@ use crate::normal::{CallbackForm, Normalizer, Walk};
 use dataflow::Dataflow;
 use std::collections::HashMap;
 
+/// The symbol an identifier node reads or binds, when the scope analysis recorded one.
+fn symbol_at(parsed: &Parsed, node: NodeId) -> Option<SymbolId> {
+    parsed.scopes.symbol_at(parsed.tree.span(node).start)
+}
+
+/// Whether the trace can prove a class's behavior from its content: it cannot when a key is
+/// computed from anything but a literal (its value, and when it evaluates, are unproved), or when
+/// a `with` statement may bind arbitrary names. A dependency the trace cannot name is an
+/// abstention, never a claim.
+fn class_provable(tree: &Tree, class: NodeId) -> bool {
+    !tree.descendants(class).any(|node| match tree.kind(node) {
+        "MethodDefinition" | "PropertyDefinition" | "AccessorProperty" => {
+            tree.flag(node, "computed")
+                && tree
+                    .child(node, "key")
+                    .is_some_and(|key| tree.kind(key) != "Literal")
+        }
+        "WithStatement" => true,
+        _ => false,
+    })
+}
+
 /// How deep the trace walks. Past it the walk stops and the trace is incomplete: a dropped
 /// region is invisible in the events, so two bodies that differ only past the bound could
 /// collect equal traces — a trace with a hole is not evidence of similarity in either direction,
@@ -113,6 +135,38 @@ pub(crate) fn trace_text<'s>(
         .iter()
         .map(|(symbol, inline)| (*symbol, inline.init))
         .collect();
+    // A local class a shape names renders by its content, the way a constructor call already
+    // does — otherwise two constructions over different classes share a shape inside any
+    // assertion built on them. An unprovable class is not registered: its reads keep the local's
+    // own name, which can only keep events apart, never merge them.
+    {
+        let tree = &parsed.tree;
+        for node in tree.descendants(function) {
+            let candidate = match tree.kind(node) {
+                "ClassDeclaration" => tree
+                    .child(node, "id")
+                    .and_then(|id| symbol_at(parsed, id))
+                    .map(|symbol| (symbol, node)),
+                "VariableDeclarator" => {
+                    let init = tree.child(node, "init");
+                    let is_class = init.is_some_and(|init| tree.kind(init) == "ClassExpression");
+                    if is_class {
+                        tree.child(node, "id")
+                            .and_then(|id| symbol_at(parsed, id))
+                            .map(|symbol| (symbol, init.unwrap()))
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            };
+            if let Some((symbol, class)) = candidate {
+                if class_provable(tree, class) {
+                    walk.classes.insert(symbol, class);
+                }
+            }
+        }
+    }
     let root = walk.root;
     let mut walker = Walker {
         normalizer,
@@ -684,48 +738,49 @@ impl<'s> Walker<'_, 's> {
             return;
         }
         let tree = self.tree();
+        if let Some(object) = tree.child(member, "object") {
+            self.walk_under_members(object, deferred, depth);
+        }
+        // The object evaluates before its key: `object()[key()]` runs `object()` first, and the
+        // trace keeps that order.
         if tree.flag(member, "computed") {
             if let Some(key) = tree.child(member, "property") {
                 self.walk_expr(key, deferred, depth + 1);
             }
-        }
-        if let Some(object) = tree.child(member, "object") {
-            self.walk_under_members(object, deferred, depth);
         }
     }
 
     /// Walks whatever sits underneath a member chain, emitting nothing for the links themselves:
     /// the callee of a call, whose own event already names them, and the object of a member
     /// access whose chain this recognizer declined.
-    fn walk_under_members(&mut self, mut current: NodeId, deferred: bool, mut depth: u32) {
-        loop {
-            if depth > MAX_TRACE_DEPTH {
-                self.complete = false;
-                return;
-            }
-            let tree = self.tree();
-            current = match tree.kind(current) {
-                "MemberExpression" => {
-                    if tree.flag(current, "computed") {
-                        if let Some(key) = tree.child(current, "property") {
-                            self.walk_expr(key, deferred, depth + 1);
-                        }
-                    }
-                    match tree.child(current, "object") {
-                        Some(object) => object,
-                        None => return,
+    fn walk_under_members(&mut self, current: NodeId, deferred: bool, depth: u32) {
+        if depth > MAX_TRACE_DEPTH {
+            self.complete = false;
+            return;
+        }
+        let tree = self.tree();
+        match tree.kind(current) {
+            "MemberExpression" => {
+                // The chain evaluates from its object inward, and a computed key evaluates after
+                // the object it reads from: `x()[y()][z()]` runs `x`, then `y`, then `z`.
+                if let Some(object) = tree.child(current, "object") {
+                    self.walk_under_members(object, deferred, depth + 1);
+                }
+                if tree.flag(current, "computed") {
+                    if let Some(key) = tree.child(current, "property") {
+                        self.walk_expr(key, deferred, depth + 1);
                     }
                 }
-                "ParenthesizedExpression"
-                | "TSAsExpression"
-                | "TSSatisfiesExpression"
-                | "TSNonNullExpression" => match tree.child(current, "expression") {
-                    Some(inner) => inner,
-                    None => return,
-                },
-                _ => return self.walk_expr(current, deferred, depth),
-            };
-            depth += 1;
+            }
+            "ParenthesizedExpression"
+            | "TSAsExpression"
+            | "TSSatisfiesExpression"
+            | "TSNonNullExpression" => {
+                if let Some(inner) = tree.child(current, "expression") {
+                    self.walk_under_members(inner, deferred, depth);
+                }
+            }
+            _ => self.walk_expr(current, deferred, depth),
         }
     }
 
@@ -863,7 +918,7 @@ impl<'s> Walker<'_, 's> {
     /// outside needs no expansion — its declaration identity already carries its content.
     fn local_class(&self, callee: NodeId) -> Option<NodeId> {
         let tree = self.tree();
-        let symbol = self.symbol_at(callee)?;
+        let symbol = symbol_at(self.parsed, callee)?;
         if !self.root.contains(self.scopes().symbol(symbol).span) {
             return None;
         }
@@ -882,17 +937,7 @@ impl<'s> Walker<'_, 's> {
     /// when a `with` statement may bind arbitrary names. This is the bounded port of the current
     /// core's `class_unresolved`: a dependency it cannot name is an abstention, never a claim.
     fn class_provable(&self, class: NodeId) -> bool {
-        let tree = self.tree();
-        !tree.descendants(class).any(|node| match tree.kind(node) {
-            "MethodDefinition" | "PropertyDefinition" | "AccessorProperty" => {
-                tree.flag(node, "computed")
-                    && tree
-                        .child(node, "key")
-                        .is_some_and(|key| tree.kind(key) != "Literal")
-            }
-            "WithStatement" => true,
-            _ => false,
-        })
+        class_provable(self.tree(), class)
     }
 
     /// Emits the one definition-time event a class body carries: its heritage, its computed

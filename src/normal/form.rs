@@ -543,6 +543,15 @@ impl Normalizer<'_> {
                     // depth bound — a chain a hundred links long renders past the bound's position
                     // token instead of recursing once per link with no bound at all.
                     self.write_node(init, walk, out);
+                } else if let Some(class) = walk.classes.get(&symbol) {
+                    let class = *class;
+                    // The same in-place rule: a class a shape names renders by its content, so
+                    // two constructions over different classes never share one. The class's own
+                    // name is taken out for the duration: its content's references to itself
+                    // render as the local, or the expansion would never end.
+                    walk.classes.remove(&symbol);
+                    self.write_node(class, walk, out);
+                    walk.classes.insert(symbol, class);
                 } else {
                     let mut text = self.identifier(symbol, walk);
                     if let Some(suffix) = walk.suffixes.get(&symbol) {
