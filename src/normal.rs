@@ -7,6 +7,7 @@
 //! A test's key and its context are assembled from the pieces here.
 
 mod form;
+pub(crate) use form::MAX_CLASS_RENDER_BYTES;
 mod identity;
 pub(crate) mod row_identity;
 mod rows;
@@ -224,6 +225,10 @@ pub struct Walk {
     /// Local classes the trace renders by their content wherever a read names them, so two
     /// constructions over different classes never share a shape.
     pub(crate) classes: HashMap<SymbolId, NodeId>,
+    /// Bytes class rendering has written, counted at every level of a nested expansion.
+    pub(crate) class_bytes: usize,
+    /// A class read went unexpanded because [`form::MAX_CLASS_RENDER_BYTES`] was spent.
+    pub(crate) class_budget_spent: bool,
 }
 
 impl Walk {
@@ -251,6 +256,8 @@ impl Walk {
             suffixes: HashMap::new(),
             inline: HashMap::new(),
             classes: HashMap::new(),
+            class_bytes: 0,
+            class_budget_spent: false,
         }
     }
 }
@@ -377,6 +384,8 @@ pub struct Normalizer<'s> {
     shallow_imports: bool,
     /// How many nodes deep the form being written is.
     nesting: usize,
+    /// Whether a form written since [`Normalizer::take_truncated`] reached the depth bound.
+    truncated: bool,
 }
 
 impl<'s> Normalizer<'s> {
@@ -398,12 +407,19 @@ impl<'s> Normalizer<'s> {
             resolving: false,
             shallow_imports: false,
             nesting: 0,
+            truncated: false,
         }
     }
 
     /// The normal form of `node`.
     pub fn of(&mut self, node: NodeId) -> String {
         self.substituted(node, HashMap::new(), false)
+    }
+
+    /// Whether a form written since the last call reached the depth bound, which reads as its
+    /// position, so it can match nothing: its test is not compared, and must not read as if it were.
+    pub fn take_truncated(&mut self) -> bool {
+        std::mem::take(&mut self.truncated)
     }
 
     /// [`Self::of`] with some bindings replaced by the normal form of what they are bound to, and,

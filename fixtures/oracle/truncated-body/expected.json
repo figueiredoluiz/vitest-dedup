@@ -1,0 +1,24 @@
+{
+  "files": {
+    "shallow-beside-deep.test.ts": {
+      "tasks": 2,
+      "wrapperSites": [],
+      "next": {}
+    },
+    "shared-declaration.test.ts": {
+      "tasks": 2,
+      "wrapperSites": [],
+      "next": {}
+    },
+    "truncated.test.ts": {
+      "tasks": 2,
+      "wrapperSites": [],
+      "next": {
+        "reasons": [
+          "unresolved-context"
+        ],
+        "testsExcluded": 2
+      }
+    }
+  }
+}

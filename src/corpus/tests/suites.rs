@@ -1,6 +1,7 @@
 //! Whole-suite outcome controls over parsed source.
 
 use super::*;
+use crate::corpus::Exclusion;
 use crate::model::Rule;
 
 const IMPORTS: &str = "import { describe, test, expect, beforeEach } from 'vitest';";
@@ -12,6 +13,74 @@ fn read(source: &str, count: usize) -> FileCorpus {
     let corpus = files.remove(0);
     assert_eq!(corpus.tests.len(), count, "{source}");
     corpus
+}
+
+/// A class the trace cannot prove leaves the trace incomplete and nothing else: the flat form is
+/// whole, so the tests stay compared, and their suite with them.
+#[test]
+fn an_incomplete_trace_excludes_nothing_from_the_flat_rules() {
+    let body = "test('t', () => { class C { [k]() { return 1 } } use(new C()) })";
+    let source = format!("{IMPORTS}{body};{body}");
+    let corpus = read(&source, 2);
+    assert!(corpus.tests.iter().all(|test| test.exclusion.is_none()));
+    assert!(corpus.tests.iter().all(|test| !test.trace_complete));
+    assert_eq!(corpus.tests[0].key, corpus.tests[1].key);
+    let block = format!("describe('s', () => {{ {body} }})");
+    assert_eq!(suite_count(&format!("{IMPORTS}{block};{block}"), 2), 1);
+    let plain = format!("{IMPORTS}test('t', () => {{ use(1) }})");
+    assert!(read(&plain, 1).tests[0].trace_complete);
+}
+
+/// A body past the flat form's depth bound can match nothing, so it is excluded, not left silently
+/// uncompared; a long body under the bound stays compared.
+#[test]
+fn a_body_past_the_flat_bound_is_excluded_out_loud() {
+    let sum = |operands: usize| vec!["1"; operands].join(" + ");
+    let body = |operands: usize| format!("test('t', () => {{ use({}) }})", sum(operands));
+    let deep = format!("{IMPORTS}{};{}", body(270), body(270));
+    let corpus = read(&deep, 2);
+    assert!(corpus
+        .tests
+        .iter()
+        .all(|test| test.exclusion == Some(Exclusion::TruncatedBody)));
+    let shallow = format!("{IMPORTS}{};{}", body(120), body(120));
+    let corpus = read(&shallow, 2);
+    assert!(corpus.tests.iter().all(|test| test.exclusion.is_none()));
+    assert_eq!(corpus.tests[0].key, corpus.tests[1].key);
+}
+
+/// Only a test's own flat render decides whether it is excluded: a deep form rendered before it,
+/// or a trace rendered for the row before it, says nothing about it.
+#[test]
+fn another_forms_depth_does_not_exclude_a_test() {
+    let sum = vec!["1"; 270].join(" + ");
+    let shallow = "test('t', () => { use(1) })";
+    let beside = format!("{IMPORTS}console.log({sum});{shallow};{shallow}");
+    let corpus = read(&beside, 2);
+    assert!(corpus.tests.iter().all(|test| test.exclusion.is_none()));
+    assert_eq!(corpus.tests[0].key, corpus.tests[1].key);
+    for declaration in [
+        format!("const big = {sum}; test('t', () => {{ use(big) }}); test('t', () => {{ use(big) }})"),
+        format!(
+            "function big() {{ return {sum} }}; test('t', () => {{ use(big()) }}); test('t', () => {{ use(big()) }})"
+        ),
+    ] {
+        let corpus = read(&format!("{IMPORTS}{declaration}"), 2);
+        assert!(corpus.tests.iter().all(|test| test.exclusion.is_none()));
+        assert_eq!(corpus.tests[0].key, corpus.tests[1].key);
+    }
+    let mut classes = "class A0 { v() { return 1 } } ".to_owned();
+    for level in 1..=65 {
+        let below = level - 1;
+        classes.push_str(&format!(
+            "class A{level} {{ a() {{ return new A{below}() }} }} "
+        ));
+    }
+    let rows = format!(
+        "{IMPORTS}test.each([[1], [2]])('row %s', (n) => {{ {classes} use(n, new A65()) }})"
+    );
+    let corpus = read(&rows, 2);
+    assert!(corpus.tests.iter().all(|test| test.exclusion.is_none()));
 }
 
 /// Count suite claims over one parsed file.

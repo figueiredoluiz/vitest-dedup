@@ -190,6 +190,44 @@ fn local_classes_render_by_content() {
     assert!(!complete(&events, "unprovable"));
 }
 
+/// A class reading another twice doubles its text per level, so class rendering spends a budget:
+/// a short chain renders whole, and a long one finishes promptly with the trace incomplete.
+#[test]
+fn a_class_chain_spends_the_render_budget() {
+    let chain = |levels: usize| {
+        let mut classes = "class A0 { v() { return 1; } } ".to_owned();
+        for level in 1..=levels {
+            let below = level - 1;
+            classes.push_str(&format!(
+                "class A{level} {{ a() {{ return new A{below}(); }} b() {{ return new A{below}(); }} }} "
+            ));
+        }
+        format!("test('chain', () => {{ {classes} use(new A{levels}()); }});")
+    };
+    assert!(complete(&events(&chain(3), &[]), "chain"));
+    assert!(!complete(&events(&chain(16), &[]), "chain"));
+}
+
+/// A constructor renders its class's content too, so it spends the same budget.
+#[test]
+fn a_constructor_spends_the_render_budget() {
+    let methods: String = (0..600)
+        .map(|index| format!("m{index}() {{ return {index}; }} "))
+        .collect();
+    let body = |reads: usize| {
+        let reads = "new C(); ".repeat(reads);
+        format!("test('reads', () => {{ class C {{ {methods} }} {reads} }});")
+    };
+    assert!(complete(&events(&body(1), &[]), "reads"));
+    let spent = events(&body(60), &[]);
+    assert!(!complete(&spent, "reads"));
+    let written: usize = spent["reads"].0.iter().map(String::len).sum();
+    assert!(
+        written <= 2 * crate::normal::MAX_CLASS_RENDER_BYTES,
+        "{written}"
+    );
+}
+
 /// `await f(); g()` and the returned chain are the same events; a rejection handler, an
 /// unreturned chain, a parameterized callback and an expression body are never spliced.
 #[test]

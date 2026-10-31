@@ -177,6 +177,8 @@ jobs:
       - run: node scripts/check/check-hooks-differential.mjs
       # The next engine's ported rules against the fixture headers (docs/development.md).
       - run: node scripts/check/check-next-duplicates.mjs
+      # What the behavior trace claims about the runtime, against the pinned Vitest.
+      - run: node scripts/check/check-behavior-runtime.mjs
 
   # The prose gate. Findings in code fell to nearly zero over four pull requests while findings
   # in *prose* did not, and two of the last ones were mechanical: a fenced block labelled ```json

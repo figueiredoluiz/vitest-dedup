@@ -485,6 +485,7 @@ const DELIBERATE_BLIND_FILES = new Set([
   'mixed/mixed-loop-each-in-non-idempotent-hook-scope.test.ts',
   'recall/duplicate-suite-computed-condition/run.test.ts',
   'recall/duplicate-test-dynamic-title/session.test.ts',
+  'recall/duplicate-test-past-the-depth-bound/run.test.ts',
   'recall/duplicate-test-name-dynamic-title/tenants.test.ts',
   // Anonymous and binding-inferred function titles remain deliberately unresolved.
   'recall/function-title-unresolved/run.test.ts',

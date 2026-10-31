@@ -28,11 +28,10 @@ pub enum Exclusion {
     NoCallback,
     /// A spread argument, or a callee the analysis cannot read, may hide the callback that runs.
     UnreadableCallback,
-    /// Its body is deeper than the behavior trace walks, or holds a class whose behavior the
-    /// trace cannot prove: what it does was not read to the end.
-    IncompleteTrace,
     /// It reads state another test writes, or a hook accumulates.
     OrderDependentState,
+    /// Its body is deeper than the normal form reads, so it can match nothing.
+    TruncatedBody,
     /// Its callback is passed by name, not written inline: whether that binding is reassigned, or
     /// shared with another test, decides what runs.
     NamedCallback,
@@ -57,10 +56,9 @@ impl Exclusion {
                 "a test reads state another test writes, or a hook accumulates, so it depends on \
                  which tests ran first",
             )),
-            Self::IncompleteTrace => Some((
-                ExclusionReason::IncompleteTrace,
-                "a test's body is deeper than the behavior trace walks, or holds a class the \
-                 trace cannot prove",
+            Self::TruncatedBody => Some((
+                ExclusionReason::UnresolvedContext,
+                "a test's body is deeper than the analyzer reads, so it cannot be compared",
             )),
             Self::UnreadableCallback => Some((
                 ExclusionReason::UnreadableCallback,
@@ -110,6 +108,10 @@ pub struct TestCase {
     pub body: u64,
     /// The body's behavior trace, one 128-bit digest per event in source order.
     pub trace: Vec<u128>,
+    /// Whether the trace read the body to the end. A rule keyed on the trace must skip a case
+    /// where it did not, and say so: a trace with a hole is no evidence either way. Rules keyed on
+    /// the flat form do not read it.
+    pub trace_complete: bool,
     /// Equal for two tests of one file the near-duplicate rule may pair: chain, expected
     /// failure, options, unbound row cells, context and callback form — everything two
     /// near-duplicates must agree on before their events are compared at all.
@@ -386,6 +388,7 @@ pub fn file(
         module_key: 0,
         body: 0,
         trace: Vec::new(),
+        trace_complete: false,
         similarity_key: 0,
         subsumption_key: 0,
         callback_form: normal::CallbackForm::Interchangeable,
@@ -574,15 +577,19 @@ pub fn file(
                 normal::row_identity::suite_prefix_known(&parsed, call, setting.dialect)
             })
         });
-        // Each row's body, rendered flat and traced: an incomplete trace — a walk past its bound,
-        // or a class the trace cannot prove — excludes every row of the body, because a trace
-        // with a hole is not evidence of similarity in either direction.
+        // Each row's body, rendered flat and traced. An incomplete trace says nothing about the
+        // flat form, so it excludes nothing here: only a rule reading traces skips the row. A flat
+        // form past the depth bound can match nothing, so its test is excluded out loud.
         let mut traced: Vec<(String, crate::behavior::Trace, normal::CallbackForm)> = Vec::new();
+        let mut truncated = false;
         // The trace walks the function itself, not the argument as written: a parenthesized or
         // type-wrapped callback would otherwise read as a body with no statements in it.
         let traced_body = function.unwrap_or(body);
         for (bound, every, _) in &rows {
+            // Cleared first: the flag is shared, and only this render decides this test.
+            normalizer.take_truncated();
             let normal_body = normalizer.substituted(body, bound.clone(), *every);
+            truncated |= normalizer.take_truncated();
             let (trace, callback_form) = crate::behavior::trace(
                 &mut normalizer,
                 &parsed,
@@ -592,8 +599,8 @@ pub fn file(
             );
             traced.push((normal_body, trace, callback_form));
         }
-        if traced.iter().any(|(_, trace, _)| !trace.complete) {
-            tests.extend(excluded(Exclusion::IncompleteTrace));
+        if truncated {
+            tests.extend(excluded(Exclusion::TruncatedBody));
             continue;
         }
         for (index, ((_, _, unbound), (normal_body, trace, callback_form))) in
@@ -654,6 +661,7 @@ pub fn file(
                 module_key: digest(&format!("{key}\u{1}{module_context}")),
                 body: digest(&normal_body),
                 trace: trace.events,
+                trace_complete: trace.complete,
                 similarity_key: digest(&format!(
                     "{chain}{fails}\u{1}{options}\u{1}{unbound}\u{1}{context}\u{1}{form}"
                 )),
