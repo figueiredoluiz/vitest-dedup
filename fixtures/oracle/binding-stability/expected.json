@@ -137,6 +137,18 @@
         "testsExcluded": 2
       }
     },
+    "namespace-export-const.test.ts": {
+      "tasks": 1,
+      "wrapperSites": [
+        "wrapper@5"
+      ],
+      "next": {
+        "reasons": [
+          "registered-elsewhere"
+        ],
+        "testsExcluded": 1
+      }
+    },
     "namespace-export-declared.test.ts": {
       "tasks": 1,
       "wrapperSites": [
@@ -149,6 +161,18 @@
           "registered-elsewhere"
         ],
         "testsExcluded": 3
+      }
+    },
+    "namespace-export-runtime.test.ts": {
+      "tasks": 1,
+      "wrapperSites": [
+        "wrapper@5"
+      ],
+      "next": {
+        "reasons": [
+          "registered-elsewhere"
+        ],
+        "testsExcluded": 1
       }
     },
     "namespace-export-shadow.test.ts": {
