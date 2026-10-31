@@ -308,6 +308,12 @@ const RUST_MODULES = {
   'src/rules/rows.rs': 100,
   // Suite reporting and child suppression: measured at 99.00% (99/100 lines).
   'src/rules/suites.rs': 99,
+  // The behavior trace: measured at 84.78% (802/946 lines), its first recorded floor.
+  'src/behavior.rs': 84,
+  // Trace-only dataflow normalizations: measured at 89.70% (392/437 lines).
+  'src/behavior/dataflow.rs': 89,
+  // Test-only fixture harness: measured at 100.00% (35/35 lines).
+  'src/testing.rs': 100,
 }
 
 // Re-pinned 2026-09-19, after `check-mutation-score.mjs` and then the memory gates' five modules
