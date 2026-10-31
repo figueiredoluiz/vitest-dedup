@@ -212,7 +212,15 @@ export function selectScope(argv) {
   const named = argv.find((argument) => argument.startsWith('--scope'))
   if (named === undefined) return { scope: SCOPE, minimumScore: MINIMUM_SCORE, minimumScored: MINIMUM_SCORED }
   if (named === '--scope=next-core') return NEXT_CORE
-  if (named === '--scope=trace') return TRACE
+  if (named === '--scope=trace') {
+    // The floors below are placeholders until the first full run lands; a scope whose floor
+    // cannot fail would be a gate that measures nothing, which is refused rather than wired.
+    assert.ok(
+      TRACE.minimumScored > 0,
+      'the trace scope has no recorded floor yet; run npm run mutants:trace to completion and record the measured score',
+    )
+    return TRACE
+  }
   assert.fail(`unknown scope ${named}; the named scopes are --scope=next-core and --scope=trace`)
 }
 
