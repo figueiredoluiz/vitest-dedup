@@ -5,7 +5,8 @@
 //! than a claim. Each mechanism's test names the one edit that would break it, so a revert can
 //! be proved by that test failing alone.
 
-use super::trace_text;
+use super::{trace_text, Trace};
+use crate::model::sha256_128;
 use crate::inventory::SiteKind;
 use crate::normal::CallbackForm;
 use std::collections::HashMap;
@@ -815,4 +816,570 @@ fn an_effect_before_the_use_blocks_the_member_rewrite() {
         &[("helpers.ts", "export const o = { reset() {} }\n")],
     );
     assert_ne!(of(&events, "extracted"), of(&events, "written"));
+}
+
+/// Statement families the earlier controls did not exercise: every loop kind, `try` with its
+/// handler and finalizer, `switch`, `throw`, and a non-chain `return` with its argument.
+#[test]
+fn statement_families_all_record() {
+    let events = events(
+        r#"
+        test('loops', () => {
+          for (f(); i < 2; i++) { g(); }
+          for (const k in o) { g(); }
+          let n = 0;
+          while (n < 1) { g(); n++; }
+          do { g(); } while (n < 1);
+        });
+        test('try', () => { try { g(); } catch (e) { h(); } finally { i(); } });
+        test('switch', () => { switch (v) { case 1: g(); break; default: h(); } });
+        test('throw-return', () => { if (v) { throw e; } return v; });
+    "#,
+        &[],
+    );
+    assert!(of(&events, "loops").iter().any(|event| event == "loop"));
+    assert!(of(&events, "try").iter().any(|event| event == "try"));
+    assert!(of(&events, "try").iter().any(|event| event == "call:g:h"));
+    assert!(of(&events, "try").iter().any(|event| event == "call:g:i"));
+    assert!(of(&events, "switch").iter().any(|event| event == "call:g:g"));
+    assert!(of(&events, "switch").iter().any(|event| event == "call:g:h"));
+    let throw_return = of(&events, "throw-return");
+    assert!(throw_return.iter().any(|event| event == "throw"));
+    assert!(throw_return.iter().any(|event| event == "return"));
+}
+
+/// A `for` head that is not a declaration still walks its initializer expression.
+#[test]
+fn a_for_head_expression_is_walked() {
+    let events = events(
+        r#"
+        test('expr-init', () => { for (f(); i < 2; i++) { g(); } });
+    "#,
+        &[],
+    );
+    let evts = of(&events, "expr-init");
+    assert!(evts.iter().any(|event| event == "call:g:f"));
+    assert!(evts.iter().any(|event| event == "loop"));
+}
+
+/// Deferred state reaches every statement family inside a nested declaration, not only calls.
+#[test]
+fn deferred_reaches_the_statement_families() {
+    let events = events(
+        r#"
+        test('nested', () => {
+          function later() {
+            while (n) { g(); }
+            try { h(); } finally { i(); }
+            throw e;
+            return v;
+          }
+        });
+    "#,
+        &[],
+    );
+    let evts = of(&events, "nested");
+    assert!(evts.iter().any(|event| event == "deferred-loop"));
+    assert!(evts.iter().any(|event| event == "deferred-try"));
+    assert!(evts.iter().any(|event| event == "deferred-call:g:h"));
+    assert!(evts.iter().any(|event| event == "deferred-throw"));
+    assert!(evts.iter().any(|event| event == "deferred-return"));
+}
+
+/// The `.then` splice declines each remaining precondition, and the chain then reads as an
+/// ordinary call over a deferred callback.
+#[test]
+fn then_splice_declines_its_remaining_preconditions() {
+    let events = events(
+        r#"
+        test('computed-then', () => { return f()['then'](() => { g(); }); });
+        test('not-then', () => { return f().catch(() => { g(); }); });
+        test('inner-not-call', () => { return p.then(() => { g(); }); });
+        test('chained', () => { return f().then(() => {}).then(() => { g(); }); });
+        test('zero-args', () => { return f().then(); });
+        test('non-function', () => { return f().then(1); });
+        test('reads-this', () => { return f().then(function () { g(this); }); });
+    "#,
+        &[],
+    );
+    for title in [
+        "computed-then",
+        "not-then",
+        "inner-not-call",
+        "chained",
+        "zero-args",
+        "non-function",
+        "reads-this",
+    ] {
+        let evts = of(&events, title);
+        assert!(
+            !evts.iter().any(|event| event == "await"),
+            "{title} is never spliced: {evts:?}"
+        );
+    }
+    // Each declined shape still records the callback's body as deferred behavior.
+    for title in ["not-then", "inner-not-call", "chained", "reads-this"] {
+        let evts = of(&events, title);
+        assert!(
+            evts.iter().any(|event| event.starts_with("deferred-call:g:g")),
+            "{title} keeps its deferred body: {evts:?}"
+        );
+    }
+}
+
+/// Expression families in statement position: optional chains, unary, conditional, sequences,
+/// templates, wrapped expressions, and a computed object key with a call in it.
+#[test]
+fn expression_families_all_record() {
+    let events = events(
+        r#"
+        test('chains', async () => { await g?.(x); a?.b; });
+        test('operators', () => { !x; c ? h() : i(); (1, 2, g()); });
+        test('template', () => { const s = `t${x}`; g(s); });
+        test('wrapped', () => { (g()); const v = x as unknown as number; w!.p; });
+        test('object', () => { const o = { [k()]: v(), plain: 1 }; g(o); });
+        test('nested-fn', () => { const h = () => { g(); }; return h; });
+    "#,
+        &[],
+    );
+    let chains = of(&events, "chains");
+    assert!(chains.iter().any(|event| event == "await"));
+    assert!(
+        chains.iter().any(|event| event.starts_with("call:g:g")),
+        "the optional call spells its dotted path: {chains:?}"
+    );
+    let operators = of(&events, "operators");
+    assert!(operators.iter().any(|event| event == "call:g:h"));
+    assert!(operators.iter().any(|event| event == "call:g:i"));
+    assert!(operators.iter().any(|event| event == "call:g:g"));
+    assert!(of(&events, "object").iter().any(|event| event == "call:g:k"));
+    assert!(of(&events, "object").iter().any(|event| event == "call:g:v"));
+    assert!(of(&events, "nested-fn").iter().any(|event| event == "deferred-call:g:g"));
+}
+
+/// Callee-path arms: a computed member callee, a private method, `this`, a fluent chain with
+/// type arguments, and an optional-call chain.
+#[test]
+fn callee_paths_all_spell_their_path() {
+    let events = events(
+        r#"
+        test('computed-callee', () => { obj[k](); });
+        test('private-callee', () => { class C { #m() {} run() { this.#m(); } } new C().run(); });
+        test('fluent-types', () => { expectTypeOf<A>().toEqualTypeOf<B>(); });
+        test('optional-callee', () => { obj?.run(); });
+    "#,
+        &[],
+    );
+    let computed = of(&events, "computed-callee");
+    assert!(
+        computed.iter().any(|event| event == "call:g:obj[]"),
+        "a computed callee spells the empty-key path: {computed:?}"
+    );
+    let fluent = of(&events, "fluent-types");
+    assert!(
+        fluent
+            .iter()
+            .any(|event| event.starts_with("call:g:expectTypeOf")),
+        "the fluent path carries the outer event: {fluent:?}"
+    );
+    let optional = of(&events, "optional-callee");
+    assert!(
+        optional.iter().any(|event| event.starts_with("call:g:obj.run")),
+        "an optional call spells the dotted path: {optional:?}"
+    );
+}
+
+/// Assertion-recognizer arms: a computed matcher, an unknown link, type arguments on both
+/// halves, a missing subject, and a spread subject.
+#[test]
+fn assertion_recognizer_declines_and_spells() {
+    let events = events(
+        r#"
+        test('computed-matcher', () => { expect(x)[mode](1); });
+        test('unknown-link', () => { expect.other(x).toBe(1); });
+        test('typed', () => { expect<string>(x).toBe(1); });
+        test('no-subject', () => { expect(); });
+        test('spread-subject', () => { expect(...xs).toBe(1); });
+    "#,
+        &[],
+    );
+    let computed = of(&events, "computed-matcher");
+    assert!(
+        !computed.iter().any(|event| event.starts_with("assert:")),
+        "a computed matcher is an ordinary call: {computed:?}"
+    );
+    let unknown = of(&events, "unknown-link");
+    assert!(
+        !unknown.iter().any(|event| event.starts_with("assert:")),
+        "an unknown link is not an assertion: {unknown:?}"
+    );
+    let typed = of(&events, "typed");
+    assert!(
+        typed.iter().any(|event| event.starts_with("assert:expect")),
+        "the typed spelling still recognizes: {typed:?}"
+    );
+    assert!(
+        typed.iter().any(|event| event.contains("subject=")),
+        "the subject rides the event: {typed:?}"
+    );
+}
+
+/// A soft or poll qualifier reaches the chain form too, with its links verbatim.
+#[test]
+fn qualified_chains_record_verbatim() {
+    let events = events(
+        r#"
+        test('soft-chain', () => { expect.soft(x).to.be.ok; });
+        test('poll-chain', () => { expect.poll(x).to.be.ok; });
+        test('plain-chain', () => { expect(x).to.be.ok; });
+    "#,
+        &[],
+    );
+    assert!(of(&events, "soft-chain").iter().any(|event| event == "assert:chain:expect.soft.to.be.ok"));
+    assert!(of(&events, "poll-chain").iter().any(|event| event == "assert:chain:expect.poll.to.be.ok"));
+    assert!(of(&events, "plain-chain").iter().any(|event| event == "assert:chain:expect.to.be.ok"));
+}
+
+/// The Trace accessors answer over a recorded trace; the corpus rules read them later.
+#[test]
+fn trace_accessors_answer() {
+    let evts = events(
+        r#"
+        test('one', () => { g(); });
+    "#,
+        &[],
+    );
+    let (events, complete, _) = &evts["one"];
+    let trace = Trace {
+        events: events.iter().map(|event| sha256_128(event)).collect(),
+        complete: *complete,
+    };
+    assert_eq!(trace.len(), 1);
+    assert!(!trace.is_empty());
+}
+
+
+
+
+
+
+
+/// Destructuring forms that carry no provable rewrite keep their name tags or plain numbers:
+/// array patterns contribute position, defaults and computed keys are unsupported shapes, and a
+/// rest names no property.
+#[test]
+fn unrewritable_destructuring_forms_stay_named() {
+    let events = events(
+        r#"
+        import { o, pair } from './helpers';
+        test('array-pattern', () => { const [x] = pair; use(x); });
+        test('default', () => { const { a = 1 } = o; use(a); });
+        test('rest', () => { const { ...r } = o; use(r); });
+        test('computed-key', () => { const { [k]: v } = o; use(v); });
+        test('for-of-head', () => { for (const x of pair) { use(x); } });
+        test('catch-param', () => { try { g(); } catch (e) { use(e); } });
+    "#,
+        &[("helpers.ts", "export const o = {}\nexport const pair = [1, 2]\n")],
+    );
+    let array_pattern = of(&events, "array-pattern");
+    assert!(
+        array_pattern.iter().any(|event| event.starts_with("call:g:use args=")),
+        "the array pattern's read stays an ordinary event: {array_pattern:?}"
+    );
+    // Every body traces to completion: an unsupported shape is not an abstention.
+    for title in ["array-pattern", "default", "rest", "computed-key", "for-of-head", "catch-param"] {
+        assert!(complete(&events, title), "{title} traces whole");
+    }
+}
+
+/// The effect scan reaches every expression family through the statements it screens, so an
+/// initializer does not move across a hole, a spread property, a computed read, or a wrapped
+/// call.
+#[test]
+fn effect_forms_block_inlining() {
+    let events = events(
+        r#"
+        test('hole', () => { const x = f(); const a = [,]; g(x); });
+        test('spread-prop', () => { const x = f(); const a = { ...r }; g(x); });
+        test('computed-read', () => { const x = f(); const a = o[k()]; g(x); });
+        test('unary', () => { const x = f(); const a = !eff(); g(x); });
+        test('conditional', () => { const x = f(); const a = c ? eff1() : eff2(); g(x); });
+        test('wrapped', () => { const x = f(); const a = eff() as unknown; g(x); });
+        test('import-call', () => { const x = f(); const a = import('./x'); g(x); });
+    "#,
+        &[],
+    );
+    for title in [
+        "hole",
+        "spread-prop",
+        "computed-read",
+        "unary",
+        "conditional",
+        "wrapped",
+        "import-call",
+    ] {
+        let evts = of(&events, title);
+        assert!(
+            evts.iter().any(|event| event == "call:g:f"),
+            "{title} keeps its initializer's event in place: {evts:?}"
+        );
+        assert!(complete(&events, title), "{title} traces whole");
+    }
+}
+
+/// Class and callee paths the earlier controls missed: a static accessor, `super` in a method,
+/// a shadowed assertion entry, an `import()` and a tagged template.
+#[test]
+fn remaining_class_and_callee_paths_record() {
+    let events = events(
+        r#"
+        test('accessor', () => { class C { static accessor x = 1; } new C(); });
+        test('super', () => { class D extends B { run() { super.run(); } } new D().run(); });
+        test('shadowed-expect', () => { const expect = (v) => ({ toBe: () => {} }); expect(1).toBe(2); });
+        test('dynamic-import', () => { import('./x'); });
+        test('tagged', () => { tag`t${x}`; });
+    "#,
+        &[],
+    );
+    for title in ["accessor", "super", "shadowed-expect", "dynamic-import", "tagged"] {
+        assert!(complete(&events, title), "{title} traces whole");
+    }
+    let accessor = of(&events, "accessor");
+    assert!(
+        accessor
+            .iter()
+            .any(|event| event.contains("static-field")),
+        "the static accessor is a definition-time field: {accessor:?}"
+    );
+    // A method body is inert: `super.run()` shows up only inside the class content the shapes
+    // carry, while the definition-time heritage is its own event.
+    let super_call = of(&events, "super");
+    assert!(
+        super_call
+            .iter()
+            .any(|event| event.starts_with("class-eval:") && event.contains("heritage:g:B")),
+        "the heritage is a definition-time event: {super_call:?}"
+    );
+    let shadowed = of(&events, "shadowed-expect");
+    assert!(
+        !shadowed.iter().any(|event| event.starts_with("assert:")),
+        "a body-local shadowing the entry is not the API: {shadowed:?}"
+    );
+    let tagged = of(&events, "tagged");
+    assert!(tagged.is_empty(), "a tagged template records no event: {tagged:?}");
+}
+
+/// The call form with a qualifier records its modifiers and values like the plain entry.
+#[test]
+fn qualified_call_assertions_record() {
+    let events = events(
+        r#"
+        test('soft-call', () => { expect.soft(x).toBe(1); });
+        test('poll-not', () => { expect.poll(x).not.toBe(1); });
+    "#,
+        &[],
+    );
+    assert!(of(&events, "soft-call").iter().any(|event| event.starts_with("assert:expect.soft.toBe(")));
+    assert!(of(&events, "poll-not").iter().any(|event| event.starts_with("assert:expect.poll.not.toBe(")));
+}
+
+/// Concise arrow callbacks splice and walk like their block spellings: the body is what the
+/// test returns.
+#[test]
+fn concise_callbacks_splice_and_walk() {
+    let events = events(
+        r#"
+        test('concise-splice', async () => f().then(() => { g(); }));
+        test('awaited', async () => { await f(); g(); });
+        test('concise-plain', async () => g());
+    "#,
+        &[],
+    );
+    assert_eq!(of(&events, "concise-splice"), of(&events, "awaited"));
+    let plain = of(&events, "concise-plain");
+    assert!(plain.iter().any(|event| event == "call:g:g"), "{plain:?}");
+}
+
+/// Statement shapes the earlier fixtures missed: an empty `for`, a `try` without `catch`, a
+/// bare `return`, a labeled loop, a declaration `for` head, and an empty statement or bare
+/// block in the scanned region.
+#[test]
+fn remaining_statement_shapes_record() {
+    let events = events(
+        r#"
+        test('empty-for', () => { for (;;) { break; } g(); });
+        test('finally-only', () => { try { g(); } finally { h(); } });
+        test('bare-return', () => { if (c) { return; } g(); });
+        test('labeled', () => { outer: while (c) { break outer; } g(); });
+        test('decl-for', () => { for (let i = 0, j = f(); i < 1; i++) { g(j); } });
+        test('empties', () => { ; { g(); } });
+    "#,
+        &[],
+    );
+    for title in [
+        "empty-for",
+        "finally-only",
+        "bare-return",
+        "labeled",
+        "decl-for",
+        "empties",
+    ] {
+        assert!(complete(&events, title), "{title} traces whole");
+    }
+    let decl_for = of(&events, "decl-for");
+    assert!(
+        decl_for.iter().any(|event| event == "call:g:f"),
+        "the declaration head's initializer is walked: {decl_for:?}"
+    );
+    assert!(of(&events, "finally-only").iter().any(|event| event == "call:g:h"));
+}
+
+/// Type arguments on a constructor, a class bound to nothing usable, an imported class, and a
+/// member-claimed callee all spell their paths.
+#[test]
+fn constructor_and_callee_paths_record() {
+    let events = events(
+        r#"
+        import { o, Factory } from './helpers';
+        test('typed-new', () => { new C<string>(); });
+        test('uninitialized', () => { var A; new A(); });
+        test('imported-class', () => { new Factory(); });
+        test('member-callee', () => { const { run } = o; run(); });
+        test('this-callee', () => { function bound() { this.run(); } });
+    "#,
+        &[("helpers.ts", "export const o = { run() {} }\nexport class Factory {}\n")],
+    );
+    for title in ["typed-new", "uninitialized", "imported-class", "member-callee", "this-callee"] {
+        assert!(complete(&events, title), "{title} traces whole");
+    }
+    let typed = of(&events, "typed-new");
+    assert!(
+        typed.iter().any(|event| event.starts_with("new:")),
+        "the typed construction records: {typed:?}"
+    );
+    let member = of(&events, "member-callee");
+    assert!(
+        member
+            .iter()
+            .any(|event| event.starts_with("call:var:") && event.contains(".run")),
+        "the member-claimed callee spells object.property: {member:?}"
+    );
+}
+
+/// Assertion recognizers decline their last arms: an unknown modifier link, a subjectless
+/// assertion, matcher type arguments, a chain hung off a call, and a chain off nothing
+/// recognized.
+#[test]
+fn assertion_declines_reach_every_arm() {
+    let events = events(
+        r#"
+        test('unknown-modifier', () => { expect(x).foo.bar(1); });
+        test('subjectless', () => { expect().toBe(1); });
+        test('matcher-typed', () => { expect(x).toBe<number>(1); });
+        test('call-base', () => { expect(1)(2).toBe(3); });
+        test('not-expect', () => { wrapper.to.be.ok; });
+    "#,
+        &[],
+    );
+    for title in [
+        "unknown-modifier",
+        "subjectless",
+        "matcher-typed",
+        "call-base",
+        "not-expect",
+    ] {
+        assert!(complete(&events, title), "{title} traces whole");
+    }
+    for title in ["unknown-modifier", "call-base", "not-expect"] {
+        let evts = of(&events, title);
+        assert!(
+            !evts.iter().any(|event| event.starts_with("assert:")),
+            "{title} is no assertion: {evts:?}"
+        );
+    }
+    assert!(of(&events, "subjectless").iter().any(|event| event.starts_with("assert:expect.toBe(subject=()")));
+    assert!(of(&events, "matcher-typed").iter().any(|event| event.starts_with("assert:expect.toBe(")));
+}
+
+/// Destructuring shapes that reach the remaining pattern arms: quoted and nested keys, an
+/// object inside an array, a defaulted element, a key walking to an array, and a never-read
+/// binding.
+#[test]
+fn exotic_destructuring_patterns_record() {
+    let events = events(
+        r#"
+        import { o, xs } from './helpers';
+        test('quoted-key', () => { const { 'x-y': v } = o; use(v); });
+        test('nested-under-key', () => { const { a: { b } } = o; use(b); });
+        test('object-in-array', () => { const [{ a }] = xs; use(a); });
+        test('defaulted-element', () => { const [x = 1] = xs; use(x); });
+        test('array-under-key', () => { const { a: [b] } = o; use(b); });
+        test('never-read', () => { const { unused } = o; g(); });
+        test('unsafe-read', () => { const { a } = o; if (c) { use(a); } });
+        test('non-const', () => { let x = f(); use(x); });
+        test('multi-declarator', () => { const y = f(), z = g(); use(y); });
+    "#,
+        &[("helpers.ts", "export const o = { a: { b: 1 } }\nexport const xs = [{ a: 1 }]\n")],
+    );
+    for title in [
+        "quoted-key",
+        "nested-under-key",
+        "object-in-array",
+        "defaulted-element",
+        "array-under-key",
+        "never-read",
+        "unsafe-read",
+        "non-const",
+        "multi-declarator",
+    ] {
+        assert!(complete(&events, title), "{title} traces whole");
+    }
+}
+
+/// A class whose method runs a `with` statement cannot be proven: the trace abstains.
+#[test]
+fn a_class_with_with_statement_abstains() {
+    let events = events(
+        r#"
+        test('with-body', () => { class C { m() { with (o) { g(); } } } new C(); });
+    "#,
+        &[("helpers.ts", "export const o = {}\n")],
+    );
+    assert!(!complete(&events, "with-body"), "a `with` in a class is unprovable");
+}
+
+/// A plain zero-parameter `function` continuation splices like an arrow: it reads neither the
+/// resolved value nor its own frame.
+#[test]
+fn a_plain_function_continuation_splices() {
+    let events = events(
+        r#"
+        test('function-continuation', async () => { return f().then(function () { g(); }); });
+        test('awaited', async () => { await f(); g(); });
+    "#,
+        &[],
+    );
+    assert_eq!(of(&events, "function-continuation"), of(&events, "awaited"));
+}
+
+/// Callee and chain shapes at the recognizer's edges: a function declaration as a guarded
+/// statement, a chain call over an optional chain, and a non-null assertion inside a chain.
+#[test]
+fn edge_callee_and_chain_shapes_trace() {
+    let events = events(
+        r#"
+        test('guarded-function', () => { if (c) { function f() { g(); } } f(); });
+        test('chain-in-callee', () => { x?.y().z(); });
+        test('nonnull-in-chain', () => { v?.w!.p; });
+    "#,
+        &[],
+    );
+    for title in ["guarded-function", "chain-in-callee", "nonnull-in-chain"] {
+        assert!(complete(&events, title), "{title} traces whole");
+    }
+    let guarded = of(&events, "guarded-function");
+    assert!(
+        guarded.iter().any(|event| event == "deferred-call:g:g"),
+        "the inner function's body is deferred behavior: {guarded:?}"
+    );
 }
