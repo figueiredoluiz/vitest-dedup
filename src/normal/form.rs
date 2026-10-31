@@ -161,7 +161,7 @@ fn tagged(tree: &Tree, literal: NodeId) -> bool {
 }
 
 /// Whether a function body reads the function's own `this`, `arguments`, `super` or `new.target`.
-fn binds_this(tree: &Tree, node: NodeId) -> bool {
+pub(super) fn binds_this(tree: &Tree, node: NodeId) -> bool {
     any_inside(node, |node| match tree.kind(node) {
         "ThisExpression" | "Super" | "MetaProperty" => Visit::Found,
         "Identifier" if tree.text(node, "name") == Some("arguments") => Visit::Found,
@@ -204,6 +204,16 @@ fn value(tree: &Tree, node: NodeId, key: &str) -> Value {
     match tree.field_of(node, key) {
         Field::Value(value) => value.clone(),
         _ => Value::Null,
+    }
+}
+
+/// The kind a literal's JSON value names, for the structural rendering.
+fn literal_kind(value: Value) -> &'static str {
+    match value {
+        Value::Number(_) => "number",
+        Value::String(_) => "string",
+        Value::Bool(_) => "boolean",
+        _ => "null",
     }
 }
 
@@ -332,32 +342,42 @@ impl Normalizer<'_> {
                 let _ = write!(out, "R{}", quasi_text(tree, node, "raw"));
                 return;
             }
-            // `` `text` `` is the string it spells.
+            // `` `text` `` is the string it spells. The structural rendering keeps only its kind:
+            // an assertion subject's shape tells assertions apart by what they compare, not by
+            // which literal each compares.
             "TemplateLiteral"
                 if tree.list(node, "expressions").is_empty() && !tagged(tree, node) =>
             {
-                let cooked = tree
-                    .list(node, "quasis")
-                    .first()
-                    .copied()
-                    .flatten()
-                    .map(|quasi| quasi_text(tree, quasi, "cooked"))
-                    .unwrap_or(Value::Null);
-                let _ = write!(out, "L{cooked}");
+                if walk.structural {
+                    let _ = write!(out, "L<string>");
+                } else {
+                    let cooked = tree
+                        .list(node, "quasis")
+                        .first()
+                        .copied()
+                        .flatten()
+                        .map(|quasi| quasi_text(tree, quasi, "cooked"))
+                        .unwrap_or(Value::Null);
+                    let _ = write!(out, "L{cooked}");
+                }
                 return;
             }
             "Literal" => {
-                let literal = value(tree, node, "value");
-                let _ = write!(out, "L{literal}");
-                for extra in ["regex", "bigint"] {
-                    let field = tree.field_of(node, extra);
-                    if !is_empty(field) {
-                        self.write_field(field, walk, out);
-                        break;
+                if walk.structural {
+                    let _ = write!(out, "L<{}>", literal_kind(value(tree, node, "value")));
+                } else {
+                    let literal = value(tree, node, "value");
+                    let _ = write!(out, "L{literal}");
+                    for extra in ["regex", "bigint"] {
+                        let field = tree.field_of(node, extra);
+                        if !is_empty(field) {
+                            self.write_field(field, walk, out);
+                            break;
+                        }
                     }
-                }
-                if literal.is_null() {
-                    out.push_str(&value(tree, node, "raw").to_string());
+                    if literal.is_null() {
+                        out.push_str(&value(tree, node, "raw").to_string());
+                    }
                 }
                 return;
             }
@@ -503,8 +523,24 @@ impl Normalizer<'_> {
                 let _ = write!(out, "g:{name}");
             }
             Some(Name::Binding(Some(symbol)) | Name::Reference(Some(symbol))) => {
-                let text = self.identifier(symbol, walk);
-                out.push_str(&text);
+                // A read of an inlined local renders the initializer's form, where the read
+                // stands, with the numbering the walk has reached — exactly what the read site's
+                // own event walk does for the events. Rendering the local's own number instead
+                // would erase the initializer's content from every shape.
+                if let Some(init) = walk.inline.get(&symbol) {
+                    let init = *init;
+                    // Written in place, not through a fresh `form_of`: the current nesting count
+                    // carries into the expansion, so a chain of single-use locals stays under one
+                    // depth bound — a chain a hundred links long renders past the bound's position
+                    // token instead of recursing once per link with no bound at all.
+                    self.write_node(init, walk, out);
+                } else {
+                    let mut text = self.identifier(symbol, walk);
+                    if let Some(suffix) = walk.suffixes.get(&symbol) {
+                        text.push_str(suffix);
+                    }
+                    out.push_str(&text);
+                }
             }
         }
         for key in ["decorators", "typeAnnotation", "optional"] {

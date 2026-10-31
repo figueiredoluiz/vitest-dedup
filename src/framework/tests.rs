@@ -7,6 +7,8 @@ use std::path::Path;
 /// may be a name the dialect declares. Unit tests (`tests.rs`, `tests/`) are exempt: they spell the
 /// API in the sources they analyze. New neutral modules join this list as they land.
 const NEUTRAL: &[&str] = &[
+    "src/behavior.rs",
+    "src/behavior",
     "src/framework.rs",
     "src/lang.rs",
     "src/lang",
@@ -27,6 +29,9 @@ const COLLISIONS: &[(&str, &str)] = &[
     ("src/lang/limits.rs", "for"),
     // ESTree's field for the condition of an `if`.
     ("src/inventory/module.rs", "test"),
+    // The same field, in the trace walk's control flow.
+    ("src/behavior.rs", "test"),
+    ("src/behavior/dataflow.rs", "test"),
 ];
 
 /// The string literals in `source`, with `//` comments removed first so prose may name the API.
@@ -139,6 +144,48 @@ fn neutral_modules_spell_no_api_name() {
     }
 }
 
+/// The behavior layer reads its assertion vocabulary from the dialect: no production file there
+/// spells an entry, a qualifier or a modifier. The names are deliberately absent from `names()`
+/// (`not` is common prose, and a collision exemption for it would be noise), so the boundary
+/// carries its own check over the same scan.
+#[test]
+fn the_behavior_layer_reads_its_assertions_from_the_dialect() {
+    let vocabulary: HashSet<&str> = DIALECT
+        .assertions
+        .iter()
+        .flat_map(|entry| {
+            std::iter::once(entry.name)
+                .chain(std::iter::once(entry.label))
+                .chain(entry.qualifiers.iter().copied())
+                .chain(entry.modifiers.iter().copied())
+        })
+        .collect();
+    assert!(
+        vocabulary.len() >= 5,
+        "the dialect declares only {vocabulary:?} assertion vocabulary"
+    );
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let files: Vec<_> = neutral_files(root)
+        .into_iter()
+        .filter(|file| file.to_string_lossy().contains("src/behavior"))
+        .collect();
+    assert!(
+        files.len() >= 2,
+        "only {} behavior files were scanned",
+        files.len()
+    );
+    for file in files {
+        let literals = string_literals(&std::fs::read_to_string(&file).unwrap());
+        let found = violations(&literals, &vocabulary);
+        assert!(
+            found.is_empty(),
+            "{} spells assertion vocabulary {found:?}; read it from the dialect",
+            file.display()
+        );
+    }
+}
+
+/// The vocabulary check rejects a planted API name and keeps ordinary escaped prose.
 #[test]
 fn the_boundary_check_rejects_a_planted_api_name() {
     let names: HashSet<&str> = DIALECT.names().collect();

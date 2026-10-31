@@ -23,6 +23,11 @@ fn case(line: u32, site: u32, key: u64, module_key: u64) -> TestCase {
         row_class: None,
         key,
         module_key,
+        body: 0,
+        trace: Vec::new(),
+        similarity_key: 0,
+        subsumption_key: 0,
+        callback_form: crate::normal::CallbackForm::Interchangeable,
         inert: false,
         exclusion: None,
     }

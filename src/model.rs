@@ -1482,8 +1482,9 @@ impl Sha256 {
     }
 }
 
-/// SHA-256 of `value`, truncated to 128 bits. The per-event digest [`BehaviorTrace`] stores.
-fn sha256_128(value: &str) -> u128 {
+/// SHA-256 of `value`, truncated to 128 bits. The per-event digest [`BehaviorTrace`] stores, and
+/// the next engine's trace stores the same way.
+pub(crate) fn sha256_128(value: &str) -> u128 {
     let mut hasher = Sha256::new();
     hasher.update(value.as_bytes());
     hasher.finish_128()
@@ -2330,6 +2331,9 @@ pub enum ExclusionReason {
     NamedCallback,
     /// A spread argument, or a callee the analyzer cannot read, may hide a test's callback.
     UnreadableCallback,
+    /// A test's body is deeper than the trace walks, or holds a class whose behavior the trace
+    /// cannot prove, so its behavior was not read to the end.
+    IncompleteTrace,
     /// A benchmark, which the next engine counts but does not compare yet.
     UnsupportedBenchmark,
     /// A wrapper call, a module load or a registration function read as a value registers tests
@@ -2366,7 +2370,7 @@ pub enum ExclusionReason {
 
 impl ExclusionReason {
     /// Every code, in the order that breaks ties between a file's reasons.
-    pub const ALL: [Self; 29] = [
+    pub const ALL: [Self; 30] = [
         Self::HelperExportUnreadable,
         Self::HelperSetupEffects,
         Self::HelperEffectsUnproved,
@@ -2381,6 +2385,7 @@ impl ExclusionReason {
         Self::OrderDependentState,
         Self::NamedCallback,
         Self::UnreadableCallback,
+        Self::IncompleteTrace,
         Self::UnsupportedBenchmark,
         Self::RegisteredElsewhere,
         Self::UnsupportedStatement,
@@ -2414,6 +2419,7 @@ impl ExclusionReason {
             Self::RegisteredInsideFunction => "registered-inside-function",
             Self::OrderDependentState => "order-dependent-state",
             Self::NamedCallback => "named-callback",
+            Self::IncompleteTrace => "incomplete-trace",
             Self::UnreadableCallback => "unreadable-callback",
             Self::UnsupportedBenchmark => "unsupported-benchmark",
             Self::RegisteredElsewhere => "registered-elsewhere",
