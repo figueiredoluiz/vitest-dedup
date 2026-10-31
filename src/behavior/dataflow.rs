@@ -355,10 +355,15 @@ fn try_register_members(
         if last_use <= decl_index {
             continue;
         }
-        if scan.statements[decl_index + 1..last_use]
-            .iter()
-            .any(|statement| statement_has_effect(tree, *statement, 0))
-        {
+        // The rewrite moves the object's read from the declaration to every use: for each read,
+        // nothing effectful may stand between the declaration and it, nor before it inside its
+        // own statement — the rewrite would evaluate the object later than it runs today.
+        if reads.iter().any(|(index, read_span)| {
+            scan.statements[decl_index + 1..*index]
+                .iter()
+                .any(|statement| statement_has_effect(tree, *statement, 0))
+                || an_effect_precedes(tree, scan.statements[*index], *read_span)
+        }) {
             continue;
         }
         dataflow.member.insert(symbol, (init, name.to_owned()));

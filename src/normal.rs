@@ -490,6 +490,11 @@ impl<'s> Normalizer<'s> {
         }
     }
 
+    /// Whether a body reads the function's own `this`, `arguments`, `super` or `new.target`.
+    pub fn binds_this(&self, body: NodeId) -> bool {
+        form::binds_this(self.tree, body)
+    }
+
     /// The dialect every form reads its framework knowledge from.
     pub fn dialect(&self) -> &'s Dialect {
         self.setting.dialect

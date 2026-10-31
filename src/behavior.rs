@@ -539,6 +539,16 @@ impl<'s> Walker<'_, 's> {
         {
             return None;
         }
+        // A `function` continuation may read the resolved value through `arguments[0]`, or its
+        // own `this`; the splice would re-home those reads into the test body, where they name
+        // something else.
+        if tree.kind(*argument) == "FunctionExpression" {
+            if let Some(body) = tree.child(*argument, "body") {
+                if self.normalizer.binds_this(body) {
+                    return None;
+                }
+            }
+        }
         let body = tree.child(*argument, "body")?;
         (tree.kind(body) == "BlockStatement").then(|| {
             (

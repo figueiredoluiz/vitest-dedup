@@ -710,3 +710,71 @@ fn a_member_chain_keeps_its_evaluation_order() {
         .unwrap();
     assert!(object_at < key_at, "object() runs first: {order:?}");
 }
+
+/// Debug probe: the dataflow maps for the declining member fixture. Deleted before delivery.
+#[test]
+fn debug_probe_dataflow() {
+    use crate::lang::parse;
+    use std::fs;
+    let dir = tempfile::tempdir().unwrap();
+    let main = "import { o } from './helpers';\ntest('t', () => { const { b } = o; use(o.reset(), b); });\n";
+    let path = dir.path().join("a.test.tsx");
+    fs::write(&path, main).unwrap();
+    let parsed = parse(&path, main).unwrap();
+    let d = crate::behavior::dataflow::analyze(&parsed, {
+        // the test callback's function node: the last argument of the registration
+        let tree = &parsed.tree;
+        let root = tree.root();
+        tree.descendants(root)
+            .find(|&n| tree.kind(n) == "ArrowFunctionExpression")
+            .unwrap()
+    });
+    println!("inline: {:?}", d.inline.keys().collect::<Vec<_>>());
+    println!("member: {:?}", d.member);
+    println!("names: {:?}", d.names);
+}
+
+/// A `function` continuation that reads its own `this` or `arguments` is never spliced: the
+/// re-homed reads would name the test body's, not the continuation's.
+#[test]
+fn a_function_continuation_reading_this_is_never_spliced() {
+    let events = events(
+        r#"
+        test('reads-arguments', () => { return f().then(function () { g(arguments[0]); }); });
+        test('plain', () => { return f().then(function (v) { g(v); }); });
+    "#,
+        &[],
+    );
+    let reads = of(&events, "reads-arguments");
+    assert!(
+        !reads.iter().any(|event| event == "await"),
+        "no splice when the continuation reads arguments: {reads:?}"
+    );
+    assert!(
+        reads
+            .iter()
+            .any(|event| event.starts_with("deferred-call:g:g")),
+        "the body stays deferred: {reads:?}"
+    );
+    // The parameterized spelling is rejected by its own precondition; both stay unspliced.
+    assert!(
+        !of(&events, "plain").iter().any(|event| event == "await"),
+        "a parameterized continuation is never spliced either"
+    );
+}
+
+/// The member rewrite moves the object's read to every use, so nothing effectful may stand
+/// before a use, inside its own statement either: the rewrite declines to a name tag, and the
+/// rewritten spelling stays apart.
+#[test]
+fn an_effect_before_the_use_blocks_the_member_rewrite() {
+    let events = events(
+        r#"
+        import { o } from './helpers';
+        test('extracted', () => { const { b } = o; use(o.reset(), b); });
+        test('written', () => { use(o.reset(), o.b); });
+    "#,
+        &[("helpers.ts", "export const o = { reset() {} }\n")],
+    );
+    assert_ne!(of(&events, "extracted"), of(&events, "written"));
+}
