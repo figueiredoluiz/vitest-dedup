@@ -1,0 +1,133 @@
+{
+  "files": {
+    "async-arrow.test.ts": {
+      "tasks": 3,
+      "wrapperSites": [
+        "hook-wrapper@6",
+        "wrapper@7"
+      ],
+      "next": {
+        "reasons": [
+          "registered-elsewhere"
+        ],
+        "testsExcluded": 3
+      }
+    },
+    "async-return.test.ts": {
+      "tasks": 3,
+      "wrapperSites": [
+        "hook-wrapper@6",
+        "wrapper@7"
+      ],
+      "next": {
+        "reasons": [
+          "registered-elsewhere"
+        ],
+        "testsExcluded": 2
+      }
+    },
+    "call-site.test.ts": {
+      "tasks": 4,
+      "wrapperSites": [
+        "hook-wrapper@7",
+        "wrapper@8",
+        "wrapper@9"
+      ],
+      "next": {
+        "reasons": [
+          "registered-elsewhere"
+        ],
+        "testsExcluded": 4
+      }
+    },
+    "conditional.test.ts": {
+      "tasks": 3,
+      "wrapperSites": [
+        "hook-wrapper@6",
+        "wrapper@7"
+      ],
+      "next": {
+        "reasons": [
+          "registered-elsewhere"
+        ],
+        "testsExcluded": 2
+      }
+    },
+    "global.test.ts": {
+      "tasks": 3,
+      "wrapperSites": [
+        "hook-wrapper@6",
+        "wrapper@7"
+      ],
+      "next": {
+        "reasons": [
+          "registered-elsewhere"
+        ],
+        "testsExcluded": 2
+      }
+    },
+    "method.test.ts": {
+      "tasks": 3,
+      "wrapperSites": [
+        "hook-wrapper@6",
+        "wrapper@7"
+      ],
+      "next": {
+        "reasons": [
+          "registered-elsewhere"
+        ],
+        "testsExcluded": 2
+      }
+    },
+    "namespace.test.ts": {
+      "tasks": 3,
+      "wrapperSites": [
+        "hook-wrapper@6",
+        "wrapper@7"
+      ],
+      "next": {
+        "reasons": [
+          "registered-elsewhere"
+        ],
+        "testsExcluded": 2
+      }
+    },
+    "parameter.test.ts": {
+      "tasks": 3,
+      "wrapperSites": [
+        "hook-wrapper@6",
+        "wrapper@7"
+      ],
+      "next": {
+        "reasons": [
+          "registered-elsewhere"
+        ],
+        "testsExcluded": 4
+      }
+    },
+    "timeout.test.ts": {
+      "tasks": 3,
+      "wrapperSites": [
+        "hook-wrapper@6",
+        "wrapper@7"
+      ],
+      "next": {
+        "reasons": [
+          "registered-elsewhere"
+        ],
+        "testsExcluded": 3
+      }
+    }
+  },
+  "blindUnderCurrent": [
+    "async-arrow.test.ts",
+    "async-return.test.ts",
+    "call-site.test.ts",
+    "conditional.test.ts",
+    "global.test.ts",
+    "method.test.ts",
+    "namespace.test.ts",
+    "parameter.test.ts",
+    "timeout.test.ts"
+  ]
+}
