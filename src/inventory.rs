@@ -31,6 +31,8 @@ pub enum SiteKind {
 pub enum Reach {
     /// Hooks only: every registration in its body is a hook or a call of a hooks-only wrapper.
     Hooks,
+    /// A hook read under another name: it registers a hook, and the framework reads its arguments.
+    Hook,
     /// Tests, suites or benchmarks, or what the inventory cannot tell.
     Tasks,
 }

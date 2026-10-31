@@ -1,4 +1,4 @@
-// A direct `eval` writes a binding no analysis can see.
+// A direct `eval` may write any binding of its module, so nothing there is hooks-only.
 import { describe, expect, test } from 'vitest'
 import { closed, open } from './direct-eval'
 

@@ -5,7 +5,8 @@ use super::{
 };
 use crate::framework::{Chain, Registers};
 use crate::lang::{
-    bound_symbols, export_name, property_name, Name, NodeId, Parsed, Span, SymbolId, Tree,
+    bound_symbols, export_name, property_name, Declaration, Name, NodeId, Parsed, Span, SymbolId,
+    Tree,
 };
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -40,8 +41,13 @@ struct Module<'s> {
     wrappers: HashMap<SymbolId, Reach>,
     loads: Vec<u32>,
     values: HashSet<NodeId>,
-    /// Bindings a second `var` or function declaration declares again, replacing their value.
+    /// Bindings declared more than once, replacing their value.
     redeclared: HashSet<SymbolId>,
+    /// Whether a direct `eval` may write any binding of the module.
+    evaluates: bool,
+    /// Globals the module writes through the global object, `None` for a key only known when it
+    /// runs, which may be any of them.
+    rewritten_globals: HashSet<Option<String>>,
 }
 
 /// The inventory of a module, and the export names whose value registers when called with what
@@ -65,8 +71,12 @@ pub(super) fn analyse(
         loads: Vec::new(),
         values: HashSet::new(),
         redeclared: HashSet::new(),
+        evaluates: false,
+        rewritten_globals: HashSet::new(),
     };
     module.redeclared = module.redeclarations();
+    module.evaluates = module.has_direct_eval();
+    module.rewritten_globals = module.global_writes();
     module.collect_origins(modules, depth);
     let found = module.registrations();
     let mut exports = module.exports(modules, depth, &found);
@@ -157,11 +167,17 @@ impl<'s> Module<'s> {
                     };
                     (*origin, provenance)
                 }),
-                Name::Reference(None) if self.setting.globals => self
-                    .setting
-                    .dialect
-                    .registration(tree.text(node, "name")?)
-                    .map(|registration| (Origin::Api(registration.registers), Provenance::Global)),
+                Name::Reference(None) if self.setting.globals => {
+                    let name = tree.text(node, "name")?;
+                    let registration = self.setting.dialect.registration(name)?;
+                    let rewritten = self.rewritten_globals.contains(&None)
+                        || self.rewritten_globals.contains(&Some(name.to_owned()));
+                    Some(if rewritten {
+                        (Origin::Wrapper(Reach::Tasks), Provenance::Global)
+                    } else {
+                        (Origin::Api(registration.registers), Provenance::Global)
+                    })
+                }
                 _ => None,
             },
             _ => None,
@@ -447,7 +463,7 @@ impl<'s> Module<'s> {
                             };
                             if tree.kind(value) == "Identifier" {
                                 if let Some(symbol) = self.declares(value) {
-                                    self.origins.entry(symbol).or_insert(Origin::Api(registers));
+                                    self.alias(symbol, Origin::Api(registers));
                                 }
                             }
                         }
@@ -465,7 +481,9 @@ impl<'s> Module<'s> {
     /// wrapper's reach only grows while the fixpoint runs; any other origin is set once.
     fn alias(&mut self, symbol: SymbolId, origin: Origin) {
         let origin = match origin {
-            Origin::Wrapper(_) if self.reassigned(symbol) => Origin::Wrapper(Reach::Tasks),
+            Origin::Api(_) | Origin::Wrapper(_) if self.reassigned(symbol) => {
+                Origin::Wrapper(Reach::Tasks)
+            }
             origin => origin,
         };
         let entry = self.origins.entry(symbol).or_insert(origin);
@@ -521,10 +539,11 @@ impl<'s> Module<'s> {
         }
     }
 
-    /// Whether `symbol` is assigned or declared again after its declaration, so a call of it may
-    /// run another value.
+    /// Whether `symbol` may hold anything but what it was declared with: it is declared more than
+    /// once, something writes it, or a direct `eval` may. Every reading of a name's value asks this.
     fn reassigned(&self, symbol: SymbolId) -> bool {
-        self.redeclared.contains(&symbol)
+        self.evaluates
+            || self.redeclared.contains(&symbol)
             || self
                 .parsed
                 .scopes
@@ -534,9 +553,10 @@ impl<'s> Module<'s> {
                 .any(|reference| reference.write)
     }
 
-    /// The bindings declared by more than one `var` or function declaration.
+    /// The bindings more than one declaration binds, patterns included.
     fn redeclarations(&self) -> HashSet<SymbolId> {
         let tree = self.tree;
+        let mut seen = HashSet::new();
         tree.nodes()
             .filter(|&node| {
                 matches!(
@@ -545,12 +565,81 @@ impl<'s> Module<'s> {
                 )
             })
             .filter_map(|node| tree.child(node, "id"))
-            .filter(|&id| tree.kind(id) == "Identifier")
-            .filter_map(|id| {
-                let symbol = self.declares(id)?;
-                (self.parsed.scopes.symbol(symbol).span != tree.span(id)).then_some(symbol)
+            .flat_map(|id| bound_symbols(tree, &self.parsed.scopes, id))
+            .filter(|&symbol| !seen.insert(symbol))
+            .collect()
+    }
+
+    /// Whether the module calls the global `eval`, which runs in the caller's scope.
+    fn has_direct_eval(&self) -> bool {
+        let tree = self.tree;
+        tree.nodes()
+            .filter(|&node| tree.kind(node) == "CallExpression")
+            .filter_map(|node| tree.child(node, "callee"))
+            .map(|callee| tree.inner(callee))
+            .any(|callee| {
+                tree.kind(callee) == "Identifier"
+                    && tree.text(callee, "name") == Some("eval")
+                    && self.read(callee).is_none()
+            })
+    }
+
+    /// The names the module writes through the global object, in an assignment, a pattern, a
+    /// `for` head or an update, `None` for a key only known when it runs.
+    fn global_writes(&self) -> HashSet<Option<String>> {
+        let tree = self.tree;
+        tree.nodes()
+            .filter_map(|node| match tree.kind(node) {
+                "AssignmentExpression" | "ForOfStatement" | "ForInStatement" => {
+                    tree.child(node, "left")
+                }
+                "UpdateExpression" => tree.child(node, "argument"),
+                _ => None,
+            })
+            .flat_map(|target| std::iter::once(target).chain(tree.descendants(target)))
+            .filter(|&target| self.global_member(target))
+            .map(|member| {
+                let member = tree.inner(member);
+                let property = tree.child(member, "property")?;
+                let key = if !tree.flag(member, "computed") {
+                    tree.text(property, "name")
+                } else if tree.kind(property) == "Literal" {
+                    tree.text(property, "value")
+                } else {
+                    None
+                };
+                key.map(str::to_owned)
             })
             .collect()
+    }
+
+    /// Whether `node` is a member of the global object.
+    fn global_member(&self, node: NodeId) -> bool {
+        let tree = self.tree;
+        let node = tree.inner(node);
+        tree.kind(node) == "MemberExpression"
+            && tree.child(node, "object").is_some_and(|object| {
+                let object = tree.inner(object);
+                tree.kind(object) == "Identifier"
+                    && matches!(
+                        tree.text(object, "name"),
+                        Some("globalThis" | "global" | "window" | "self")
+                    )
+                    && self.read(object).is_none()
+            })
+    }
+
+    /// Whether `symbol` is only declared to the type checker: `declare` gives it no value.
+    fn ambient(&self, symbol: SymbolId) -> bool {
+        let tree = self.tree;
+        match self.parsed.scopes.symbol(symbol).declaration {
+            Declaration::Variable(declarator) => tree
+                .outer_parent(declarator)
+                .is_some_and(|declaration| tree.flag(declaration, "declare")),
+            Declaration::Function(function) => tree.kind(function) == "TSDeclareFunction",
+            Declaration::Class(class) => tree.flag(class, "declare"),
+            _ => false,
+        }
     }
 
     /// What calling a function whose body is `body` may register, `None` when its body holds no
@@ -561,9 +650,8 @@ impl<'s> Module<'s> {
             .iter()
             .filter(|(_, span, ..)| body.contains(*span))
             .map(|(_, _, kind, ..)| match kind {
-                SiteKind::Registers(Registers::Hook(_)) | SiteKind::Wrapper(Reach::Hooks) => {
-                    Reach::Hooks
-                }
+                SiteKind::Registers(Registers::Hook(_))
+                | SiteKind::Wrapper(Reach::Hooks | Reach::Hook) => Reach::Hooks,
                 SiteKind::Registers(_) | SiteKind::Wrapper(Reach::Tasks) => Reach::Tasks,
             })
             .max()
@@ -649,21 +737,29 @@ impl<'s> Module<'s> {
             return false;
         }
         match self.registration(self.callee(call)) {
-            // The framework reads a hook's arguments (it compares a timeout), which may run a
-            // value's `valueOf`: only functions and literals are passed.
-            Some((SiteKind::Registers(Registers::Hook(_)), ..)) => {
-                tree.list(call, "arguments").into_iter().all(|argument| {
-                    argument.is_some_and(|argument| {
-                        matches!(
-                            tree.kind(tree.inner(argument)),
-                            "Literal" | "FunctionExpression" | "ArrowFunctionExpression"
-                        )
-                    })
-                })
-            }
+            Some((
+                SiteKind::Registers(Registers::Hook(_)) | SiteKind::Wrapper(Reach::Hook),
+                ..,
+            )) => self.hook_arguments(call),
             Some((SiteKind::Wrapper(Reach::Hooks), ..)) => self.arguments_run_nothing(call),
             _ => false,
         }
+    }
+
+    /// Whether a hook's arguments are functions and literals: the framework reads them (it compares
+    /// a timeout), which may run a value's `valueOf`.
+    fn hook_arguments(&self, call: NodeId) -> bool {
+        let tree = self.tree;
+        // A hook used as a template tag is no hook call: its substitutions run first.
+        tree.kind(call) == "CallExpression"
+            && tree.list(call, "arguments").into_iter().all(|argument| {
+                argument.is_some_and(|argument| {
+                    matches!(
+                        tree.kind(tree.inner(argument)),
+                        "Literal" | "FunctionExpression" | "ArrowFunctionExpression"
+                    )
+                })
+            })
     }
 
     /// Whether evaluating the arguments of `call`, or a tagged template's substitutions, runs no
@@ -714,7 +810,7 @@ impl<'s> Module<'s> {
             "Literal" | "FunctionExpression" | "ArrowFunctionExpression" => true,
             // A global may be an accessor; these three are fixed properties of the global object.
             "Identifier" => {
-                self.read(node).is_some()
+                self.read(node).is_some_and(|symbol| !self.ambient(symbol))
                     || matches!(
                         tree.text(node, "name"),
                         Some("undefined" | "NaN" | "Infinity")
@@ -792,7 +888,12 @@ impl<'s> Module<'s> {
                 };
                 let (mut kind, chain, provenance) = self.registration(callee)?;
                 // Arguments are evaluated before the call, and may register anything.
-                if kind == SiteKind::Wrapper(Reach::Hooks) && !self.arguments_run_nothing(node) {
+                let inert = match kind {
+                    SiteKind::Wrapper(Reach::Hooks) => self.arguments_run_nothing(node),
+                    SiteKind::Wrapper(Reach::Hook) => self.hook_arguments(node),
+                    _ => true,
+                };
+                if !inert {
                     kind = SiteKind::Wrapper(Reach::Tasks);
                 }
                 Some((node, tree.span(node), kind, chain, provenance))
@@ -938,7 +1039,7 @@ impl<'s> Module<'s> {
             let reach = match self.wrappers.get(&symbol) {
                 Some(&reach) => reach,
                 None => match self.origins.get(&symbol)? {
-                    Origin::Api(Registers::Hook(_)) => Reach::Hooks,
+                    Origin::Api(Registers::Hook(_)) => Reach::Hook,
                     Origin::Api(_) => Reach::Tasks,
                     Origin::Wrapper(reach) => *reach,
                     Origin::Namespace => return None,

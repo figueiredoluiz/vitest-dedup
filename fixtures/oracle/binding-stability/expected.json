@@ -11,18 +11,7 @@
           "registered-elsewhere"
         ],
         "testsExcluded": 2
-      },
-      "wrapperSitesToday": [
-        "hook-wrapper@6",
-        "hook-wrapper@7"
-      ],
-      "nextToday": {
-        "reasons": [
-          "registered-elsewhere"
-        ],
-        "testsExcluded": 1
-      },
-      "waitsOn": "a binding's value known only when it is never rewritten"
+      }
     },
     "annotated-binding.test.ts": {
       "tasks": 2,
@@ -30,18 +19,7 @@
         "hook-wrapper@6",
         "hook-wrapper@7"
       ],
-      "next": {},
-      "wrapperSitesToday": [
-        "wrapper@6",
-        "wrapper@7"
-      ],
-      "nextToday": {
-        "reasons": [
-          "registered-elsewhere"
-        ],
-        "testsExcluded": 2
-      },
-      "waitsOn": "a type annotation told apart from a second declaration"
+      "next": {}
     },
     "array-redeclaration.test.ts": {
       "tasks": 3,
@@ -54,18 +32,7 @@
           "registered-elsewhere"
         ],
         "testsExcluded": 2
-      },
-      "wrapperSitesToday": [
-        "hook-wrapper@6",
-        "hook-wrapper@7"
-      ],
-      "nextToday": {
-        "reasons": [
-          "registered-elsewhere"
-        ],
-        "testsExcluded": 1
-      },
-      "waitsOn": "a binding's value known only when it is never rewritten"
+      }
     },
     "compound-assignment.test.ts": {
       "tasks": 3,
@@ -91,18 +58,7 @@
           "registered-elsewhere"
         ],
         "testsExcluded": 2
-      },
-      "wrapperSitesToday": [
-        "hook-wrapper@6",
-        "hook-wrapper@7"
-      ],
-      "nextToday": {
-        "reasons": [
-          "registered-elsewhere"
-        ],
-        "testsExcluded": 1
-      },
-      "waitsOn": "a binding's value known only when it is never rewritten"
+      }
     },
     "destructuring-assignment.test.ts": {
       "tasks": 3,
@@ -120,26 +76,15 @@
     "direct-eval.test.ts": {
       "tasks": 3,
       "wrapperSites": [
-        "hook-wrapper@6",
+        "wrapper@6",
         "wrapper@7"
       ],
       "next": {
         "reasons": [
           "registered-elsewhere"
         ],
-        "testsExcluded": 2
-      },
-      "wrapperSitesToday": [
-        "hook-wrapper@6",
-        "hook-wrapper@7"
-      ],
-      "nextToday": {
-        "reasons": [
-          "registered-elsewhere"
-        ],
-        "testsExcluded": 1
-      },
-      "waitsOn": "a direct eval treated as writing any binding"
+        "testsExcluded": 3
+      }
     },
     "exported-hook-alias.test.ts": {
       "tasks": 3,
@@ -152,18 +97,7 @@
           "registered-elsewhere"
         ],
         "testsExcluded": 2
-      },
-      "wrapperSitesToday": [
-        "hook-wrapper@6",
-        "hook-wrapper@7"
-      ],
-      "nextToday": {
-        "reasons": [
-          "registered-elsewhere"
-        ],
-        "testsExcluded": 1
-      },
-      "waitsOn": "an exported hook keeping the hook-argument rule"
+      }
     },
     "for-of-assignment.test.ts": {
       "tasks": 3,
@@ -309,36 +243,6 @@
       }
     }
   },
-  "knownSites": [
-    {
-      "path": "alias-of-reassigned.test.ts",
-      "kind": "missing-site",
-      "item": "test@7",
-      "reason": "A copy of a rewritten hook alias keeps the hook origin, so the helper reads as hooks-only.",
-      "waitsOn": "a binding's value known only when it is never rewritten"
-    },
-    {
-      "path": "array-redeclaration.test.ts",
-      "kind": "missing-site",
-      "item": "test@7",
-      "reason": "A `var` array pattern replaces the helper, and redeclarations are read from identifiers only.",
-      "waitsOn": "a binding's value known only when it is never rewritten"
-    },
-    {
-      "path": "destructured-redeclaration.test.ts",
-      "kind": "missing-site",
-      "item": "test@7",
-      "reason": "A `var` object pattern replaces the helper, and redeclarations are read from identifiers only.",
-      "waitsOn": "a binding's value known only when it is never rewritten"
-    },
-    {
-      "path": "direct-eval.test.ts",
-      "kind": "missing-site",
-      "item": "test@7",
-      "reason": "A direct `eval` writes the binding, which no scope analysis sees.",
-      "waitsOn": "a direct eval treated as writing any binding"
-    }
-  ],
   "blindUnderCurrent": [
     "alias-of-reassigned.test.ts",
     "annotated-binding.test.ts",

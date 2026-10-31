@@ -180,7 +180,7 @@ fn site_kind(dialect: &Dialect, kind: SiteKind) -> &'static str {
             .find(|registration| registration.registers == registers)
             .map_or("registration", |registration| registration.canonical),
         SiteKind::Wrapper(Reach::Tasks) => "wrapper",
-        SiteKind::Wrapper(Reach::Hooks) => "hook-wrapper",
+        SiteKind::Wrapper(Reach::Hooks | Reach::Hook) => "hook-wrapper",
     }
 }
 

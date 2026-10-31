@@ -39,7 +39,7 @@ fn sites(main: &str, files: &[(&str, &str)], globals: bool) -> Vec<String> {
                 SiteKind::Registers(Registers::Bench) => "bench".to_owned(),
                 SiteKind::Registers(Registers::Hook(timing)) => format!("{timing:?}"),
                 SiteKind::Wrapper(Reach::Tasks) => "wrapper".to_owned(),
-                SiteKind::Wrapper(Reach::Hooks) => "hook-wrapper".to_owned(),
+                SiteKind::Wrapper(Reach::Hooks | Reach::Hook) => "hook-wrapper".to_owned(),
             };
             let (line, column) = lines.position(&source, site.position);
             let provenance = match site.provenance {
@@ -556,7 +556,6 @@ fn a_hooks_only_wrapper_runs_nothing_but_hooks() {
         "function hooks() { beforeEach(() => {}) }; let setup = hooks; setup = helpers.cases",
         "function setup() { (helpers.cases() ? beforeEach : beforeEach)(() => {}) }",
         "async function setup() { beforeEach(() => {}); return local }",
-        "let register = beforeEach; register = helpers.cases; function setup() { register(() => {}) }",
         "const setup = async (n) => beforeEach(() => {}, n)",
         "function setup() { const config = globalConfig; beforeEach(() => {}, config) }",
         "let api = v; api = { beforeEach: helpers.cases }; function setup() { api.beforeEach(() => {}) }",
@@ -567,6 +566,153 @@ fn a_hooks_only_wrapper_runs_nothing_but_hooks() {
             wrapper_calls(&format!("{header}{open}\nsetup()"), &files),
             ["wrapper@5"],
             "{open}"
+        );
+    }
+}
+
+/// A name's value is known only when one declaration binds it and nothing writes it: each way of
+/// replacing it reaches the helper reading it, and a type annotation is not a second declaration.
+#[test]
+fn a_binding_rewritten_any_way_may_register_tests() {
+    let files = [
+        (
+            "cases.ts",
+            "import { test } from 'vitest'\nexport function cases() { test('hidden', () => {}) }",
+        ),
+        (
+            "hooks.ts",
+            "import { beforeEach } from 'vitest'\nexport const hook = beforeEach",
+        ),
+    ];
+    let header = "import { beforeEach } from 'vitest'; import * as v from 'vitest'\nimport { cases } from './cases'\nimport { hook } from './hooks'\n";
+    for (closed, open, sites) in [
+        (
+            "const kept: Function = beforeEach",
+            "kept(() => {})",
+            ["hook-wrapper@6"].as_slice(),
+        ),
+        (
+            "let moved = beforeEach; moved = cases; const kept = moved",
+            "kept(() => {})",
+            &["wrapper@5", "wrapper@6"],
+        ),
+        (
+            "const { beforeEach: picked } = v; picked = cases",
+            "picked(() => {})",
+            &["wrapper@5", "wrapper@6"],
+        ),
+        (
+            "var kept = beforeEach; var { run: kept } = { run: cases }",
+            "kept(() => {})",
+            &["wrapper@5", "wrapper@6"],
+        ),
+        (
+            "var kept = beforeEach; var [kept] = [cases]",
+            "kept(() => {})",
+            &["wrapper@5", "wrapper@6"],
+        ),
+        (
+            "const kept = beforeEach; eval('kept')",
+            "kept(() => {})",
+            &["wrapper@5", "wrapper@6"],
+        ),
+        (
+            "const kept = beforeEach; (eval)('kept')",
+            "kept(() => {})",
+            &["wrapper@5", "wrapper@6"],
+        ),
+    ] {
+        assert_eq!(
+            wrapper_calls(
+                &format!("{header}{closed}\nfunction setup() {{ {open} }}\nsetup()"),
+                &files
+            ),
+            sites,
+            "{closed}"
+        );
+    }
+    // An imported hook keeps the hook's argument rule, inside a helper and at the call.
+    let imported = |body: &str| format!("{header}\nfunction setup(n) {{ {body} }}\nsetup(1)");
+    assert_eq!(
+        wrapper_calls(&imported("hook(() => {}, 1000)"), &files)
+            .last()
+            .map(String::as_str),
+        Some("hook-wrapper@6")
+    );
+    assert_eq!(
+        wrapper_calls(&imported("hook(() => {}, n)"), &files)
+            .last()
+            .map(String::as_str),
+        Some("wrapper@6")
+    );
+    assert_eq!(
+        wrapper_calls(&format!("{header}const n = 1\nhook(() => {{}}, n)"), &files),
+        ["wrapper@5"]
+    );
+    assert_eq!(
+        wrapper_calls(&format!("{header}hook`${{cases()}}`"), &files)
+            .last()
+            .map(String::as_str),
+        Some("wrapper@4")
+    );
+    // `declare` gives a name no value, in each of its forms.
+    for declared in [
+        "declare const g: number",
+        "declare function g(): number",
+        "declare class g {}",
+    ] {
+        assert_eq!(
+            wrapper_calls(&format!("{header}{declared}\nfunction setup() {{ const n = g; beforeEach(() => {{}}) }}\nsetup()"), &files),
+            ["wrapper@6"],
+            "{declared}"
+        );
+    }
+}
+
+/// A hook read as a global is the API until the module writes that global, under any spelling of
+/// its key; a key only known when it runs may be that global.
+#[test]
+fn a_global_the_module_writes_may_register_tests() {
+    let calls = |source: &str| -> Vec<String> {
+        sites(source, &[], true)
+            .into_iter()
+            .filter(|site| site.contains("wrapper@"))
+            .map(|site| site.split(':').next().unwrap().to_owned())
+            .collect()
+    };
+    let call = "function setup() { beforeEach(() => {}) }\nsetup()";
+    assert_eq!(calls(call), ["hook-wrapper@2"]);
+    for write in [
+        "globalThis.beforeEach = () => {}",
+        "global.beforeEach = () => {}",
+        "globalThis['beforeEach'] = () => {}",
+        "globalThis[process.argv[2]] = () => {}",
+        "({ beforeEach: globalThis.beforeEach } = { beforeEach() {} })",
+        "[globalThis.beforeEach] = [() => {}]",
+        "for (globalThis.beforeEach of [() => {}]) {}",
+        "globalThis.beforeEach++",
+        "(globalThis).beforeEach = () => {}",
+        "(globalThis.beforeEach) = () => {}",
+        "window.beforeEach = () => {}",
+        "self.beforeEach = () => {}",
+    ] {
+        assert_eq!(
+            calls(&format!("{write}\n{call}")),
+            ["wrapper@2", "wrapper@3"],
+            "{write}"
+        );
+    }
+    for unrelated in [
+        "globalThis.other = 1",
+        "globalThis['other'] = 1",
+        "globalThis['*'] = 1",
+        "const local = {}; local.beforeEach = 1",
+        "const globalThis = {}; globalThis.beforeEach = 1",
+    ] {
+        assert_eq!(
+            calls(&format!("{unrelated}\n{call}")),
+            ["hook-wrapper@3"],
+            "{unrelated}"
         );
     }
 }
