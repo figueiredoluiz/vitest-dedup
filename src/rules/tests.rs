@@ -25,6 +25,7 @@ fn case(line: u32, site: u32, key: u64, module_key: u64) -> TestCase {
         module_key,
         body: 0,
         trace: Vec::new(),
+        trace_complete: true,
         similarity_key: 0,
         subsumption_key: 0,
         callback_form: crate::normal::CallbackForm::Interchangeable,

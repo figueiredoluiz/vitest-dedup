@@ -25,7 +25,7 @@ mod tests;
 use crate::framework::{AssertionEntry, Dialect};
 use crate::lang::{Name, NodeId, Parsed, Scopes, Span, SymbolId, Tree};
 use crate::model::sha256_128;
-use crate::normal::{CallbackForm, Normalizer, Walk};
+use crate::normal::{CallbackForm, Normalizer, Walk, MAX_CLASS_RENDER_BYTES};
 use dataflow::Dataflow;
 use std::collections::HashMap;
 
@@ -54,7 +54,7 @@ fn class_provable(tree: &Tree, class: NodeId) -> bool {
 /// How deep the trace walks. Past it the walk stops and the trace is incomplete: a dropped
 /// region is invisible in the events, so two bodies that differ only past the bound could
 /// collect equal traces — a trace with a hole is not evidence of similarity in either direction,
-/// and the corpus excludes its case with a stated reason instead.
+/// so a rule keyed on the trace skips its case and says why.
 const MAX_TRACE_DEPTH: u32 = 256;
 
 /// How many links a chai-style property chain may carry. A chain is recognized whole or not at
@@ -66,8 +66,9 @@ const MAX_ASSERTION_CHAIN: usize = 16;
 pub struct Trace {
     /// The events, in source order.
     pub events: Vec<u128>,
-    /// Whether the walk finished. An unfinished trace never reaches a rule: the corpus excludes
-    /// its case, because silence about a body it could not read proves nothing.
+    /// Whether the walk finished. A rule keyed on the trace must skip an unfinished one and say
+    /// so, because silence about a body it could not read proves nothing. The flat rules do not
+    /// read it.
     pub complete: bool,
 }
 
@@ -178,7 +179,8 @@ pub(crate) fn trace_text<'s>(
         complete: true,
     };
     walker.run(function);
-    (walker.events, walker.complete, form)
+    let complete = walker.complete && !walker.walk.class_budget_spent;
+    (walker.events, complete, form)
 }
 
 /// One body's trace walk: the event grammar, driven over the owned tree, naming through the
@@ -917,7 +919,13 @@ impl<'s> Walker<'_, 's> {
                     self.complete = false;
                     return String::new();
                 }
-                return self.shape(class);
+                if self.walk.class_bytes > MAX_CLASS_RENDER_BYTES {
+                    self.complete = false;
+                    return String::new();
+                }
+                let shape = self.shape(class);
+                self.walk.class_bytes += shape.len();
+                return shape;
             }
         }
         self.call_path(callee, depth)

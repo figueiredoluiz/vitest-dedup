@@ -131,6 +131,7 @@ pub(super) fn collect(
             module_key: 0,
             body: 0,
             trace: Vec::new(),
+            trace_complete: false,
             similarity_key: 0,
             subsumption_key: 0,
             callback_form: normal::CallbackForm::Interchangeable,

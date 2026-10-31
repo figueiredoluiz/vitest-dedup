@@ -29,6 +29,11 @@ const TYPE_KEYS: [&str; 2] = ["typeAnnotation", "returnType"];
 /// its own; a form is written on its caller's stack, where a 2 MiB test thread must hold it.
 pub(super) const MAX_FORM_DEPTH: usize = 256;
 
+/// How many bytes one walk's class expansion may write. Depth bounds the recursion and not the
+/// output: a class reading another twice doubles it per level. Past this a read renders the local's
+/// name and the trace is incomplete.
+pub(crate) const MAX_CLASS_RENDER_BYTES: usize = 256 * 1024;
+
 /// The fields of `node` that are child nodes or lists of them, for the predicates below.
 fn children(tree: &Tree, node: NodeId) -> Vec<NodeId> {
     let mut out = Vec::new();
@@ -270,6 +275,7 @@ impl Normalizer<'_> {
     /// substitutions (a table row's cells), writes: deeper code can stop a match but never make one.
     pub(super) fn write_node(&mut self, node: NodeId, walk: &mut Walk, out: &mut String) {
         if self.nesting >= MAX_FORM_DEPTH {
+            self.truncated = true;
             return self.write_deep(node, walk, out);
         }
         self.nesting += 1;
@@ -543,16 +549,23 @@ impl Normalizer<'_> {
                     // depth bound — a chain a hundred links long renders past the bound's position
                     // token instead of recursing once per link with no bound at all.
                     self.write_node(init, walk, out);
-                } else if let Some(class) = walk.classes.get(&symbol) {
-                    let class = *class;
+                } else if let Some(class) = walk
+                    .classes
+                    .get(&symbol)
+                    .copied()
+                    .filter(|_| walk.class_bytes <= MAX_CLASS_RENDER_BYTES)
+                {
                     // The same in-place rule: a class a shape names renders by its content, so
                     // two constructions over different classes never share one. The class's own
                     // name is taken out for the duration: its content's references to itself
                     // render as the local, or the expansion would never end.
+                    let start = out.len();
                     walk.classes.remove(&symbol);
                     self.write_node(class, walk, out);
                     walk.classes.insert(symbol, class);
+                    walk.class_bytes += out.len() - start;
                 } else {
+                    walk.class_budget_spent |= walk.classes.contains_key(&symbol);
                     let mut text = self.identifier(symbol, walk);
                     if let Some(suffix) = walk.suffixes.get(&symbol) {
                         text.push_str(suffix);
