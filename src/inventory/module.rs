@@ -1,7 +1,7 @@
 //! The inventory of one module.
 
 use super::{
-    Escape, Inventory, Label, Modules, Provenance, Reach, Setting, Site, SiteKind, ON_LOAD,
+    Escape, Export, Inventory, Label, Modules, Provenance, Reach, Setting, Site, SiteKind, ON_LOAD,
 };
 use crate::framework::{Chain, Registers};
 use crate::lang::{
@@ -59,7 +59,7 @@ pub(super) fn analyse(
     setting: Setting,
     modules: &mut Modules,
     depth: usize,
-) -> (Inventory, HashMap<String, Reach>) {
+) -> (Inventory, HashMap<String, Export>) {
     let mut module = Module {
         path,
         source,
@@ -88,7 +88,7 @@ pub(super) fn analyse(
             .iter()
             .any(|(_, span, ..)| !bodies.iter().any(|body| body.contains(*span)))
     {
-        exports.insert(ON_LOAD.to_owned(), Reach::Tasks);
+        exports.insert(ON_LOAD.to_owned(), Export::Wrapper(Reach::Tasks));
     }
     let escapes = module.escapes();
     let calls: HashSet<NodeId> = found.iter().map(|(node, ..)| *node).collect();
@@ -413,11 +413,15 @@ impl<'s> Module<'s> {
                             self.origins.insert(symbol, Origin::Api(registers));
                         }
                     }
-                    Some(exports) => {
-                        if let Some(&reach) = exports.get(&name) {
+                    Some(exports) => match exports.get(&name) {
+                        Some(Export::Namespace) => {
+                            self.origins.insert(symbol, Origin::Namespace);
+                        }
+                        Some(&Export::Wrapper(reach)) => {
                             self.origins.insert(symbol, Origin::Wrapper(reach));
                         }
-                    }
+                        None => {}
+                    },
                 }
             }
         }
@@ -1036,35 +1040,88 @@ impl<'s> Module<'s> {
         escapes
     }
 
+    /// Every name this module spells in an export of its own, value or type: whether one replaces
+    /// the same name from an `export *` depends on what the name erases to, which is not read here.
+    fn spelled_exports(&self) -> HashSet<String> {
+        let tree = self.tree;
+        let mut names = HashSet::new();
+        for statement in tree.list(tree.root(), "body").into_iter().flatten() {
+            match tree.kind(statement) {
+                "ExportAllDeclaration" => {
+                    names.extend(
+                        tree.child(statement, "exported")
+                            .map(|exported| export_name(tree, exported)),
+                    );
+                }
+                "ExportNamedDeclaration" => {
+                    names.extend(
+                        specifiers(tree, statement)
+                            .into_iter()
+                            .map(|(_, exported)| export_name(tree, exported)),
+                    );
+                    let Some(declaration) = tree.child(statement, "declaration") else {
+                        continue;
+                    };
+                    let bindings = tree
+                        .list(declaration, "declarations")
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|declarator| tree.child(declarator, "id"))
+                        .flat_map(|id| bound_symbols(tree, &self.parsed.scopes, id));
+                    names.extend(
+                        bindings.map(|symbol| self.parsed.scopes.symbol(symbol).name.clone()),
+                    );
+                    names.extend(
+                        tree.child(declaration, "id")
+                            .and_then(|id| tree.text(id, "name"))
+                            .map(str::to_owned),
+                    );
+                }
+                _ => {}
+            }
+        }
+        names
+    }
+
     /// Export names whose value registers when called, with what each may register.
     fn exports(
         &self,
         modules: &mut Modules,
         depth: usize,
         found: &[Found],
-    ) -> HashMap<String, Reach> {
+    ) -> HashMap<String, Export> {
         let tree = self.tree;
-        let mut exports: HashMap<String, Reach> = HashMap::new();
-        let mut add = |name: String, reach: Reach| {
-            let held = exports.entry(name).or_insert(reach);
-            *held = (*held).max(reach);
+        let spelled = self.spelled_exports();
+        let stars = tree
+            .list(tree.root(), "body")
+            .into_iter()
+            .flatten()
+            .filter(|&statement| {
+                tree.kind(statement) == "ExportAllDeclaration"
+                    && tree.child(statement, "exported").is_none()
+            })
+            .count();
+        let mut exports: HashMap<String, Export> = HashMap::new();
+        let mut add = |name: String, export: Export| {
+            let held = exports.entry(name).or_insert(export);
+            *held = (*held).max(export);
         };
-        let registers = |symbol: Option<SymbolId>| -> Option<Reach> {
+        let registers = |symbol: Option<SymbolId>| -> Option<Export> {
             let symbol = symbol?;
-            let reach = match self.wrappers.get(&symbol) {
-                Some(&reach) => reach,
+            let export = match self.wrappers.get(&symbol) {
+                Some(&reach) => Export::Wrapper(reach),
                 None => match self.origins.get(&symbol)? {
-                    Origin::Api(Registers::Hook(_)) => Reach::Hook,
-                    Origin::Api(_) => Reach::Tasks,
-                    Origin::Wrapper(reach) => *reach,
-                    Origin::Namespace => return None,
+                    Origin::Api(Registers::Hook(_)) => Export::Wrapper(Reach::Hook),
+                    Origin::Api(_) => Export::Wrapper(Reach::Tasks),
+                    Origin::Wrapper(reach) => Export::Wrapper(*reach),
+                    Origin::Namespace => Export::Namespace,
                 },
             };
             // A reassigned binding may hold any value when an importer calls it.
             Some(if self.reassigned(symbol) {
-                Reach::Tasks
+                Export::Wrapper(Reach::Tasks)
             } else {
-                reach
+                export
             })
         };
         for statement in tree.list(tree.root(), "body").into_iter().flatten() {
@@ -1081,11 +1138,11 @@ impl<'s> Module<'s> {
                         let theirs = modules.exports(&file, self.setting, depth + 1);
                         // Re-exporting any name loads the module, and whatever it registers then.
                         if theirs.contains_key(ON_LOAD) {
-                            add(ON_LOAD.to_owned(), Reach::Tasks);
+                            add(ON_LOAD.to_owned(), Export::Wrapper(Reach::Tasks));
                         }
                         for (local, exported) in specifiers(tree, statement) {
-                            if let Some(&reach) = theirs.get(&export_name(tree, local)) {
-                                add(export_name(tree, exported), reach);
+                            if let Some(&export) = theirs.get(&export_name(tree, local)) {
+                                add(export_name(tree, exported), export);
                             }
                         }
                         continue;
@@ -1105,16 +1162,16 @@ impl<'s> Module<'s> {
                             _ => Vec::new(),
                         };
                         for id in ids {
-                            if let (Some(reach), Some(name)) =
+                            if let (Some(export), Some(name)) =
                                 (registers(self.declares(id)), tree.text(id, "name"))
                             {
-                                add(name.to_owned(), reach);
+                                add(name.to_owned(), export);
                             }
                         }
                     }
                     for (local, exported) in specifiers(tree, statement) {
-                        if let Some(reach) = registers(self.read(local)) {
-                            add(export_name(tree, exported), reach);
+                        if let Some(export) = registers(self.read(local)) {
+                            add(export_name(tree, exported), export);
                         }
                     }
                 }
@@ -1122,6 +1179,7 @@ impl<'s> Module<'s> {
                     let Some(declaration) = tree.child(statement, "declaration") else {
                         continue;
                     };
+                    let declaration = tree.inner(declaration);
                     let symbol = match tree.kind(declaration) {
                         "Identifier" => self.read(declaration),
                         _ => tree
@@ -1139,8 +1197,8 @@ impl<'s> Module<'s> {
                         })
                     })
                     .flatten();
-                    if let Some(reach) = registers(symbol).or(anonymous) {
-                        add("default".to_owned(), reach);
+                    if let Some(export) = registers(symbol).or(anonymous.map(Export::Wrapper)) {
+                        add("default".to_owned(), export);
                     }
                 }
                 "ExportAllDeclaration" if tree.child(statement, "exported").is_none() => {
@@ -1151,10 +1209,20 @@ impl<'s> Module<'s> {
                         continue;
                     };
                     if let Some(file) = crate::lang::resolve(self.path, source, self.setting.root) {
-                        for (name, reach) in modules.exports(&file, self.setting, depth + 1) {
-                            if name != "default" {
-                                add(name, reach);
+                        for (name, export) in modules.exports(&file, self.setting, depth + 1) {
+                            if name == "default" {
+                                continue;
                             }
+                            // The namespace only when nothing else may be the name's source.
+                            let only_source = stars == 1 && !spelled.contains(&name);
+                            add(
+                                name,
+                                if export == Export::Namespace && !only_source {
+                                    Export::Wrapper(Reach::Tasks)
+                                } else {
+                                    export
+                                },
+                            );
                         }
                     }
                 }

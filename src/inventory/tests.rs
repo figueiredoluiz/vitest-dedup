@@ -754,6 +754,172 @@ fn a_rewritten_namespace_alias_may_register_tests() {
     );
 }
 
+/// A namespace alias nothing rewrites is the namespace in the module importing it: a member reads
+/// as it does on a local alias, and what is not a registration adds no site.
+#[test]
+fn a_namespace_alias_stays_the_namespace_across_an_export() {
+    let exporting = "import * as v from 'vitest'\nimport { beforeEach } from 'vitest'\n\
+                     const local = v\nexport const kept = v\nexport { v as renamed }\n\
+                     export { local }\nexport default v\nexport const hook = beforeEach\n\
+                     export let moved = v; moved = {}";
+    let files = [
+        ("api.ts", exporting),
+        (
+            "cast.ts",
+            "import * as v from 'vitest'\nexport default v as any",
+        ),
+        (
+            "paren.ts",
+            "import * as v from 'vitest'\nexport default (v)",
+        ),
+        ("barrel.ts", "export { kept as viaBarrel } from './api'"),
+        ("star.ts", "export * from './api'"),
+    ];
+    let found = |main: String| -> Vec<String> {
+        sites(&main, &files, false)
+            .into_iter()
+            .map(|site| site.split(':').next().unwrap().to_owned())
+            .collect()
+    };
+    for (import, read, site) in [
+        (
+            "{ kept } from './api'",
+            "kept.test('x', () => {})",
+            "test@2",
+        ),
+        (
+            "{ renamed } from './api'",
+            "renamed.test('x', () => {})",
+            "test@2",
+        ),
+        (
+            "{ local } from './api'",
+            "local.test('x', () => {})",
+            "test@2",
+        ),
+        ("api from './api'", "api.test('x', () => {})", "test@2"),
+        ("api from './cast'", "api.test('x', () => {})", "test@2"),
+        ("api from './paren'", "api.test('x', () => {})", "test@2"),
+        (
+            "{ viaBarrel } from './barrel'",
+            "viaBarrel.test('x', () => {})",
+            "test@2",
+        ),
+        (
+            "{ kept } from './star'",
+            "kept.test('x', () => {})",
+            "test@2",
+        ),
+        (
+            "{ kept } from './api'",
+            "kept.beforeEach(() => {})",
+            "BeforeEach@2",
+        ),
+        (
+            "{ kept } from './api'",
+            "const t = kept.test; t('x', () => {})",
+            "test@2",
+        ),
+        (
+            "{ kept } from './api'",
+            "const { test: t } = kept; t('x', () => {})",
+            "test@2",
+        ),
+        (
+            "{ moved } from './api'",
+            "moved.test('x', () => {})",
+            "wrapper@2",
+        ),
+    ] {
+        assert_eq!(found(format!("import {import}\n{read}")), [site], "{read}");
+    }
+    for read in ["kept.expect(1).toBe(1)", "kept.vi.fn()"] {
+        assert_eq!(
+            found(format!("import {{ kept }} from './api'\n{read}")),
+            Vec::<String>::new(),
+            "{read}"
+        );
+    }
+    assert_eq!(
+        wrapper_calls(
+            "import { kept } from './api'\nfunction setup() { kept.beforeEach(() => {}) }\nsetup()",
+            &files
+        ),
+        ["hook-wrapper@3"]
+    );
+    assert_eq!(
+        wrapper_calls("import { hook } from './api'\nhook(() => {})", &files),
+        ["hook-wrapper@2"]
+    );
+}
+
+/// A star forwards the namespace only when nothing else in the module may be the source of the
+/// name; otherwise the name may hold anything. A wrapper forwards as it always did.
+#[test]
+fn a_star_forwards_the_namespace_only_as_the_only_source_of_the_name() {
+    let noop = "{ test() {} }";
+    let found = |barrel: &str| -> Vec<String> {
+        let files = [
+            (
+                "api.ts",
+                "import * as v from 'vitest'\nexport const kept = v",
+            ),
+            ("noop.ts", "export const kept = { test() {} }"),
+            ("barrel.ts", barrel),
+        ];
+        sites(
+            "import { kept } from './barrel'\nkept.test('x', () => {})",
+            &files,
+            false,
+        )
+        .into_iter()
+        .map(|site| site.split(':').next().unwrap().to_owned())
+        .collect()
+    };
+    for visible in [
+        "export * from './api'",
+        "export * from './api'\nexport const other = 1",
+    ] {
+        assert_eq!(found(visible), ["test@2"], "{visible}");
+    }
+    for spelled in [
+        format!("export * from './api'\nexport const kept = {noop}"),
+        format!("export const kept = {noop}\nexport * from './api'"),
+        "export * from './api'\nexport function kept() {}".to_owned(),
+        "export * from './api'\nexport class kept {}".to_owned(),
+        "export * from './api'\nexport enum kept { a }".to_owned(),
+        "export * from './api'\nexport namespace kept { export function test() {} }".to_owned(),
+        format!("export * from './api'\nexport const {{ kept }} = {{ kept: {noop} }}"),
+        format!("export * from './api'\nconst o = {noop}\nexport {{ o as kept }}"),
+        "export * from './api'\nexport { kept } from './noop'".to_owned(),
+        "export * from './api'\nexport * as kept from './noop'".to_owned(),
+        "export * from './api'\nexport type kept = number".to_owned(),
+        "export * from './api'\nexport interface kept { a: 1 }".to_owned(),
+        "export * from './api'\ntype o = number\nexport { o as kept }".to_owned(),
+        "export * from './api'\ntype o = number\nexport type { o as kept }".to_owned(),
+        "export * from './api'\nexport declare const kept: number".to_owned(),
+        "export * from './noop'\nexport * from './api'".to_owned(),
+        "export * from './api'\nexport * from './noop'".to_owned(),
+    ] {
+        assert_eq!(found(&spelled), ["wrapper@2"], "{spelled}");
+    }
+    // A wrapper that registers is never lost to a name spelled beside the star.
+    let files = [
+        (
+            "cases.ts",
+            "import { test } from 'vitest'\nexport function run() { test('x', () => {}) }",
+        ),
+        (
+            "barrel.ts",
+            "export * from './cases'\ntype o = number\nexport { o as run }",
+        ),
+    ];
+    assert_eq!(
+        wrapper_calls("import { run } from './barrel'\nrun()", &files),
+        ["wrapper@2"]
+    );
+}
+
 /// A hook read as a global is the API until the module writes that global, under any spelling of
 /// its key; a key only known when it runs may be that global.
 #[test]

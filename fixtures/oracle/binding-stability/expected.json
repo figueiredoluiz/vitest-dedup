@@ -137,6 +137,63 @@
         "testsExcluded": 2
       }
     },
+    "namespace-export-declared.test.ts": {
+      "tasks": 1,
+      "wrapperSites": [
+        "wrapper@4",
+        "wrapper@5",
+        "wrapper@5"
+      ],
+      "next": {
+        "reasons": [
+          "registered-elsewhere"
+        ],
+        "testsExcluded": 3
+      }
+    },
+    "namespace-export-shadow.test.ts": {
+      "tasks": 1,
+      "wrapperSites": [
+        "wrapper@6"
+      ],
+      "next": {
+        "reasons": [
+          "registered-elsewhere"
+        ],
+        "testsExcluded": 1
+      }
+    },
+    "namespace-export-stars.test.ts": {
+      "tasks": 1,
+      "wrapperSites": [
+        "wrapper@5"
+      ],
+      "next": {
+        "reasons": [
+          "registered-elsewhere"
+        ],
+        "testsExcluded": 1
+      }
+    },
+    "namespace-export-type.test.ts": {
+      "tasks": 1,
+      "wrapperSites": [
+        "wrapper@4",
+        "wrapper@5",
+        "wrapper@5"
+      ],
+      "next": {
+        "reasons": [
+          "registered-elsewhere"
+        ],
+        "testsExcluded": 3
+      }
+    },
+    "namespace-exports.test.ts": {
+      "tasks": 4,
+      "wrapperSites": [],
+      "next": {}
+    },
     "nested-redeclaration.test.ts": {
       "tasks": 3,
       "wrapperSites": [
@@ -332,8 +389,8 @@
       "path": "rewritten-namespace-export.test.ts",
       "kind": "missing-hook",
       "item": "beforeEach@rewritten-namespace-export.test.ts:5",
-      "reason": "Neither engine reads a namespace alias through an import.",
-      "waitsOn": "namespace aliases read across an import"
+      "reason": "The default engine does not read a namespace alias.",
+      "waitsOn": "the next engine becoming the default"
     },
     {
       "path": "parameter-property.test.ts",

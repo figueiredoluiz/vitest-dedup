@@ -37,6 +37,15 @@ pub enum Reach {
     Tasks,
 }
 
+/// What an export of a module holds, for the modules importing it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Export {
+    /// The API's namespace, which nothing replaces.
+    Namespace,
+    /// A function or value that registers when called.
+    Wrapper(Reach),
+}
+
 /// How the callee of a site reaches the API.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Provenance {
@@ -122,7 +131,7 @@ const MAX_DEPTH: usize = 8;
 /// project with globals reads free names as the API), shared by every file of one run.
 #[derive(Debug, Default)]
 pub struct Modules {
-    cache: HashMap<(PathBuf, bool), HashMap<String, Reach>>,
+    cache: HashMap<(PathBuf, bool), HashMap<String, Export>>,
     active: HashSet<PathBuf>,
     /// How many lookups the depth limit has cut short. A module whose analysis saw a cut is not
     /// cached: read again from nearer the test file, the limit may not reach it. (A cycle is cut
@@ -146,7 +155,7 @@ impl Modules {
     /// The registering exports of the module at `path`, with what each may register, analysed
     /// once unless the depth limit cut the analysis short. A cut import reads as exporting
     /// nothing, so no hooks-only answer rests on it (see `Module::closed`).
-    fn exports(&mut self, path: &Path, setting: Setting, depth: usize) -> HashMap<String, Reach> {
+    fn exports(&mut self, path: &Path, setting: Setting, depth: usize) -> HashMap<String, Export> {
         let key = (path.to_path_buf(), setting.globals);
         if let Some(found) = self.cache.get(&key) {
             return found.clone();
