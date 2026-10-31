@@ -383,6 +383,10 @@ fn is_unsafe_nesting(kind: &str) -> bool {
     matches!(
         kind,
         "IfStatement"
+            | "LogicalExpression"
+            | "ConditionalExpression"
+            | "ChainExpression"
+            | "AssignmentPattern"
             | "ForStatement"
             | "ForInStatement"
             | "ForOfStatement"

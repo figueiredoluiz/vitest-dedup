@@ -528,8 +528,12 @@ impl Normalizer<'_> {
                 // own event walk does for the events. Rendering the local's own number instead
                 // would erase the initializer's content from every shape.
                 if let Some(init) = walk.inline.get(&symbol) {
-                    let rendered = self.form_of(*init, walk);
-                    out.push_str(&rendered);
+                    let init = *init;
+                    // Written in place, not through a fresh `form_of`: the current nesting count
+                    // carries into the expansion, so a chain of single-use locals stays under one
+                    // depth bound — a chain a hundred links long renders past the bound's position
+                    // token instead of recursing once per link with no bound at all.
+                    self.write_node(init, walk, out);
                 } else {
                     let mut text = self.identifier(symbol, walk);
                     if let Some(suffix) = walk.suffixes.get(&symbol) {

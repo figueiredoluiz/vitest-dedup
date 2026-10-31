@@ -504,3 +504,17 @@ fn inlining_never_moves_a_read_past_its_declaration() {
     assert_ne!(of(&events, "crash-order"), of(&events, "run-order"));
     assert_eq!(of(&events, "pure-before"), of(&events, "pure-after"));
 }
+
+/// A read that only a condition evaluates is never inlined: moving the initializer there would
+/// change how often it runs. The short-circuit twin stays apart.
+#[test]
+fn a_read_under_a_condition_is_never_inlined() {
+    let events = events(
+        r#"
+        test('extracted', () => { const x = f(); c && g(x); });
+        test('written', () => { c && g(f()); });
+    "#,
+        &[],
+    );
+    assert_ne!(of(&events, "extracted"), of(&events, "written"));
+}

@@ -46,7 +46,9 @@ export function runCli() {
       ],
       { cwd: ROOT, encoding: "utf8", maxBuffer: 64 << 20, timeout: 300_000 },
     );
-    if (!result.status && !exists(join(work, "out.json"))) {
+    // Checked whatever the exit was: the expected run itself exits 1 (two cases must fail), and a
+    // crash that wrote no report must name Vitest's stderr, not surface as a missing-file error.
+    if (!exists(join(work, "out.json"))) {
       return { status: 1, lines: [`vitest run produced no report (exit ${result.status}): ${result.stderr ?? ""}`.slice(-2000)] };
     }
     const report = JSON.parse(readFileSync(join(work, "out.json"), "utf8"));
