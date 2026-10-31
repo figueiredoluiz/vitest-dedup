@@ -1,0 +1,328 @@
+{
+  "files": {
+    "constructor.test.ts": {
+      "tasks": 3,
+      "wrapperSites": [
+        "wrapper@6"
+      ],
+      "next": {
+        "reasons": [
+          "registered-elsewhere"
+        ],
+        "testsExcluded": 1
+      },
+      "wrapperSitesToday": [],
+      "waitsOn": "collection-scope calls the inventory cannot resolve"
+    },
+    "control-call.test.ts": {
+      "tasks": 3,
+      "wrapperSites": [
+        "wrapper@6"
+      ],
+      "next": {
+        "reasons": [
+          "registered-elsewhere"
+        ],
+        "testsExcluded": 2
+      }
+    },
+    "control-named.test.ts": {
+      "tasks": 3,
+      "wrapperSites": [
+        "wrapper@6"
+      ],
+      "next": {
+        "reasons": [
+          "registered-elsewhere"
+        ],
+        "testsExcluded": 2
+      }
+    },
+    "default-object.test.ts": {
+      "tasks": 3,
+      "wrapperSites": [
+        "wrapper@6"
+      ],
+      "next": {
+        "reasons": [
+          "registered-elsewhere"
+        ],
+        "testsExcluded": 1
+      },
+      "wrapperSitesToday": [],
+      "waitsOn": "collection-scope calls the inventory cannot resolve"
+    },
+    "describe-title.test.ts": {
+      "tasks": 3,
+      "wrapperSites": [
+        "wrapper@5"
+      ],
+      "next": {
+        "reasons": [
+          "registered-elsewhere"
+        ],
+        "testsExcluded": 2
+      }
+    },
+    "hook-timeout.test.ts": {
+      "tasks": 3,
+      "wrapperSites": [
+        "wrapper@6"
+      ],
+      "next": {
+        "reasons": [
+          "registered-elsewhere"
+        ],
+        "testsExcluded": 1
+      },
+      "wrapperSitesToday": [],
+      "waitsOn": "registration arguments that run code"
+    },
+    "mocked-helper.test.ts": {
+      "tasks": 3,
+      "wrapperSites": [
+        "wrapper@8"
+      ],
+      "next": {},
+      "wrapperSitesToday": [
+        "hook-wrapper@8"
+      ],
+      "waitsOn": "modules `vi.mock` replaces"
+    },
+    "namespace-barrel.test.ts": {
+      "tasks": 3,
+      "wrapperSites": [
+        "wrapper@6"
+      ],
+      "next": {},
+      "wrapperSitesToday": [],
+      "waitsOn": "collection-scope calls the inventory cannot resolve"
+    },
+    "namespace-member.test.ts": {
+      "tasks": 3,
+      "wrapperSites": [
+        "wrapper@6"
+      ],
+      "next": {
+        "reasons": [
+          "registered-elsewhere"
+        ],
+        "testsExcluded": 1
+      },
+      "wrapperSitesToday": [],
+      "waitsOn": "collection-scope calls the inventory cannot resolve"
+    },
+    "object-member.test.ts": {
+      "tasks": 3,
+      "wrapperSites": [
+        "wrapper@6"
+      ],
+      "next": {
+        "reasons": [
+          "registered-elsewhere"
+        ],
+        "testsExcluded": 1
+      },
+      "wrapperSitesToday": [],
+      "waitsOn": "collection-scope calls the inventory cannot resolve"
+    },
+    "optional-call.test.ts": {
+      "tasks": 3,
+      "wrapperSites": [
+        "wrapper@6"
+      ],
+      "next": {
+        "reasons": [
+          "registered-elsewhere"
+        ],
+        "testsExcluded": 2
+      }
+    },
+    "sequence-callee.test.ts": {
+      "tasks": 3,
+      "wrapperSites": [
+        "wrapper@6"
+      ],
+      "next": {
+        "reasons": [
+          "registered-elsewhere"
+        ],
+        "testsExcluded": 2
+      },
+      "wrapperSitesToday": [],
+      "waitsOn": "collection-scope calls the inventory cannot resolve"
+    },
+    "static-method.test.ts": {
+      "tasks": 3,
+      "wrapperSites": [
+        "wrapper@6"
+      ],
+      "next": {
+        "reasons": [
+          "registered-elsewhere"
+        ],
+        "testsExcluded": 1
+      },
+      "wrapperSitesToday": [],
+      "waitsOn": "collection-scope calls the inventory cannot resolve"
+    },
+    "wrapper-as-value.test.ts": {
+      "tasks": 3,
+      "wrapperSites": [
+        "wrapper@6"
+      ],
+      "next": {
+        "reasons": [
+          "registered-elsewhere"
+        ],
+        "testsExcluded": 2
+      },
+      "wrapperSitesToday": [],
+      "waitsOn": "collection-scope calls the inventory cannot resolve"
+    }
+  },
+  "blindUnderCurrent": [
+    "control-call.test.ts",
+    "control-named.test.ts",
+    "describe-title.test.ts",
+    "mocked-helper.test.ts",
+    "namespace-member.test.ts"
+  ],
+  "knownSites": [
+    {
+      "path": "constructor.test.ts",
+      "kind": "missing-site",
+      "item": "test@6",
+      "reason": "`new` runs a constructor that registers; no site reads it.",
+      "waitsOn": "collection-scope calls the inventory cannot resolve"
+    },
+    {
+      "path": "default-object.test.ts",
+      "kind": "missing-site",
+      "item": "test@6",
+      "reason": "A member of a default export is not resolved.",
+      "waitsOn": "collection-scope calls the inventory cannot resolve"
+    },
+    {
+      "path": "hook-timeout.test.ts",
+      "kind": "missing-site",
+      "item": "test@6",
+      "reason": "Vitest compares the timeout, which runs `valueOf`.",
+      "waitsOn": "registration arguments that run code"
+    },
+    {
+      "path": "mocked-helper.test.ts",
+      "kind": "missing-site",
+      "item": "test@8",
+      "reason": "The factory replaces the helper the analyzer read.",
+      "waitsOn": "modules `vi.mock` replaces"
+    },
+    {
+      "path": "namespace-barrel.test.ts",
+      "kind": "missing-site",
+      "item": "test@6",
+      "reason": "`export * as ns` is not followed to its members.",
+      "waitsOn": "collection-scope calls the inventory cannot resolve"
+    },
+    {
+      "path": "namespace-member.test.ts",
+      "kind": "missing-site",
+      "item": "test@6",
+      "reason": "A member of a project namespace is not resolved.",
+      "waitsOn": "collection-scope calls the inventory cannot resolve"
+    },
+    {
+      "path": "object-member.test.ts",
+      "kind": "missing-site",
+      "item": "test@6",
+      "reason": "A member of an imported object is not resolved.",
+      "waitsOn": "collection-scope calls the inventory cannot resolve"
+    },
+    {
+      "path": "sequence-callee.test.ts",
+      "kind": "missing-site",
+      "item": "test@6",
+      "reason": "A sequence expression hides the callee.",
+      "waitsOn": "collection-scope calls the inventory cannot resolve"
+    },
+    {
+      "path": "static-method.test.ts",
+      "kind": "missing-site",
+      "item": "test@6",
+      "reason": "A class's static method is not resolved.",
+      "waitsOn": "collection-scope calls the inventory cannot resolve"
+    },
+    {
+      "path": "wrapper-as-value.test.ts",
+      "kind": "missing-site",
+      "item": "test@6",
+      "reason": "A function that registers runs from a callback nothing follows.",
+      "waitsOn": "collection-scope calls the inventory cannot resolve"
+    }
+  ],
+  "knownTitles": [
+    {
+      "path": "constructor.test.ts",
+      "kind": "missing-test",
+      "item": "constructor > registered by a constructor",
+      "reason": "`new` runs a constructor that registers; no site reads it.",
+      "waitsOn": "collection-scope calls the inventory cannot resolve"
+    },
+    {
+      "path": "default-object.test.ts",
+      "kind": "missing-test",
+      "item": "default-object > registered through a member",
+      "reason": "A member of a default export is not resolved.",
+      "waitsOn": "collection-scope calls the inventory cannot resolve"
+    },
+    {
+      "path": "hook-timeout.test.ts",
+      "kind": "missing-test",
+      "item": "hook-timeout > registered by a comparison",
+      "reason": "Vitest compares the timeout, which runs `valueOf`.",
+      "waitsOn": "registration arguments that run code"
+    },
+    {
+      "path": "namespace-barrel.test.ts",
+      "kind": "missing-test",
+      "item": "namespace-barrel > registered from another module",
+      "reason": "`export * as ns` is not followed to its members.",
+      "waitsOn": "collection-scope calls the inventory cannot resolve"
+    },
+    {
+      "path": "object-member.test.ts",
+      "kind": "missing-test",
+      "item": "object-member > registered through a member",
+      "reason": "A member of an imported object is not resolved.",
+      "waitsOn": "collection-scope calls the inventory cannot resolve"
+    },
+    {
+      "path": "optional-call.test.ts",
+      "kind": "missing-test",
+      "item": "optional-call > registered from another module",
+      "reason": "The next engine reads this call as a wrapper; the default engine does not follow it.",
+      "waitsOn": "the default engine following an optional call"
+    },
+    {
+      "path": "sequence-callee.test.ts",
+      "kind": "missing-test",
+      "item": "sequence-callee > registered from another module",
+      "reason": "A sequence expression hides the callee.",
+      "waitsOn": "collection-scope calls the inventory cannot resolve"
+    },
+    {
+      "path": "static-method.test.ts",
+      "kind": "missing-test",
+      "item": "static-method > registered by a static method",
+      "reason": "A class's static method is not resolved.",
+      "waitsOn": "collection-scope calls the inventory cannot resolve"
+    },
+    {
+      "path": "wrapper-as-value.test.ts",
+      "kind": "missing-test",
+      "item": "wrapper-as-value > registered from another module",
+      "reason": "A function that registers runs from a callback nothing follows.",
+      "waitsOn": "collection-scope calls the inventory cannot resolve"
+    }
+  ]
+}
