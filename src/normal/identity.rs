@@ -1,6 +1,7 @@
 //! Identities: how a binding declared outside the normalized node is named.
 
 use super::{digest, form, Normalizer, Setting, Structure, Walk};
+use crate::lang::Scopes;
 use crate::lang::{bound_symbols, export_name, Declaration, Imported, NodeId, SymbolId};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -9,6 +10,11 @@ use std::path::{Path, PathBuf};
 /// one): equal declarations are one identity, but each binding is its own object, numbered within
 /// a normal form so `a === a` and `a === b` differ.
 const OBJECT: &str = ":object";
+
+/// A binding's declaration span, as the identity's own stable discriminator.
+fn symbol_span(scopes: &Scopes, symbol: SymbolId) -> u32 {
+    scopes.symbol(symbol).span.start
+}
 
 impl Normalizer<'_> {
     /// The text an identifier bound to `symbol` is written as.
@@ -34,9 +40,17 @@ impl Normalizer<'_> {
             (None, None) => self.external(symbol),
         };
         if identity.ends_with(OBJECT) {
-            let next = walk.objects.len();
-            let number = *walk.objects.entry(symbol).or_insert(next);
-            identity = format!("{identity}#{number}");
+            if walk.trace {
+                // The trace's policy: named by its declaration alone. The declaration's position
+                // disambiguates two bindings whose declarations and uses are identical — which
+                // the flat form's per-walk ordinal would have told apart — and is stable across
+                // every test of the file, which is all the same-file rules need.
+                identity = format!("{identity}@{}", symbol_span(self.scopes, symbol));
+            } else {
+                let next = walk.objects.len();
+                let number = *walk.objects.entry(symbol).or_insert(next);
+                identity = format!("{identity}#{number}");
+            }
         }
         // A reader that observes names (`f.name`) tells apart functions that differ only in name.
         if walk.names_observed && self.named(symbol) {

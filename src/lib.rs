@@ -10,6 +10,7 @@
 
 pub mod analysis;
 pub mod atomic_write;
+pub mod behavior;
 pub mod cli;
 pub mod config;
 pub(crate) mod confine;
