@@ -24,6 +24,7 @@ fn case(line: u32, site: u32, key: u64, module_key: u64) -> TestCase {
         key,
         module_key,
         body: 0,
+        parameterization_key: None,
         trace: Vec::new(),
         trace_complete: true,
         similarity_key: 0,
@@ -674,3 +675,5 @@ fn row_rule_preserves_spanning_edges_clusters_and_budget() {
 }
 
 mod suites;
+
+mod parameters;

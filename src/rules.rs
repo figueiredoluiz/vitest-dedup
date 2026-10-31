@@ -14,6 +14,7 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 mod names;
+mod parameters;
 mod rows;
 mod suites;
 
@@ -133,6 +134,7 @@ fn run_with_suites_and_budget(
 
     budget_exhausted |= !names::run(files, config, &mut budget, &mut findings);
     budget_exhausted |= !rows::run(files, config, &mut budget, &mut findings);
+    budget_exhausted |= !parameters::run(files, config, &mut budget, &mut findings);
 
     let cross_file_severity = config.severity(Rule::CrossFileDuplicate);
     if cross_file_severity != Severity::Off {

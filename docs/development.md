@@ -90,7 +90,7 @@ fails, so its entry goes when support lands.
 
 `npm run check:next-duplicates` runs the analyzer under `VITEST_DEDUP_ENGINE=next` over
 `fixtures/duplicates/`, `fixtures/observed/` and `fixtures/mixed/` and judges the rules the
-next engine ports (`duplicate-test`, `duplicate-test-name`, `duplicate-each-row`, `duplicate-suite`, `cross-file-duplicate`) pairwise against the fixture
+next engine ports (`duplicate-test`, `duplicate-test-name`, `duplicate-each-row`, `duplicate-suite`, `parameterization-candidate`, `cross-file-duplicate`) pairwise against the fixture
 headers: every pair a positive expectation declares must be linked by its rule, no pair declared
 silent may be linked, and any other linked pair is a failure until it is adjudicated into a
 header or into `scripts/check/next-duplicates-known.json` with a reason. A listed delta that
@@ -100,6 +100,9 @@ the next engine, and the ported rules' findings are judged against the manifest:
 or unexpected finding fails until adjudicated. The gate prints how many expectations each rule not
 yet ported still holds. Floors on fixtures, cases, tests analyzed and required pairs keep an empty
 read from passing.
+
+`npm run check:parameterization-runtime` also executes the owned consolidation and inline-snapshot cases under Vitest;
+the same source supplies the corpus expectations. CI runs both checks.
 
 The experimental name rule compares proven title segments in one file and renders supported
 literal table titles. It preserves the corpus's existing exclusions, including empty callbacks and
@@ -121,6 +124,19 @@ cells, nested reference values, suite tables, imported/member constants and unre
 formatting remain unsupported. In particular, dollar substitutions, string `%i` conversions and
 whole null rows cannot anchor row findings yet. Strings and keys containing the replacement
 character are also refused until the owned tree exposes lossless JavaScript code-unit identity. Existing corpus exclusions still apply.
+
+The experimental parameterization rule groups same-file callbacks with the same literal shape,
+exact setup and modifiers, and different normalized bodies. It retains one representative per
+declaration and per exact body; every input case must survive consolidation. Literal kinds,
+property names, static module specifiers, type-level values and outside binding identities remain significant. Bodies with
+no recorded behavior event, a local dependency on a matcher name containing `InlineSnapshot`,
+or an unresolved computed member or destructuring key are excluded. Nonliteral import sources and
+imports with options are also refused until their module identities are proved. This includes conventionally
+named custom inline-snapshot matchers; arbitrary custom matcher semantics are not modeled.
+Replacement-character text in callbacks and their local dependencies is also refused until the
+owned tree preserves JavaScript code units without display encoding.
+Row binding uses the existing proof; unsupported row values and observed class names still limit
+parity with the default engine.
 
 ## Writing documentation
 

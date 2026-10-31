@@ -159,6 +159,8 @@ pub struct Dialect {
     /// Text a matcher's name contains when its assertion records values in a form that prints
     /// constructor and function names (snapshots).
     pub name_observing_matchers: &'static [&'static str],
+    /// Name fragments of matchers whose assertions use their source location as a storage key.
+    pub source_keyed_matchers: &'static [&'static str],
 }
 
 impl Dialect {
@@ -218,6 +220,7 @@ impl Dialect {
             .chain(chain.iter().map(|member| member.name))
             .chain(self.scheduling_options.iter().copied())
             .chain(self.name_observing_matchers.iter().copied())
+            .chain(self.source_keyed_matchers.iter().copied())
     }
 }
 

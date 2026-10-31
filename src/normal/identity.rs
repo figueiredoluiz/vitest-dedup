@@ -52,6 +52,11 @@ impl Normalizer<'_> {
                 identity = format!("{identity}#{number}");
             }
         }
+        // Consolidating literal inputs must keep the same outside binding: two helper
+        // declarations may have equal text while their source-keyed assertions use different sites.
+        if walk.structural && !walk.trace {
+            identity = format!("{identity}:binding@{}", symbol_span(self.scopes, symbol));
+        }
         // A reader that observes names (`f.name`) tells apart functions that differ only in name.
         if walk.names_observed && self.named(symbol) {
             identity = format!("{identity}:n:{}", self.scopes.symbol(symbol).name);

@@ -281,7 +281,7 @@ fn run_with_engine(
         }
         writeln!(
             stderr,
-            "vitest-dedup: VITEST_DEDUP_ENGINE=next runs duplicate-test, duplicate-test-name, duplicate-each-row, duplicate-suite and cross-file-duplicate \
+            "vitest-dedup: VITEST_DEDUP_ENGINE=next runs duplicate-test, duplicate-test-name, duplicate-each-row, duplicate-suite, parameterization-candidate and cross-file-duplicate \
              only; the other rules do not run yet"
         )?;
     }
@@ -1426,9 +1426,56 @@ mod tests {
             "duplicate-test-name",
             "duplicate-each-row",
             "duplicate-suite",
+            "parameterization-candidate",
             "cross-file-duplicate",
         ] {
             assert!(stderr.contains(rule), "{rule} missing from: {stderr}");
+        }
+    }
+
+    /// The next-engine rule preserves its consolidation verdict through the CLI and JSONL.
+    #[test]
+    fn next_parameterization_reports_cases_to_keep() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(
+            directory.path().join("cases.test.ts"),
+            include_str!("../fixtures/duplicates/parameterization-contract.test.ts"),
+        )
+        .unwrap();
+        let output = assert_cmd::Command::cargo_bin("vitest-dedup")
+            .unwrap()
+            .arg(directory.path())
+            .args([
+                "--reporters",
+                "jsonl",
+                "--rule",
+                "parameterization-candidate=error",
+                "--rule",
+                "duplicate-test=off",
+            ])
+            .env("VITEST_DEDUP_ENGINE", "next")
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(1));
+        let records: Vec<serde_json::Value> = String::from_utf8(output.stdout)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        let summary = records.iter().find(|r| r["type"] == "summary").unwrap();
+        assert_eq!(summary["testsAnalyzed"], 10);
+        assert_eq!(summary["unresolvedTests"], 0);
+        assert_eq!(summary["errors"], 2);
+        let findings: Vec<_> = records.iter().filter(|r| r["type"] == "finding").collect();
+        assert_eq!(findings.len(), 2);
+        for finding in findings {
+            assert_eq!(finding["rule"], "parameterization-candidate");
+            assert_eq!(finding["severity"], "error");
+            assert_eq!(finding["verdict"], "consolidatable");
+            assert!(finding["message"]
+                .as_str()
+                .unwrap()
+                .contains("keeps every case as its own row"));
         }
     }
 

@@ -100,7 +100,9 @@ fn owned_suites_replace_child_findings() {
     assert!(corpus.tests.iter().all(|case| case.exclusion.is_none()));
     assert_eq!(corpus.suites.len(), 2);
     let outcome = owned_findings("a.test.ts", corpus);
-    assert_eq!(outcome.findings.len(), 1, "{outcome:?}");
+    assert_eq!(outcome.findings.len(), 2, "{outcome:?}");
+    assert_eq!(outcome.findings[1].rule, Rule::ParameterizationCandidate);
+    assert_eq!(outcome.findings[1].titles, ["copy > one", "copy > two"]);
     assert_eq!(outcome.findings[0].rule, Rule::DuplicateSuite);
     assert_eq!(outcome.findings[0].titles, ["copy", "copy"]);
     assert_eq!(
