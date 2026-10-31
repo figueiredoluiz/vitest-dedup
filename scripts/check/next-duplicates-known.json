@@ -59,6 +59,566 @@
     {
       "id": "link|fixtures/duplicates|not-duplicate-concise-suite-body.test.ts:13|not-duplicate-concise-suite-body.test.ts:17",
       "reason": "A concise suite body sequences its setup, and the suite context reads block bodies only."
+    },
+    {
+      "id": "recall-absent|cross-file-duplicate-dynamic-import-different-module|cross-file-duplicate|a/panel.test.ts:13,b/panel.test.ts:13",
+      "reason": "False positive: one relative `import()` path resolves to two modules, and the key reads the text."
+    },
+    {
+      "id": "recall-absent|cross-file-duplicate-per-directory-config|cross-file-duplicate|happy-dom/url.test.ts:3,node/url.test.ts:3",
+      "reason": "False positive: two projects with different environments share a test. Waits on the cross-file environment key."
+    },
+    {
+      "id": "recall-extra|duplicate-suite-globals-config|duplicate-test|auth.test.ts:16,auth.test.ts:6",
+      "reason": "`duplicate-suite` is not ported, so the tests of a copied suite are reported one by one."
+    },
+    {
+      "id": "recall-extra|duplicate-suite-globals-config|duplicate-test|auth.test.ts:10,auth.test.ts:20",
+      "reason": "`duplicate-suite` is not ported, so the tests of a copied suite are reported one by one."
+    },
+    {
+      "id": "recall-extra|duplicate-suite-nested|duplicate-test|auth.test.ts:20,auth.test.ts:30",
+      "reason": "`duplicate-suite` is not ported, so the tests of a copied suite are reported one by one."
+    },
+    {
+      "id": "recall-extra|duplicate-suite-nested|duplicate-test|auth.test.ts:24,auth.test.ts:34",
+      "reason": "`duplicate-suite` is not ported, so the tests of a copied suite are reported one by one."
+    },
+    {
+      "id": "recall-absent|duplicate-suite-positive|duplicate-test|auth.test.ts:21,auth.test.ts:31",
+      "reason": "`duplicate-suite` is not ported, so the tests of a copied suite are reported one by one."
+    },
+    {
+      "id": "recall-extra|duplicate-suite-positive|duplicate-test|auth.test.ts:25,auth.test.ts:35",
+      "reason": "`duplicate-suite` is not ported, so the tests of a copied suite are reported one by one."
+    },
+    {
+      "id": "recall-miss|duplicate-test-bench|duplicate-test|parses a short document,reads a small config",
+      "reason": "Benchmarks are excluded until they are compared."
+    },
+    {
+      "id": "recall-miss|duplicate-test-bench|duplicate-test|parses a long document,reads a large config",
+      "reason": "Benchmarks are excluded until they are compared."
+    },
+    {
+      "id": "recall-extra|duplicate-test-dynamic-title|duplicate-test|session.test.ts:21,session.test.ts:26",
+      "reason": "The next engine renders no dynamic title and locates a participant at its call, so the finding differs in shape, not in claim."
+    },
+    {
+      "id": "recall-absent|duplicate-test-imported-helper-arity-guard|duplicate-test|twin.test.ts:11,twin.test.ts:15",
+      "reason": "False positive: calls of two different imported helpers key alike."
+    },
+    {
+      "id": "recall-absent|duplicate-test-written-each-parameter-negative|duplicate-test|parse.test.ts:18,parse.test.ts:23",
+      "reason": "False positive: a row parameter that is reassigned is still substituted by its row."
+    },
+    {
+      "id": "recall-absent|mixed-cross-file-and-suite|duplicate-test|ledger.test.ts:20,ledger.test.ts:26",
+      "reason": "`duplicate-suite` is not ported, so the tests of a copied suite are reported one by one."
+    },
+    {
+      "id": "recall-absent|mixed-duplicate-suite-suppresses-children|duplicate-test|billing.test.ts:22,billing.test.ts:32",
+      "reason": "`duplicate-suite` is not ported, so the tests of a copied suite are reported one by one."
+    },
+    {
+      "id": "recall-absent|mixed-duplicate-suite-suppresses-children|duplicate-test|billing.test.ts:26,billing.test.ts:36",
+      "reason": "`duplicate-suite` is not ported, so the tests of a copied suite are reported one by one."
+    },
+    {
+      "id": "recall-absent|mixed-near-duplicate-and-suite|duplicate-test|main.test.ts:18,main.test.ts:24",
+      "reason": "`duplicate-suite` is not ported, so the tests of a copied suite are reported one by one."
+    },
+    {
+      "id": "recall-absent|mixed-parameterization-and-suite|duplicate-test|main.test.ts:19,main.test.ts:25",
+      "reason": "`duplicate-suite` is not ported, so the tests of a copied suite are reported one by one."
+    },
+    {
+      "id": "recall-absent|mixed-subsumed-and-suite|duplicate-test|main.test.ts:19,main.test.ts:25",
+      "reason": "`duplicate-suite` is not ported, so the tests of a copied suite are reported one by one."
+    },
+    {
+      "id": "recall-absent|mixed-suite-and-each-row|duplicate-test|main.test.ts:18,main.test.ts:24",
+      "reason": "`duplicate-suite` is not ported, so the tests of a copied suite are reported one by one."
+    },
+    {
+      "id": "recall-absent|mixed-suite-and-redundant-hook|duplicate-test|billing.test.ts:30,billing.test.ts:46",
+      "reason": "`duplicate-suite` is not ported, so the tests of a copied suite are reported one by one."
+    },
+    {
+      "id": "recall-extra|mixed-suite-copy-with-internal-duplicates|duplicate-test|billing.test.ts:25,billing.test.ts:31",
+      "reason": "`duplicate-suite` is not ported, so the tests of a copied suite are reported one by one."
+    },
+    {
+      "id": "recall-miss|framework-runner-default-const|duplicate-test|page lowercases,page slug is lowercase",
+      "reason": "Tests a helper registers are excluded, not compared, until they are compared where the helper is called."
+    },
+    {
+      "id": "recall-miss|framework-runner-default-alias-control|duplicate-test|page lowercases,page slug is lowercase",
+      "reason": "Tests a helper registers are excluded, not compared, until they are compared where the helper is called."
+    },
+    {
+      "id": "recall-miss|framework-runner-named-control|duplicate-test|page lowercases,page slug is lowercase",
+      "reason": "Tests a helper registers are excluded, not compared, until they are compared where the helper is called."
+    },
+    {
+      "id": "recall-absent|framework-package-mock-call-uninstalled|duplicate-test|users.test.ts:14,users.test.ts:19",
+      "reason": "The default engine abstains on this file; the next engine compares identical text in an identical context, as decided."
+    },
+    {
+      "id": "recall-absent|framework-package-parenthesised-registration|duplicate-test|users.test.ts:12,users.test.ts:16",
+      "reason": "The default engine abstains on this file; the next engine compares identical text in an identical context, as decided."
+    },
+    {
+      "id": "recall-absent|framework-package-global-newline-registration|duplicate-test|users.test.ts:11,users.test.ts:15",
+      "reason": "The default engine abstains on this file; the next engine compares identical text in an identical context, as decided."
+    },
+    {
+      "id": "recall-absent|framework-mock-module-effects|cross-file-duplicate|alpha.test.ts:15,beta.test.ts:15",
+      "reason": "The default engine abstains on this file; the next engine compares identical text in an identical context, as decided."
+    },
+    {
+      "id": "recall-absent|framework-auto-import-in-helper|duplicate-test|unknown.test.ts:12,unknown.test.ts:16",
+      "reason": "The default engine abstains on this file; the next engine compares identical text in an identical context, as decided."
+    },
+    {
+      "id": "recall-absent|framework-auto-import-ungenerated-control|duplicate-test|known.test.ts:12,known.test.ts:16",
+      "reason": "The default engine abstains on this file; the next engine compares identical text in an identical context, as decided."
+    },
+    {
+      "id": "recall-miss|framework-runner-default-function-declared-after|duplicate-test|page lowercases,page slug is lowercase",
+      "reason": "Tests a helper registers are excluded, not compared, until they are compared where the helper is called."
+    },
+    {
+      "id": "recall-miss|framework-runner-named-and-default|duplicate-test|page lowercases,page slug is lowercase",
+      "reason": "Tests a helper registers are excluded, not compared, until they are compared where the helper is called."
+    },
+    {
+      "id": "recall-miss|framework-runner-ambient-module-augmentation|duplicate-test|page lowercases,page slug is lowercase",
+      "reason": "Tests a helper registers are excluded, not compared, until they are compared where the helper is called."
+    },
+    {
+      "id": "recall-miss|framework-runner-ambient-declarations|duplicate-test|page lowercases,page slug is lowercase",
+      "reason": "Tests a helper registers are excluded, not compared, until they are compared where the helper is called."
+    },
+    {
+      "id": "recall-miss|framework-runner-module-values|duplicate-test|page lowercases,page slug is lowercase",
+      "reason": "Tests a helper registers are excluded, not compared, until they are compared where the helper is called."
+    },
+    {
+      "id": "recall-miss|framework-runner-plain-import-control|duplicate-test|page lowercases,page slug is lowercase",
+      "reason": "Tests a helper registers are excluded, not compared, until they are compared where the helper is called."
+    },
+    {
+      "id": "recall-absent|framework-nuxt-mock-redeclared-binding|duplicate-test|run.test.ts:16,run.test.ts:20",
+      "reason": "The default engine abstains on this file; the next engine compares identical text in an identical context, as decided."
+    },
+    {
+      "id": "recall-absent|framework-nuxt-mock-accumulating-hook|duplicate-test|count.test.ts:17,count.test.ts:21",
+      "reason": "The default engine abstains on this file; the next engine compares identical text in an identical context, as decided."
+    },
+    {
+      "id": "recall-miss|local-helper-overloaded|duplicate-test|old body,independent",
+      "reason": "Tests a helper registers are excluded, not compared, until they are compared where the helper is called."
+    },
+    {
+      "id": "recall-miss|local-helper-member-write|duplicate-test|old body,independent",
+      "reason": "Tests a helper registers are excluded, not compared, until they are compared where the helper is called."
+    },
+    {
+      "id": "recall-miss|local-helper-return-test|duplicate-test|hidden,visible",
+      "reason": "Tests a helper registers are excluded, not compared, until they are compared where the helper is called."
+    },
+    {
+      "id": "recall-miss|local-helper-return-describe|duplicate-test|group > inner,inner",
+      "reason": "Tests a helper registers are excluded, not compared, until they are compared where the helper is called."
+    },
+    {
+      "id": "recall-miss|local-helper-computed-arguments|duplicate-test|hidden,visible",
+      "reason": "Tests a helper registers are excluded, not compared, until they are compared where the helper is called."
+    },
+    {
+      "id": "recall-miss|local-helper-unused-default|duplicate-test|hidden,visible",
+      "reason": "Tests a helper registers are excluded, not compared, until they are compared where the helper is called."
+    },
+    {
+      "id": "recall-miss|local-helper-return-tail|duplicate-test|hidden,visible",
+      "reason": "Tests a helper registers are excluded, not compared, until they are compared where the helper is called."
+    },
+    {
+      "id": "recall-miss|describe-return-tail|duplicate-test|suite > first,visible",
+      "reason": "False positive: a test after `return` never registers, and the inventory still counts it."
+    },
+    {
+      "id": "recall-absent|describe-return-tail|duplicate-test|run.test.ts:12,run.test.ts:8",
+      "reason": "False positive: a test after `return` never registers, and the inventory still counts it."
+    },
+    {
+      "id": "recall-miss|describe-finally-break|duplicate-test|suite > live,visible",
+      "reason": "A hook after an unconditional exit never registers, and the suite context still reads it, so equal tests key apart."
+    },
+    {
+      "id": "recall-miss|describe-label-break-tail|duplicate-test|suite > live,visible",
+      "reason": "A hook after an unconditional exit never registers, and the suite context still reads it, so equal tests key apart."
+    },
+    {
+      "id": "recall-miss|local-helper-finally-local-break|duplicate-test|hidden,visible",
+      "reason": "Tests a helper registers are excluded, not compared, until they are compared where the helper is called."
+    },
+    {
+      "id": "recall-miss|local-helper-shadowed-undefined|duplicate-test|suite > hidden,visible",
+      "reason": "Tests a helper registers are excluded, not compared, until they are compared where the helper is called."
+    },
+    {
+      "id": "recall-miss|local-helper-const-arrow|duplicate-test|hidden,visible",
+      "reason": "Tests a helper registers are excluded, not compared, until they are compared where the helper is called."
+    },
+    {
+      "id": "recall-miss|local-helper-const-concise|duplicate-test|hidden,visible",
+      "reason": "Tests a helper registers are excluded, not compared, until they are compared where the helper is called."
+    },
+    {
+      "id": "recall-miss|local-helper-const-later-call|duplicate-test|hidden,visible",
+      "reason": "Tests a helper registers are excluded, not compared, until they are compared where the helper is called."
+    },
+    {
+      "id": "recall-absent|guarded-hook-identical|duplicate-test|run.test.ts:18,run.test.ts:27",
+      "reason": "The default engine abstains on this file; the next engine compares identical text in an identical context, as decided."
+    },
+    {
+      "id": "recall-absent|helper-guarded-hook-uncertainty|duplicate-test|run.test.ts:15,run.test.ts:24",
+      "reason": "The default engine abstains on this file; the next engine compares identical text in an identical context, as decided."
+    },
+    {
+      "id": "recall-absent|nested-hook-after-exit-uncertainty|duplicate-test|run.test.ts:11,run.test.ts:20",
+      "reason": "The default engine abstains on this file; the next engine compares identical text in an identical context, as decided."
+    },
+    {
+      "id": "recall-miss|labeled-break-hook-retention|duplicate-test|suite-a > reads,suite-b > reads",
+      "reason": "A hook after an unconditional exit never registers, and the suite context still reads it, so equal tests key apart."
+    },
+    {
+      "id": "recall-miss|local-break-hook-retention|duplicate-test|suite-a > reads,suite-b > reads",
+      "reason": "A hook after an unconditional exit never registers, and the suite context still reads it, so equal tests key apart."
+    },
+    {
+      "id": "recall-miss|braceless-hook-retention|duplicate-test|suite-a > reads,suite-b > reads",
+      "reason": "A hook after an unconditional exit never registers, and the suite context still reads it, so equal tests key apart."
+    },
+    {
+      "id": "recall-absent|caught-helper-throw-hook-uncertainty|duplicate-test|run.test.ts:18,run.test.ts:27",
+      "reason": "The default engine abstains on this file; the next engine compares identical text in an identical context, as decided."
+    },
+    {
+      "id": "recall-miss|concise-suite-hook-retention|duplicate-test|suite-a > reads,suite-b > reads",
+      "reason": "Tests a helper registers are excluded, not compared, until they are compared where the helper is called."
+    },
+    {
+      "id": "recall-absent|mock-spy-options-unreadable|duplicate-test|unknown.test.ts:13,unknown.test.ts:9",
+      "reason": "The default engine abstains on this file; the next engine compares identical text in an identical context, as decided."
+    },
+    {
+      "id": "recall-absent|framework-auto-import-table-depth|duplicate-test|clock.test.ts:8,clock.test.ts:9",
+      "reason": "The default engine abstains on this file; the next engine compares identical text in an identical context, as decided."
+    },
+    {
+      "id": "recall-absent|framework-package-manifest-oversized|duplicate-test|metadata.test.ts:7,metadata.test.ts:8",
+      "reason": "The default engine abstains on this file; the next engine compares identical text in an identical context, as decided."
+    },
+    {
+      "id": "recall-miss|function-title-handlers-equivalent|duplicate-test|alpha,beta",
+      "reason": "The next engine renders no dynamic title and locates a participant at its call, so the finding differs in shape, not in claim."
+    },
+    {
+      "id": "recall-extra|function-title-handlers-equivalent|duplicate-test|run.test.ts:2,run.test.ts:3",
+      "reason": "The next engine renders no dynamic title and locates a participant at its call, so the finding differs in shape, not in claim."
+    },
+    {
+      "id": "recall-extra|function-title-unresolved|duplicate-test|run.test.ts:5,run.test.ts:6",
+      "reason": "The next engine renders no dynamic title and locates a participant at its call, so the finding differs in shape, not in claim."
+    },
+    {
+      "id": "recall-extra|function-title-unresolved|duplicate-test|run.test.ts:6,run.test.ts:7",
+      "reason": "The next engine renders no dynamic title and locates a participant at its call, so the finding differs in shape, not in claim."
+    },
+    {
+      "id": "recall-miss|helper-inert-registration-callback|duplicate-test|hooked > reads,plain > reads",
+      "reason": "A hook after an unconditional exit never registers, and the suite context still reads it, so equal tests key apart."
+    },
+    {
+      "id": "recall-miss|helper-initializer-test|duplicate-test|hidden,visible",
+      "reason": "Tests a helper registers are excluded, not compared, until they are compared where the helper is called."
+    },
+    {
+      "id": "recall-miss|helper-initializer-factories|duplicate-test|first,second",
+      "reason": "Tests a helper registers are excluded, not compared, until they are compared where the helper is called."
+    },
+    {
+      "id": "recall-miss|helper-in-source-bindings|duplicate-test|first,second",
+      "reason": "Tests a helper registers are excluded, not compared, until they are compared where the helper is called."
+    },
+    {
+      "id": "recall-absent|vitest-api-renamed|cross-file-duplicate|renamed-vi.test.ts:5,vi.test.ts:5",
+      "reason": "False positive: a mock through a renamed `vitest` import is not context across files."
+    },
+    {
+      "id": "recall-extra|vitest-api-renamed|cross-file-duplicate|alias.test.ts:5,renamed-vi.test.ts:5",
+      "reason": "False positive: a mock through a renamed `vitest` import is not context across files."
+    },
+    {
+      "id": "recall-miss|vitest-api-shadowed-environment|cross-file-duplicate|alias.test.ts:4,plain.test.ts:2",
+      "reason": "A shadowed `vitest` is read as the API, so its call stays in the context and equal tests key apart."
+    },
+    {
+      "id": "recall-absent|callback-registers-foreach|duplicate-test|run.test.ts:12,run.test.ts:17",
+      "reason": "The default engine abstains on this file; the next engine compares identical text in an identical context, as decided."
+    },
+    {
+      "id": "recall-miss|foreach-known-array|duplicate-test|loop a,outside",
+      "reason": "The next engine renders no dynamic title and locates a participant at its call, so the finding differs in shape, not in claim."
+    },
+    {
+      "id": "recall-extra|foreach-known-array|duplicate-test|run.test.ts:10,run.test.ts:15",
+      "reason": "The next engine renders no dynamic title and locates a participant at its call, so the finding differs in shape, not in claim."
+    },
+    {
+      "id": "recall-tests|duplicate-each-row-describe-each|all|2",
+      "reason": "The next engine counts a suite table's tests once; the default engine expands one per row."
+    },
+    {
+      "id": "recall-tests|duplicate-suite-describe-each|all|1",
+      "reason": "The next engine counts a suite table's tests once; the default engine expands one per row."
+    },
+    {
+      "id": "recall-tests|mixed-loop-each-under-projects-entry|all|2",
+      "reason": "The next engine counts a suite table's tests once; the default engine expands one per row."
+    },
+    {
+      "id": "recall-tests|framework-runner-default-let-negative|all|2",
+      "reason": "The next engine counts a helper's call and the tests its file spells; the default engine inlines what the helper registers."
+    },
+    {
+      "id": "recall-tests|framework-runner-default-reassigned-negative|all|2",
+      "reason": "The next engine counts a helper's call and the tests its file spells; the default engine inlines what the helper registers."
+    },
+    {
+      "id": "recall-tests|framework-runner-namespace-hook-negative|all|6",
+      "reason": "The next engine counts a helper's call and the tests its file spells; the default engine inlines what the helper registers."
+    },
+    {
+      "id": "recall-tests|framework-runner-fake-timers-negative|all|4",
+      "reason": "The next engine counts a helper's call and the tests its file spells; the default engine inlines what the helper registers."
+    },
+    {
+      "id": "recall-tests|framework-runner-getter-value-negative|all|3",
+      "reason": "The next engine counts a helper's call and the tests its file spells; the default engine inlines what the helper registers."
+    },
+    {
+      "id": "recall-tests|framework-runner-import-time-mock-negative|all|3",
+      "reason": "The next engine counts a helper's call and the tests its file spells; the default engine inlines what the helper registers."
+    },
+    {
+      "id": "recall-tests|framework-runner-default-imported-negative|all|2",
+      "reason": "The next engine counts a helper's call and the tests its file spells; the default engine inlines what the helper registers."
+    },
+    {
+      "id": "recall-tests|framework-nuxt-mock-redeclared-binding|all|4",
+      "reason": "The next engine counts a helper's call and the tests its file spells; the default engine inlines what the helper registers."
+    },
+    {
+      "id": "recall-tests|local-helper-overloaded|all|3",
+      "reason": "The next engine counts a helper's call and the tests its file spells; the default engine inlines what the helper registers."
+    },
+    {
+      "id": "recall-tests|local-helper-overloaded-reassigned|all|5",
+      "reason": "The next engine counts a helper's call and the tests its file spells; the default engine inlines what the helper registers."
+    },
+    {
+      "id": "recall-tests|local-helper-reassigned|all|5",
+      "reason": "The next engine counts a helper's call and the tests its file spells; the default engine inlines what the helper registers."
+    },
+    {
+      "id": "recall-tests|local-helper-member-write|all|4",
+      "reason": "The next engine counts a helper's call and the tests its file spells; the default engine inlines what the helper registers."
+    },
+    {
+      "id": "recall-tests|local-helper-default-hook|all|3",
+      "reason": "The next engine counts a helper's call and the tests its file spells; the default engine inlines what the helper registers."
+    },
+    {
+      "id": "recall-tests|local-helper-return-hook|all|3",
+      "reason": "The next engine counts a helper's call and the tests its file spells; the default engine inlines what the helper registers."
+    },
+    {
+      "id": "recall-tests|local-helper-async-await|all|3",
+      "reason": "The next engine counts a helper's call and the tests its file spells; the default engine inlines what the helper registers."
+    },
+    {
+      "id": "recall-tests|local-helper-return-test|all|3",
+      "reason": "The next engine counts a helper's call and the tests its file spells; the default engine inlines what the helper registers."
+    },
+    {
+      "id": "recall-tests|local-helper-return-describe|all|3",
+      "reason": "The next engine counts a helper's call and the tests its file spells; the default engine inlines what the helper registers."
+    },
+    {
+      "id": "recall-tests|local-helper-generator|all|3",
+      "reason": "The next engine counts a helper's call and the tests its file spells; the default engine inlines what the helper registers."
+    },
+    {
+      "id": "recall-tests|local-helper-computed-arguments|all|3",
+      "reason": "The next engine counts a helper's call and the tests its file spells; the default engine inlines what the helper registers."
+    },
+    {
+      "id": "recall-tests|local-helper-unused-default|all|3",
+      "reason": "The next engine counts a helper's call and the tests its file spells; the default engine inlines what the helper registers."
+    },
+    {
+      "id": "recall-tests|local-helper-return-tail|all|4",
+      "reason": "The next engine counts a helper's call and the tests its file spells; the default engine inlines what the helper registers."
+    },
+    {
+      "id": "recall-tests|describe-return-tail|all|3",
+      "reason": "False positive: a test after `return` never registers, and the inventory still counts it."
+    },
+    {
+      "id": "recall-tests|local-helper-null-destructure|all|3",
+      "reason": "The next engine counts a helper's call and the tests its file spells; the default engine inlines what the helper registers."
+    },
+    {
+      "id": "recall-tests|local-helper-noniterable-destructure|all|3",
+      "reason": "The next engine counts a helper's call and the tests its file spells; the default engine inlines what the helper registers."
+    },
+    {
+      "id": "recall-tests|local-helper-finally-local-break|all|4",
+      "reason": "The next engine counts a helper's call and the tests its file spells; the default engine inlines what the helper registers."
+    },
+    {
+      "id": "recall-tests|local-helper-shadowed-undefined|all|3",
+      "reason": "The next engine counts a helper's call and the tests its file spells; the default engine inlines what the helper registers."
+    },
+    {
+      "id": "recall-tests|local-helper-parameter-default-call|all|3",
+      "reason": "The next engine counts a helper's call and the tests its file spells; the default engine inlines what the helper registers."
+    },
+    {
+      "id": "recall-tests|local-helper-nested-default-getter|all|3",
+      "reason": "The next engine counts a helper's call and the tests its file spells; the default engine inlines what the helper registers."
+    },
+    {
+      "id": "recall-tests|local-helper-forwarded-parameter|all|4",
+      "reason": "The next engine counts a helper's call and the tests its file spells; the default engine inlines what the helper registers."
+    },
+    {
+      "id": "recall-tests|local-helper-const-arrow|all|3",
+      "reason": "The next engine counts a helper's call and the tests its file spells; the default engine inlines what the helper registers."
+    },
+    {
+      "id": "recall-tests|local-helper-const-describe-scope|all|5",
+      "reason": "The next engine counts a helper's call and the tests its file spells; the default engine inlines what the helper registers."
+    },
+    {
+      "id": "recall-tests|local-helper-parameter-callee|all|2",
+      "reason": "The next engine counts a helper's call and the tests its file spells; the default engine inlines what the helper registers."
+    },
+    {
+      "id": "recall-tests|local-helper-const-concise|all|3",
+      "reason": "The next engine counts a helper's call and the tests its file spells; the default engine inlines what the helper registers."
+    },
+    {
+      "id": "recall-tests|local-helper-const-tdz|all|4",
+      "reason": "The next engine counts a helper's call and the tests its file spells; the default engine inlines what the helper registers."
+    },
+    {
+      "id": "recall-tests|local-helper-const-switch-case|all|3",
+      "reason": "The next engine counts a helper's call and the tests its file spells; the default engine inlines what the helper registers."
+    },
+    {
+      "id": "recall-tests|local-helper-const-default-hook|all|3",
+      "reason": "The next engine counts a helper's call and the tests its file spells; the default engine inlines what the helper registers."
+    },
+    {
+      "id": "recall-tests|local-helper-const-generator|all|3",
+      "reason": "The next engine counts a helper's call and the tests its file spells; the default engine inlines what the helper registers."
+    },
+    {
+      "id": "recall-tests|local-helper-const-return-hook|all|3",
+      "reason": "The next engine counts a helper's call and the tests its file spells; the default engine inlines what the helper registers."
+    },
+    {
+      "id": "recall-tests|local-helper-const-async-await|all|3",
+      "reason": "The next engine counts a helper's call and the tests its file spells; the default engine inlines what the helper registers."
+    },
+    {
+      "id": "recall-tests|local-helper-const-switch-cross-case|all|4",
+      "reason": "The next engine counts a helper's call and the tests its file spells; the default engine inlines what the helper registers."
+    },
+    {
+      "id": "recall-tests|local-helper-const-later-call|all|4",
+      "reason": "The next engine counts a helper's call and the tests its file spells; the default engine inlines what the helper registers."
+    },
+    {
+      "id": "recall-tests|duplicate-each-row-imported-constants|all|19",
+      "reason": "The default engine expands a table row built from imported constants; the next engine reads one row fewer."
+    },
+    {
+      "id": "recall-tests|concise-suite-hook-retention|all|4",
+      "reason": "The next engine counts a helper's call and the tests its file spells; the default engine inlines what the helper registers."
+    },
+    {
+      "id": "recall-tests|concise-suite-guarded-hook-uncertainty|all|4",
+      "reason": "The next engine counts a helper's call and the tests its file spells; the default engine inlines what the helper registers."
+    },
+    {
+      "id": "recall-tests|helper-initializer-hook|all|3",
+      "reason": "The next engine counts a helper's call and the tests its file spells; the default engine inlines what the helper registers."
+    },
+    {
+      "id": "recall-tests|helper-initializer-equivalent-hooks|all|4",
+      "reason": "The next engine counts a helper's call and the tests its file spells; the default engine inlines what the helper registers."
+    },
+    {
+      "id": "recall-tests|helper-ignored-assignment-hook|all|3",
+      "reason": "The next engine counts a helper's call and the tests its file spells; the default engine inlines what the helper registers."
+    },
+    {
+      "id": "recall-tests|helper-ignored-sequence-hook|all|3",
+      "reason": "The next engine counts a helper's call and the tests its file spells; the default engine inlines what the helper registers."
+    },
+    {
+      "id": "recall-tests|helper-ignored-logical-hook|all|3",
+      "reason": "The next engine counts a helper's call and the tests its file spells; the default engine inlines what the helper registers."
+    },
+    {
+      "id": "recall-tests|helper-ignored-conditional-hook|all|3",
+      "reason": "The next engine counts a helper's call and the tests its file spells; the default engine inlines what the helper registers."
+    },
+    {
+      "id": "recall-tests|helper-initializer-test|all|3",
+      "reason": "The next engine counts a helper's call and the tests its file spells; the default engine inlines what the helper registers."
+    },
+    {
+      "id": "recall-tests|helper-initializer-factories|all|3",
+      "reason": "The next engine counts a helper's call and the tests its file spells; the default engine inlines what the helper registers."
+    },
+    {
+      "id": "recall-tests|helper-in-source-bindings|all|3",
+      "reason": "The next engine counts a helper's call and the tests its file spells; the default engine inlines what the helper registers."
+    },
+    {
+      "id": "recall-tests|helper-initializer-factory-argument-hook|all|3",
+      "reason": "The next engine counts a helper's call and the tests its file spells; the default engine inlines what the helper registers."
+    },
+    {
+      "id": "recall-tests|callback-registers-foreach|all|2",
+      "reason": "The next engine counts a registration in a `forEach` callback once; the default engine leaves that callback out."
+    },
+    {
+      "id": "recall-tests|callback-parameter-registers|all|2",
+      "reason": "The next engine counts a helper's call and the tests its file spells; the default engine inlines what the helper registers."
+    },
+    {
+      "id": "recall-tests|foreach-known-array|all|2",
+      "reason": "The default engine expands a `forEach` over a known array per element; the next engine counts its registration and the test beside it."
     }
   ]
 }

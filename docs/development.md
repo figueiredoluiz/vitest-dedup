@@ -95,8 +95,11 @@ headers: every pair a positive expectation declares must be linked by its rule, 
 silent may be linked, and any other linked pair is a failure until it is adjudicated into a
 header or into `scripts/check/next-duplicates-known.json` with a reason. A listed delta that
 stops being observed fails, so its entry goes when the header or the engine moves; a rule the
-next engine does not port reporting a finding fails outright. Floors on fixtures, tests analyzed
-and required pairs keep an empty read from passing.
+next engine does not port reporting a finding fails outright. Every recall case then runs under
+the next engine, and the two rules' findings are judged against the manifest: a missing, forbidden
+or unexpected finding fails until adjudicated. The gate prints how many expectations each rule not
+yet ported still holds. Floors on fixtures, cases, tests analyzed and required pairs keep an empty
+read from passing.
 
 ## Writing documentation
 

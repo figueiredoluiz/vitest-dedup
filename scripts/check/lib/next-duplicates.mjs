@@ -17,6 +17,8 @@
 // Nothing here judges a run pass or fail except the floors the caller asserts on top: a
 // contract violation is data, a measurement that did not measure is an error.
 
+import { describeMatcher, findingMatches } from './recall-runner.mjs'
+
 /** The rules the next engine runs. */
 export const PORTED_RULES = new Set(['duplicate-test', 'cross-file-duplicate'])
 
@@ -120,6 +122,75 @@ export function expectationEdges(fixtures) {
   }
   const requiredEdges = new Set(required.map((r) => r.edge))
   return { required, declared, forbidden: forbidden.filter((f) => !requiredEdges.has(f.edge)) }
+}
+
+/** The sorted `path:line` of a finding's locations. */
+const locationsOf = (finding) => finding.locations.map((location) => `${location.path}:${location.line}`).sort()
+
+/**
+ * What of `expected` a next-engine finding can meet: the next engine renders no row titles, so a
+ * matcher that names locations is read by them.
+ */
+const readable = (expected) => (expected.locations ? { ...expected, titles: undefined } : expected)
+
+/**
+ * Judges one recall case: its ported expectations against what the next engine reported.
+ *
+ * @param {object} testCase A manifest case.
+ * @param {object[]} records The run's jsonl records.
+ * @returns {{failures: {id: string, message: string}[], judged: number}} Each delta under the
+ *   stable id a known entry names, and how many expectations were judged.
+ */
+export function judgeRecall(testCase, records) {
+  const findings = records.filter((record) => record?.type === 'finding' && PORTED_RULES.has(record.rule))
+  const ported = (list) => (list ?? []).filter((expected) => PORTED_RULES.has(expected.rule))
+  const failures = []
+  const delta = (kind, rule, where, text) => {
+    failures.push({ id: `recall-${kind}|${testCase.name}|${rule}|${where}`, message: `FAIL recall ${testCase.name}: ${text}` })
+  }
+  const matched = new Set()
+  const take = (expected) => {
+    const found = findings.find((finding) => !matched.has(finding) && findingMatches(finding, readable(expected)))
+    if (found) matched.add(found)
+    return found
+  }
+  // A case that read fewer tests can pass its silences without having compared anything.
+  const analyzed = records.find((record) => record?.type === 'summary')?.testsAnalyzed
+  if (analyzed !== testCase.expectedTests) {
+    delta('tests', 'all', String(analyzed), `the next engine analyzed ${analyzed} test(s), and the case expects ${testCase.expectedTests}`)
+  }
+  const expected = ported(testCase.expectedFindings)
+  for (const matcher of expected) {
+    if (!take(matcher)) {
+      delta('miss', matcher.rule, (matcher.locations ?? matcher.titles ?? []).join(','), `expected ${describeMatcher(matcher)}, which the next engine did not report`)
+    }
+  }
+  for (const matcher of ported(testCase.knownMisses)) take(matcher)
+  for (const matcher of ported(testCase.expectedAbsent)) {
+    const found = findings.find((finding) => findingMatches(finding, readable(matcher)))
+    if (found) {
+      matched.add(found)
+      delta('absent', matcher.rule, locationsOf(found).join(','), `${describeMatcher(matcher)} must stay absent, and the next engine reported it`)
+    }
+  }
+  for (const finding of findings.filter((candidate) => !matched.has(candidate))) {
+    delta('extra', finding.rule, locationsOf(finding).join(','), `the next engine reported ${finding.rule} at ${locationsOf(finding).join(', ')}, which the case does not expect`)
+  }
+  return { failures, judged: expected.length }
+}
+
+/**
+ * How many expectations each rule the next engine does not port still holds.
+ *
+ * @param {{rule: string}[]} expectations Expectations of the fixture headers and recall cases.
+ * @returns {Record<string, number>} Count per rule.
+ */
+export function pendingByRule(expectations) {
+  const counts = {}
+  for (const { rule } of expectations) {
+    if (rule !== 'none' && !PORTED_RULES.has(rule)) counts[rule] = (counts[rule] ?? 0) + 1
+  }
+  return counts
 }
 
 /**
