@@ -205,6 +205,14 @@ impl<'s> Module<'s> {
                         (Some(Origin::Api(left)), Some(Origin::Api(right))) if left == right => {
                             left
                         }
+                        (Some(Origin::Wrapper(_)), _) | (_, Some(Origin::Wrapper(_))) => {
+                            steps.reverse();
+                            return Some((
+                                Origin::Wrapper(Reach::Tasks),
+                                Provenance::Wrapper,
+                                steps,
+                            ));
+                        }
                         _ => return None,
                     };
                     steps.reverse();
@@ -481,9 +489,7 @@ impl<'s> Module<'s> {
     /// wrapper's reach only grows while the fixpoint runs; any other origin is set once.
     fn alias(&mut self, symbol: SymbolId, origin: Origin) {
         let origin = match origin {
-            Origin::Api(_) | Origin::Wrapper(_) if self.reassigned(symbol) => {
-                Origin::Wrapper(Reach::Tasks)
-            }
+            _ if self.reassigned(symbol) => Origin::Wrapper(Reach::Tasks),
             origin => origin,
         };
         let entry = self.origins.entry(symbol).or_insert(origin);
@@ -553,19 +559,28 @@ impl<'s> Module<'s> {
                 .any(|reference| reference.write)
     }
 
-    /// The bindings more than one declaration binds, patterns included.
+    /// The bindings more than one declaration binds: patterns, parameters and catch bindings
+    /// included. A type sharing a name binds no value, so it is not one.
     fn redeclarations(&self) -> HashSet<SymbolId> {
         let tree = self.tree;
         let mut seen = HashSet::new();
         tree.nodes()
-            .filter(|&node| {
-                matches!(
-                    tree.kind(node),
-                    "VariableDeclarator" | "FunctionDeclaration"
-                )
+            .flat_map(|node| {
+                let (binding, params) = match tree.kind(node) {
+                    "VariableDeclarator" => (tree.child(node, "id"), false),
+                    "FunctionDeclaration" => (tree.child(node, "id"), true),
+                    "CatchClause" => (tree.child(node, "param"), false),
+                    "FunctionExpression" | "ArrowFunctionExpression" => (None, true),
+                    _ => (None, false),
+                };
+                let params = if params {
+                    tree.list(node, "params")
+                } else {
+                    Vec::new()
+                };
+                binding.into_iter().chain(params.into_iter().flatten())
             })
-            .filter_map(|node| tree.child(node, "id"))
-            .flat_map(|id| bound_symbols(tree, &self.parsed.scopes, id))
+            .flat_map(|binding| bound_symbols(tree, &self.parsed.scopes, binding))
             .filter(|&symbol| !seen.insert(symbol))
             .collect()
     }

@@ -36,6 +36,7 @@ pub fn bound_symbols(tree: &Tree, scopes: &Scopes, pattern: NodeId) -> Vec<Symbo
             "Property" => pending.extend(tree.child(node, "value")),
             "RestElement" => pending.extend(tree.child(node, "argument")),
             "AssignmentPattern" => pending.extend(tree.child(node, "left")),
+            "TSParameterProperty" => pending.extend(tree.child(node, "parameter")),
             _ => {}
         }
     }

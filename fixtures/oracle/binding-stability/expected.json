@@ -34,6 +34,18 @@
         "testsExcluded": 2
       }
     },
+    "catch-redeclaration.test.ts": {
+      "tasks": 3,
+      "wrapperSites": [
+        "wrapper@9"
+      ],
+      "next": {
+        "reasons": [
+          "registered-elsewhere"
+        ],
+        "testsExcluded": 3
+      }
+    },
     "compound-assignment.test.ts": {
       "tasks": 3,
       "wrapperSites": [
@@ -138,6 +150,32 @@
         "testsExcluded": 2
       }
     },
+    "parameter-property.test.ts": {
+      "tasks": 2,
+      "wrapperSites": [
+        "wrapper@7"
+      ],
+      "next": {
+        "reasons": [
+          "registered-elsewhere"
+        ],
+        "testsExcluded": 3
+      }
+    },
+    "parameter-redeclaration.test.ts": {
+      "tasks": 4,
+      "wrapperSites": [
+        "hook-wrapper@7",
+        "wrapper@8",
+        "wrapper@9"
+      ],
+      "next": {
+        "reasons": [
+          "registered-elsewhere"
+        ],
+        "testsExcluded": 5
+      }
+    },
     "reassigned-alias.test.ts": {
       "tasks": 3,
       "wrapperSites": [
@@ -229,6 +267,31 @@
         "testsExcluded": 2
       }
     },
+    "rewritten-namespace-call.test.ts": {
+      "tasks": 3,
+      "wrapperSites": [
+        "wrapper@10",
+        "wrapper@12"
+      ],
+      "next": {
+        "reasons": [
+          "registered-elsewhere"
+        ],
+        "testsExcluded": 7
+      }
+    },
+    "rewritten-namespace-export.test.ts": {
+      "tasks": 2,
+      "wrapperSites": [
+        "wrapper@6"
+      ],
+      "next": {
+        "reasons": [
+          "registered-elsewhere"
+        ],
+        "testsExcluded": 2
+      }
+    },
     "var-redeclaration.test.ts": {
       "tasks": 3,
       "wrapperSites": [
@@ -243,10 +306,55 @@
       }
     }
   },
+  "knownTitles": [
+    {
+      "path": "rewritten-namespace-call.test.ts",
+      "kind": "missing-test",
+      "item": "registered by the rewrite",
+      "reason": "The default engine does not read a namespace alias.",
+      "waitsOn": "the next engine becoming the default"
+    },
+    {
+      "path": "rewritten-namespace-export.test.ts",
+      "kind": "missing-test",
+      "item": "registered by the rewrite",
+      "reason": "The default engine does not read a namespace alias.",
+      "waitsOn": "the next engine becoming the default"
+    },
+    {
+      "path": "rewritten-namespace-call.test.ts",
+      "kind": "missing-hook",
+      "item": "beforeEach@rewritten-namespace-call.test.ts:9",
+      "reason": "The default engine does not read a namespace alias.",
+      "waitsOn": "the next engine becoming the default"
+    },
+    {
+      "path": "rewritten-namespace-export.test.ts",
+      "kind": "missing-hook",
+      "item": "beforeEach@rewritten-namespace-export.test.ts:5",
+      "reason": "Neither engine reads a namespace alias through an import.",
+      "waitsOn": "namespace aliases read across an import"
+    },
+    {
+      "path": "parameter-property.test.ts",
+      "kind": "missing-test",
+      "item": "registered by the rewrite",
+      "reason": "The default engine reads the `var` as the hook the parameter holds.",
+      "waitsOn": "the next engine becoming the default"
+    },
+    {
+      "path": "rewritten-namespace-call.test.ts",
+      "kind": "missing-test",
+      "item": "registered by the rewrite",
+      "reason": "The default engine does not read a namespace alias.",
+      "waitsOn": "the next engine becoming the default"
+    }
+  ],
   "blindUnderCurrent": [
     "alias-of-reassigned.test.ts",
     "annotated-binding.test.ts",
     "array-redeclaration.test.ts",
+    "catch-redeclaration.test.ts",
     "compound-assignment.test.ts",
     "destructured-redeclaration.test.ts",
     "destructuring-assignment.test.ts",
@@ -255,6 +363,7 @@
     "for-of-assignment.test.ts",
     "live-export.test.ts",
     "nested-redeclaration.test.ts",
+    "parameter-redeclaration.test.ts",
     "reassigned-alias.test.ts",
     "reassigned-export-barrel.test.ts",
     "reassigned-export.test.ts",

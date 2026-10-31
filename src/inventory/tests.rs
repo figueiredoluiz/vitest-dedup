@@ -558,7 +558,6 @@ fn a_hooks_only_wrapper_runs_nothing_but_hooks() {
         "async function setup() { beforeEach(() => {}); return local }",
         "const setup = async (n) => beforeEach(() => {}, n)",
         "function setup() { const config = globalConfig; beforeEach(() => {}, config) }",
-        "let api = v; api = { beforeEach: helpers.cases }; function setup() { api.beforeEach(() => {}) }",
         "function setup(timeout) { beforeEach(() => {}, timeout) }",
         "var setup = function () { beforeEach(() => {}) }; var setup = helpers.cases",
     ] {
@@ -568,6 +567,11 @@ fn a_hooks_only_wrapper_runs_nothing_but_hooks() {
             "{open}"
         );
     }
+    let rewritten = "let api = v; api = { beforeEach: helpers.cases }; function setup() { api.beforeEach(() => {}) }\nsetup()";
+    assert_eq!(
+        wrapper_calls(&format!("{header}{rewritten}"), &files),
+        ["wrapper@4", "wrapper@5"]
+    );
 }
 
 /// A name's value is known only when one declaration binds it and nothing writes it: each way of
@@ -665,6 +669,89 @@ fn a_binding_rewritten_any_way_may_register_tests() {
             "{declared}"
         );
     }
+}
+
+/// Every declaration of a binding counts: a `var` naming a parameter or a catch binding is that
+/// binding, and it holds what it was handed until the `var` runs. A type sharing a name does not.
+#[test]
+fn a_var_naming_a_parameter_or_catch_binding_may_register_tests() {
+    let files = [(
+        "cases.ts",
+        "import { test } from 'vitest'\nexport function cases() { test('hidden', () => {}) }",
+    )];
+    let header = "import { test, beforeEach } from 'vitest'\nimport { cases } from './cases'\n";
+    let body = "hook(() => {}); var hook = beforeEach";
+    for source in [
+        format!("function setup(hook) {{ {body} }}"),
+        format!("const setup = function (hook) {{ {body} }}"),
+        format!("const setup = (hook) => {{ {body} }}"),
+        format!("const o = {{ setup(hook) {{ {body} }} }}"),
+        format!("function setup(hook = cases) {{ {body} }}"),
+        format!("function setup({{ hook }}) {{ {body} }}"),
+        format!("function setup({{ a: [hook] }}) {{ {body} }}"),
+        format!("try {{ throw cases }} catch (hook) {{ {body} }}"),
+        format!("class K {{ constructor(private hook) {{ {body} }} }}"),
+        format!("class K {{ constructor(readonly hook = cases) {{ {body} }} }}"),
+    ] {
+        assert_eq!(
+            wrapper_calls(&format!("{header}{source}"), &files)
+                .first()
+                .map(String::as_str),
+            Some("wrapper@3"),
+            "{source}"
+        );
+    }
+    for source in [
+        "type t = number; const t = test; t('x', () => {})",
+        "const t = test; type t = number; t('x', () => {})",
+        "interface t { a: 1 }; const t = test; t('x', () => {})",
+        "function other(hook) { return hook }; var hook = beforeEach; hook(() => {})",
+        "const other = (hook) => hook; var hook = beforeEach; hook(() => {})",
+    ] {
+        assert_eq!(
+            wrapper_calls(&format!("{header}{source}"), &files),
+            Vec::<String>::new(),
+            "{source}"
+        );
+    }
+}
+
+/// A namespace alias anything rewrites may hold anything, and so may all that is read from it.
+#[test]
+fn a_rewritten_namespace_alias_may_register_tests() {
+    let files = [(
+        "cases.ts",
+        "import { test } from 'vitest'\nexport function cases() { test('hidden', () => {}) }",
+    )];
+    let header = "import * as v from 'vitest'\nimport { cases } from './cases'\n";
+    let rewritten = "let api = v; api = { beforeEach: cases }\n";
+    for read in [
+        "api.beforeEach(() => {})",
+        "api.test('x', () => {})",
+        "api.describe('s', () => {})",
+        "const b = api.beforeEach; b(() => {})",
+        "const { beforeEach: b } = api; b(() => {})",
+        "const other = api; other.beforeEach(() => {})",
+        "(1 ? api.test : api.it)('x', () => {})",
+    ] {
+        assert_eq!(
+            wrapper_calls(&format!("{header}{rewritten}{read}"), &files),
+            ["wrapper@4"],
+            "{read}"
+        );
+        assert_eq!(
+            wrapper_calls(&format!("{header}const api = v\n{read}"), &files),
+            Vec::<String>::new(),
+            "{read}"
+        );
+    }
+    assert_eq!(
+        wrapper_calls(
+            &format!("{header}var api = v; var api = {{ beforeEach: cases }}\napi.beforeEach(() => {{}})"),
+            &files
+        ),
+        ["wrapper@4"]
+    );
 }
 
 /// A hook read as a global is the API until the module writes that global, under any spelling of
