@@ -1,0 +1,55 @@
+{
+  "files": {
+    "helper-write-control.test.ts": {
+      "tasks": 3,
+      "wrapperSites": [],
+      "next": {}
+    },
+    "helper-write.test.ts": {
+      "tasks": 3,
+      "wrapperSites": [],
+      "next": {
+        "reasons": [
+          "order-dependent-state"
+        ],
+        "testsExcluded": 1
+      },
+      "nextToday": {},
+      "waitsOn": "writes inside a helper a test calls"
+    },
+    "method-mutation-control.test.ts": {
+      "tasks": 3,
+      "wrapperSites": [],
+      "next": {}
+    },
+    "method-mutation.test.ts": {
+      "tasks": 3,
+      "wrapperSites": [],
+      "next": {
+        "reasons": [
+          "order-dependent-state"
+        ],
+        "testsExcluded": 1
+      },
+      "nextToday": {},
+      "waitsOn": "mutation through methods and properties"
+    },
+    "try-assignment-control.test.ts": {
+      "tasks": 3,
+      "wrapperSites": [],
+      "next": {}
+    },
+    "try-assignment.test.ts": {
+      "tasks": 3,
+      "wrapperSites": [],
+      "next": {},
+      "nextToday": {
+        "reasons": [
+          "order-dependent-state"
+        ],
+        "testsExcluded": 2
+      },
+      "waitsOn": "an assignment in `try` read as a reset"
+    }
+  }
+}
