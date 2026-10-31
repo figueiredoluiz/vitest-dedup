@@ -1090,7 +1090,12 @@ fn owned_findings(path: &str, corpus: FileCorpus) -> crate::rules::Outcome {
         threshold: 100,
         source: "test".to_owned(),
     };
-    crate::rules::run(&[(path.into(), corpus.tests)], &config)
+    crate::rules::run_with_suites(
+        &[(path.into(), corpus.tests)],
+        &[(path.into(), corpus.suites)],
+        &config,
+        &[],
+    )
 }
 
 /// A derived suite table has no proven prefix yet; a direct suite retains row detection.
@@ -1137,3 +1142,5 @@ fn row_names_refuse_derived_suite_prefixes() {
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].titles, ["scope > row", "scope > row"]);
 }
+
+mod suites;
