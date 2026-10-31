@@ -1,0 +1,37 @@
+{
+  "files": {
+    "closed.test.ts": {
+      "tasks": 2,
+      "wrapperSites": [
+        "hook-wrapper@5"
+      ],
+      "next": {}
+    },
+    "rewritten.test.ts": {
+      "tasks": 3,
+      "wrapperSites": [
+        "wrapper@5"
+      ],
+      "next": {
+        "reasons": [
+          "registered-elsewhere"
+        ],
+        "testsExcluded": 1
+      },
+      "wrapperSitesToday": [
+        "hook-wrapper@5"
+      ],
+      "nextToday": {},
+      "waitsOn": "globals the program rewrites"
+    }
+  },
+  "knownSites": [
+    {
+      "path": "rewritten.test.ts",
+      "kind": "missing-site",
+      "item": "test@5",
+      "reason": "`globalThis.beforeEach = cases` rewrites the global; the analyzer reads the name as the API.",
+      "waitsOn": "globals the program rewrites"
+    }
+  ]
+}

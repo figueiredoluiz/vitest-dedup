@@ -1,0 +1,363 @@
+{
+  "files": {
+    "alias-of-reassigned.test.ts": {
+      "tasks": 3,
+      "wrapperSites": [
+        "hook-wrapper@6",
+        "wrapper@7"
+      ],
+      "next": {
+        "reasons": [
+          "registered-elsewhere"
+        ],
+        "testsExcluded": 2
+      },
+      "wrapperSitesToday": [
+        "hook-wrapper@6",
+        "hook-wrapper@7"
+      ],
+      "nextToday": {
+        "reasons": [
+          "registered-elsewhere"
+        ],
+        "testsExcluded": 1
+      },
+      "waitsOn": "a binding's value known only when it is never rewritten"
+    },
+    "annotated-binding.test.ts": {
+      "tasks": 2,
+      "wrapperSites": [
+        "hook-wrapper@6",
+        "hook-wrapper@7"
+      ],
+      "next": {},
+      "wrapperSitesToday": [
+        "wrapper@6",
+        "wrapper@7"
+      ],
+      "nextToday": {
+        "reasons": [
+          "registered-elsewhere"
+        ],
+        "testsExcluded": 2
+      },
+      "waitsOn": "a type annotation told apart from a second declaration"
+    },
+    "array-redeclaration.test.ts": {
+      "tasks": 3,
+      "wrapperSites": [
+        "hook-wrapper@6",
+        "wrapper@7"
+      ],
+      "next": {
+        "reasons": [
+          "registered-elsewhere"
+        ],
+        "testsExcluded": 2
+      },
+      "wrapperSitesToday": [
+        "hook-wrapper@6",
+        "hook-wrapper@7"
+      ],
+      "nextToday": {
+        "reasons": [
+          "registered-elsewhere"
+        ],
+        "testsExcluded": 1
+      },
+      "waitsOn": "a binding's value known only when it is never rewritten"
+    },
+    "compound-assignment.test.ts": {
+      "tasks": 3,
+      "wrapperSites": [
+        "hook-wrapper@6",
+        "wrapper@7"
+      ],
+      "next": {
+        "reasons": [
+          "registered-elsewhere"
+        ],
+        "testsExcluded": 2
+      }
+    },
+    "destructured-redeclaration.test.ts": {
+      "tasks": 3,
+      "wrapperSites": [
+        "hook-wrapper@6",
+        "wrapper@7"
+      ],
+      "next": {
+        "reasons": [
+          "registered-elsewhere"
+        ],
+        "testsExcluded": 2
+      },
+      "wrapperSitesToday": [
+        "hook-wrapper@6",
+        "hook-wrapper@7"
+      ],
+      "nextToday": {
+        "reasons": [
+          "registered-elsewhere"
+        ],
+        "testsExcluded": 1
+      },
+      "waitsOn": "a binding's value known only when it is never rewritten"
+    },
+    "destructuring-assignment.test.ts": {
+      "tasks": 3,
+      "wrapperSites": [
+        "hook-wrapper@6",
+        "wrapper@7"
+      ],
+      "next": {
+        "reasons": [
+          "registered-elsewhere"
+        ],
+        "testsExcluded": 2
+      }
+    },
+    "direct-eval.test.ts": {
+      "tasks": 3,
+      "wrapperSites": [
+        "hook-wrapper@6",
+        "wrapper@7"
+      ],
+      "next": {
+        "reasons": [
+          "registered-elsewhere"
+        ],
+        "testsExcluded": 2
+      },
+      "wrapperSitesToday": [
+        "hook-wrapper@6",
+        "hook-wrapper@7"
+      ],
+      "nextToday": {
+        "reasons": [
+          "registered-elsewhere"
+        ],
+        "testsExcluded": 1
+      },
+      "waitsOn": "a direct eval treated as writing any binding"
+    },
+    "exported-hook-alias.test.ts": {
+      "tasks": 3,
+      "wrapperSites": [
+        "hook-wrapper@6",
+        "wrapper@7"
+      ],
+      "next": {
+        "reasons": [
+          "registered-elsewhere"
+        ],
+        "testsExcluded": 2
+      },
+      "wrapperSitesToday": [
+        "hook-wrapper@6",
+        "hook-wrapper@7"
+      ],
+      "nextToday": {
+        "reasons": [
+          "registered-elsewhere"
+        ],
+        "testsExcluded": 1
+      },
+      "waitsOn": "an exported hook keeping the hook-argument rule"
+    },
+    "for-of-assignment.test.ts": {
+      "tasks": 3,
+      "wrapperSites": [
+        "hook-wrapper@6",
+        "wrapper@7"
+      ],
+      "next": {
+        "reasons": [
+          "registered-elsewhere"
+        ],
+        "testsExcluded": 2
+      }
+    },
+    "live-export.test.ts": {
+      "tasks": 3,
+      "wrapperSites": [
+        "hook-wrapper@6",
+        "wrapper@8"
+      ],
+      "next": {
+        "reasons": [
+          "registered-elsewhere"
+        ],
+        "testsExcluded": 2
+      }
+    },
+    "nested-redeclaration.test.ts": {
+      "tasks": 3,
+      "wrapperSites": [
+        "hook-wrapper@6",
+        "wrapper@7"
+      ],
+      "next": {
+        "reasons": [
+          "registered-elsewhere"
+        ],
+        "testsExcluded": 2
+      }
+    },
+    "reassigned-alias.test.ts": {
+      "tasks": 3,
+      "wrapperSites": [
+        "hook-wrapper@16",
+        "wrapper@17"
+      ],
+      "next": {
+        "reasons": [
+          "registered-elsewhere"
+        ],
+        "testsExcluded": 4
+      }
+    },
+    "reassigned-export-barrel.test.ts": {
+      "tasks": 3,
+      "wrapperSites": [
+        "hook-wrapper@6",
+        "wrapper@7"
+      ],
+      "next": {
+        "reasons": [
+          "registered-elsewhere"
+        ],
+        "testsExcluded": 2
+      }
+    },
+    "reassigned-export.test.ts": {
+      "tasks": 3,
+      "wrapperSites": [
+        "hook-wrapper@6",
+        "wrapper@7"
+      ],
+      "next": {
+        "reasons": [
+          "registered-elsewhere"
+        ],
+        "testsExcluded": 2
+      }
+    },
+    "reassigned-helper.test.ts": {
+      "tasks": 3,
+      "wrapperSites": [
+        "hook-wrapper@6",
+        "wrapper@7"
+      ],
+      "next": {
+        "reasons": [
+          "registered-elsewhere"
+        ],
+        "testsExcluded": 2
+      }
+    },
+    "reassigned-hook.test.ts": {
+      "tasks": 3,
+      "wrapperSites": [
+        "hook-wrapper@6",
+        "wrapper@7"
+      ],
+      "next": {
+        "reasons": [
+          "registered-elsewhere"
+        ],
+        "testsExcluded": 2
+      }
+    },
+    "reassigned-local.test.ts": {
+      "tasks": 3,
+      "wrapperSites": [
+        "hook-wrapper@18",
+        "wrapper@19"
+      ],
+      "next": {
+        "reasons": [
+          "registered-elsewhere"
+        ],
+        "testsExcluded": 4
+      }
+    },
+    "reassigned-namespace.test.ts": {
+      "tasks": 3,
+      "wrapperSites": [
+        "hook-wrapper@6",
+        "wrapper@7"
+      ],
+      "next": {
+        "reasons": [
+          "registered-elsewhere"
+        ],
+        "testsExcluded": 2
+      }
+    },
+    "var-redeclaration.test.ts": {
+      "tasks": 3,
+      "wrapperSites": [
+        "hook-wrapper@6",
+        "wrapper@7"
+      ],
+      "next": {
+        "reasons": [
+          "registered-elsewhere"
+        ],
+        "testsExcluded": 2
+      }
+    }
+  },
+  "knownSites": [
+    {
+      "path": "alias-of-reassigned.test.ts",
+      "kind": "missing-site",
+      "item": "test@7",
+      "reason": "A copy of a rewritten hook alias keeps the hook origin, so the helper reads as hooks-only.",
+      "waitsOn": "a binding's value known only when it is never rewritten"
+    },
+    {
+      "path": "array-redeclaration.test.ts",
+      "kind": "missing-site",
+      "item": "test@7",
+      "reason": "A `var` array pattern replaces the helper, and redeclarations are read from identifiers only.",
+      "waitsOn": "a binding's value known only when it is never rewritten"
+    },
+    {
+      "path": "destructured-redeclaration.test.ts",
+      "kind": "missing-site",
+      "item": "test@7",
+      "reason": "A `var` object pattern replaces the helper, and redeclarations are read from identifiers only.",
+      "waitsOn": "a binding's value known only when it is never rewritten"
+    },
+    {
+      "path": "direct-eval.test.ts",
+      "kind": "missing-site",
+      "item": "test@7",
+      "reason": "A direct `eval` writes the binding, which no scope analysis sees.",
+      "waitsOn": "a direct eval treated as writing any binding"
+    }
+  ],
+  "blindUnderCurrent": [
+    "alias-of-reassigned.test.ts",
+    "annotated-binding.test.ts",
+    "array-redeclaration.test.ts",
+    "compound-assignment.test.ts",
+    "destructured-redeclaration.test.ts",
+    "destructuring-assignment.test.ts",
+    "direct-eval.test.ts",
+    "exported-hook-alias.test.ts",
+    "for-of-assignment.test.ts",
+    "live-export.test.ts",
+    "nested-redeclaration.test.ts",
+    "reassigned-alias.test.ts",
+    "reassigned-export-barrel.test.ts",
+    "reassigned-export.test.ts",
+    "reassigned-helper.test.ts",
+    "reassigned-hook.test.ts",
+    "reassigned-local.test.ts",
+    "reassigned-namespace.test.ts",
+    "var-redeclaration.test.ts"
+  ]
+}
