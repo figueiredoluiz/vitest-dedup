@@ -5,6 +5,7 @@
 import { test } from 'vitest'
 
 declare const key: string
+/** Takes any value. */
 declare function use(value: unknown): void
 
 test('one', () => {

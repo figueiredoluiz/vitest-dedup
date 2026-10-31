@@ -5,6 +5,11 @@
       "wrapperSites": [],
       "next": {}
     },
+    "shared-declaration.test.ts": {
+      "tasks": 2,
+      "wrapperSites": [],
+      "next": {}
+    },
     "truncated.test.ts": {
       "tasks": 2,
       "wrapperSites": [],

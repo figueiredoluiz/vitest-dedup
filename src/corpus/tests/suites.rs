@@ -59,6 +59,16 @@ fn another_forms_depth_does_not_exclude_a_test() {
     let corpus = read(&beside, 2);
     assert!(corpus.tests.iter().all(|test| test.exclusion.is_none()));
     assert_eq!(corpus.tests[0].key, corpus.tests[1].key);
+    for declaration in [
+        format!("const big = {sum}; test('t', () => {{ use(big) }}); test('t', () => {{ use(big) }})"),
+        format!(
+            "function big() {{ return {sum} }}; test('t', () => {{ use(big()) }}); test('t', () => {{ use(big()) }})"
+        ),
+    ] {
+        let corpus = read(&format!("{IMPORTS}{declaration}"), 2);
+        assert!(corpus.tests.iter().all(|test| test.exclusion.is_none()));
+        assert_eq!(corpus.tests[0].key, corpus.tests[1].key);
+    }
     let mut classes = "class A0 { v() { return 1 } } ".to_owned();
     for level in 1..=65 {
         let below = level - 1;

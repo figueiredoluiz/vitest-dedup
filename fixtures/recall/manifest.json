@@ -7831,6 +7831,29 @@
           ]
         }
       ]
+    },
+    {
+      "name": "duplicate-test-deep-declaration",
+      "path": "duplicate-test-deep-declaration",
+      "rule": "duplicate-test",
+      "role": "positive",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-01",
+      "expectedTests": 2,
+      "expectedIncomplete": false,
+      "expectedUnresolved": 0,
+      "expectedFindings": [
+        {
+          "rule": "duplicate-test",
+          "severity": "error",
+          "titles": [
+            "one",
+            "two"
+          ]
+        }
+      ],
+      "expectedAbsent": []
     }
   ],
   "knownFalsePositiveBaseline": 1,

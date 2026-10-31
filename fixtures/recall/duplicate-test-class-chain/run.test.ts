@@ -3,6 +3,7 @@
 // Rendering these by content doubles per level, so a run that does not bound it never finishes.
 import { test } from 'vitest'
 
+/** Takes any value. */
 declare function use(value: unknown): void
 
 test('one', () => {

@@ -2,6 +2,7 @@
 // must say so, or a clean run would read as if these two had been compared.
 import { expect, test } from 'vitest'
 
+/** Takes any value. */
 declare function use(value: unknown): void
 
 test('one', () => {

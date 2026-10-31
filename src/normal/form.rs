@@ -275,7 +275,9 @@ impl Normalizer<'_> {
     /// substitutions (a table row's cells), writes: deeper code can stop a match but never make one.
     pub(super) fn write_node(&mut self, node: NodeId, walk: &mut Walk, out: &mut String) {
         if self.nesting >= MAX_FORM_DEPTH {
-            self.truncated = true;
+            // A declaration's identity is cached and equals only itself, so its depth is not the
+            // reader's: two reads of it read the same code.
+            self.truncated |= !self.resolving;
             return self.write_deep(node, walk, out);
         }
         self.nesting += 1;

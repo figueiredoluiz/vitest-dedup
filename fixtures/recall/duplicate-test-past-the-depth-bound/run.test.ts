@@ -4,6 +4,7 @@
 // and the run incomplete: a silent, complete run would read as if they had been compared.
 import { test } from 'vitest'
 
+/** Takes any value. */
 declare function use(value: unknown): void
 
 test('one', () => {
