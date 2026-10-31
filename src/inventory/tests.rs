@@ -920,6 +920,52 @@ fn a_star_forwards_the_namespace_only_as_the_only_source_of_the_name() {
     );
 }
 
+/// What follows a `return` or `throw` in its statement list never runs, so it registers nothing;
+/// a function declared there is hoisted, and any other way past a statement stays reachable.
+#[test]
+fn a_statement_after_an_exit_registers_nothing() {
+    let header = "import { describe, test } from 'vitest'\n";
+    let found = |source: &str| -> Vec<String> {
+        sites(&format!("{header}{source}"), &[], false)
+            .into_iter()
+            .map(|site| site.split(':').next().unwrap().to_owned())
+            .collect()
+    };
+    let t = "test('t', () => {})";
+    for dead in [
+        format!("describe('s', () => {{ return; {t} }})"),
+        format!("describe('s', () => {{ throw new Error('x'); {t} }})"),
+        format!("describe('s', () => {{ return; {{ {t} }} }})"),
+        format!("describe('s', () => {{ return; if (1) {{ {t} }} }})"),
+        format!("describe('s', () => {{ return; describe('d', () => {{ {t} }}) }})"),
+        format!("describe('s', () => {{ return; const run = () => {{ {t} }}; run() }})"),
+    ] {
+        assert_eq!(found(&dead), ["suite@2"], "{dead}");
+    }
+    assert_eq!(
+        wrapper_calls(
+            &format!("{header}function setup() {{ return; {t} }}\nsetup()"),
+            &[]
+        ),
+        Vec::<String>::new()
+    );
+    for live in [
+        format!("describe('s', () => {{ {t}; return }})"),
+        format!("describe('s', () => {{ if (1) return; {t} }})"),
+        format!("describe('s', () => {{ try {{ return }} finally {{ {t} }} }})"),
+        format!("describe('s', () => {{ switch (1) {{ case 1: return; {t} }} }})"),
+    ] {
+        assert_eq!(found(&live), ["suite@2", "test@2"], "{live}");
+    }
+    assert_eq!(
+        wrapper_calls(
+            &format!("{header}function setup() {{ helper(); return; function helper() {{ {t} }} }}\nsetup()"),
+            &[]
+        ),
+        ["wrapper@2", "wrapper@3"]
+    );
+}
+
 /// A hook read as a global is the API until the module writes that global, under any spelling of
 /// its key; a key only known when it runs may be that global.
 #[test]

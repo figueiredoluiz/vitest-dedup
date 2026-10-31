@@ -16,7 +16,7 @@ mod tree;
 
 pub use resolve::{resolve, resolve_file};
 pub use scopes::{Declaration, Imported, Name, Reference, Scopes, Symbol, SymbolId};
-pub use syntax::{bound_symbols, export_name, property_name};
+pub use syntax::{bound_symbols, export_name, member_name, property_name};
 pub use tree::{Field, NodeId, Span, Tree};
 
 use std::path::Path;

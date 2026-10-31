@@ -158,7 +158,12 @@ fn suite_local_names_and_unknown_activation() {
         0,
         "child order is part of the complete block"
     );
-    for prefix in ["describe.runIf(false)", "describe.skipIf(true)"] {
+    for prefix in [
+        "describe.runIf(false)",
+        "describe.skipIf(true)",
+        "describe['runIf'](false)",
+        "describe['skipIf'](true)",
+    ] {
         let changed = block.replacen("describe", prefix, 1);
         assert_eq!(suite_count(&format!("{IMPORTS}{changed};{changed}"), 2), 0);
     }

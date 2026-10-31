@@ -2,7 +2,7 @@
 
 use super::Normalizer;
 use crate::framework::Chain;
-use crate::lang::{property_name, Field, NodeId};
+use crate::lang::{member_name, property_name, Field, NodeId};
 use serde_json::Value;
 
 impl Normalizer<'_> {
@@ -13,26 +13,24 @@ impl Normalizer<'_> {
             Field::Value(Value::Bool(value)) => Some(*value),
             _ => None,
         };
-        for node in std::iter::once(callee).chain(tree.descendants(callee)) {
-            if tree.kind(node) != "CallExpression" {
-                continue;
-            }
-            let Some(member) = tree.child(node, "callee").map(|node| tree.inner(node)) else {
-                return false;
-            };
-            let meaning = tree
-                .child(member, "property")
-                .and_then(|property| tree.text(property, "name"))
-                .and_then(|name| self.setting.dialect.chain_member(name));
-            let enabling = match meaning {
-                Some(Chain::RunWhen) => true,
-                Some(Chain::SkipWhen) => false,
-                _ => continue,
-            };
-            let values = tree.list(node, "arguments");
-            if values.len() != 1 || values[0].and_then(boolean) != Some(enabling) {
-                return false;
-            }
+        let conditions_hold = std::iter::once(callee)
+            .chain(tree.descendants(callee))
+            .filter(|&node| tree.kind(node) == "CallExpression")
+            .filter_map(|node| {
+                let member = tree.inner(tree.child(node, "callee")?);
+                let name = member_name(tree, member)?;
+                match self.setting.dialect.chain_member(name)? {
+                    Chain::RunWhen => Some((node, true)),
+                    Chain::SkipWhen => Some((node, false)),
+                    _ => None,
+                }
+            })
+            .all(|(node, enabling)| {
+                let values = tree.list(node, "arguments");
+                values.len() == 1 && values[0].and_then(boolean) == Some(enabling)
+            });
+        if !conditions_hold {
+            return false;
         }
         arguments.iter().skip(1).all(|&argument| {
             let argument = tree.inner(argument);
@@ -47,13 +45,12 @@ impl Normalizer<'_> {
                             {
                                 return false;
                             }
-                            let Some(name) = property_name(tree, property) else {
-                                return false;
-                            };
-                            !matches!(
-                                self.setting.dialect.chain_member(name),
-                                Some(Chain::Skip | Chain::Todo)
-                            ) || tree.child(property, "value").and_then(boolean) == Some(false)
+                            property_name(tree, property).is_some_and(|name| {
+                                !matches!(
+                                    self.setting.dialect.chain_member(name),
+                                    Some(Chain::Skip | Chain::Todo)
+                                ) || tree.child(property, "value").and_then(boolean) == Some(false)
+                            })
                         })
                 }
                 _ => false,

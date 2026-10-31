@@ -298,8 +298,8 @@ const RUST_MODULES = {
   'src/normal/rows.rs': 90,
   'src/normal/row_identity.rs': 95,
   'src/normal/titles.rs': 93,
-  // Active suite admission: measured at 94.12% (48/51 lines).
-  'src/normal/suites.rs': 94,
+  // Active suite admission: measured at 98.08% (51/52 lines).
+  'src/normal/suites.rs': 98,
   'src/corpus.rs': 99,
   // Whole-suite collection: measured at 93.60% (117/125 lines).
   'src/corpus/suites.rs': 93,

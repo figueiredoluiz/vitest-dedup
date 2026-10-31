@@ -181,10 +181,6 @@
       "reason": "False positive: a test after `return` never registers, and the inventory still counts it."
     },
     {
-      "id": "recall-absent|describe-return-tail|duplicate-test|run.test.ts:12,run.test.ts:8",
-      "reason": "False positive: a test after `return` never registers, and the inventory still counts it."
-    },
-    {
       "id": "recall-miss|describe-finally-break|duplicate-test|suite > live,visible",
       "reason": "A hook after an unconditional exit never registers, and the suite context still reads it, so equal tests key apart."
     },
@@ -405,12 +401,8 @@
       "reason": "The next engine counts a helper's call and the tests its file spells; the default engine inlines what the helper registers."
     },
     {
-      "id": "recall-tests|local-helper-return-tail|all|4",
+      "id": "recall-tests|local-helper-return-tail|all|3",
       "reason": "The next engine counts a helper's call and the tests its file spells; the default engine inlines what the helper registers."
-    },
-    {
-      "id": "recall-tests|describe-return-tail|all|3",
-      "reason": "False positive: a test after `return` never registers, and the inventory still counts it."
     },
     {
       "id": "recall-tests|local-helper-null-destructure|all|3",
@@ -623,6 +615,18 @@
     {
       "id": "recall-miss|duplicate-each-row-imported-constants|duplicate-each-row|tags fast,tags fast",
       "reason": "The next-engine row value proof does not resolve imported constants, bigint values or tagged tables; these repeated rows remain unproved."
+    },
+    {
+      "id": "recall-tests|duplicate-suite-computed-condition|all|3",
+      "reason": "The next engine reads a bracket condition as the dotted form, whose skipped children still report; the default engine cannot read it."
+    },
+    {
+      "id": "recall-extra|duplicate-suite-computed-condition|duplicate-test|run.test.ts:13,run.test.ts:7",
+      "reason": "The next engine reads a bracket condition as the dotted form, whose skipped children still report; the default engine cannot read it."
+    },
+    {
+      "id": "recall-extra|duplicate-suite-computed-condition|duplicate-test-name|run.test.ts:13,run.test.ts:7|[\"skipped > child\",\"skipped > child\"]",
+      "reason": "The next engine reads a bracket condition as the dotted form, whose skipped children still report; the default engine cannot read it."
     }
   ]
 }
