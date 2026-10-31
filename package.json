@@ -30,10 +30,12 @@
     "docs/vitest-surface/"
   ],
   "scripts": {
+    "probe": "node scripts/dev/probe.mjs",
+    "revert-proof": "node scripts/dev/revert-proof.mjs",
     "verify:fast": "node scripts/dev/verify.mjs fast",
     "verify:full": "node scripts/dev/verify.mjs full",
     "hooks:install": "node scripts/dev/verify.mjs install",
-    "test:dev-checks": "node --test scripts/dev/verify.test.mjs scripts/check/run-action-tests.test.mjs scripts/check/check-docstrings.test.mjs",
+    "test:dev-checks": "node --test scripts/dev/verify.test.mjs scripts/dev/dev-tools.test.mjs scripts/check/run-action-tests.test.mjs scripts/check/check-docstrings.test.mjs",
     "test": "node scripts/check/run-npm-tests.mjs",
     "test:action": "node scripts/check/run-action-tests.mjs",
     "test:check-lib": "node --test scripts/check/check-behavior-runtime.test.mjs scripts/check/lib/collection-oracle.test.mjs scripts/check/lib/hooks-differential.test.mjs scripts/check/lib/oracle-cases.test.mjs scripts/check/lib/next-duplicates.test.mjs scripts/check/lib/fixture-directives.test.mjs scripts/check/lib/excluded-share.test.mjs scripts/check/run-external-corpus.test.mjs scripts/release/release-comparison.test.mjs scripts/check/lib/external-corpus-retention.test.mjs scripts/check/lib/js-tokens.test.mjs scripts/check/lib/isolation.test.mjs scripts/check/lib/rust-test-modules.test.mjs scripts/check/lib/memory-corpus.test.mjs scripts/check/lib/memory-record.test.mjs scripts/check/lib/gate-main.test.mjs scripts/check/lib/run-analyzer.test.mjs scripts/check/lib/recall-runner.test.mjs scripts/check/lib/manifest-schema.test.mjs scripts/check/lib/corpus-labels.test.mjs scripts/check/lib/corpus-evaluation.test.mjs scripts/check/lib/corpus-comparison.test.mjs scripts/check/lib/output-equivalence.test.mjs scripts/check/evaluate-corpus.test.mjs scripts/check/check-output-equivalence.test.mjs scripts/check/check-mutation-score.test.mjs scripts/check/check-doc-accuracy.test.mjs scripts/check/check-name-leak.test.mjs scripts/check/check-secret-scan.test.mjs",

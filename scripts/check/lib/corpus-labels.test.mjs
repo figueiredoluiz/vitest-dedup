@@ -8,8 +8,9 @@ import test from 'node:test'
 import { fileURLToPath } from 'node:url'
 
 import {
-  buildRecallLabels,
   EXPECTATION_GROUPS,
+  blindRecallFiles,
+  buildRecallLabels,
   readRecallManifest,
   summarizeLabels,
 } from './corpus-labels.mjs'
@@ -340,18 +341,29 @@ test('summarizeLabels counts every kind and pending case', () => {
   )
 })
 
+test('a recall case declares its own blind files, each inside the case', () => {
+  const cases = [
+    { path: 'a', blindUnderCurrent: ['run.test.ts', 'other.test.ts'] },
+    { path: 'b' },
+  ]
+  assert.deepEqual(blindRecallFiles({ cases }), ['recall/a/run.test.ts', 'recall/a/other.test.ts'])
+  for (const blind of [[], 'run.test.ts', [1], ['../escape.test.ts'], ['/abs.test.ts']]) {
+    assert.throws(() => blindRecallFiles({ cases: [{ path: 'a', blindUnderCurrent: blind }] }), /blindUnderCurrent/)
+  }
+})
+
 test('the real recall manifest labels to the populations the recall gate counts', () => {
   const result = readRecallManifest(REAL_ROOT)
   const summary = summarizeLabels(result)
-  assert.equal(summary.cases, 280)
-  assert.equal(summary.byKind['expected-finding'], 237)
-  assert.equal(summary.byKind['expected-absent'], 201)
+  // Floors: a gate that measured less must fail, and adding a case must not edit this test.
+  assert.ok(summary.cases >= 280, `${summary.cases} cases`)
+  assert.ok(summary.byKind['expected-finding'] >= 237, 'expected findings')
+  assert.ok(summary.byKind['expected-absent'] >= 201, 'expected absences')
+  assert.ok(result.controls.length >= 36, 'controls')
   assert.equal(summary.byKind['known-miss'], 0)
   assert.equal(summary.byKind['known-false-positive'], 1)
-  assert.equal(summary.expectations, 439)
   assert.equal(summary.pendingCases, 0)
-  assert.equal(new Set(result.expectations.map((e) => e.id)).size, 439)
-  assert.equal(result.controls.length, 36)
+  assert.equal(new Set(result.expectations.map((e) => e.id)).size, summary.expectations)
   assert.ok(result.cases.every((c) => c.origin === 'synthetic' && c.verdict === 'generated'))
 })
 
