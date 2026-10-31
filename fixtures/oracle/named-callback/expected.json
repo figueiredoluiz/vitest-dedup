@@ -1,0 +1,36 @@
+{
+  "files": {
+    "declared.test.ts": {
+      "tasks": 2,
+      "wrapperSites": [],
+      "next": {},
+      "nextToday": {
+        "reasons": [
+          "named-callback"
+        ],
+        "testsExcluded": 1
+      },
+      "waitsOn": "tests whose callback is passed by name"
+    },
+    "reassigned.test.ts": {
+      "tasks": 2,
+      "wrapperSites": [],
+      "next": {
+        "reasons": [
+          "named-callback"
+        ],
+        "testsExcluded": 1
+      }
+    },
+    "shared.test.ts": {
+      "tasks": 3,
+      "wrapperSites": [],
+      "next": {
+        "reasons": [
+          "named-callback"
+        ],
+        "testsExcluded": 2
+      }
+    }
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "files": {
+    "case.test.ts": {
+      "tasks": 3,
+      "wrapperSites": [
+        "wrapper@7"
+      ],
+      "next": {
+        "reasons": [
+          "registered-elsewhere"
+        ],
+        "testsExcluded": 1
+      },
+      "wrapperSitesToday": [],
+      "nextToday": {},
+      "waitsOn": "exports that survive an import cycle"
+    }
+  },
+  "knownSites": [
+    {
+      "path": "case.test.ts",
+      "kind": "missing-site",
+      "item": "test@7",
+      "reason": "`outer` reaches its test only through the cycle, whose exports read as empty, so its call has no site.",
+      "waitsOn": "exports that survive an import cycle"
+    }
+  ]
+}

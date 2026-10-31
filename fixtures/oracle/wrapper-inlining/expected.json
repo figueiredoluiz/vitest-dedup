@@ -1,0 +1,18 @@
+{
+  "files": {
+    "wrapped.test.ts": {
+      "tasks": 3,
+      "wrapperSites": [
+        "wrapper@6"
+      ],
+      "next": {},
+      "nextToday": {
+        "reasons": [
+          "registered-elsewhere"
+        ],
+        "testsExcluded": 1
+      },
+      "waitsOn": "tests a wrapper registers compared where it is called"
+    }
+  }
+}
