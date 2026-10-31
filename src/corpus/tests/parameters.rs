@@ -359,3 +359,49 @@ fn parameterization_refuses_unproven_module_sources() {
         .all(|case| case.parameterization_key.is_none()));
     assert!(owned_findings("a.test.ts", corpus).findings.is_empty());
 }
+
+/// Deep external identities keep both owned duplicate pairs with margin below a 1 MiB stack.
+#[test]
+fn normalization_stack_preserves_owned_findings() {
+    std::thread::Builder::new()
+        .stack_size(768 * 1024)
+        .spawn(|| {
+            let source = include_str!("../../../fixtures/duplicates/normalization-stack.test.ts");
+            let corpus = eligible(source, 4);
+            let findings = owned_findings("a.test.ts", corpus).findings;
+            assert_eq!(findings.len(), 2, "{findings:#?}");
+            assert!(findings
+                .iter()
+                .all(|finding| finding.rule == Rule::DuplicateTest));
+            let titles: Vec<_> = findings
+                .iter()
+                .map(|finding| finding.titles.clone())
+                .collect();
+            assert_eq!(
+                titles,
+                vec![vec!["deep a", "deep b"], vec!["positive a", "positive b"]]
+            );
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
+/// Flat-form eligibility does not turn a partial trace into a consolidation proof.
+#[test]
+fn parameterization_requires_a_complete_substance_trace() {
+    let source = format!(
+        "{HEADER}const key = 'value';
+         test('partial one', () => {{ expect(1).toBe(1); class C {{ [key]() {{ return 1 }} }}; new C() }});
+         test('partial two', () => {{ expect(2).toBe(2); class C {{ [key]() {{ return 2 }} }}; new C() }});
+         test('complete one', () => {{ expect(3).toBe(3) }});
+         test('complete two', () => {{ expect(4).toBe(4) }});"
+    );
+    let corpus = eligible(&source, 4);
+    for case in &corpus.tests[..2] {
+        assert!(!case.trace_complete);
+        assert!(!case.trace.is_empty());
+        assert!(case.parameterization_key.is_none());
+    }
+    only_candidate(corpus, ["complete one", "complete two"]);
+}

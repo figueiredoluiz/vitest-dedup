@@ -383,21 +383,12 @@ impl Normalizer<'_> {
         );
     }
 
-    /// [`Self::write_node`] below the depth bound.
-    fn write_kind(&mut self, node: NodeId, walk: &mut Walk, out: &mut String) {
+    /// Writes terminal forms outside the recursive frame so their formatting temporaries do not
+    /// consume stack space at every level of a deep expression.
+    #[inline(never)]
+    fn write_atom(&mut self, node: NodeId, walk: &mut Walk, out: &mut String) -> bool {
         let tree = self.tree;
-        let kind = tree.kind(node);
-        match kind {
-            "TSAsExpression"
-            | "TSSatisfiesExpression"
-            | "TSNonNullExpression"
-            | "TSTypeAssertion"
-            | "ParenthesizedExpression" => {
-                if let Some(inner) = tree.child(node, "expression") {
-                    return self.write_node(inner, walk, out);
-                }
-            }
-            "Identifier" | "JSXIdentifier" => return self.write_identifier(node, walk, out),
+        match tree.kind(node) {
             "PrivateIdentifier" => {
                 let name = tree.text(node, "name").unwrap_or_default();
                 let owner = walk
@@ -419,7 +410,7 @@ impl Normalizer<'_> {
                         let _ = write!(out, "#?{name}");
                     }
                 }
-                return;
+                return true;
             }
             // A tag reads the raw text, so `` String.raw`\n` `` is not a line break.
             "TemplateElement"
@@ -428,7 +419,7 @@ impl Normalizer<'_> {
                     .is_some_and(|literal| tagged(tree, literal)) =>
             {
                 let _ = write!(out, "R{}", quasi_text(tree, node, "raw"));
-                return;
+                return true;
             }
             // An untagged constant template is the string it spells. Runtime structural forms
             // keep its kind; flat forms of type-level values keep the value too.
@@ -447,7 +438,7 @@ impl Normalizer<'_> {
                         .unwrap_or(Value::Null);
                     let _ = write!(out, "L{cooked}");
                 }
-                return;
+                return true;
             }
             "Literal" => {
                 if walk.structural && (walk.trace || walk.in_type == 0) {
@@ -475,7 +466,7 @@ impl Normalizer<'_> {
                         out.push_str(&value(tree, node, "raw").to_string());
                     }
                 }
-                return;
+                return true;
             }
             "JSXText" => {
                 let _ = write!(
@@ -483,9 +474,32 @@ impl Normalizer<'_> {
                     "J{:?}",
                     jsx_text(tree.text(node, "value").unwrap_or_default())
                 );
-                return;
+                return true;
             }
             _ => {}
+        }
+        false
+    }
+
+    /// [`Self::write_node`] below the depth bound.
+    fn write_kind(&mut self, node: NodeId, walk: &mut Walk, out: &mut String) {
+        let tree = self.tree;
+        let kind = tree.kind(node);
+        match kind {
+            "TSAsExpression"
+            | "TSSatisfiesExpression"
+            | "TSNonNullExpression"
+            | "TSTypeAssertion"
+            | "ParenthesizedExpression" => {
+                if let Some(inner) = tree.child(node, "expression") {
+                    return self.write_node(inner, walk, out);
+                }
+            }
+            "Identifier" | "JSXIdentifier" => return self.write_identifier(node, walk, out),
+            _ => {}
+        }
+        if self.write_atom(node, walk, out) {
+            return;
         }
         // `function () {}` is `() => {}` when it never reads its own `this`, `arguments` or
         // `new.target`, and is the callback being normalized, which the runner only calls. Any
