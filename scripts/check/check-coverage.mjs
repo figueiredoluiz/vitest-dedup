@@ -279,6 +279,7 @@ const RUST_MODULES = {
   // dialect's own tests and by the extractor reading it.
   'src/framework.rs': 100,
   'src/framework/vitest.rs': 100,
+  'src/framework/vitest/titles.rs': 87,
   // The next core, measured when it landed. What stays uncovered is mostly a `None` arm for a
   // node shape the ESTree serialization never produces (a specifier without `local`, a member
   // without `property`).
@@ -295,8 +296,10 @@ const RUST_MODULES = {
   'src/normal/form.rs': 90,
   'src/normal/identity.rs': 90,
   'src/normal/rows.rs': 90,
+  'src/normal/titles.rs': 93,
   'src/corpus.rs': 99,
   'src/rules.rs': 100,
+  'src/rules/names.rs': 100,
 }
 
 // Re-pinned 2026-09-19, after `check-mutation-score.mjs` and then the memory gates' five modules

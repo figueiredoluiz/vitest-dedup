@@ -1323,3 +1323,84 @@ fn the_next_engine_reads_the_owned_fixtures() {
         .collect();
     assert!(failed.is_empty(), "{failed:#?}");
 }
+
+/// The name port reaches reporters, severity gates and line suppressions over the owned source.
+#[test]
+fn next_name_findings_preserve_titles_severity_and_suppression() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = include_str!("../fixtures/oracle/name-collisions/cases.test.ts");
+    write(directory.path(), "cases.test.ts", source);
+    let environment = [("VITEST_DEDUP_ENGINE", "next")];
+    let result = run_with(
+        directory.path(),
+        &[
+            "--rule",
+            "duplicate-test=off",
+            "--rule",
+            "cross-file-duplicate=off",
+        ],
+        &environment,
+    );
+    assert_eq!(result.json["testsAnalyzed"], 18);
+    let findings = result.json["findings"].as_array().unwrap();
+    assert_eq!(findings.len(), 4, "{}", result.json_text);
+    assert!(findings.iter().all(
+        |finding| finding["rule"] == "duplicate-test-name" && finding["severity"] == "warning"
+    ));
+    let streamed: Vec<_> = result
+        .jsonl
+        .iter()
+        .filter(|record| record["type"] == "finding")
+        .collect();
+    assert_eq!(streamed.len(), 4);
+    assert_eq!(
+        streamed
+            .iter()
+            .map(|finding| &finding["titles"])
+            .collect::<Vec<_>>(),
+        findings
+            .iter()
+            .map(|finding| &finding["titles"])
+            .collect::<Vec<_>>()
+    );
+    for (severity, expected_exit) in [("off", 0), ("warning", 0), ("error", 1)] {
+        let output = assert_cmd::Command::cargo_bin("vitest-dedup")
+            .unwrap()
+            .arg(directory.path())
+            .args([
+                "--rule",
+                "duplicate-test=off",
+                "--rule",
+                "cross-file-duplicate=off",
+                "--rule",
+                &format!("duplicate-test-name={severity}"),
+                "--reporters",
+                "jsonl",
+            ])
+            .envs(environment)
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(expected_exit));
+    }
+    let suppressed = source.replace(
+        "test('collision'",
+        "// vitest-dedup-disable-next-line the name is intentional\ntest('collision'",
+    );
+    write(directory.path(), "cases.test.ts", suppressed);
+    let result = run_with(
+        directory.path(),
+        &[
+            "--rule",
+            "duplicate-test=off",
+            "--rule",
+            "cross-file-duplicate=off",
+        ],
+        &environment,
+    );
+    assert_eq!(
+        result.json["findings"].as_array().unwrap().len(),
+        3,
+        "{}",
+        result.json_text
+    );
+}

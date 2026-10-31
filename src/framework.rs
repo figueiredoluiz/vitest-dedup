@@ -109,9 +109,19 @@ pub struct Namespace {
     pub canonical: &'static str,
 }
 
+/// A framework's rendering of literal row-title arguments, with unknown cells retained.
+pub type RenderTitle = fn(
+    &str,
+    &[Option<serde_json::Value>],
+    Option<&serde_json::Map<String, serde_json::Value>>,
+    usize,
+) -> Option<String>;
+
 /// One framework's test API, described as data.
 #[derive(Debug)]
 pub struct Dialect {
+    /// Renders a row title only when the supplied values establish its runtime text.
+    pub render_title: RenderTitle,
     /// Modules whose imports are the API.
     pub api_modules: &'static [&'static str],
     /// The `import.meta` member that carries the API in source files, when the framework has one.

@@ -619,6 +619,70 @@
     {
       "id": "recall-tests|foreach-known-array|all|2",
       "reason": "The default engine expands a `forEach` over a known array per element; the next engine counts its registration and the test beside it."
+    },
+    {
+      "id": "recall-extra|duplicate-suite-globals-config|duplicate-test-name|auth.test.ts:16,auth.test.ts:6|[\"login > accepts valid credentials\",\"login > accepts valid credentials\"]",
+      "reason": "The default engine reports the copied suite once and suppresses its child name findings; the next engine does not port suite suppression yet."
+    },
+    {
+      "id": "recall-extra|duplicate-suite-globals-config|duplicate-test-name|auth.test.ts:10,auth.test.ts:20|[\"login > rejects a bad password\",\"login > rejects a bad password\"]",
+      "reason": "The default engine reports the copied suite once and suppresses its child name findings; the next engine does not port suite suppression yet."
+    },
+    {
+      "id": "recall-extra|duplicate-suite-nested|duplicate-test-name|auth.test.ts:20,auth.test.ts:30|[\"auth > credentials > accepts valid credentials\",\"auth > credentials > accepts valid credentials\"]",
+      "reason": "The default engine reports the copied suite once and suppresses its child name findings; the next engine does not port suite suppression yet."
+    },
+    {
+      "id": "recall-extra|duplicate-suite-nested|duplicate-test-name|auth.test.ts:24,auth.test.ts:34|[\"auth > credentials > rejects a bad password\",\"auth > credentials > rejects a bad password\"]",
+      "reason": "The default engine reports the copied suite once and suppresses its child name findings; the next engine does not port suite suppression yet."
+    },
+    {
+      "id": "recall-absent|duplicate-suite-positive|duplicate-test-name|auth.test.ts:21,auth.test.ts:31|[\"login > accepts valid credentials\",\"login > accepts valid credentials\"]",
+      "reason": "The default engine reports the copied suite once and suppresses its child name findings; the next engine does not port suite suppression yet."
+    },
+    {
+      "id": "recall-extra|duplicate-suite-positive|duplicate-test-name|auth.test.ts:25,auth.test.ts:35|[\"login > rejects a bad password\",\"login > rejects a bad password\"]",
+      "reason": "The default engine reports the copied suite once and suppresses its child name findings; the next engine does not port suite suppression yet."
+    },
+    {
+      "id": "recall-miss|duplicate-test-name-function-title|duplicate-test-name|parsesAnEmptyDocument,parsesAnEmptyDocument",
+      "reason": "The functions supply titles for todos, which have no callback; the next engine excludes these cases until title comparison has separate eligibility."
+    },
+    {
+      "id": "recall-extra|mixed-cross-file-and-suite|duplicate-test-name|ledger.test.ts:20,ledger.test.ts:26|[\"audit > stamps the ledger page\",\"audit > stamps the ledger page\"]",
+      "reason": "The default engine reports the copied suite once and suppresses its child name findings; the next engine does not port suite suppression yet."
+    },
+    {
+      "id": "recall-extra|mixed-duplicate-suite-suppresses-children|duplicate-test-name|billing.test.ts:22,billing.test.ts:32|[\"billing > applies tax to a subtotal\",\"billing > applies tax to a subtotal\"]",
+      "reason": "The default engine reports the copied suite once and suppresses its child name findings; the next engine does not port suite suppression yet."
+    },
+    {
+      "id": "recall-extra|mixed-duplicate-suite-suppresses-children|duplicate-test-name|billing.test.ts:26,billing.test.ts:36|[\"billing > renders an invoice total\",\"billing > renders an invoice total\"]",
+      "reason": "The default engine reports the copied suite once and suppresses its child name findings; the next engine does not port suite suppression yet."
+    },
+    {
+      "id": "recall-extra|mixed-near-duplicate-and-suite|duplicate-test-name|main.test.ts:18,main.test.ts:24|[\"taxes > applies tax to a subtotal\",\"taxes > applies tax to a subtotal\"]",
+      "reason": "The default engine reports the copied suite once and suppresses its child name findings; the next engine does not port suite suppression yet."
+    },
+    {
+      "id": "recall-extra|mixed-parameterization-and-suite|duplicate-test-name|main.test.ts:19,main.test.ts:25|[\"taxes > applies tax to a subtotal\",\"taxes > applies tax to a subtotal\"]",
+      "reason": "The default engine reports the copied suite once and suppresses its child name findings; the next engine does not port suite suppression yet."
+    },
+    {
+      "id": "recall-extra|mixed-subsumed-and-suite|duplicate-test-name|main.test.ts:19,main.test.ts:25|[\"taxes > applies tax to a subtotal\",\"taxes > applies tax to a subtotal\"]",
+      "reason": "The default engine reports the copied suite once and suppresses its child name findings; the next engine does not port suite suppression yet."
+    },
+    {
+      "id": "recall-extra|mixed-suite-and-each-row|duplicate-test-name|main.test.ts:18,main.test.ts:24|[\"taxes > applies tax to a subtotal\",\"taxes > applies tax to a subtotal\"]",
+      "reason": "The default engine reports the copied suite once and suppresses its child name findings; the next engine does not port suite suppression yet."
+    },
+    {
+      "id": "recall-extra|mixed-suite-and-redundant-hook|duplicate-test-name|billing.test.ts:30,billing.test.ts:46|[\"billing > orders > reads the meter\",\"billing > orders > reads the meter\"]",
+      "reason": "The default engine reports the copied suite once and suppresses its child name findings; the next engine does not port suite suppression yet."
+    },
+    {
+      "id": "recall-extra|mixed-suite-copy-with-internal-duplicates|duplicate-test-name|billing.test.ts:25,billing.test.ts:31|[\"billing > applies tax to a subtotal\",\"billing > applies tax to a subtotal\"]",
+      "reason": "The default engine reports the copied suite once and suppresses its child name findings; the next engine does not port suite suppression yet."
     }
   ]
 }

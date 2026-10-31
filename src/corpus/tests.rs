@@ -58,6 +58,52 @@ fn by_title(source: &str) -> HashMap<String, TestCase> {
 const HEADER: &str =
     "import { test, describe, beforeEach, aroundEach, expect, vi } from 'vitest'\n";
 
+/// Runs an owned oracle source through the corpus and asserts counts before name findings.
+fn assert_owned_names(source: &str, path: &str, tests: usize, excluded: usize, expected: &[&str]) {
+    let corpus = corpora(&[(path, source)], &[path]).remove(0);
+    assert_eq!(corpus.tests.len(), tests);
+    assert_eq!(
+        corpus
+            .tests
+            .iter()
+            .filter(|case| case.exclusion.is_some())
+            .count(),
+        excluded
+    );
+    let config = crate::config::Config {
+        root: ".".into(),
+        include: Vec::new(),
+        include_is_explicit: false,
+        exclude: Vec::new(),
+        rules: Default::default(),
+        threshold: 100,
+        source: "test".to_owned(),
+    };
+    let outcome = crate::rules::run(&[(path.into(), corpus.tests)], &config);
+    let names: Vec<_> = outcome
+        .findings
+        .iter()
+        .filter(|finding| finding.rule == crate::model::Rule::DuplicateTestName)
+        .collect();
+    assert_eq!(names.len(), expected.len(), "{names:#?}");
+    for (finding, title) in names.iter().zip(expected) {
+        assert_eq!(finding.titles, [*title, *title]);
+        assert_eq!(finding.locations.len(), 2);
+    }
+}
+
+/// The same owned source the collection oracle runs: names, rows, scope and deferred exclusions.
+#[test]
+fn owned_name_collisions_keep_distinct_rows_and_exclusions() {
+    assert_owned_names(
+        include_str!("../../fixtures/oracle/name-collisions/cases.test.ts"),
+        "cases.test.ts",
+        18,
+        4,
+        &["collision", "round 1", "round 2", "object [object Object]"],
+    );
+}
+
 /// Asserts which titled tests share a same-file key.
 fn keys(source: &str, equal: &[(&str, &str)], differ: &[(&str, &str)]) {
     let tests = by_title(&format!("{HEADER}{source}"));
@@ -957,4 +1003,25 @@ fn skip_marks_a_case_inert_without_changing_its_key() {
         "inertness is recorded beside the key, never inside it: skip is not what the test checks"
     );
     assert_ne!(skipped.inert, plain.inert);
+}
+
+/// Exact runtime names from the owned formatter controls; uncertain coercions must stay silent.
+#[test]
+fn owned_name_formats_match_runtime_without_widening_unknowns() {
+    assert_owned_names(
+        include_str!("../../fixtures/oracle/name-collisions/formats.test.ts"),
+        "formats.test.ts",
+        32,
+        0,
+        &[
+            "constant",
+            "array 1,,2,3",
+            "value 2",
+            "for A 1",
+            "for B 2",
+            "index 0/1",
+            "index 1/2",
+            "namedTitle",
+        ],
+    );
 }

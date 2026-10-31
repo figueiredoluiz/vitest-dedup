@@ -18,6 +18,7 @@ fn case(line: u32, site: u32, key: u64, module_key: u64) -> TestCase {
         },
         title: Some(format!("t{line}")),
         full_title: Some(format!("t{line}")),
+        name: Some(vec![format!("t{line}")]),
         row: None,
         key,
         module_key,
@@ -447,4 +448,141 @@ fn entries_order_and_equality_follow_where_the_case_is() {
         case: &case(3, 90, 1, 1),
     };
     assert!(earlier < left, "line and column order within one file");
+}
+
+/// Name collisions depend on file, title segments and distinct declarations, not callback keys.
+#[test]
+fn names_use_proven_segments_and_preserve_all_exclusions() {
+    let config = config_with(&[
+        (Rule::DuplicateTest, Severity::Off),
+        (Rule::CrossFileDuplicate, Severity::Off),
+    ]);
+    let mut left = case(1, 10, 1, 1);
+    left.name = Some(vec!["suite".to_owned(), "name".to_owned()]);
+    let mut right = case(2, 20, 2, 2);
+    right.name = left.name.clone();
+    let files = [file("a.test.ts", vec![left.clone(), right.clone()])];
+    let result = run(&files, &config);
+    assert_eq!(result.findings.len(), 1);
+    assert_eq!(result.findings[0].rule, Rule::DuplicateTestName);
+    assert_eq!(result.findings[0].titles, ["suite > name", "suite > name"]);
+    for exclusion in [
+        Exclusion::EmptyBody,
+        Exclusion::NoCallback,
+        Exclusion::UnreadableCallback,
+        Exclusion::NamedCallback,
+        Exclusion::RegisteredInsideFunction,
+        Exclusion::RegisteredElsewhere,
+        Exclusion::OrderDependentState,
+        Exclusion::Benchmark,
+    ] {
+        right.exclusion = Some(exclusion);
+        assert!(
+            run(
+                &[file("a.test.ts", vec![left.clone(), right.clone()])],
+                &config
+            )
+            .findings
+            .is_empty(),
+            "{exclusion:?}"
+        );
+    }
+    right.exclusion = None;
+    for name in [
+        None,
+        Some(vec!["suite > name".to_owned()]),
+        Some(vec!["other".to_owned(), "name".to_owned()]),
+    ] {
+        right.name = name;
+        assert!(run(
+            &[file("a.test.ts", vec![left.clone(), right.clone()])],
+            &config
+        )
+        .findings
+        .is_empty());
+    }
+    right.name = left.name.clone();
+    assert!(run(
+        &[
+            file("a.test.ts", vec![left.clone()]),
+            file("b.test.ts", vec![right.clone()])
+        ],
+        &config
+    )
+    .findings
+    .is_empty());
+    right.span = left.span;
+    right.row = Some(1);
+    assert!(run(&[file("a.test.ts", vec![left, right])], &config)
+        .findings
+        .is_empty());
+}
+
+/// A name collision can coexist with a body duplicate; config and budget affect it independently.
+#[test]
+fn name_config_budget_and_coexisting_rules_are_independent() {
+    let mut cases = vec![case(1, 10, 1, 1), case(2, 20, 1, 1)];
+    for case in &mut cases {
+        case.name = Some(vec!["same".to_owned()]);
+    }
+    let files = [file("a.test.ts", cases)];
+    let result = run(&files, &config_with(&[]));
+    assert_eq!(
+        result
+            .findings
+            .iter()
+            .map(|finding| finding.rule)
+            .collect::<Vec<_>>(),
+        vec![Rule::DuplicateTest, Rule::DuplicateTestName]
+    );
+    let only_names = config_with(&[
+        (Rule::DuplicateTest, Severity::Off),
+        (Rule::DuplicateTestName, Severity::Error),
+    ]);
+    assert_eq!(
+        run(&files, &only_names).findings[0].severity,
+        Severity::Error
+    );
+    let exhausted = run_with_budget(&files, &only_names, 0);
+    assert!(exhausted.budget_exhausted);
+    assert!(exhausted.findings.is_empty());
+    assert_eq!(
+        run(
+            &files,
+            &config_with(&[(Rule::DuplicateTestName, Severity::Off)])
+        )
+        .findings
+        .len(),
+        1
+    );
+}
+
+/// Every distinct rendered title survives even when five tables share the same declaration set.
+#[test]
+fn name_clusters_keep_every_title_and_ignore_input_order() {
+    let cases: Vec<_> = (0..5)
+        .flat_map(|site| {
+            (0..2).map(move |row| {
+                let mut test = case(site + 1, site * 10, u64::from(site), u64::from(site));
+                test.row = Some(row);
+                test.name = Some(vec![format!("row {row}")]);
+                test
+            })
+        })
+        .collect();
+    let config = config_with(&[
+        (Rule::DuplicateTest, Severity::Off),
+        (Rule::CrossFileDuplicate, Severity::Off),
+    ]);
+    let expected = run(&[file("a.test.ts", cases.clone())], &config);
+    assert_eq!(expected.findings.len(), 2);
+    assert!(expected
+        .findings
+        .iter()
+        .all(|finding| finding.locations.len() == 5));
+    let reversed = run(
+        &[file("a.test.ts", cases.into_iter().rev().collect())],
+        &config,
+    );
+    assert_eq!(expected.findings, reversed.findings);
 }

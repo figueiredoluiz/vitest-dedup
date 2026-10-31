@@ -84,6 +84,9 @@ pub struct TestCase {
     /// The suite path joined with the title the way a report spells a participant, when every
     /// segment is a literal the source spells.
     pub full_title: Option<String>,
+    /// Proven title segments for name comparison, distinct from display text or raw patterns.
+    /// None when any segment, row rendering or registration multiplicity is unknown.
+    pub name: Option<Vec<String>>,
     /// Which row of its table, when it has one.
     pub row: Option<usize>,
     /// Equal for two tests of one file claimed to be duplicates.
@@ -294,6 +297,29 @@ pub fn file(
         }
     }
 
+    let table_site = |site: &Site| {
+        site.chain.iter().any(|member| {
+            matches!(
+                setting.dialect.chain_member(member),
+                Some(crate::framework::Chain::Table(_))
+            )
+        })
+    };
+    let suite_names: HashMap<NodeId, Option<String>> = found
+        .sites
+        .iter()
+        .filter(|site| site.kind == SiteKind::Registers(Registers::Suite))
+        .map(|site| {
+            (
+                site.node,
+                if table_site(site) {
+                    None
+                } else {
+                    normal::titles::title(&parsed, site.node)
+                },
+            )
+        })
+        .collect();
     // What each suite spells as its title, by its registering call: the segments of the suite
     // path a report names a participant by.
     let suite_titles: HashMap<NodeId, Option<String>> = found
@@ -325,6 +351,7 @@ pub fn file(
         span: at(site.span.start, site.span.end),
         title: site.title.clone(),
         full_title: None,
+        name: None,
         row: None,
         key: 0,
         module_key: 0,
@@ -494,7 +521,34 @@ pub fn file(
             segments.push(title);
             Some(segments.join(" > "))
         });
+        // Name comparison consumes values, not display fallbacks. In particular an unread table
+        // or a suite table cannot stand for its runtime names through a raw pattern.
+        let name_prefix: Option<Vec<String>> = suites
+            .iter()
+            .map(|scope| suite_names.get(structure.suites.get(scope)?)?.clone())
+            .collect();
+        let pattern = normal::titles::title(&parsed, site.node);
         for (index, (bound, every, unbound)) in rows.into_iter().enumerate() {
+            let name =
+                name_prefix
+                    .clone()
+                    .zip(pattern.as_deref())
+                    .and_then(|(mut segments, pattern)| {
+                        let title = if table_site(site) {
+                            let row = modifiers.rows.as_ref()?.get(index)?;
+                            let (arguments, fields) = normal::titles::row(&parsed, row);
+                            (setting.dialect.render_title)(
+                                pattern,
+                                &arguments,
+                                fields.as_ref(),
+                                index,
+                            )?
+                        } else {
+                            pattern.to_owned()
+                        };
+                        segments.push(title);
+                        Some(segments)
+                    });
             let normal_body = normalizer.substituted(body, bound, every);
             // A row whose every parameter is bound is the test it would be written out as.
             let chain = if table && every {
@@ -510,6 +564,7 @@ pub fn file(
                 key: digest(&key),
                 module_key: digest(&format!("{key}\u{1}{module_context}")),
                 full_title: full_title.clone(),
+                name,
                 inert: record.inert,
                 ..record.clone()
             });
@@ -530,6 +585,7 @@ pub fn file(
             span: at(start, start),
             title: None,
             full_title: None,
+            name: None,
             row: None,
             key: 0,
             module_key: 0,

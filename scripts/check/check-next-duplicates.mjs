@@ -2,7 +2,7 @@
 // The next engine's duplicate rules against the owned corpus: the spike's evaluator as a gate.
 //
 // The corpus gate pins the default engine, whose nine rules this repository ships. Under
-// `VITEST_DEDUP_ENGINE=next` exactly two of them run (`duplicate-test`,
+// `VITEST_DEDUP_ENGINE=next` three of them run (`duplicate-test`, `duplicate-test-name`,
 // `cross-file-duplicate`), and the fixture headers cannot say what that engine should claim --
 // the headers are the default engine's vocabulary. This gate runs the next engine over the
 // three fixture directories, reads the same expectation blocks, and asserts the ported rules'

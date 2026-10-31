@@ -2,16 +2,16 @@
 // `fixtures/duplicates`, `fixtures/observed` and `fixtures/mixed`.
 //
 // The shared fixture headers pin the default engine -- nine rules, one verdict vocabulary -- so
-// they cannot say what the next engine, which ports two rules, should do. This gate reads the
+// they cannot say what the next engine, whose ported rules are listed below, should do. This gate reads the
 // same headers and judges only the ported rules' pairwise claims, the way the spike evaluator
-// did: a positive `duplicate-test` or `cross-file-duplicate` expectation requires its
+// did: a positive expectation for any ported rule requires its
 // participants connected by that rule, in the spanning pairs it reports; a `rule=none` expectation forbids any ported rule from
 // linking its pairs; anything else the next engine links is a delta someone must adjudicate --
 // a fixture to fix, or an entry in `next-duplicates-known.json` with a reason. A known entry
 // whose delta stops being observed fails the gate, so an entry dies the moment the header or
 // the behavior moves.
 //
-// A rule outside the ported pair emitting under the next engine is a failure outright: its
+// A rule outside the ported set emitting under the next engine is a failure outright: its
 // expectations must move through the corpus gate's engine axis, never be satisfied silently.
 //
 // Nothing here judges a run pass or fail except the floors the caller asserts on top: a
@@ -20,7 +20,7 @@
 import { describeMatcher, findingMatches } from './recall-runner.mjs'
 
 /** The rules the next engine runs. */
-export const PORTED_RULES = new Set(['duplicate-test', 'cross-file-duplicate'])
+export const PORTED_RULES = new Set(['duplicate-test', 'duplicate-test-name', 'cross-file-duplicate'])
 
 /** The identity one participant is matched by, the way the spike evaluator matched: file:line. */
 function endpoint(participant) {
@@ -128,10 +128,16 @@ export function expectationEdges(fixtures) {
 const locationsOf = (finding) => finding.locations.map((location) => `${location.path}:${location.line}`).sort()
 
 /**
- * What of `expected` a next-engine finding can meet: the next engine renders no row titles, so a
- * matcher that names locations is read by them.
+ * Body findings retain their source pattern; name findings carry exact rendered titles, which
+ * must be checked even when two different title groups share the same declaration locations.
  */
-const readable = (expected) => (expected.locations ? { ...expected, titles: undefined } : expected)
+const readable = (expected) => (expected.locations && expected.rule !== 'duplicate-test-name' ? { ...expected, titles: undefined } : expected)
+
+/** A name finding's title distinguishes two row groups at the same pair of declarations. */
+const findingIdentity = (finding) => locationsOf(finding).join(',') + (finding.rule === 'duplicate-test-name' ? `|${JSON.stringify(finding.titles)}` : '')
+
+/** Missing name groups also stay distinct when their expected declaration locations agree. */
+const matcherIdentity = (expected) => (expected.locations ?? expected.titles ?? []).join(',') + (expected.rule === 'duplicate-test-name' && expected.locations && expected.titles ? `|${JSON.stringify(expected.titles)}` : '')
 
 /**
  * Judges one recall case: its ported expectations against what the next engine reported.
@@ -162,7 +168,7 @@ export function judgeRecall(testCase, records) {
   const expected = ported(testCase.expectedFindings)
   for (const matcher of expected) {
     if (!take(matcher)) {
-      delta('miss', matcher.rule, (matcher.locations ?? matcher.titles ?? []).join(','), `expected ${describeMatcher(matcher)}, which the next engine did not report`)
+      delta('miss', matcher.rule, matcherIdentity(matcher), `expected ${describeMatcher(matcher)}, which the next engine did not report`)
     }
   }
   for (const matcher of ported(testCase.knownMisses)) take(matcher)
@@ -170,11 +176,11 @@ export function judgeRecall(testCase, records) {
     const found = findings.find((finding) => findingMatches(finding, readable(matcher)))
     if (found) {
       matched.add(found)
-      delta('absent', matcher.rule, locationsOf(found).join(','), `${describeMatcher(matcher)} must stay absent, and the next engine reported it`)
+      delta('absent', matcher.rule, findingIdentity(found), `${describeMatcher(matcher)} must stay absent, and the next engine reported it`)
     }
   }
   for (const finding of findings.filter((candidate) => !matched.has(candidate))) {
-    delta('extra', finding.rule, locationsOf(finding).join(','), `the next engine reported ${finding.rule} at ${locationsOf(finding).join(', ')}, which the case does not expect`)
+    delta('extra', finding.rule, findingIdentity(finding), `the next engine reported ${finding.rule} at ${locationsOf(finding).join(', ')}, which the case does not expect`)
   }
   return { failures, judged: expected.length }
 }

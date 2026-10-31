@@ -10,6 +10,7 @@ use super::{
 
 pub mod config;
 pub mod projects;
+mod titles;
 
 /// Vitest.
 #[derive(Debug)]
@@ -58,6 +59,7 @@ macro_rules! member {
 
 /// Vitest's test API (`docs/vitest-surface.md` sections 1, 2, 4, 5, 6, 7, 8 and 12).
 pub static DIALECT: Dialect = Dialect {
+    render_title: titles::render,
     api_modules: &["vitest"],
     in_source_member: Some("vitest"),
     registrations: &[

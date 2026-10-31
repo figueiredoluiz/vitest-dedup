@@ -13,6 +13,8 @@ use std::cmp::Ordering;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
+mod names;
+
 /// The files of one run, as the engine retained them: each path relative to the analysis root,
 /// its cases in source order, rows in table order.
 pub type Files = [(PathBuf, Vec<TestCase>)];
@@ -98,6 +100,8 @@ pub fn run_with_budget(files: &Files, config: &Config, max_pair_comparisons: u64
             &mut findings,
         );
     }
+
+    budget_exhausted |= !names::run(files, config, &mut budget, &mut findings);
 
     let cross_file_severity = config.severity(Rule::CrossFileDuplicate);
     if cross_file_severity != Severity::Off {
@@ -197,7 +201,9 @@ fn emit(
                 let pairs: Vec<[Entry; 2]> = pairs
                     .into_iter()
                     .map(|(left, right)| [entries[left], entries[right]])
-                    .filter(|members| claimed.insert(declarations(members)))
+                    .filter(|members| {
+                        claimed.insert((declarations(members), name_claim(rule, members)))
+                    })
                     .collect();
                 if !budget.charge(pairs.len() as u64) {
                     return false;
@@ -208,7 +214,7 @@ fn emit(
             }
             GroupOutcome::Cluster(members) => {
                 let members: Vec<Entry> = members.iter().map(|&index| entries[index]).collect();
-                if !claimed.insert(declarations(&members)) {
+                if !claimed.insert((declarations(&members), name_claim(rule, &members))) {
                     continue;
                 }
                 if !budget.charge((members.len() - 1) as u64) {
@@ -237,10 +243,31 @@ fn over(rule: Rule, severity: Severity, members: &[Entry<'_>], message: String) 
             })
             .collect(),
         registration_files: Vec::new(),
-        titles: members.iter().map(|member| title(member)).collect(),
+        titles: members
+            .iter()
+            .map(|member| {
+                if rule == Rule::DuplicateTestName {
+                    member
+                        .case
+                        .name
+                        .as_ref()
+                        .expect("name findings require a proven name")
+                        .join(" > ")
+                } else {
+                    title(member)
+                }
+            })
+            .collect(),
         inert: members.iter().map(|member| member.case.inert).collect(),
         baselined: false,
     }
+}
+
+/// Distinct rendered names remain distinct claims even when the same two tables spell them.
+fn name_claim<'a>(rule: Rule, members: &[Entry<'a>]) -> Option<&'a Vec<String>> {
+    (rule == Rule::DuplicateTestName)
+        .then(|| members[0].case.name.as_ref())
+        .flatten()
 }
 
 /// A participant's name: its full title when every segment is spelled, else where it is declared,

@@ -281,7 +281,7 @@ fn run_with_engine(
         }
         writeln!(
             stderr,
-            "vitest-dedup: VITEST_DEDUP_ENGINE=next runs duplicate-test and cross-file-duplicate \
+            "vitest-dedup: VITEST_DEDUP_ENGINE=next runs duplicate-test, duplicate-test-name and cross-file-duplicate \
              only; the other rules do not run yet"
         )?;
     }
