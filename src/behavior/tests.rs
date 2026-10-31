@@ -6,8 +6,8 @@
 //! be proved by that test failing alone.
 
 use super::{trace_text, Trace};
-use crate::model::sha256_128;
 use crate::inventory::SiteKind;
+use crate::model::sha256_128;
 use crate::normal::CallbackForm;
 use std::collections::HashMap;
 
@@ -179,6 +179,7 @@ fn local_classes_render_by_content() {
         test('unprovable', () => { class F { [k]() {} } new F(); });
         test('bound-expression', () => { const G = class {}; new G(); });
         test('bound-twin', () => { const H = class {}; new H(); });
+        test('bound-different', () => { const I = class { m() {} }; new I(); });
     "#,
         &[],
     );
@@ -188,6 +189,11 @@ fn local_classes_render_by_content() {
         of(&events, "different-content")
     );
     assert_eq!(of(&events, "bound-expression"), of(&events, "bound-twin"));
+    assert_ne!(
+        of(&events, "bound-expression"),
+        of(&events, "bound-different"),
+        "two class expressions with different content never share a trace"
+    );
     assert!(!complete(&events, "unprovable"));
 }
 
@@ -841,11 +847,45 @@ fn statement_families_all_record() {
     assert!(of(&events, "try").iter().any(|event| event == "try"));
     assert!(of(&events, "try").iter().any(|event| event == "call:g:h"));
     assert!(of(&events, "try").iter().any(|event| event == "call:g:i"));
-    assert!(of(&events, "switch").iter().any(|event| event == "call:g:g"));
-    assert!(of(&events, "switch").iter().any(|event| event == "call:g:h"));
+    assert!(of(&events, "switch")
+        .iter()
+        .any(|event| event == "call:g:g"));
+    assert!(of(&events, "switch")
+        .iter()
+        .any(|event| event == "call:g:h"));
     let throw_return = of(&events, "throw-return");
     assert!(throw_return.iter().any(|event| event == "throw"));
     assert!(throw_return.iter().any(|event| event == "return"));
+}
+
+/// A do-while records its marker even when it is the only loop in the body.
+#[test]
+fn a_do_while_records_its_marker() {
+    let events = events(
+        r#"
+        test('dow', () => { do { g(); } while (c); });
+    "#,
+        &[],
+    );
+    assert!(of(&events, "dow").iter().any(|event| event == "loop"));
+}
+
+/// A function declaration in a guarded statement position walks as deferred behavior.
+#[test]
+fn a_guarded_function_declaration_walks_deferred() {
+    let events = events(
+        r#"
+        test('guarded', () => { if (c) function f() { g(); } f(); });
+    "#,
+        &[],
+    );
+    assert!(
+        of(&events, "guarded")
+            .iter()
+            .any(|event| event == "deferred-call:g:g"),
+        "the declaration's body is deferred: {:?}",
+        of(&events, "guarded")
+    );
 }
 
 /// A `for` head that is not a declaration still walks its initializer expression.
@@ -921,7 +961,8 @@ fn then_splice_declines_its_remaining_preconditions() {
     for title in ["not-then", "inner-not-call", "chained", "reads-this"] {
         let evts = of(&events, title);
         assert!(
-            evts.iter().any(|event| event.starts_with("deferred-call:g:g")),
+            evts.iter()
+                .any(|event| event.starts_with("deferred-call:g:g")),
             "{title} keeps its deferred body: {evts:?}"
         );
     }
@@ -952,9 +993,15 @@ fn expression_families_all_record() {
     assert!(operators.iter().any(|event| event == "call:g:h"));
     assert!(operators.iter().any(|event| event == "call:g:i"));
     assert!(operators.iter().any(|event| event == "call:g:g"));
-    assert!(of(&events, "object").iter().any(|event| event == "call:g:k"));
-    assert!(of(&events, "object").iter().any(|event| event == "call:g:v"));
-    assert!(of(&events, "nested-fn").iter().any(|event| event == "deferred-call:g:g"));
+    assert!(of(&events, "object")
+        .iter()
+        .any(|event| event == "call:g:k"));
+    assert!(of(&events, "object")
+        .iter()
+        .any(|event| event == "call:g:v"));
+    assert!(of(&events, "nested-fn")
+        .iter()
+        .any(|event| event == "deferred-call:g:g"));
 }
 
 /// Callee-path arms: a computed member callee, a private method, `this`, a fluent chain with
@@ -984,7 +1031,9 @@ fn callee_paths_all_spell_their_path() {
     );
     let optional = of(&events, "optional-callee");
     assert!(
-        optional.iter().any(|event| event.starts_with("call:g:obj.run")),
+        optional
+            .iter()
+            .any(|event| event.starts_with("call:g:obj.run")),
         "an optional call spells the dotted path: {optional:?}"
     );
 }
@@ -1035,9 +1084,15 @@ fn qualified_chains_record_verbatim() {
     "#,
         &[],
     );
-    assert!(of(&events, "soft-chain").iter().any(|event| event == "assert:chain:expect.soft.to.be.ok"));
-    assert!(of(&events, "poll-chain").iter().any(|event| event == "assert:chain:expect.poll.to.be.ok"));
-    assert!(of(&events, "plain-chain").iter().any(|event| event == "assert:chain:expect.to.be.ok"));
+    assert!(of(&events, "soft-chain")
+        .iter()
+        .any(|event| event == "assert:chain:expect.soft.to.be.ok"));
+    assert!(of(&events, "poll-chain")
+        .iter()
+        .any(|event| event == "assert:chain:expect.poll.to.be.ok"));
+    assert!(of(&events, "plain-chain")
+        .iter()
+        .any(|event| event == "assert:chain:expect.to.be.ok"));
 }
 
 /// The Trace accessors answer over a recorded trace; the corpus rules read them later.
@@ -1045,24 +1100,19 @@ fn qualified_chains_record_verbatim() {
 fn trace_accessors_answer() {
     let evts = events(
         r#"
-        test('one', () => { g(); });
+        test('two', () => { g(); h(); });
     "#,
         &[],
     );
-    let (events, complete, _) = &evts["one"];
+    let (events, complete, _) = &evts["two"];
     let trace = Trace {
         events: events.iter().map(|event| sha256_128(event)).collect(),
         complete: *complete,
     };
-    assert_eq!(trace.len(), 1);
+    assert_eq!(trace.len(), 2, "the trace counts every event");
     assert!(!trace.is_empty());
+    assert!(Trace::default().is_empty(), "the default trace is empty");
 }
-
-
-
-
-
-
 
 /// Destructuring forms that carry no provable rewrite keep their name tags or plain numbers:
 /// array patterns contribute position, defaults and computed keys are unsupported shapes, and a
@@ -1079,15 +1129,27 @@ fn unrewritable_destructuring_forms_stay_named() {
         test('for-of-head', () => { for (const x of pair) { use(x); } });
         test('catch-param', () => { try { g(); } catch (e) { use(e); } });
     "#,
-        &[("helpers.ts", "export const o = {}\nexport const pair = [1, 2]\n")],
+        &[(
+            "helpers.ts",
+            "export const o = {}\nexport const pair = [1, 2]\n",
+        )],
     );
     let array_pattern = of(&events, "array-pattern");
     assert!(
-        array_pattern.iter().any(|event| event.starts_with("call:g:use args=")),
+        array_pattern
+            .iter()
+            .any(|event| event.starts_with("call:g:use args=")),
         "the array pattern's read stays an ordinary event: {array_pattern:?}"
     );
     // Every body traces to completion: an unsupported shape is not an abstention.
-    for title in ["array-pattern", "default", "rest", "computed-key", "for-of-head", "catch-param"] {
+    for title in [
+        "array-pattern",
+        "default",
+        "rest",
+        "computed-key",
+        "for-of-head",
+        "catch-param",
+    ] {
         assert!(complete(&events, title), "{title} traces whole");
     }
 }
@@ -1141,14 +1203,18 @@ fn remaining_class_and_callee_paths_record() {
     "#,
         &[],
     );
-    for title in ["accessor", "super", "shadowed-expect", "dynamic-import", "tagged"] {
+    for title in [
+        "accessor",
+        "super",
+        "shadowed-expect",
+        "dynamic-import",
+        "tagged",
+    ] {
         assert!(complete(&events, title), "{title} traces whole");
     }
     let accessor = of(&events, "accessor");
     assert!(
-        accessor
-            .iter()
-            .any(|event| event.contains("static-field")),
+        accessor.iter().any(|event| event.contains("static-field")),
         "the static accessor is a definition-time field: {accessor:?}"
     );
     // A method body is inert: `super.run()` shows up only inside the class content the shapes
@@ -1166,7 +1232,10 @@ fn remaining_class_and_callee_paths_record() {
         "a body-local shadowing the entry is not the API: {shadowed:?}"
     );
     let tagged = of(&events, "tagged");
-    assert!(tagged.is_empty(), "a tagged template records no event: {tagged:?}");
+    assert!(
+        tagged.is_empty(),
+        "a tagged template records no event: {tagged:?}"
+    );
 }
 
 /// The call form with a qualifier records its modifiers and values like the plain entry.
@@ -1179,8 +1248,12 @@ fn qualified_call_assertions_record() {
     "#,
         &[],
     );
-    assert!(of(&events, "soft-call").iter().any(|event| event.starts_with("assert:expect.soft.toBe(")));
-    assert!(of(&events, "poll-not").iter().any(|event| event.starts_with("assert:expect.poll.not.toBe(")));
+    assert!(of(&events, "soft-call")
+        .iter()
+        .any(|event| event.starts_with("assert:expect.soft.toBe(")));
+    assert!(of(&events, "poll-not")
+        .iter()
+        .any(|event| event.starts_with("assert:expect.poll.not.toBe(")));
 }
 
 /// Concise arrow callbacks splice and walk like their block spellings: the body is what the
@@ -1226,12 +1299,18 @@ fn remaining_statement_shapes_record() {
     ] {
         assert!(complete(&events, title), "{title} traces whole");
     }
+    assert!(
+        of(&events, "labeled").iter().any(|event| event == "loop"),
+        "the labeled body's loop is walked"
+    );
     let decl_for = of(&events, "decl-for");
     assert!(
         decl_for.iter().any(|event| event == "call:g:f"),
         "the declaration head's initializer is walked: {decl_for:?}"
     );
-    assert!(of(&events, "finally-only").iter().any(|event| event == "call:g:h"));
+    assert!(of(&events, "finally-only")
+        .iter()
+        .any(|event| event == "call:g:h"));
 }
 
 /// Type arguments on a constructor, a class bound to nothing usable, an imported class, and a
@@ -1247,9 +1326,18 @@ fn constructor_and_callee_paths_record() {
         test('member-callee', () => { const { run } = o; run(); });
         test('this-callee', () => { function bound() { this.run(); } });
     "#,
-        &[("helpers.ts", "export const o = { run() {} }\nexport class Factory {}\n")],
+        &[(
+            "helpers.ts",
+            "export const o = { run() {} }\nexport class Factory {}\n",
+        )],
     );
-    for title in ["typed-new", "uninitialized", "imported-class", "member-callee", "this-callee"] {
+    for title in [
+        "typed-new",
+        "uninitialized",
+        "imported-class",
+        "member-callee",
+        "this-callee",
+    ] {
         assert!(complete(&events, title), "{title} traces whole");
     }
     let typed = of(&events, "typed-new");
@@ -1297,8 +1385,12 @@ fn assertion_declines_reach_every_arm() {
             "{title} is no assertion: {evts:?}"
         );
     }
-    assert!(of(&events, "subjectless").iter().any(|event| event.starts_with("assert:expect.toBe(subject=()")));
-    assert!(of(&events, "matcher-typed").iter().any(|event| event.starts_with("assert:expect.toBe(")));
+    assert!(of(&events, "subjectless")
+        .iter()
+        .any(|event| event.starts_with("assert:expect.toBe(subject=()")));
+    assert!(of(&events, "matcher-typed")
+        .iter()
+        .any(|event| event.starts_with("assert:expect.toBe(")));
 }
 
 /// Destructuring shapes that reach the remaining pattern arms: quoted and nested keys, an
@@ -1319,7 +1411,10 @@ fn exotic_destructuring_patterns_record() {
         test('non-const', () => { let x = f(); use(x); });
         test('multi-declarator', () => { const y = f(), z = g(); use(y); });
     "#,
-        &[("helpers.ts", "export const o = { a: { b: 1 } }\nexport const xs = [{ a: 1 }]\n")],
+        &[(
+            "helpers.ts",
+            "export const o = { a: { b: 1 } }\nexport const xs = [{ a: 1 }]\n",
+        )],
     );
     for title in [
         "quoted-key",
@@ -1345,7 +1440,10 @@ fn a_class_with_with_statement_abstains() {
     "#,
         &[("helpers.ts", "export const o = {}\n")],
     );
-    assert!(!complete(&events, "with-body"), "a `with` in a class is unprovable");
+    assert!(
+        !complete(&events, "with-body"),
+        "a `with` in a class is unprovable"
+    );
 }
 
 /// A plain zero-parameter `function` continuation splices like an arrow: it reads neither the

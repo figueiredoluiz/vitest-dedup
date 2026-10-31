@@ -193,12 +193,27 @@ export const NEXT_CORE = {
   minimumScored: 320,
 }
 
+// The behavior trace, measured as its own scope for the same reason the normal forms are: it
+// feeds NC16 and NC17, whose claims will be exactly as strong as the tests that constrain this
+// code. Selected with `--scope trace` (`npm run mutants:trace`).
+export const TRACE = {
+  scope: [
+    { file: 'src/behavior.rs', minimumMutants: 0 }, // enumerated below
+    { file: 'src/behavior/dataflow.rs', minimumMutants: 0 }, // enumerated below
+  ],
+  // Floors recorded from the first measured run; 0 placeholders are replaced with the measured
+  // counts and score before the scope ships.
+  minimumScore: 0.0,
+  minimumScored: 0,
+}
+
 /** The scope `argv` selects, with the floors it is checked against. */
 export function selectScope(argv) {
   const named = argv.find((argument) => argument.startsWith('--scope'))
   if (named === undefined) return { scope: SCOPE, minimumScore: MINIMUM_SCORE, minimumScored: MINIMUM_SCORED }
-  assert.equal(named, '--scope=next-core', `unknown scope ${named}; the one named scope is --scope=next-core`)
-  return NEXT_CORE
+  if (named === '--scope=next-core') return NEXT_CORE
+  if (named === '--scope=trace') return TRACE
+  assert.fail(`unknown scope ${named}; the named scopes are --scope=next-core and --scope=trace`)
 }
 
 /**
