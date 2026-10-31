@@ -767,9 +767,6 @@ fn run_with_engine(
                 root: &config.root,
             };
             let relative = relativize_test_path(&file.path, &config.root);
-            // Inline suppressions are a claim about a file's findings, not about how its tests
-            // were read, so the next engine's files are scanned like the default path's.
-            inline_suppressions.extend(modes::scan_inline_suppressions(&source, relative.clone()));
             let (entry, partial) = engine.read(
                 &file.path,
                 &relative,

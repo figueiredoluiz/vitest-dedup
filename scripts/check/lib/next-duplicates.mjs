@@ -89,7 +89,7 @@ export function strayFindings(records) {
  * second are silent under next by design.
  *
  * @param {Map<string, object>} fixtures Parsed fixtures by file name (`parseFixture` results).
- * @returns {{required: {edge: string, rule: string, from: string}[], declared: string[], forbidden: {edge: string, from: string}[]}}
+ * @returns {{required: {edge: string, rule: string, from: string}[], declared: {edge: string, rule: string}[], forbidden: {edge: string, from: string}[]}}
  */
 export function expectationEdges(fixtures) {
   const required = []
@@ -98,15 +98,16 @@ export function expectationEdges(fixtures) {
   for (const [name, fixture] of fixtures) {
     for (const expectation of fixture.expectations ?? []) {
       if (expectation.pending) continue
-      // In source order, the way the engine orders a group; the serialized form sorts line 9 last.
+      // In the engine's group order: files by bytes, lines by number. The serialized form sorts
+      // line 9 last, and a locale puts `a.test.ts` before `B.test.ts`.
       const points = [...(expectation.participants ?? [])]
-        .sort((a, b) => a.file.localeCompare(b.file) || a.line - b.line)
+        .sort((a, b) => Buffer.compare(Buffer.from(a.file), Buffer.from(b.file)) || a.line - b.line)
         .map(endpoint)
       if (points.length < 2) continue
       if (PORTED_RULES.has(expectation.rule)) {
         // A group of up to four is reported as a chain of neighbouring pairs, so only neighbours
         // are required; every other pair is declared, and a cluster finding may link it.
-        for (const [left, right] of combinations(points)) declared.push(edgeKey(left, right))
+        for (const [left, right] of combinations(points)) declared.push({ edge: edgeKey(left, right), rule: expectation.rule })
         for (let i = 1; i < points.length; i += 1) {
           required.push({ edge: edgeKey(points[i - 1], points[i]), rule: expectation.rule, from: `${name}` })
         }
@@ -145,7 +146,8 @@ export function knownProblems(known) {
  *
  * @param {object} input
  * @param {{edge: string, rule: string, from: string}[]} input.required Edges that must be linked.
- * @param {string[]} [input.declared] Edges a positive expectation names without requiring them.
+ * @param {{edge: string, rule: string}[]} [input.declared] Edges a positive expectation names
+ *   without requiring them, with its rule.
  * @param {{edge: string, from: string}[]} input.forbidden Edges no ported rule may link.
  * @param {Map<string, Set<string>>} input.linked What the run linked.
  * @param {{id: string, reason: string}[]} input.known The adjudicated deltas.
@@ -155,9 +157,11 @@ export function knownProblems(known) {
 export function judge({ required, declared = [], forbidden, linked, known, scope }) {
   const failures = []
   const fired = new Set()
+  const missed = new Set()
   const miss = (edge, rule, from) => {
     const id = `miss|${scope}|${edge}|${rule}`
     fired.add(id)
+    missed.add(edge)
     failures.push({
       id,
       message: `FAIL ${from}: expected ${rule} to link ${edge.replaceAll('|', ' <-> ')}; the next engine linked ${
@@ -179,9 +183,25 @@ export function judge({ required, declared = [], forbidden, linked, known, scope
       })
     }
   }
-  const accounted = new Set([...required.map((r) => r.edge), ...declared, ...forbidden.map((f) => f.edge)])
+  const claims = [...required, ...declared]
+  const claimed = new Set(claims.map(({ edge, rule }) => `${edge}|${rule}`))
+  const named = new Set(claims.map(({ edge }) => edge))
+  const silenced = new Set(forbidden.map(({ edge }) => edge))
   for (const [edge, rules] of linked) {
-    if (accounted.has(edge)) continue
+    if (silenced.has(edge)) continue
+    // A pair an expectation names is still judged per rule: the other rule linking it is a claim
+    // nothing made. A miss already names what linked the pair instead.
+    for (const rule of rules) {
+      if (named.has(edge) && !missed.has(edge) && !claimed.has(`${edge}|${rule}`)) {
+        const id = `rule|${scope}|${edge}|${rule}`
+        fired.add(id)
+        failures.push({
+          id,
+          message: `FAIL ${scope}: ${rule} linked ${edge.replaceAll('|', ' <-> ')}, which the fixture expects from another rule`,
+        })
+      }
+    }
+    if (named.has(edge)) continue
     const id = `extra|${scope}|${edge}`
     fired.add(id)
     failures.push({

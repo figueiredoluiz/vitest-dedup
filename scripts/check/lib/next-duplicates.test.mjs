@@ -242,6 +242,43 @@ test('a group of three is required as a chain, and its third pair is declared, n
   assert.equal(broken.failures.length, 1, 'a participant left out of the chain is a miss')
 })
 
+test('files chain in byte order, the way the engine orders a group', () => {
+  const header = new Map([
+    ['a.test.ts', { expectations: [expectation('cross-file-duplicate', [['a.test.ts', 3], ['B.test.ts', 3], ['c.test.ts', 3]])] }],
+  ])
+  const { required, declared, forbidden } = expectationEdges(header)
+  const linked = pairEdges([
+    finding('cross-file-duplicate', [['d/B.test.ts', 3], ['d/a.test.ts', 3]]),
+    finding('cross-file-duplicate', [['d/a.test.ts', 3], ['d/c.test.ts', 3]]),
+  ])
+  assert.deepEqual(judge({ required, declared, forbidden, linked, known: [], scope: 'd' }).failures, [])
+
+  // UTF-8 puts U+FF01 before U+1F407; UTF-16 code units put them the other way round.
+  const wide = new Map([
+    ['a.test.ts', { expectations: [expectation('cross-file-duplicate', [['a.test.ts', 3], ['\u{1F407}.test.ts', 3], ['\uFF01.test.ts', 3]])] }],
+  ])
+  const chain = expectationEdges(wide)
+  const emitted = pairEdges([
+    finding('cross-file-duplicate', [['d/a.test.ts', 3], ['d/\uFF01.test.ts', 3]]),
+    finding('cross-file-duplicate', [['d/\uFF01.test.ts', 3], ['d/\u{1F407}.test.ts', 3]]),
+  ])
+  assert.deepEqual(judge({ ...chain, linked: emitted, known: [], scope: 'd' }).failures, [])
+})
+
+test('a pair an expectation names fails when the other rule links it too', () => {
+  const header = new Map([['a.test.ts', { expectations: [expectation('duplicate-test', [['a.test.ts', 3], ['a.test.ts', 6]])] }]])
+  const { required, declared, forbidden } = expectationEdges(header)
+  const expected = finding('duplicate-test', [['d/a.test.ts', 3], ['d/a.test.ts', 6]])
+  const other = finding('cross-file-duplicate', [['d/a.test.ts', 3], ['d/a.test.ts', 6]])
+  const clean = judge({ required, declared, forbidden, linked: pairEdges([expected]), known: [], scope: 'd' })
+  assert.deepEqual(clean.failures, [])
+  const outcome = judge({ required, declared, forbidden, linked: pairEdges([expected, other]), known: [], scope: 'd' })
+  assert.equal(outcome.failures.length, 1)
+  assert.match(outcome.failures[0].message, /cross-file-duplicate linked .* another rule/)
+  const held = [{ id: outcome.failures[0].id, reason: 'r' }]
+  assert.deepEqual(judge({ required, declared, forbidden, linked: pairEdges([expected, other]), known: held, scope: 'd' }).failures, [])
+})
+
 test('a known entry needs an id and a reason', () => {
   assert.deepEqual(knownProblems([{ id: 'a', reason: 'b' }]), [])
   assert.deepEqual(knownProblems({}), ['the known list must be a list of cases'])
