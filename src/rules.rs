@@ -1,4 +1,4 @@
-//! The findings the corpus supports: one rule per equality claim.
+//! The findings the corpus supports: one rule per comparison claim.
 //!
 //! A rule reads owned test, suite and hook records. Its equality key is the key
 //! the corpus computed, its participants are the cases themselves, and its severity comes from the
@@ -18,6 +18,7 @@ mod names;
 mod near;
 mod parameters;
 mod rows;
+mod subsumed;
 mod suites;
 
 /// The files of one run, as the engine retained them: each path relative to the analysis root,
@@ -206,6 +207,8 @@ fn run_all(
             &mut findings,
         );
     }
+
+    budget_exhausted |= !subsumed::run(files, config, &mut budget, &mut findings);
 
     twins.suppress(&mut findings);
     let (hook_scan_exhausted, hook_pairs_exhausted) =

@@ -2,8 +2,8 @@
 // The next engine's duplicate rules against the owned corpus: the spike's evaluator as a gate.
 //
 // The corpus gate pins the default engine, whose nine rules this repository ships. Under
-// `VITEST_DEDUP_ENGINE=next` eight of them run (`duplicate-test`, `duplicate-test-name`,
-// `duplicate-each-row`, `duplicate-suite`, `parameterization-candidate`, `near-duplicate-test`, `redundant-hook`, `cross-file-duplicate`), and the fixture headers cannot say what that engine should claim --
+// `VITEST_DEDUP_ENGINE=next` all nine run (`duplicate-test`, `duplicate-test-name`,
+// `duplicate-each-row`, `duplicate-suite`, `parameterization-candidate`, `near-duplicate-test`, `subsumed-test`, `redundant-hook`, `cross-file-duplicate`), and the fixture headers cannot say what that engine should claim --
 // the headers are the default engine's vocabulary. This gate runs the next engine over the
 // three fixture directories, reads the same expectation blocks, and asserts the ported rules'
 // pairwise claims: every required pair linked, every declared silence kept, every delta
@@ -102,7 +102,7 @@ export function runCli(argv) {
         expectations.push(...(result.expectations ?? []))
       }
     }
-    const { records } = runAnalyzerJsonl(binary, [target], ENV)
+    const { records } = runAnalyzerJsonl(binary, [target, '--rule', 'subsumed-test=warning'], ENV)
     const summary = records.find((record) => record.type === 'summary')
     if (!summary) throw new Error(`${target}: the run produced no summary record`)
     if (!(summary.testsAnalyzed > 0)) {
@@ -140,7 +140,7 @@ export function runCli(argv) {
   expectations.push(...recall.expectations)
   lines.push(`fixtures/recall: ${recall.cases} case(s), ${recall.testsAnalyzed} test(s) analyzed under next, ${recall.judged} ported expectation(s) judged`)
   const pending = Object.entries(pendingByRule(expectations)).map(([rule, count]) => `${rule} ${count}`)
-  lines.push(`waiting on a port: ${pending.join(', ')}`)
+  if (pending.length > 0) lines.push(`waiting on a port: ${pending.join(', ')}`)
   for (const entry of known) {
     if (!consumed.has(entry.id)) {
       failures.push({

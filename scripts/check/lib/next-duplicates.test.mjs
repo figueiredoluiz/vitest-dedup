@@ -62,7 +62,7 @@ test('a cluster finding covers every member pair', () => {
 
 test('a rule the next engine does not port links nothing here', () => {
   const linked = pairEdges([
-    finding('subsumed-test', [
+    finding('future-rule', [
       ['a.test.ts', 1],
       ['b.test.ts', 2],
     ]),
@@ -76,13 +76,13 @@ test('strayFindings names the findings of unported rules only', () => {
       ['a.test.ts', 1],
       ['a.test.ts', 2],
     ]),
-    finding('subsumed-test', [
+    finding('future-rule', [
       ['a.test.ts', 3],
       ['a.test.ts', 4],
     ]),
   ]
-  assert.deepEqual(strayFindings(records).map((record) => record.rule), ['subsumed-test'])
-  assert.equal(PORTED_RULES.has('subsumed-test'), false)
+  assert.deepEqual(strayFindings(records).map((record) => record.rule), ['future-rule'])
+  assert.equal(PORTED_RULES.has('subsumed-test'), true)
 })
 
 test('a positive expectation requires every participant pair; none forbids the rest', () => {
@@ -134,7 +134,7 @@ test('pending expectations and unported rules claim nothing', () => {
             ],
             { pending: 'waits on the dataflow gap' },
           ),
-          expectation('subsumed-test', [
+          expectation('future-rule', [
             ['pair.test.ts', 5],
             ['pair.test.ts', 20],
           ]),
@@ -301,7 +301,7 @@ test('a recall expectation is met by rule and locations, whatever title the next
 })
 
 test('a recall expectation of a rule not ported is not judged, and a titled matcher keeps its titles', () => {
-  const other = { name: 'c', expectedFindings: [{ rule: 'subsumed-test' }] }
+  const other = { name: 'c', expectedFindings: [{ rule: 'future-rule' }] }
   assert.deepEqual(judgeRecall({ ...other, expectedTests: 1 }, [summary(1)]), { failures: [], judged: 0 })
   const titled = { name: 'c', expectedFindings: [{ rule: 'duplicate-test', titles: ['row 1'] }] }
   const { failures } = judgeRecall({ ...titled, expectedTests: 2 }, [summary(2), located('duplicate-test', [3, 6])])
@@ -328,8 +328,8 @@ test('a known miss is not required, and consumes the finding that meets it', () 
 })
 
 test('expectations waiting on a port are counted per rule, without the ported rules or `none`', () => {
-  const expectations = [{ rule: 'subsumed-test' }, { rule: 'subsumed-test' }, { rule: 'redundant-hook' }, { rule: 'duplicate-test' }, { rule: 'duplicate-suite' }, { rule: 'none' }]
-  assert.deepEqual(pendingByRule(expectations), { 'subsumed-test': 2 })
+  const expectations = [{ rule: 'future-rule' }, { rule: 'future-rule' }, { rule: 'redundant-hook' }, { rule: 'duplicate-test' }, { rule: 'duplicate-suite' }, { rule: 'none' }]
+  assert.deepEqual(pendingByRule(expectations), { 'future-rule': 2 })
 })
 
 test('a known entry needs an id and a reason', () => {

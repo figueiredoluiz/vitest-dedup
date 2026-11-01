@@ -1177,3 +1177,152 @@ mod suites;
 
 mod hooks;
 mod parameters;
+
+/// The permanent owned positive is extracted before its directional finding is inspected.
+#[test]
+fn subsumption_owned_positive_reaches_final_findings() {
+    let source = include_str!("../../fixtures/duplicates/subsumed-smoke-subset.test.ts");
+    let corpus = corpora(&[("a.test.ts", source)], &["a.test.ts"]).remove(0);
+    assert_eq!(corpus.tests.len(), 2);
+    assert!(corpus
+        .tests
+        .iter()
+        .all(|case| case.exclusion.is_none() && case.trace_complete));
+    let config = subsumption_config();
+    let result = crate::rules::run(&[("a.test.ts".into(), corpus.tests)], &config);
+    let findings: Vec<_> = result
+        .findings
+        .iter()
+        .filter(|f| f.rule == crate::model::Rule::SubsumedTest)
+        .collect();
+    assert_eq!(findings.len(), 1);
+    assert_eq!(
+        findings[0].titles,
+        [
+            "cart > applies the coupon",
+            "cart > applies the coupon and recalculates"
+        ]
+    );
+}
+
+/// The permanent placeholder regression retains extraction while refusing the new rule.
+#[test]
+fn subsumption_placeholder_is_not_evidence() {
+    let source = include_str!("../../fixtures/duplicates/not-subsumed-placeholder.test.ts");
+    let corpus = corpora(&[("a.test.ts", source)], &["a.test.ts"]).remove(0);
+    assert_eq!(corpus.tests.len(), 2);
+    assert!(corpus
+        .tests
+        .iter()
+        .all(|case| case.exclusion.is_none() && case.trace_complete));
+    assert!(corpus.tests[0].subsumption_key.is_none());
+    assert!(corpus.tests[1].subsumption_key.is_some());
+    let config = subsumption_config();
+    let result = crate::rules::run(&[("a.test.ts".into(), corpus.tests)], &config);
+    assert!(result
+        .findings
+        .iter()
+        .all(|f| f.rule != crate::model::Rule::SubsumedTest));
+}
+
+/// Placeholder spellings are refused while a one-event assertion about real data is retained.
+#[test]
+fn subsumption_placeholder_family_and_retention() {
+    for body in [
+        "() => null",
+        "() => undefined",
+        "() => void 0",
+        "() => todo()",
+        "() => pending()",
+        "() => Promise.resolve()",
+        "async () => await pending()",
+        "() => { return expect(true).toBe(true) }",
+        "function () { expect(true).toBe(true) }",
+    ] {
+        let source = format!("import {{test, expect}} from 'vitest'; test('stub', {body});");
+        let corpus = corpora(&[("a.test.ts", &source)], &["a.test.ts"]).remove(0);
+        assert_eq!(corpus.tests.len(), 1, "{body}");
+        assert!(corpus.tests[0].subsumption_key.is_none(), "{body}");
+    }
+    let source = "import {test,expect} from 'vitest'; test('real',()=>expect(value).toBe(true));";
+    let corpus = corpora(&[("a.test.ts", source)], &["a.test.ts"]).remove(0);
+    assert_eq!(corpus.tests.len(), 1);
+    assert!(corpus.tests[0].subsumption_key.is_some());
+}
+
+/// Checks final subsumption claims only after the owned source's extraction is accounted for.
+fn subsumption_claim_count(source: &str, count: usize) -> usize {
+    let corpus = corpora(&[("a.test.ts", source)], &["a.test.ts"]).remove(0);
+    assert_eq!(corpus.tests.len(), count);
+    assert!(corpus.tests.iter().all(|case| case.exclusion.is_none()));
+    let config = subsumption_config();
+    crate::rules::run(&[("a.test.ts".into(), corpus.tests)], &config)
+        .findings
+        .iter()
+        .filter(|f| f.rule == crate::model::Rule::SubsumedTest)
+        .count()
+}
+
+/// Fixture-provider identity must participate even when the callback only reads a fixture name.
+#[test]
+fn subsumption_fixture_provider_identity() {
+    let source = include_str!("../../fixtures/duplicates/not-subsumed-different-fixtures.test.ts");
+    assert_eq!(subsumption_claim_count(source, 2), 0);
+    let same_provider = source.replace("pro('b'", "free('b'");
+    assert_eq!(subsumption_claim_count(&same_provider, 2), 1);
+}
+
+/// Unknown row populations never anchor this rule, including identical sources and both APIs.
+#[test]
+fn subsumption_unknown_tables_are_refused() {
+    let source = include_str!("../../fixtures/duplicates/not-subsumed-unresolved-tables.test.ts");
+    assert_eq!(subsumption_claim_count(source, 3), 0);
+    let tagged = "import {test,expect} from 'vitest'; test.each`n\n${1}`('a',({n})=>{expect(n).toBe(1)}); test.each`n\n${2}`('b',({n})=>{expect(n).toBe(1);expect(n).toBe(2)});";
+    assert_eq!(subsumption_claim_count(tagged, 2), 0);
+    for api in ["each", "for"] {
+        let same_source = source
+            .replace("loadB())", "loadA())")
+            .replace("test.each", &format!("test.{api}"));
+        assert_eq!(subsumption_claim_count(&same_source, 3), 0);
+    }
+}
+
+/// Fully resolved rows retain manual comparisons while different conditions remain separate.
+#[test]
+fn subsumption_bound_rows_and_conditions() {
+    let source = "import {test,expect} from 'vitest'; test.each([1])('a',()=>{expect(value).toBe(1)}); test('b',()=>{expect(value).toBe(1);expect(other).toBe(2)});";
+    assert_eq!(subsumption_claim_count(source, 2), 1);
+    let conditional = "import {test,expect} from 'vitest'; test.skipIf(first)('a',()=>{expect(value).toBe(1)});test.skipIf(second)('b',()=>{expect(value).toBe(1);expect(other).toBe(2)});";
+    assert_eq!(subsumption_claim_count(conditional, 2), 0);
+}
+
+/// Computed callees and awaited assertions are not additional placeholder admissions.
+#[test]
+fn subsumption_placeholder_static_boundary() {
+    for body in [
+        "() => handlers[pending]()",
+        "async () => await expect(true).toBe(true)",
+    ] {
+        let source = format!("import {{test,expect}} from 'vitest'; test('a', {body});");
+        let corpus = corpora(&[("a.test.ts", &source)], &["a.test.ts"]).remove(0);
+        assert_eq!(corpus.tests.len(), 1);
+        assert!(corpus.tests[0].subsumption_key.is_some(), "{body}");
+    }
+}
+
+/// Enables the opt-in rule consistently for owned-source outcome checks.
+fn subsumption_config() -> crate::config::Config {
+    crate::config::Config {
+        rules: [(
+            crate::model::Rule::SubsumedTest,
+            crate::model::Severity::Warning,
+        )]
+        .into(),
+        root: ".".into(),
+        include: Vec::new(),
+        include_is_explicit: false,
+        exclude: Vec::new(),
+        threshold: 100,
+        source: "test".into(),
+    }
+}

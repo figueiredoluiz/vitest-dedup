@@ -281,6 +281,8 @@ const RUST_MODULES = {
   'src/framework.rs': 100,
   'src/framework/vitest.rs': 100,
   'src/framework/vitest/titles.rs': 87,
+  // Placeholder recognition: measured at 92.13% (82/89 lines).
+  'src/framework/vitest/stub.rs': 92,
   // The next core, measured when it landed. What stays uncovered is mostly a `None` arm for a
   // node shape the ESTree serialization never produces (a specifier without `local`, a member
   // without `property`).
@@ -313,6 +315,8 @@ const RUST_MODULES = {
   'src/rules/rows.rs': 100,
   'src/rules/parameters.rs': 100,
   'src/rules/near.rs': 100,
+  // Directional event inclusion: measured at 100% (56/56 lines).
+  'src/rules/subsumed.rs': 100,
   // Suite reporting and child suppression: measured at 99.00% (99/100 lines).
   'src/rules/suites.rs': 99,
   // Hook pair reporting: measured at 98.84% (85/86 lines).

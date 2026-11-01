@@ -137,6 +137,8 @@ pub struct AssertionEntry {
 /// One framework's test API, described as data.
 #[derive(Debug)]
 pub struct Dialect {
+    /// Recognizes framework placeholder callbacks without exposing parser nodes.
+    pub placeholder: fn(&crate::lang::Tree, crate::lang::NodeId) -> bool,
     /// Renders a row title only when the supplied values establish its runtime text.
     pub render_title: RenderTitle,
     /// The bounded title proof used by row comparison while broader rendering is being ported.

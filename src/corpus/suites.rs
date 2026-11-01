@@ -134,7 +134,7 @@ pub(super) fn collect(
             trace: Vec::new(),
             trace_complete: false,
             similarity_key: 0,
-            subsumption_key: 0,
+            subsumption_key: None,
             callback_form: normal::CallbackForm::Interchangeable,
             row: None,
             row_class: None,
