@@ -257,7 +257,9 @@ test('the JavaScript coverage job provisions gitleaks before running scanner tes
   const setup = job.slice(install, coverage)
   assert.match(setup, /GITLEAKS_VERSION: \d+\.\d+\.\d+/)
   assert.match(setup, /GITLEAKS_SHA256: [a-f0-9]{64}/)
-  assert.match(setup, /sha256sum --check --strict/)
+  assert.match(job, /runs-on: macos-15\n/)
+  assert.match(setup, /_darwin_arm64\.tar\.gz/)
+  assert.match(setup, /shasum -a 256 --check/)
   assert.match(setup, /GITHUB_PATH/)
 })
 

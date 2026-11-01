@@ -128,10 +128,13 @@ function sitesOf(binary, directory) {
   }
 }
 
-/** Vitest's reading of `directory`, or why it has none. */
-function collect(directory) {
+/** Vitest's trusted reading of `directory`, or why its collection cannot be compared. */
+export function collect(directory, read = collectWithVitest) {
   try {
-    const files = [...collectWithVitest(ROOT, directory).values()]
+    const files = [...read(ROOT, directory).values()]
+    if (files.some((file) => file.overlapping || file.unprobed)) {
+      return { vitest: null, error: 'collection has overlapping projects or unprobed files' }
+    }
     // A read of a stubbed missing module changes what registers, so that collection is not evidence.
     const errors = files.flatMap((file) => [...(file.collectErrors ?? []), ...(file.stubReads ?? [])])
     if (errors.length) return { vitest: null, error: JSON.stringify(errors).slice(0, 200) }

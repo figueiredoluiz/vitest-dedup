@@ -75,6 +75,7 @@ import * as fs from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { coverageOnHost } from './lib/coverage-platform.mjs'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
 
@@ -354,6 +355,8 @@ const JS_MODULES = {
   // The rest of each is the entry point and the subprocess calls a real run makes.
   'scripts/dev/probe.mjs': 77,
   'scripts/dev/revert-proof.mjs': 97,
+  'scripts/dev/proof-command.mjs': 95,
+  'scripts/check/lib/coverage-platform.mjs': 100,
   // Action pin gate measured 67/67 lines with owned YAML cases.
   'scripts/check/check-action-pins.mjs': 100,
   'scripts/check/check-docstrings.mjs': 100,
@@ -486,6 +489,7 @@ const JS_NOT_MEASURED = {
 const JS_TEST_FILES = [
   'scripts/dev/verify.test.mjs',
   'scripts/dev/dev-tools.test.mjs',
+  'scripts/dev/proof-command.test.mjs',
   'scripts/check/check-docstrings.test.mjs',
   ...globSync('npm/test/*.test.mjs', { cwd: ROOT }).sort(),
   ...globSync('scripts/check/lib/*.test.mjs', { cwd: ROOT }).sort(),
@@ -794,7 +798,8 @@ function checkJs(failures) {
     console.log('   line%   floor   covered/lines  module')
     let totalFound = 0
     let totalHit = 0
-    for (const [module, floor] of Object.entries(JS_MODULES)) {
+    const { measured, deferred } = coverageOnHost(JS_MODULES)
+    for (const [module, floor] of Object.entries(measured)) {
       const entry = lcov.get(module)
       if (!entry) {
         failures.push(
@@ -838,7 +843,7 @@ function checkJs(failures) {
     checkFloor(failures, 'js total', total, JS_TOTAL)
     console.log('\njs totals')
     console.log(
-      `  ${total.toFixed(2)}% line over the ${Object.keys(JS_MODULES).length} measured module(s) ` +
+      `  ${total.toFixed(2)}% line over the ${Object.keys(measured).length} measured module(s) ` +
         `(floor ${JS_TOTAL}%, target ${TARGET_PERCENTAGE}%)`,
     )
     console.log(
@@ -846,6 +851,9 @@ function checkJs(failures) {
         'a recorded reason in JS_NOT_MEASURED',
     )
     console.log(`  ${ran} tests executed across ${JS_TEST_FILES.length} file(s)`)
+    for (const [module, floor] of Object.entries(deferred)) {
+      console.log(`  ${module}: native coverage deferred to macOS CI (floor ${floor}%)`)
+    }
   } finally {
     keepOrRemove(work, `node --test output at ${testLogPath}, lcov at ${lcovPath}`)
   }
@@ -871,7 +879,7 @@ function main() {
     for (const failure of failures) console.error(`  ${failure}`)
     process.exit(1)
   }
-  console.log('\nok: every module measured, and none is below its recorded floor.')
+  console.log('\nok: every applicable module measured, and none is below its recorded floor.')
 }
 
 if (resolve(process.argv[1] ?? '') === resolve(fileURLToPath(import.meta.url))) {

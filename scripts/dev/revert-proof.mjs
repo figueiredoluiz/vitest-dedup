@@ -12,12 +12,10 @@
 // --check <file>` is enough. A `cargo test` check is also compiled by itself with `--no-run` before
 // it runs, under the same flags, so a test that does not compile never reads as caught. An
 // interrupted run restores every file before it exits.
-import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { existsSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
-
-const LIMIT_MS = 15 * 60 * 1000
+import { requireMacOS, runCommand } from './proof-command.mjs'
 
 /** The digest a restored file is compared by. */
 const digest = (text) => createHash('sha256').update(text).digest('hex')
@@ -28,8 +26,21 @@ const digest = (text) => createHash('sha256').update(text).digest('hex')
  * @param {string[]} command A check's command.
  * @returns {string[]|null} The compile step, or null when the check has none.
  */
-export function compileStep([tool, verb, ...rest]) {
-  return tool === 'cargo' && verb === 'test' ? ['cargo', 'test', '--no-run', ...rest] : null
+export function compileStep(command) {
+  const [tool] = command
+  if (!/^cargo(?:\.exe)?$/i.test(tool.split(/[\\/]/).at(-1))) return null
+  let index = command[1]?.startsWith('+') ? 2 : 1
+  for (; index < command.length; index++) {
+    const arg = command[index]
+    if (!arg.startsWith('-')) break
+    if (['--color', '--config', '-C', '-Z'].includes(arg)) index++
+    else if (!/^(?:-v+|-q|--verbose|--quiet|--locked|--offline|--frozen|--color=.+|--config=.+|-C.+|-Z.+)$/.test(arg)) {
+      throw new Error(`cannot determine Cargo command after ${arg}; use a direct cargo test command`)
+    }
+  }
+  return ['test', 't'].includes(command[index])
+    ? [...command.slice(0, index + 1), '--no-run', ...command.slice(index + 1)]
+    : null
 }
 
 /**
@@ -138,32 +149,42 @@ export async function prove(spec, { run, read, write, print }) {
  * @throws {Error} On bad usage or a failed proof.
  */
 async function cli(args) {
+  requireMacOS()
   const [path, ...rest] = args
   if (!path || rest.length) throw new Error('usage: revert-proof.mjs <spec.json>')
   const touched = new Map()
-  let child = null
+  const controller = new AbortController()
+  const handlers = new Map()
+  let interrupted = null
   for (const [signal, code] of [['SIGINT', 130], ['SIGTERM', 143], ['SIGHUP', 129]]) {
-    process.once(signal, () => {
-      child?.kill(signal)
-      for (const [file, text] of touched) writeFileSync(file, text)
-      process.exit(code)
-    })
+    const handler = () => {
+      if (interrupted !== null) return
+      interrupted = code
+      controller.abort(new Error(`interrupted by ${signal}`))
+    }
+    handlers.set(signal, handler)
+    process.on(signal, handler)
   }
-  const results = await prove(JSON.parse(readFileSync(path, 'utf8')), {
-    run: ([command, ...commandArgs]) =>
-      new Promise((done) => {
-        child = spawn(command, commandArgs, { stdio: 'ignore', timeout: LIMIT_MS, shell: process.platform === 'win32' })
-        child.once('error', () => done(false))
-        child.once('close', (code) => done(code === 0))
-      }),
-    read: (file) => readFileSync(file, 'utf8'),
-    write: (file, text) => {
-      if (!touched.has(file)) touched.set(file, readFileSync(file, 'utf8'))
-      writeFileSync(file, text)
-    },
-    print: console.log,
-  })
-  return results.every((result) => result.verdict === 'caught')
+  try {
+    const results = await prove(JSON.parse(readFileSync(path, 'utf8')), {
+      run: (command) => runCommand(command, { signal: controller.signal }),
+      read: (file) => readFileSync(file, 'utf8'),
+      write: (file, text) => {
+        if (!touched.has(file)) touched.set(file, readFileSync(file, 'utf8'))
+        writeFileSync(file, text)
+      },
+      print: console.log,
+    })
+    return results.every((result) => result.verdict === 'caught')
+  } catch (error) {
+    if (interrupted !== null) error.exitCode = interrupted
+    throw error
+  } finally {
+    // runCommand settles only after stopping the owned command tree, so no descendant can
+    // race this restoration. Keep signal handlers installed until the restoration is complete.
+    for (const [file, text] of touched) writeFileSync(file, text)
+    for (const [signal, handler] of handlers) process.removeListener(signal, handler)
+  }
 }
 
 if (process.argv[1] && existsSync(process.argv[1]) && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url))) {
@@ -173,7 +194,7 @@ if (process.argv[1] && existsSync(process.argv[1]) && realpathSync(process.argv[
     },
     (error) => {
       console.error(error.message)
-      process.exitCode = 1
+      process.exitCode = error.exitCode ?? 1
     },
   )
 }

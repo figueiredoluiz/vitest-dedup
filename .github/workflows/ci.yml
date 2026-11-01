@@ -225,11 +225,12 @@ jobs:
   # `check-coverage.mjs` carry the floors, the targets, and the reasoning for both.
   #
   # This job runs per pull request because neither half needs cargo: jscpd reads the sources, and
-  # the JS coverage run drives the existing Node suites. It is the cheapest job in this workflow.
+  # the JS coverage run drives the existing Node suites. macOS exercises the macOS-only proof
+  # runner instead of skipping its process-lifecycle tests or reducing their coverage floors.
   # The Rust half of coverage is separate, below, for the opposite reason.
   quality-gates:
     name: Duplication and JS coverage ratchets
-    runs-on: ubuntu-22.04
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -244,11 +245,11 @@ jobs:
       - name: Install gitleaks
         env:
           GITLEAKS_VERSION: 8.30.1
-          GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+          GITLEAKS_SHA256: b40ab0ae55c505963e365f271a8d3846efbc170aa17f2607f13df610a9aeb6a5
         run: |
           curl --proto "=https" --tlsv1.2 -sSfL -o "$RUNNER_TEMP/gitleaks.tar.gz" \
-            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
-          echo "${GITLEAKS_SHA256}  $RUNNER_TEMP/gitleaks.tar.gz" | sha256sum --check --strict
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_darwin_arm64.tar.gz"
+          echo "${GITLEAKS_SHA256}  $RUNNER_TEMP/gitleaks.tar.gz" | shasum -a 256 --check
           tar -xzf "$RUNNER_TEMP/gitleaks.tar.gz" -C "$RUNNER_TEMP" gitleaks
           echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
       # jscpd is pinned to an exact version inside the script and fetched through npx. An

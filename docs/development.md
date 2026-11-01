@@ -179,12 +179,24 @@ This workflow relaxes no gate threshold or corpus exclusion.
 
 `npm run probe -- <test file or directory>...` copies each input to a temporary project and prints
 what Vitest collects beside what both engines report, marking any disagreement. It reads
-`target/release/vitest-dedup` unless `--binary` names another.
+`target/release/vitest-dedup` unless `--binary` names another. Overlapping project collections
+and files the runner did not probe are unread, so partial collection cannot report agreement.
 
-`npm run revert-proof -- <spec.json>` proves a fix fails its checks when undone. The spec lists
+`npm run revert-proof -- <spec.json>` is a macOS-only developer tool that proves a fix fails its
+checks when undone. It refuses to start on other platforms before reading the spec, launching
+commands or changing files. This restriction does not apply to the analyzer or `probe`. The spec lists
 `checks` and `mutants`, as `scripts/dev/revert-proof.mjs` documents. The checks must pass untouched,
 each mutant must match exactly once, and every file is restored and verified. A mutant that
-applies but fails no check, or does not build, fails the run.
+applies but fails no check, or does not build, fails the run. Direct Cargo test commands, including
+`cargo +stable test`, executable paths and global options, compile with `--no-run` under the same
+arguments before running. For arbitrary command wrappers, `build` must compile the checks too.
+Spawn errors, signals, timeouts and excessive output fail the proof rather than count as caught
+mutants. Command output is retained in temporary logs (at most 8 MiB per command); failed commands
+name their log. Each command has a 15-minute limit. Interruption stops its owned process tree
+before restoring files; commands must not detach descendants into separate sessions.
+The JavaScript coverage job runs on macOS and enforces both proof modules' coverage floors.
+On other hosts, the shared coverage command reports those native measurements as deferred to
+macOS CI while enforcing all other module floors; pure proof and platform-refusal tests still run.
 
 ### Docstring guard
 
