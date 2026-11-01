@@ -1,14 +1,15 @@
 // Unit tests for the probe's judgement and the revert proof's guarantees.
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import test from 'node:test'
 
-import { analyze, disagreements, parseArguments, project, render, summarize } from './probe.mjs'
+import { analyze, collect, disagreements, parseArguments, project, render, summarize } from './probe.mjs'
 import { caught, compileStep, mutate, problems, prove } from './revert-proof.mjs'
+import { vitestView } from '../check/lib/collection-oracle.mjs'
 
 const engine = (over = {}) => ({ exit: 0, failure: null, findings: [], rules: [], tests: 2, unresolved: 0, incomplete: false, reasons: [], ...over })
 
@@ -54,6 +55,43 @@ test('each way the readings part is named, and agreement is silent', () => {
   assert.deepEqual(disagreements({ ...row, next: engine({ incomplete: true }) }), ['completeness-differs'])
   assert.deepEqual(disagreements({ ...row, next: engine({ unresolved: 1 }) }), ['diagnostics-differ'])
   assert.deepEqual(disagreements({ ...row, next: engine({ reasons: ['named-callback'] }) }), ['diagnostics-differ'])
+})
+
+test('a truncated or missing oracle view never reads as agreement', () => {
+  const record = { file: '/owned/a.test.ts', tests: [{ title: 'one test' }], registrations: [], suiteHooks: {}, stubReads: [], collectErrors: [] }
+  const views = [
+    vitestView([record, record], [], '/owned'),
+    vitestView([], ['/owned/a.test.ts'], '/owned'),
+  ]
+  assert.equal(views[0].get('a.test.ts').overlapping, true)
+  assert.equal(views[1].get('a.test.ts').unprobed, true)
+  for (const view of views) {
+    const result = collect('/owned', () => view)
+    assert.equal(result.vitest, null)
+    assert.match(render({ name: 'partial', ...result, sites: [], next: engine({ tests: 1 }), current: engine({ tests: 1 }) }), /^DIFF partial \(vitest-unread\)/)
+  }
+  const single = collect('/owned', () => vitestView([record], [], '/owned'))
+  assert.deepEqual(single, { vitest: ['one test'] })
+  assert.match(render({ name: 'single', ...single, sites: [], next: engine({ tests: 1 }), current: engine({ tests: 1 }) }), /^SAME single/)
+  assert.deepEqual(collect('/owned', () => new Map()), { vitest: [] })
+  for (const field of ['collectErrors', 'stubReads']) {
+    assert.equal(collect('/owned', () => vitestView([{ ...record, [field]: ['untrusted'] }], [], '/owned')).vitest, null)
+  }
+  assert.match(collect('/owned', () => { throw new Error('collection failed') }).error, /collection failed/)
+})
+
+test('real overlapping Vitest projects stay unread while a single project stays comparable', { timeout: 30_000 }, () => {
+  const work = mkdtempSync(join(tmpdir(), 'probe-projects-'))
+  const root = join(dirname(fileURLToPath(import.meta.url)), '../..')
+  try {
+    symlinkSync(join(root, 'node_modules'), join(work, 'node_modules'), process.platform === 'win32' ? 'junction' : 'dir')
+    writeFileSync(join(work, 'a.test.ts'), "import { test, expect } from 'vitest';\ntest('one test', () => { expect(1).toBe(1); });\n")
+    const config = join(work, 'vitest.config.mjs')
+    writeFileSync(config, "export default { test: { projects: [{test:{name:'first',include:['**/*.test.ts']}},{test:{name:'second',include:['**/*.test.ts']}}] } };\n")
+    assert.equal(collect(work).vitest, null)
+    writeFileSync(config, "export default { test: { projects: [{test:{name:'first',include:['**/*.test.ts']}}] } };\n")
+    assert.deepEqual(collect(work), { vitest: ['one test'] })
+  } finally { rmSync(work, { recursive: true, force: true }) }
 })
 
 test('a run that cannot start or prints no JSONL fails its own row, and does not throw', () => {
@@ -166,6 +204,65 @@ test('a cargo test check compiles under its own flags before it runs', async () 
   assert.equal(ran.filter((command) => command === check.join(' ')).length, 1, 'the mutant never ran the check')
 })
 
+test('Cargo toolchains, executable paths and global options keep compilation separate', async () => {
+  for (const prefix of [
+    ['cargo', '+stable'], ['/usr/bin/cargo', '+nightly'], ['C:\\tools\\cargo.exe', '+stable'],
+    ['cargo', '--color', 'always', '--config', 'test'], ['cargo', '-vv', '--locked', '--offline', '--frozen', '-q'],
+    ['cargo', '+nightly', '-Z', 'unstable-options', '-C', '/tmp'],
+    ['cargo', '--color=never', '--config=net.offline=true', '-Zunstable-options', '-C/tmp'],
+  ]) {
+    const check = [...prefix, 'test', '--lib', '--', '--nocapture']
+    assert.deepEqual(compileStep(check), [...prefix, 'test', '--no-run', '--lib', '--', '--nocapture'])
+    const { files, io } = memory()
+    const ran = []
+    const run = async (args) => {
+      ran.push(args)
+      return !args.includes('--no-run') || files['a.rs'].includes('good')
+    }
+    const result = await prove({ ...spec(), checks: [{ name: 'unit', command: check }] }, { ...io, run })
+    assert.equal(result[0].verdict, 'not-built')
+    assert.equal(ran.filter((args) => args === check).length, 1, 'only the baseline runs the test')
+  }
+  assert.deepEqual(compileStep(['cargo', 't', '--lib']), ['cargo', 't', '--no-run', '--lib'])
+  assert.equal(compileStep(['cargo', '+stable', 'build']), null)
+  assert.throws(() => compileStep(['cargo', '--unknown', 'test']), /cannot determine Cargo command/)
+})
+
+test('interruption stops a signal-ignoring grandchild before restoring the source', { skip: process.platform !== 'darwin', timeout: 15_000 }, async () => {
+  const work = mkdtempSync(join(tmpdir(), 'proof-descendants-'))
+  const target = join(work, 'source.txt')
+  const ready = join(work, 'ready')
+  const writer = join(work, 'writer.mjs')
+  const check = join(work, 'check.mjs')
+  writeFileSync(target, 'good')
+  writeFileSync(writer, `import {writeFileSync} from 'node:fs'; process.on('SIGTERM',()=>{}); writeFileSync(process.argv[3], String(process.pid)); setInterval(()=>writeFileSync(process.argv[2], 'bad'), 50);`)
+  writeFileSync(check, `import {readFileSync} from 'node:fs'; import {spawn} from 'node:child_process'; if(readFileSync(process.argv[2],'utf8')==='bad'){spawn(process.execPath,[process.argv[3],process.argv[2],process.argv[4]],{stdio:'ignore'});setInterval(()=>{},1000)}`)
+  const path = join(work, 'spec.json')
+  writeFileSync(path, JSON.stringify({ build: [process.execPath, '--check', check], checks: [{ name: 'child', command: [process.execPath, check, target, writer, ready] }], mutants: [{ name: 'm', file: target, find: 'good', replace: 'bad' }] }))
+  const child = spawn(process.execPath, [join(dirname(fileURLToPath(import.meta.url)), 'revert-proof.mjs'), path], { stdio: 'ignore' })
+  let descendant
+  let failure = null
+  const exited = new Promise((resolve) => child.once('close', (code) => resolve(code)))
+  try {
+    const deadline = Date.now() + 5_000
+    while (Date.now() < deadline && !readdirSync(work).includes('ready')) await new Promise((resolve) => setTimeout(resolve, 20))
+    descendant = Number(readFileSync(ready, 'utf8'))
+    child.kill('SIGTERM')
+    assert.equal(await exited, 143)
+    assert.equal(readFileSync(target, 'utf8'), 'good')
+    await new Promise((resolve) => setTimeout(resolve, 250))
+    assert.equal(readFileSync(target, 'utf8'), 'good', 'no descendant overwrites the restored source')
+  } catch (error) {
+    failure = error
+  } finally {
+    child.kill('SIGKILL')
+    if (descendant) { try { process.kill(descendant, 'SIGKILL') } catch (error) { if (error.code !== 'ESRCH') failure ??= error } }
+    await exited
+    rmSync(work, { recursive: true, force: true })
+  }
+  if (failure !== null) throw failure
+})
+
 test('a restored tree that does not build fails the run', async () => {
   const { io } = memory()
   let builds = 0
@@ -207,8 +304,8 @@ test('the file is restored when a check throws under the mutant', async () => {
 })
 
 for (const [signal, code] of [['SIGINT', 130], ['SIGTERM', 143]]) {
-  // Windows ends a child without delivering either signal, so no handler could run there.
-  test(`${signal} during a check restores the file`, { skip: process.platform === 'win32' }, async () => {
+  // The subprocess proof runner is supported only on macOS.
+  test(`${signal} during a check restores the file`, { skip: process.platform !== 'darwin' }, async () => {
     const work = mkdtempSync(join(tmpdir(), 'revert-proof-test-'))
     try {
       const target = join(work, 'a.txt')
