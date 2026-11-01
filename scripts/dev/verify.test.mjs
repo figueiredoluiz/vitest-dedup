@@ -4,7 +4,7 @@ import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, realpathSync,
 import { tmpdir } from 'node:os'
 import { basename, delimiter, dirname, join, resolve, sep } from 'node:path'
 import { test } from 'node:test'
-import { cleanEnvironment, commands, hookCommands, hookScope, installHooks, main, pushCommits, repositoryKey, runSteps, rustChanged, withLock, withNodeModules, withSnapshot, withTargetCache } from './verify.mjs'
+import { LANES, cleanEnvironment, pause, commands, hookCommands, hookScope, installHooks, main, pushCommits, repositoryKey, runSteps, rustChanged, withLock, withNodeModules, withSnapshot, withTargetCache } from './verify.mjs'
 import { coverage } from '../check/check-docstrings.mjs'
 
 const oid = 'a'.repeat(40)
@@ -285,15 +285,76 @@ test('failing snapshot check restores state and removes temporary source', () =>
   assert.throws(() => withSnapshot(root, 'does-not-exist', () => assert.fail()), /Command failed/)
 }))
 
-test('lock rejects concurrent work and is removed on success and failure', () => fixture(root => {
+test('two lanes run at once, a third is refused, and lanes are removed on success and failure', () => fixture(root => {
   const common = join(root, '.git')
-  withLock(common, () => {
+  assert.equal(LANES, 2)
+  withLock(common, first => {
+    assert.equal(first, 0)
     assert.match(readFileSync(join(common, 'delivery-check.lock/owner'), 'utf8'), /^pid=/)
-    assert.throws(() => withLock(common, () => assert.fail()), /already running/)
+    withLock(common, second => {
+      assert.equal(second, 1)
+      assert.match(readFileSync(join(common, 'delivery-check.lock.1/owner'), 'utf8'), /^pid=/)
+      assert.throws(() => withLock(common, () => assert.fail()), /every lane.*delivery-check\.lock, .*delivery-check\.lock\.1\./)
+    })
+    assert.equal(existsSync(join(common, 'delivery-check.lock.1')), false)
   })
   assert.equal(existsSync(join(common, 'delivery-check.lock')), false)
   assert.throws(() => withLock(common, () => { throw new Error('failed') }), /failed/)
   assert.equal(existsSync(join(common, 'delivery-check.lock')), false)
+}))
+
+test('the default pause blocks for the time it is given', () => {
+  const start = performance.now()
+  pause(20)
+  assert.ok(performance.now() - start >= 15)
+})
+
+test('a second hook run gets its own export and cache, and a manual run never takes lane 1', () => fixture(root => {
+  const common = join(root, '.git')
+  const env = { ...process.env }
+  delete env.CARGO_TARGET_DIR
+  delete env.CARGO_LLVM_COV_TARGET_DIR
+  const key = repositoryKey(common)
+  const seen = []
+  const check = (snapshot, _steps, options) => { seen.push([snapshot, options.env.CARGO_TARGET_DIR, options.env.CARGO_BUILD_BUILD_DIR]) }
+  writeFileSync(join(root, 'test.rs'), 'fn main() {}\n'); git(root, 'add', 'test.rs')
+  main(['pre-commit'], { root, env, check, print: () => {} })
+  withLock(common, () => main(['pre-commit'], { root, env, check, print: () => {} }))
+  const [[snapshot0, cache0], [snapshot1, cache1, build1]] = seen
+  assert.equal(snapshot0, join(env.XDG_RUNTIME_DIR || tmpdir(), `vitest-dedup-hook-${key}`, 'source'))
+  assert.equal(snapshot1, join(env.XDG_RUNTIME_DIR || tmpdir(), `vitest-dedup-hook-${key}-1`, 'source'))
+  assert.equal(cache0, join(root, 'target/hook-snapshot', key))
+  assert.equal(cache1, join(root, 'target/hook-snapshot', `${key}-1`))
+  assert.equal(build1, cache1)
+  mkdirSync(join(common, 'delivery-check.lock'))
+  const lanes = []
+  assert.throws(() => withLock(common, () => assert.fail(), { lanes: 1 }), /every lane/)
+  withLock(common, lane => lanes.push(lane))
+  assert.deepEqual(lanes, [1])
+  rmSync(join(common, 'delivery-check.lock'), { recursive: true })
+}))
+
+test('a run with one lane allowed takes only lane 0', () => fixture(root => {
+  const common = join(root, '.git')
+  withLock(common, () => {
+    assert.throws(() => withLock(common, () => assert.fail(), { lanes: 1 }), /every lane/)
+  })
+}))
+
+test('a busy repository queues instead of refusing, and gives up after its wait', () => fixture(root => {
+  const common = join(root, '.git')
+  const printed = []
+  withLock(common, () => withLock(common, () => {
+    let naps = 0
+    const sleep = () => { if (++naps === 2) rmSync(join(common, 'delivery-check.lock.1'), { recursive: true }) }
+    assert.equal(withLock(common, lane => `lane ${lane}`, { waitMs: 60_000, sleep, print: line => printed.push(line) }), 'lane 1')
+    assert.equal(naps, 2)
+    mkdirSync(join(common, 'delivery-check.lock.1'))
+    let spent = 0
+    assert.throws(() => withLock(common, () => assert.fail(), { waitMs: 10_000, sleep: () => { spent++ } }), /every lane/)
+    assert.equal(spent, 2)
+  }))
+  assert.deepEqual(printed, ['All 2 verification lanes are busy; waiting.'])
 }))
 
 test('hook environment removes original Git paths while preserving deliberate build flags', () => {
@@ -727,7 +788,85 @@ for (const [paths, scopes, required] of [
   }
 })
 
-for (const path of ['src/model.rs', 'tests/example.rs', 'fixtures/recall/sample.test.ts', 'Cargo.toml', 'Cargo.lock', 'package.json', 'package-lock.json', '.cargo/config.toml', '.github/workflows/ci.yml', 'scripts/check/check-coverage.mjs', 'scripts/check/lib/collection-oracle.mjs', 'new-script.sh', ' docs/guide.md', '\ndocs/guide.md', 'docs/README.md.rs']) {
+/** The pre-push checks `paths` select, as command lines. */
+const prePush = paths => hookCommands('pre-push', paths, 'scope.diff').map(step => step.join(' '))
+const SLOW = ['cargo clippy', 'cargo test', 'cargo doc', 'cargo build', 'npm run check:coverage', 'npm run check:duplication', 'npm run check:corpus']
+
+test('a workflow change compiles nothing and runs no slow gate', () => {
+  for (const path of ['.github/workflows/ci.yml', '.github/workflows/mutants.yml', '.github/dependabot.yml']) {
+    assert.deepEqual(hookScope([path]), ['ci'])
+    const steps = prePush([path])
+    assert.ok(steps.includes('npm run check:action-pins') && steps.includes('npm run check:release-workflow'))
+    assert.ok(steps.includes('npm run test:dev-checks'))
+    assert.ok(steps.includes('npm test'), 'npm/test reads the workflows')
+    assert.equal(steps.some(step => SLOW.some(slow => step.startsWith(slow))), false, steps.join())
+  }
+})
+
+test('documentation runs static checks only, at both hooks', () => {
+  for (const mode of ['pre-commit', 'pre-push']) {
+    const steps = hookCommands(mode, ['docs/development.md', 'README.md'], 'scope.diff').map(step => step.join(' '))
+    assert.equal(steps.some(step => step.startsWith('cargo') || step.includes('test:')), false, steps.join())
+  }
+})
+
+test('a gate script runs the corpus gates and no Rust suite', () => {
+  assert.deepEqual(hookScope(['scripts/check/lib/collection-oracle.mjs']), ['gates'])
+  const steps = prePush(['scripts/check/lib/collection-oracle.mjs'])
+  for (const gate of ['check:corpus', 'check:recall', 'check:oracle', 'check:next-duplicates', 'check:coverage:js']) assert.ok(steps.includes(`npm run ${gate}`), gate)
+  assert.ok(steps.includes('cargo build --release --locked'))
+  assert.equal(steps.some(step => /^cargo (?:test|clippy|doc)/.test(step)), false, steps.join())
+  assert.equal(steps.includes('npm run check:coverage:rust'), false)
+})
+
+test('a fixture runs the corpus gates and the Rust tests that read it, and no lints or coverage', () => {
+  assert.deepEqual(hookScope(['fixtures/recall/sample.test.ts']), ['fixtures'])
+  const steps = prePush(['fixtures/recall/sample.test.ts'])
+  for (const gate of ['check:corpus', 'check:recall', 'check:oracle', 'check:next-duplicates']) assert.ok(steps.includes(`npm run ${gate}`), gate)
+  assert.ok(steps.includes('cargo test --all-targets --all-features --locked'))
+  assert.equal(steps.some(step => /^cargo (?:clippy|doc)/.test(step)), false, steps.join())
+  assert.equal(steps.includes('npm run check:coverage:rust'), false)
+})
+
+test('the coverage gate script also runs Rust coverage', () => {
+  assert.ok(prePush(['scripts/check/check-coverage.mjs']).includes('npm run check:coverage:rust'))
+})
+
+test('a developer tool runs its tests and no compile', () => {
+  assert.deepEqual(hookScope(['scripts/dev/probe.mjs']), ['tooling'])
+  const steps = prePush(['scripts/dev/probe.mjs'])
+  assert.ok(steps.includes('npm run test:dev-checks'))
+  assert.equal(steps.some(step => step.startsWith('cargo')), false)
+})
+
+test('Rust runs its lints, tests, corpus gates and coverage, not the packaging around the binary', () => {
+  for (const path of ['src/model.rs', 'tests/example.rs', 'examples/depth.rs', 'Cargo.toml', 'Cargo.lock']) {
+    assert.deepEqual(hookScope([path]), ['rust'])
+    const steps = prePush([path])
+    for (const step of ['cargo fmt --all --check', 'cargo clippy --all-targets --all-features --locked', 'cargo doc --no-deps --document-private-items --locked', 'cargo test --all-targets --all-features --locked', 'cargo build --release --locked', 'npm run check:corpus', 'npm run check:recall', 'npm run verify:titles', 'npm run check:oracle', 'npm run check:behavior-runtime', 'npm run check:hooks-differential', 'npm run check:next-duplicates', 'npm run check:duplication', 'npm run check:coverage:rust']) assert.ok(steps.includes(step), step)
+    for (const step of ['npm test', 'npm run test:action', 'npm run test:dev-checks', 'npm run test:check-lib', 'npm run pack:check', 'npm run check:coverage:js', 'npm run check']) assert.equal(steps.includes(step), false, step)
+    assert.equal(hookCommands('pre-commit', [path]).some(step => /^cargo (?:clippy|test|build)/.test(step.join(' '))), false)
+  }
+})
+
+test('every gate in npm run check is selected by some scope, so a new gate cannot be missed', () => {
+  const { scripts } = JSON.parse(readFileSync(resolve('package.json'), 'utf8'))
+  const selected = new Set(['README.md', '.github/workflows/ci.yml', '.github/actions/vitest-dedup/a.js', 'npm/a.mjs', 'scripts/dev/a.mjs', 'scripts/check/a.mjs', 'fixtures/a.test.ts', 'src/a.rs'].flatMap(path => prePush([path])))
+  // Whole-history scanning and the closing note verify no change.
+  const unscoped = new Set(['npm run check:secrets', 'npm run check:not-run'])
+  const gates = scripts.check.split('&&').map(step => step.trim())
+  assert.ok(gates.length >= 20, 'the chain was read')
+  for (const gate of gates) assert.ok(selected.has(gate) || unscoped.has(gate), `${gate} has no scope`)
+})
+
+test('a mixed change selects each surface once', () => {
+  assert.deepEqual(hookScope(['README.md', 'src/model.rs', 'fixtures/a.test.ts']), ['docs', 'fixtures', 'rust'])
+  const steps = prePush(['README.md', 'src/model.rs', 'fixtures/a.test.ts', '.github/workflows/ci.yml'])
+  assert.equal(new Set(steps).size, steps.length)
+  assert.ok(steps.includes('npm run check:coverage:rust') && steps.includes('npm run check:coverage:js'))
+})
+
+for (const path of ['package.json', 'package-lock.json', '.cargo/config.toml', 'new-script.sh', ' docs/guide.md', '\ndocs/guide.md', 'docs/README.md.rs', 'docs/data.json', 'src/data.json', 'build.rs']) {
   test(`unknown or shared scope stays full: ${JSON.stringify(path)}`, () => {
     assert.deepEqual(hookScope(['README.md', path]), ['full'])
     assert.deepEqual(hookCommands('pre-push', [path]), commands('full'))
@@ -746,8 +885,8 @@ for (const name of [' docs/guide.md', '\ndocs/guide.md', 'src/空 白.rs']) test
   writeFileSync(join(root, name), 'content\n')
   git(root, 'add', '--', name)
   const [steps] = plannedChecks(root, 'pre-commit')
-  assert.ok(steps.includes('npm run test:dev-checks'), 'unknown staged path cannot become docs-only')
-  if (name.endsWith('.rs')) assert.ok(steps.includes('cargo fmt --all --check'))
+  const marker = name.endsWith('.rs') ? 'cargo fmt --all --check' : 'npm run test:dev-checks'
+  assert.ok(steps.includes(marker), 'unknown staged path cannot become docs-only')
 }))
 
 test('existing remote delta handles force updates and HEAD source refs without reading dirty HEAD', () => fixture(root => {
