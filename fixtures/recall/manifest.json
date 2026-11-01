@@ -8119,6 +8119,55 @@
           ]
         }
       ]
+    },
+    {
+      "name": "parameterization-row-order-identical",
+      "path": "parameterization-row-order-identical",
+      "rule": "parameterization-candidate",
+      "role": "negative",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-01",
+      "expectedTests": 4,
+      "expectedIncomplete": false,
+      "expectedUnresolved": 0,
+      "arguments": [
+        "--rule",
+        "duplicate-test=off"
+      ],
+      "expectedFindings": [],
+      "expectedAbsent": [
+        {
+          "rule": "parameterization-candidate",
+          "titles": [
+            "first table",
+            "second table"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "parameterization-row-order-retained",
+      "path": "parameterization-row-order-retained",
+      "rule": "parameterization-candidate",
+      "role": "positive",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-01",
+      "expectedTests": 3,
+      "expectedIncomplete": false,
+      "expectedUnresolved": 0,
+      "expectedFindings": [
+        {
+          "rule": "parameterization-candidate",
+          "titles": [
+            "table",
+            "manual"
+          ],
+          "severity": "warning"
+        }
+      ],
+      "expectedAbsent": []
     }
   ],
   "knownFalsePositiveBaseline": 1,

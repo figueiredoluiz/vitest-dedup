@@ -105,7 +105,7 @@ here with no recall coverage and nothing to say so.
 | --- | --- | --- | --- |
 | `duplicate-test` | renamed locals | different subject | `bench` declarations, including discovery from a `*.bench.ts` file; `.concurrent` vs `.sequential`; dynamic title (`not-compared`); resolved and inline-expression `.skipIf` conditions; in-source `import.meta.vitest` block |
 | `duplicate-test-name` | shared full title | same leaf title, different suites | parameterized titles (one finding per row); title from a function name; dynamic title (`not-compared`) |
-| `parameterization-candidate` | three differing literals | differing literal **kind** | — |
+| `parameterization-candidate` | three differing literals | differing literal **kind** | reordered identical tables; table/manual retention |
 | `near-duplicate-test` | reordered setup | reordering precondition violated | composed transformations; `.each` row against a hand-written test |
 | `cross-file-duplicate` | same body, two files | different subject | — |
 | `subsumed-test` | ordered subsequence | subset but not a subsequence | — |

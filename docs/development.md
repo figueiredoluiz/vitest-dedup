@@ -126,8 +126,12 @@ whole null rows cannot anchor row findings yet. Strings and keys containing the 
 character are also refused until the owned tree exposes lossless JavaScript code-unit identity. Existing corpus exclusions still apply.
 
 The experimental parameterization rule groups same-file callbacks with the same literal shape,
-exact setup and modifiers, and different normalized bodies. It retains one representative per
-declaration and per exact body; every input case must survive consolidation. Literal kinds,
+exact setup and modifiers, and different normalized bodies. It accounts for every row, visits
+declarations in a stable order by their distinct body sets, and retains a representative only
+when that declaration adds a body. Larger sets precede covered subsets; rows and declarations
+can move without changing the candidate count. Selection is a deterministic greedy cover;
+changing literal values can change which overlapping declarations supply representatives.
+Every input case must survive consolidation. Literal kinds,
 property names, static module specifiers, type-level values and outside binding identities remain significant. Bodies with
 no recorded behavior event, a local dependency on a matcher name containing `InlineSnapshot`,
 or an unresolved computed member or destructuring key are excluded. Nonliteral import sources and
