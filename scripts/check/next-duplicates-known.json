@@ -699,6 +699,10 @@
     {
       "id": "recall-miss|duplicate-test-lone-surrogate-values|parameterization-candidate|keeps the first high surrogate,keeps the second high surrogate",
       "reason": "NC65: the owned tree uses replacement-character display encoding for lone surrogates, which can collide with literal replacement-character text in property names. NC14 conservatively refuses this text in callback/dependency shapes. This loses the valid string-value consolidation here until code-unit identity is lossless; the duplicate-test positive remains required."
+    },
+    {
+      "id": "recall-extra|parameterization-class-alias|parameterization-candidate|run.test.ts:3,run.test.ts:88",
+      "reason": "The default engine abstains on these local classes as unresolved. The next engine reads them, and an unread alias of one must not spend the budget that keeps the trace complete."
     }
   ]
 }

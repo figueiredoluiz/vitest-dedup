@@ -8029,6 +8029,61 @@
         }
       ],
       "expectedAbsent": []
+    },
+    {
+      "name": "parameterization-binding-only-body",
+      "path": "parameterization-binding-only-body",
+      "rule": "parameterization-candidate",
+      "role": "negative",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-01",
+      "expectedTests": 6,
+      "expectedIncomplete": false,
+      "expectedUnresolved": 0,
+      "expectedFindings": [
+        {
+          "rule": "parameterization-candidate",
+          "severity": "warning",
+          "titles": [
+            "reads one",
+            "reads two"
+          ]
+        }
+      ],
+      "expectedAbsent": [
+        {
+          "rule": "parameterization-candidate",
+          "titles": [
+            "binds one",
+            "binds two"
+          ]
+        },
+        {
+          "rule": "parameterization-candidate",
+          "titles": [
+            "nests one",
+            "nests two"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "parameterization-class-alias",
+      "path": "parameterization-class-alias",
+      "rule": "parameterization-candidate",
+      "role": "negative",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-01",
+      "expectedTests": 2,
+      "expectedIncomplete": true,
+      "expectedUnresolved": 2,
+      "expectedFindings": [],
+      "expectedAbsent": [],
+      "blindUnderCurrent": [
+        "run.test.ts"
+      ]
     }
   ],
   "knownFalsePositiveBaseline": 1,

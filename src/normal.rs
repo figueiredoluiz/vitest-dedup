@@ -7,7 +7,7 @@
 //! A test's key and its context are assembled from the pieces here.
 
 mod form;
-pub(crate) use form::MAX_CLASS_RENDER_BYTES;
+pub(crate) use form::{MAX_CLASS_RENDER_BYTES, UNSCOPED_PRIVATE};
 mod identity;
 pub(crate) mod row_identity;
 mod rows;
@@ -216,7 +216,8 @@ pub struct Walk {
     /// Literals render by kind for body shapes and assertion-subject shapes.
     pub(crate) structural: bool,
     /// Text appended to a symbol's rendering wherever it appears (a destructured binding's
-    /// property path). A suffix can only tell two events apart, never make them equal.
+    /// property path, a retained binding's source). A suffix can only tell two events apart,
+    /// never make them equal.
     pub(crate) suffixes: HashMap<SymbolId, String>,
     /// Locals whose one read stands for their own initializer (the trace's single-use inlining):
     /// the read renders the initializer's form, at the position the read occupies, with the
@@ -494,6 +495,19 @@ impl<'s> Normalizer<'s> {
         self.write_node(node, walk, &mut out);
         self.nesting = saved;
         out
+    }
+
+    /// The form of `node` as shape, apart from the walk: its locals take no number, and a local
+    /// class reads as a local, so nothing here spends the class budget the events share.
+    pub(crate) fn detached_shape(&mut self, node: NodeId, walk: &mut Walk) -> String {
+        let locals = std::mem::take(&mut walk.locals);
+        let classes = std::mem::take(&mut walk.classes);
+        walk.structural = true;
+        let form = self.form_of(node, walk);
+        walk.structural = false;
+        walk.locals = locals;
+        walk.classes = classes;
+        form
     }
 
     /// The flat form of a member read, spelled the way the writer spells one, for a substitution
