@@ -306,6 +306,8 @@ const RUST_MODULES = {
   // Hook effect proof: measured at 99.23% (129/130 lines).
   'src/normal/hooks.rs': 99.2,
   'src/corpus.rs': 99,
+  // Retained next-engine ownership: first measured at 100% (165/165 lines).
+  'src/corpus/memory.rs': 100,
   // Whole-suite collection: measured at 93.60% (117/125 lines).
   'src/corpus/suites.rs': 93,
   // Hook-chain collection: measured at 99.47% (189/190 lines).

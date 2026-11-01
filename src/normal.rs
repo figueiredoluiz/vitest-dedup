@@ -35,7 +35,7 @@ pub fn digest(text: &str) -> u64 {
 /// Identities of what project modules export, shared by every file of one run.
 #[derive(Debug, Default)]
 pub struct Exports {
-    known: RefCell<HashMap<(PathBuf, String), Option<String>>>,
+    known: RefCell<crate::memory::RetainedMap<(PathBuf, String), Option<String>>>,
 }
 
 /// What a normalization reads besides the module.
@@ -834,3 +834,20 @@ impl<'s> Normalizer<'s> {
 
 #[cfg(test)]
 mod tests;
+
+impl crate::memory::HeapBytes for CallbackForm {
+    /// Callback forms are inline tags, with an exhaustive match for future additions.
+    fn heap_bytes(&self) -> usize {
+        match self {
+            Self::Interchangeable | Self::Arrow | Self::Function => 0,
+        }
+    }
+}
+
+impl crate::memory::HeapBytes for Exports {
+    /// Retained export identities include owned paths, exported names and cached text.
+    fn heap_bytes(&self) -> usize {
+        let Self { known } = self;
+        crate::memory::HeapBytes::heap_bytes(&*known.borrow())
+    }
+}

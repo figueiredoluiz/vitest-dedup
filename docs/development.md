@@ -86,6 +86,18 @@ Vitest collects nothing from, and a case Vitest cannot collect. Cases the analyz
 are listed with reasons in `scripts/check/hooks-differential-known.json`; one that starts passing
 fails, so its entry goes when support lands.
 
+### Next-engine run modes
+
+`VITEST_DEDUP_ENGINE=next` supports `--changed-since`: all files are analyzed so an unchanged
+cross-file twin remains available, then findings without a changed participant are withheld.
+Withholding findings marks the run incomplete, as with the default engine.
+
+`--debug-memory --reporters jsonl` reports next-engine retained storage under `fields.engine`,
+further split into `engineFields` cases, suites, hooks, sites, blind files and the two export
+caches. These buckets sum to `retainedBytes`. `engineMemoryNotice` states which private
+hash-table and allocator overhead is outside the estimate; RSS is a separate measurement.
+The default engine's memory record shape is unchanged.
+
 ### Next-engine duplicate rules
 
 `npm run check:next-duplicates` runs the analyzer under `VITEST_DEDUP_ENGINE=next` over
@@ -149,8 +161,9 @@ parameterization group already reports is not claimed twice. Tests with fewer th
 nothing to compare.
 
 Baselines under the next engine carry `vitestDedupFingerprint/v2`: the same derivation, but the engines pair
-and title tests differently, so each refuses the other's file rather than half matching it. Modes that
-need a base revision remain refused there.
+and title tests differently, so each refuses the other's file rather than half matching it.
+`--baseline-from-ref` remains unavailable under the next engine pending historical helper resolution.
+
 The experimental `subsumed-test` rule is opt-in. It compares complete same-file traces under
 the same context and callback form for strict ordered subsequences, preserving repeated events.
 It reports the smaller test first, charges every candidate pair to the shared budget, and never

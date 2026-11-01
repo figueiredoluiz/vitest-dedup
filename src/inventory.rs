@@ -145,7 +145,7 @@ const MAX_DEPTH: usize = 8;
 /// project with globals reads free names as the API), shared by every file of one run.
 #[derive(Debug, Default)]
 pub struct Modules {
-    cache: HashMap<(PathBuf, bool), HashMap<String, Export>>,
+    cache: crate::memory::RetainedMap<(PathBuf, bool), HashMap<String, Export>>,
     active: HashSet<PathBuf>,
     /// How many lookups the depth limit has cut short. A module whose analysis saw a cut is not
     /// cached: read again from nearer the test file, the limit may not reach it. (A cycle is cut
@@ -211,3 +211,29 @@ pub fn inventory(
 
 #[cfg(test)]
 mod tests;
+
+impl crate::memory::HeapBytes for Export {
+    /// Cached registration reach is inline; exhaustively account for every export kind.
+    fn heap_bytes(&self) -> usize {
+        match self {
+            Self::Namespace => 0,
+            Self::Api(kind) => kind.heap_bytes(),
+            Self::Wrapper(Reach::Hook | Reach::Hooks | Reach::Tasks) => 0,
+        }
+    }
+}
+
+impl crate::memory::HeapBytes for Modules {
+    /// Charge retained export maps and active-set capacity, never temporary parsed trees.
+    fn heap_bytes(&self) -> usize {
+        let Self {
+            cache,
+            active,
+            deep_cuts,
+        } = self;
+        cache
+            .heap_bytes()
+            .saturating_add(active.heap_bytes())
+            .saturating_add(deep_cuts.heap_bytes())
+    }
+}

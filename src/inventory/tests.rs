@@ -1385,3 +1385,19 @@ fn a_wrapper_past_the_depth_limit_may_register_tests() {
         ["wrapper@2"]
     );
 }
+
+/// Export caches and active-set reserved capacity are owned even between module reads.
+#[test]
+fn module_export_cache_retains_owned_bytes() {
+    use crate::memory::HeapBytes;
+    let mut modules = super::Modules::default();
+    assert_eq!(modules.heap_bytes(), 0);
+    modules.active.reserve(64);
+    let reserved = modules.heap_bytes();
+    assert!(reserved > 0);
+    modules.cache.insert(
+        ("module.ts".into(), false),
+        [("named".repeat(2048), super::Export::Namespace)].into(),
+    );
+    assert!(modules.heap_bytes() > reserved);
+}

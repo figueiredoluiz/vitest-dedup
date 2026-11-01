@@ -75,6 +75,8 @@ use crate::model::{
     HookGuardKind, HookGuards, HookKind, Location, MockFactory, MockedModule, Modifier, Position,
     Span, TestCase, Title,
 };
+use std::collections::{HashMap, HashSet};
+use std::hash::{BuildHasher, Hash};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -109,7 +111,7 @@ macro_rules! inline_only {
     };
 }
 
-inline_only!(bool, u32, u64, u128, usize, Option<u32>);
+inline_only!(bool, u32, u64, u128, usize);
 
 impl HeapBytes for String {
     /// Capacity, not length. See the module documentation for why the difference is the entire
@@ -135,6 +137,154 @@ impl<T: HeapBytes> HeapBytes for Vec<T> {
     /// buffer it never gave back.
     fn heap_bytes(&self) -> usize {
         self.capacity() * size_of::<T>() + self.iter().map(HeapBytes::heap_bytes).sum::<usize>()
+    }
+}
+
+/// An optional payload owns only the heap of a present value.
+impl<T: HeapBytes> HeapBytes for Option<T> {
+    fn heap_bytes(&self) -> usize {
+        self.as_ref().map_or(0, HeapBytes::heap_bytes)
+    }
+}
+
+/// Tuple storage is paid for by its containing collection; each member owns its own heap.
+impl<A: HeapBytes, B: HeapBytes> HeapBytes for (A, B) {
+    fn heap_bytes(&self) -> usize {
+        self.0.heap_bytes().saturating_add(self.1.heap_bytes())
+    }
+}
+
+/// Static text is borrowed from the binary, not owned retained heap.
+impl HeapBytes for &'static str {
+    fn heap_bytes(&self) -> usize {
+        0
+    }
+}
+
+/// Usable entry-capacity payload plus live owned keys/values. Private hash-table control bytes,
+/// spare buckets and allocator metadata are outside this stable-API estimate; RSS is separate.
+impl<K: HeapBytes + Eq + Hash, V: HeapBytes, S: BuildHasher> HeapBytes for HashMap<K, V, S> {
+    fn heap_bytes(&self) -> usize {
+        self.iter().fold(
+            self.capacity().saturating_mul(size_of::<(K, V)>()),
+            |bytes, (key, value)| {
+                bytes
+                    .saturating_add(key.heap_bytes())
+                    .saturating_add(value.heap_bytes())
+            },
+        )
+    }
+}
+
+/// The set counterpart of the map payload estimate, including reserved usable entry storage.
+impl<T: HeapBytes + Eq + Hash, S: BuildHasher> HeapBytes for HashSet<T, S> {
+    fn heap_bytes(&self) -> usize {
+        self.iter().fold(
+            self.capacity().saturating_mul(size_of::<T>()),
+            |bytes, value| bytes.saturating_add(value.heap_bytes()),
+        )
+    }
+}
+
+/// A retained cache whose entry payload is charged on insertion, not rescanned per file.
+#[derive(Debug)]
+pub(crate) struct RetainedMap<K, V> {
+    entries: HashMap<K, V>,
+    owned_heap: usize,
+}
+
+impl<K, V> Default for RetainedMap<K, V> {
+    fn default() -> Self {
+        Self {
+            entries: HashMap::new(),
+            owned_heap: 0,
+        }
+    }
+}
+
+impl<K: HeapBytes + Eq + Hash, V: HeapBytes> RetainedMap<K, V> {
+    /// A borrowed lookup cannot mutate an owned payload behind the ledger.
+    pub(crate) fn get(&self, key: &K) -> Option<&V> {
+        self.entries.get(key)
+    }
+
+    /// Replacements retain the existing key, just as HashMap does, and replace only its value.
+    pub(crate) fn insert(&mut self, key: K, value: V) -> Option<V> {
+        if let Some(previous) = self.entries.get_mut(&key) {
+            self.owned_heap = self
+                .owned_heap
+                .saturating_sub(previous.heap_bytes())
+                .saturating_add(value.heap_bytes());
+            return Some(std::mem::replace(previous, value));
+        }
+        self.owned_heap = self
+            .owned_heap
+            .saturating_add(key.heap_bytes())
+            .saturating_add(value.heap_bytes());
+        self.entries.insert(key, value)
+    }
+
+    /// Test reserved usable entry storage without manufacturing live payloads.
+    #[cfg(test)]
+    pub(crate) fn reserve(&mut self, additional: usize) {
+        self.entries.reserve(additional);
+    }
+}
+
+impl<K, V> HeapBytes for RetainedMap<K, V> {
+    fn heap_bytes(&self) -> usize {
+        let Self {
+            entries,
+            owned_heap,
+        } = self;
+        entries
+            .capacity()
+            .saturating_mul(size_of::<(K, V)>())
+            .saturating_add(*owned_heap)
+    }
+}
+
+/// Disjoint retained populations of the next engine. Containers include their own capacities;
+/// parser trees and file-local normalization scratch are not retained by the engine.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EngineBytes {
+    /// Per-file test cases and their paths.
+    pub cases: usize,
+    /// Per-file suite cases and their paths.
+    pub suites: usize,
+    /// Hook declarations, proven effects and lifecycle chains.
+    pub hooks: usize,
+    /// Optional registration-site records and paths.
+    pub sites: usize,
+    /// Blind-file paths and their container.
+    pub blind: usize,
+    /// Inventory module-export cache and active-path set.
+    pub modules: usize,
+    /// Normal-form export-identity cache.
+    pub exports: usize,
+    /// Inline counters, currently retaining no heap.
+    pub scalars: usize,
+}
+
+impl EngineBytes {
+    /// Every bucket exactly once, saturating rather than wrapping an accounting sum.
+    pub fn total(self) -> usize {
+        let Self {
+            cases,
+            suites,
+            hooks,
+            sites,
+            blind,
+            modules,
+            exports,
+            scalars,
+        } = self;
+        [
+            cases, suites, hooks, sites, blind, modules, exports, scalars,
+        ]
+        .into_iter()
+        .fold(0, usize::saturating_add)
     }
 }
 
@@ -477,6 +627,8 @@ pub struct FieldBytes {
     /// [`TestCase`] fields that hold no heap of their own. Always zero; reported for the reason
     /// [`ContextFieldBytes::scalars`] is.
     pub scalars: usize,
+    /// Next-engine retained state, further split by MemoryReport::engine_fields.
+    pub engine: usize,
 }
 
 impl FieldBytes {
@@ -527,8 +679,16 @@ impl FieldBytes {
             location,
             spine,
             scalars,
+            engine,
         } = self;
-        body + context.total() + suite_path + title + modifiers + location + spine + scalars
+        body + context.total()
+            + suite_path
+            + title
+            + modifiers
+            + location
+            + spine
+            + scalars
+            + engine
     }
 }
 
@@ -620,6 +780,8 @@ pub struct MemoryReport {
     /// peak RSS has no safe portable API, so the binary reads it and hands it in. `None` on a
     /// platform with no reader wired up.
     pub peak_rss_bytes: Option<u64>,
+    /// Next-engine ownership breakdown; absent for the unchanged default-engine record.
+    pub engine_fields: Option<EngineBytes>,
 }
 
 impl MemoryReport {
@@ -644,19 +806,57 @@ impl MemoryReport {
         for test in tests {
             fields.add_test(test);
         }
+        Self::from_fields(
+            fields,
+            tests_analyzed,
+            files_analyzed,
+            tests.len(),
+            peak_rss_bytes,
+            None,
+        )
+    }
+
+    /// A next-engine snapshot taken before its populations are moved into the rule evaluator.
+    pub fn next_engine(
+        fields: EngineBytes,
+        tests_analyzed: usize,
+        files_analyzed: usize,
+        declarations_retained: usize,
+        peak_rss_bytes: Option<u64>,
+    ) -> Self {
+        Self::from_fields(
+            FieldBytes {
+                engine: fields.total(),
+                ..FieldBytes::default()
+            },
+            tests_analyzed,
+            files_analyzed,
+            declarations_retained,
+            peak_rss_bytes,
+            Some(fields),
+        )
+    }
+
+    /// Both engines use one total, denominator and phase contract for their snapshots.
+    fn from_fields(
+        fields: FieldBytes,
+        tests_analyzed: usize,
+        files_analyzed: usize,
+        declarations_retained: usize,
+        peak_rss_bytes: Option<u64>,
+        engine_fields: Option<EngineBytes>,
+    ) -> Self {
         let retained_bytes = fields.total();
         Self {
             phase: MemoryPhase::PostExtraction,
             tests_analyzed,
             files_analyzed,
             retained_bytes,
-            // Checked division, not a guarded branch that could be written the other way round:
-            // an empty corpus reports 0, and a consumer is told in this field's doc to floor
-            // `tests_analyzed` before comparing.
             bytes_per_test: retained_bytes.checked_div(tests_analyzed).unwrap_or(0),
             fields,
-            declarations_retained: tests.len(),
+            declarations_retained,
             peak_rss_bytes,
+            engine_fields,
         }
     }
 
@@ -725,11 +925,27 @@ impl MemoryRoof {
         corpus: &Vec<TestCase>,
         resident: impl FnOnce() -> Option<u64>,
     ) -> bool {
+        self.exceeded_with_retained(corpus, 0, resident)
+    }
+
+    /// Checks additional owned engine state without charging it again on every file.
+    #[allow(clippy::ptr_arg)]
+    #[must_use]
+    pub fn exceeded_with_retained(
+        &self,
+        corpus: &Vec<TestCase>,
+        retained: usize,
+        resident: impl FnOnce() -> Option<u64>,
+    ) -> bool {
         let Some(budget) = self.budget_bytes else {
             return false;
         };
-        self.exceeded(corpus)
-            || resident().is_some_and(|rss| rss > budget.saturating_add(budget / 2))
+        let spine = corpus.capacity().saturating_mul(size_of::<TestCase>());
+        let held = self
+            .charged
+            .saturating_add(u64::try_from(spine).unwrap_or(u64::MAX))
+            .saturating_add(u64::try_from(retained).unwrap_or(u64::MAX));
+        held > budget || resident().is_some_and(|rss| rss > budget.saturating_add(budget / 2))
     }
 
     /// Whether `corpus`, with everything charged so far, holds more than the budget.
@@ -892,9 +1108,17 @@ mod tests {
             location,
             spine,
             scalars,
+            engine,
         } = report.fields;
-        let summed =
-            body + context.total() + suite_path + title + modifiers + location + spine + scalars;
+        let summed = body
+            + context.total()
+            + suite_path
+            + title
+            + modifiers
+            + location
+            + spine
+            + scalars
+            + engine;
         assert_eq!(
             summed, report.retained_bytes,
             "fields must be disjoint and exhaustive: {:?}",
@@ -1359,5 +1583,44 @@ mod tests {
         assert!(!roof.exceeded(&corpus));
         corpus.reserve_exact(1);
         assert!(roof.exceeded(&corpus), "the spine's capacity counts too");
+    }
+}
+
+/// Cache replacements charge the stored key and current value, without double-counting old data.
+#[cfg(test)]
+#[test]
+fn retained_map_matches_an_independent_recount_after_replacements() {
+    let mut map = RetainedMap::<String, String>::default();
+    map.reserve(16);
+    assert_eq!(map.heap_bytes(), map.entries.heap_bytes());
+    map.insert("key".into(), "large".repeat(2048));
+    assert_eq!(map.heap_bytes(), map.entries.heap_bytes());
+    let mut replacement_key = String::with_capacity(8192);
+    replacement_key.push_str("key");
+    map.insert(replacement_key, "small".into());
+    assert_eq!(map.heap_bytes(), map.entries.heap_bytes());
+    map.insert("another".into(), "value".into());
+    assert_eq!(map.heap_bytes(), map.entries.heap_bytes());
+}
+
+/// Budget sampling does not revisit retained cache payloads after insertion.
+#[cfg(test)]
+#[test]
+fn retained_cache_sampling_does_not_walk_entries() {
+    struct Payload(std::rc::Rc<std::cell::Cell<bool>>);
+    impl HeapBytes for Payload {
+        /// A probe that permits insertion accounting but rejects later payload walks.
+        fn heap_bytes(&self) -> usize {
+            assert!(!self.0.get(), "cache payload rescanned");
+            16
+        }
+    }
+    let sealed = std::rc::Rc::new(std::cell::Cell::new(false));
+    let mut map = RetainedMap::default();
+    map.insert("key".to_owned(), Payload(sealed.clone()));
+    let expected = map.heap_bytes();
+    sealed.set(true);
+    for _ in 0..1000 {
+        assert_eq!(map.heap_bytes(), expected);
     }
 }

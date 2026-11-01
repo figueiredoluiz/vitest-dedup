@@ -174,6 +174,11 @@ compared as usual.
 The run reads whole files until the analyzer holds more than its memory budget: 2,048 MiB by
 default, set with `--max-memory <MiB>` and removed with `--no-memory-cap`. The figure is the retained
 heap `--debug-memory` reports plus source text kept for the HTML report.
+The experimental engine includes retained cases, suites, hook chains, saved sites, blind-file
+records and both export caches. Its hash-table estimate counts usable entry-capacity payload
+and live owned keys/values; private spare buckets, control bytes and allocator metadata remain
+outside that estimate. Temporary parser state is not retained engine heap. The separate RSS
+backstop includes resident allocations outside this accounting.
 
 A second backstop checks current process RSS after each file and stops above 1.5 times the budget on
 Linux, macOS and Windows.

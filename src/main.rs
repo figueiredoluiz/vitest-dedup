@@ -260,20 +260,16 @@ fn run_with_engine(
     let mut stderr: std::io::Stderr = std::io::stderr();
     let config = Config::load(&args.root, args.to_overrides())?;
 
-    // The next engine reads no base revision and its memory is not charged yet, so a mode that
-    // needs either would mislead: refused before any work.
+    // File baselines use the selected engine identity. Reference baselines still need
+    // historical helper resolution before the next engine can safely analyze them.
     if next_engine.is_some() {
-        let findings_mode = [
-            ("--baseline-from-ref", args.baseline_from_ref.is_some()),
-            ("--changed-since", args.changed_since.is_some()),
-            ("--debug-memory", args.debug_memory),
-        ]
-        .into_iter()
-        .find_map(|(flag, given)| given.then_some(flag));
+        let findings_mode = [("--baseline-from-ref", args.baseline_from_ref.is_some())]
+            .into_iter()
+            .find_map(|(flag, given)| given.then_some(flag));
         if let Some(flag) = findings_mode {
             anyhow::bail!(
-                "{flag} is not available under VITEST_DEDUP_ENGINE=next, which reads no base \
-                 revision and measures no engine memory yet"
+                "{flag} is not available under VITEST_DEDUP_ENGINE=next: historical helper \
+                 resolution is not supported yet"
             );
         }
         writeln!(
@@ -602,7 +598,15 @@ fn run_with_engine(
         // Whole files only: stopping before a file, once the files read so far reach the budget,
         // keeps every per-file side effect consistent, so the run is exactly a run over them.
         // Checked here so the next engine's files, which `continue` below, are held to it too.
-        if index > 0 && roof.exceeded_with_rss(&tests, &mut resident) {
+        if index > 0
+            && roof.exceeded_with_retained(
+                &tests,
+                next_engine
+                    .as_ref()
+                    .map_or(0, vitest_dedup::memory::HeapBytes::heap_bytes),
+                &mut resident,
+            )
+        {
             let remaining = discovered.files.len() - index;
             causes.files_over_memory_budget = remaining;
             for skipped in &discovered.files[index..] {
@@ -994,12 +998,15 @@ fn run_with_engine(
     // Costs nothing when the flag is off: one walk of the corpus is proportional to the corpus,
     // which is exactly what a default run should not pay for an answer nobody asked for.
     let memory_reports = if args.debug_memory {
-        vec![vitest_dedup::memory::MemoryReport::post_extraction(
-            &tests,
-            total_tests,
-            files_read,
-            None,
-        )]
+        vec![match &next_engine {
+            Some(engine) => engine.memory_report(files_read),
+            None => vitest_dedup::memory::MemoryReport::post_extraction(
+                &tests,
+                total_tests,
+                files_read,
+                None,
+            ),
+        }]
     } else {
         Vec::new()
     };
@@ -1022,15 +1029,13 @@ fn run_with_engine(
     // The next engine's rules read the corpus it retained once every file has been read; the
     // default engine's rules read the extracted tests. Both share one tail: modes, gate capture,
     // the presentation cap, sorted findings.
-    let engine_files = next_engine
-        .as_mut()
-        .map(|engine| std::mem::take(&mut engine.files));
+    let engine_files = next_engine.as_mut().map(|engine| engine.take_files());
     let mut result = match engine_files {
         Some(files) => {
             let outcome = vitest_dedup::rules::run_with_hooks(
                 &files,
-                &next_engine.as_ref().expect("selected engine").suites,
-                &next_engine.as_ref().expect("selected engine").hooks,
+                next_engine.as_ref().expect("selected engine").suites(),
+                next_engine.as_ref().expect("selected engine").hooks(),
                 &config,
                 &inline_suppressions,
             );
@@ -1040,8 +1045,7 @@ fn run_with_engine(
                 outcome.findings,
                 causes,
                 analysis::RunModes {
-                    // A changed-file filter and a base revision are refused above.
-                    changed_files: None,
+                    changed_files: changed_files.as_ref(),
                     baseline: baseline.as_ref(),
                     suppressions: &inline_suppressions,
                 },
@@ -1145,7 +1149,11 @@ fn run_with_engine(
         .collect();
     let jsonl_reporter = JsonlReporter::with_fingerprints(hook_fingerprints, test_fingerprints)
         .with_memory(memory_reports)
-        .with_sites(next_engine.map(|engine| engine.sites).unwrap_or_default());
+        .with_sites(
+            next_engine
+                .map(|engine| engine.into_sites())
+                .unwrap_or_default(),
+        );
 
     let exit_code = final_exit_code(args.fail_on_incomplete, args.fail_on_new, &result, &config);
     let terminal_context = TerminalReportContext::new(&config, exit_code).with_timing(timing);

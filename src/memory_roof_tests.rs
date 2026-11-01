@@ -243,3 +243,46 @@ fn rss_stops_the_historical_pass_before_it_accepts_unseen_duplicates() {
     });
     assert_eq!(resident["findings"], exact["findings"]);
 }
+
+/// The next engine's retained titles stop later files even without an OS RSS sample.
+#[test]
+fn next_retained_heap_stops_at_a_whole_file_boundary_without_rss() {
+    let root = tempfile::tempdir().unwrap();
+    write_tree(root.path(), 3);
+    let title = "x".repeat(200_000);
+    let source=format!("import {{test,expect}} from 'vitest';test('a{title}',()=>expect(1).toBe(1));test('b{title}',()=>expect(1).toBe(1));");
+    std::fs::write(root.path().join("0.test.ts"), &source).unwrap();
+    let (code, partial) = analyze_on(
+        root.path(),
+        "json",
+        &["--max-memory", "1", "--fail-on-incomplete=limits"],
+        || None,
+        Some(vitest_dedup::corpus::Engine::default()),
+    );
+    assert_eq!(code, ExitCode::OperationalError);
+    assert_eq!(partial["filesAnalyzed"], 1);
+    assert_eq!(partial["testsAnalyzed"], 2);
+    assert_eq!(partial["incompleteCauses"]["filesOverMemoryBudget"], 2);
+    assert_eq!(partial["incomplete"], true);
+    let prefix = tempfile::tempdir().unwrap();
+    std::fs::write(prefix.path().join("0.test.ts"), source).unwrap();
+    let (_, expected) = analyze_on(
+        prefix.path(),
+        "json",
+        &["--no-memory-cap"],
+        || panic!("disabled budget sampled RSS"),
+        Some(vitest_dedup::corpus::Engine::default()),
+    );
+    assert!(!expected["findings"].as_array().unwrap().is_empty());
+    assert_eq!(partial["findings"], expected["findings"]);
+    let (_, full) = analyze_on(
+        root.path(),
+        "json",
+        &["--no-memory-cap"],
+        || panic!("disabled budget sampled RSS"),
+        Some(vitest_dedup::corpus::Engine::default()),
+    );
+    assert_eq!(full["filesAnalyzed"], 3);
+    assert_eq!(full["testsAnalyzed"], 4);
+    assert_eq!(full["incomplete"], false);
+}

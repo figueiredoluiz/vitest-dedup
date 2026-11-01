@@ -256,3 +256,29 @@ pub fn current() -> &'static dyn Framework {
 
 #[cfg(test)]
 mod tests;
+
+impl crate::memory::HeapBytes for HookTiming {
+    /// Every lifecycle phase is an inline tag.
+    fn heap_bytes(&self) -> usize {
+        match self {
+            Self::BeforeAll
+            | Self::BeforeEach
+            | Self::AfterEach
+            | Self::AfterAll
+            | Self::AroundEach
+            | Self::AroundAll
+            | Self::OnTestFinished
+            | Self::OnTestFailed => 0,
+        }
+    }
+}
+
+impl crate::memory::HeapBytes for Registers {
+    /// Registration tags own no heap, including the inline lifecycle phase.
+    fn heap_bytes(&self) -> usize {
+        match self {
+            Self::Test | Self::Suite | Self::Bench => 0,
+            Self::Hook(timing) => timing.heap_bytes(),
+        }
+    }
+}
