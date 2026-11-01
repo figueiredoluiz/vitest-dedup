@@ -188,7 +188,8 @@ This workflow relaxes no gate threshold or corpus exclusion.
 ### Probing and proving a change
 
 `npm run probe -- <test file or directory>...` copies each input to a temporary project and prints
-what Vitest collects beside what both engines report, marking any disagreement. It reads
+what Vitest collects beside what both engines report, marking any disagreement. Findings of rules
+the next engine does not run are listed apart and are not a disagreement. It reads
 `target/release/vitest-dedup` unless `--binary` names another. Overlapping project collections
 and files the runner did not probe are unread, so partial collection cannot report agreement.
 
