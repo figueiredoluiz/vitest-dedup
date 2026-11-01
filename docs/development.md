@@ -151,7 +151,7 @@ nothing to compare.
 The experimental `subsumed-test` rule is opt-in. It compares complete same-file traces under
 the same context and callback form for strict ordered subsequences, preserving repeated events.
 It reports the smaller test first, charges every candidate pair to the shared budget, and never
-compares rows within one declaration. Placeholder callbacks and unresolved table populations are refused. Fixture providers,
+compares rows within one declaration. Placeholder callbacks, unresolved table populations and tests expected to fail, directly or through a suite, are refused. Fixture providers,
 registration conditions and unbound cells remain part of the comparison identity. Findings suggest review rather than safe deletion.
 
 The experimental hook rule compares proven synchronous, idempotent setup within one lifecycle
