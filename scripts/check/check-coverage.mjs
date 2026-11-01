@@ -309,10 +309,14 @@ const RUST_MODULES = {
   'src/rules/parameters.rs': 100,
   // Suite reporting and child suppression: measured at 99.00% (99/100 lines).
   'src/rules/suites.rs': 99,
-  // The behavior trace: measured at 84.78% (802/946 lines), its first recorded floor.
-  'src/behavior.rs': 84,
-  // Trace-only dataflow normalizations: measured at 89.70% (392/437 lines).
-  'src/behavior/dataflow.rs': 89,
+  // The behavior trace: raised from its first floor (84.78%) after a pass driven by llvm-cov's
+  // own uncovered-line list — statement and expression families, splice and recognizer
+  // rejections, callee and destructuring paths. The 57 remaining uncovered lines are depth
+  // bounds and grammar-guaranteed children.
+  'src/behavior.rs': 95,
+  // Trace-only dataflow normalizations: raised from its first floor (89.70%) in the same pass —
+  // pattern forms, effect families and the pruning guards.
+  'src/behavior/dataflow.rs': 94,
   // Test-only fixture harness: measured at 100.00% (35/35 lines).
   'src/testing.rs': 100,
 }

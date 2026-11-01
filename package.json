@@ -67,6 +67,7 @@
     "check:mutation": "node scripts/check/check-mutation-score.mjs",
     "mutants": "node scripts/check/check-mutation-score.mjs --run",
     "mutants:next-core": "node scripts/check/check-mutation-score.mjs --run --scope=next-core",
+    "mutants:trace": "node scripts/check/check-mutation-score.mjs --run --scope=trace",
     "check:versions": "node scripts/release/check-release-version.mjs",
     "skills:check": "node scripts/check/check-agent-skills.mjs",
     "corpus:external": "cargo build --release --locked && node scripts/check/run-external-corpus.mjs",

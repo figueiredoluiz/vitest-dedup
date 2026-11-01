@@ -193,12 +193,32 @@ export const NEXT_CORE = {
   minimumScored: 320,
 }
 
+// The behavior trace, measured as its own scope for the same reason the normal forms are: it
+// feeds NC16 and NC17, whose claims will be exactly as strong as the tests that constrain this
+// code. Selected with `--scope trace` (`npm run mutants:trace`).
+export const TRACE = {
+  // The per-file and viable-count floors sit ~5% under the enumerated counts, as NEXT_CORE's
+  // do: a cleanup that removes a surviving mutant raises the score and must not fail the
+  // count checks.
+  scope: [
+    { file: 'src/behavior.rs', minimumMutants: 298 }, // 314 enumerated
+    { file: 'src/behavior/dataflow.rs', minimumMutants: 128 }, // 135 enumerated
+  ],
+  // 2026-11-01: 246 caught, 180 missed, 23 unviable, 0 timeouts in 85 minutes at `--jobs 4`;
+  // 246/426 = 57.75%. The survivors are dominated by depth-arithmetic equivalents, which the
+  // floor absorbs; the match-arm deletions with observable events are pinned by the trace's
+  // controls and can only raise the score.
+  minimumScore: 57.7,
+  minimumScored: 405,
+}
+
 /** The scope `argv` selects, with the floors it is checked against. */
 export function selectScope(argv) {
   const named = argv.find((argument) => argument.startsWith('--scope'))
   if (named === undefined) return { scope: SCOPE, minimumScore: MINIMUM_SCORE, minimumScored: MINIMUM_SCORED }
-  assert.equal(named, '--scope=next-core', `unknown scope ${named}; the one named scope is --scope=next-core`)
-  return NEXT_CORE
+  if (named === '--scope=next-core') return NEXT_CORE
+  if (named === '--scope=trace') return TRACE
+  assert.fail(`unknown scope ${named}; the named scopes are --scope=next-core and --scope=trace`)
 }
 
 /**
