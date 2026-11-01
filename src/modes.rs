@@ -242,7 +242,7 @@ pub fn load_baseline_as(path: &Path, version: &str) -> Result<Baseline> {
                 path.display()
             );
         }
-        if !entry.fingerprint.starts_with(version) {
+        if !entry.fingerprint.starts_with(&format!("{version}:")) {
             bail!(
                 "baseline {} contains an entry whose fingerprint is not a `{version}` \
                  value; regenerate it with --update-baseline",

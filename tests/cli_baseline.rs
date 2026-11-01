@@ -240,6 +240,10 @@ fn the_next_engine_refuses_a_malformed_baseline() {
             "not a `vitestDedupFingerprint/v2`",
         ),
         (
+            file("vitestDedupFingerprint/v2x:00", 1),
+            "not a `vitestDedupFingerprint/v2`",
+        ),
+        (
             file("vitestDedupFingerprint/v2:00", 0),
             "accepts 0 occurrences",
         ),
