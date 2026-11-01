@@ -35,6 +35,9 @@ pub(super) const MAX_FORM_DEPTH: usize = 256;
 /// name and the trace is incomplete.
 pub(crate) const MAX_CLASS_RENDER_BYTES: usize = 256 * 1024;
 
+/// What starts a private name no enclosing class being written declares.
+pub(crate) const UNSCOPED_PRIVATE: &str = "#?";
+
 /// The fields of `node` that are child nodes or lists of them, for the predicates below.
 fn children(tree: &Tree, node: NodeId) -> Vec<NodeId> {
     let mut out = Vec::new();
@@ -407,7 +410,7 @@ impl Normalizer<'_> {
                         let _ = write!(out, "#p{distance}.{index}");
                     }
                     None => {
-                        let _ = write!(out, "#?{name}");
+                        let _ = write!(out, "{UNSCOPED_PRIVATE}{name}");
                     }
                 }
                 return true;

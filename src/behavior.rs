@@ -30,7 +30,7 @@ mod tests;
 use crate::framework::{AssertionEntry, Dialect};
 use crate::lang::{Name, NodeId, Parsed, Scopes, Span, SymbolId, Tree};
 use crate::model::sha256_128;
-use crate::normal::{CallbackForm, Normalizer, Walk, MAX_CLASS_RENDER_BYTES};
+use crate::normal::{CallbackForm, Normalizer, Walk, MAX_CLASS_RENDER_BYTES, UNSCOPED_PRIVATE};
 use dataflow::Dataflow;
 use std::collections::HashMap;
 
@@ -179,6 +179,7 @@ pub(crate) fn trace_text<'s>(
             }
         }
     }
+    tag_retained_sources(normalizer, parsed, function, &dataflow, &mut walk);
     let root = walk.root;
     let mut walker = Walker {
         normalizer,
@@ -192,6 +193,101 @@ pub(crate) fn trace_text<'s>(
     walker.run(function);
     let complete = walker.complete && !walker.walk.class_budget_spent;
     (walker.events, complete, form)
+}
+
+/// Tags every read of a retained name with what bound it, since its reads name only the local and
+/// most sources emit no event. The tag spends no number and records no event, so numbering and a
+/// body of bindings alone stay as they were. A source with its own event stays out of the tag,
+/// which would make one difference every read's, and so does a plain name bound from one, which
+/// leaves nothing to tag. Source order, so a source reading an earlier local carries its tag.
+fn tag_retained_sources<'s>(
+    normalizer: &mut Normalizer<'s>,
+    parsed: &'s Parsed,
+    function: NodeId,
+    dataflow: &Dataflow,
+    walk: &mut Walk,
+) {
+    let tree = &parsed.tree;
+    for node in tree.descendants(function) {
+        let Some((target, source)) = binding_of(tree, node) else {
+            continue;
+        };
+        let named = names_itself(tree, source);
+        if named && tree.kind(target) == "Identifier" {
+            continue;
+        }
+        let names = bound_names(parsed, target);
+        let retained = |symbol: &SymbolId| {
+            !dataflow.inline.contains_key(symbol) && !dataflow.member.contains_key(symbol)
+        };
+        if !names.iter().any(retained) {
+            continue;
+        }
+        let mut bound = normalizer.detached_shape(target, walk);
+        if !named {
+            bound.push_str(" = ");
+            bound.push_str(&normalizer.detached_shape(source, walk));
+        }
+        // Rendered apart from its class, a private name is only its spelling.
+        if bound.contains(UNSCOPED_PRIVATE) {
+            continue;
+        }
+        let digest = sha256_128(&bound);
+        for (position, symbol) in names.iter().enumerate() {
+            if retained(symbol) {
+                let tag = format!("<{digest:x}#{position}");
+                walk.suffixes.entry(*symbol).or_default().push_str(&tag);
+            }
+        }
+    }
+}
+
+/// Whether `source` records an event naming what it evaluates: a call or a construction, awaited
+/// or not, or a function, whose body records its own.
+fn names_itself(tree: &Tree, source: NodeId) -> bool {
+    let source = tree.inner(source);
+    match tree.kind(source) {
+        "CallExpression" | "NewExpression" | "ArrowFunctionExpression" | "FunctionExpression" => {
+            true
+        }
+        "AwaitExpression" => tree
+            .child(source, "argument")
+            .is_some_and(|argument| names_itself(tree, argument)),
+        _ => false,
+    }
+}
+
+/// The target and source `node` binds, when it is a declarator or a loop over a declaration.
+fn binding_of(tree: &Tree, node: NodeId) -> Option<(NodeId, NodeId)> {
+    match tree.kind(node) {
+        "VariableDeclarator" => Some((tree.child(node, "id")?, tree.child(node, "init")?)),
+        "ForInStatement" | "ForOfStatement" => {
+            let left = tree.child(node, "left")?;
+            let declarator = tree.list(left, "declarations").first().copied()??;
+            Some((tree.child(declarator, "id")?, tree.child(node, "right")?))
+        }
+        _ => None,
+    }
+}
+
+/// The symbols `pattern` declares, in source order. A local a default or a computed key reads is
+/// not one of them.
+fn bound_names(parsed: &Parsed, pattern: NodeId) -> Vec<SymbolId> {
+    let tree = &parsed.tree;
+    let mut names = Vec::new();
+    for node in std::iter::once(pattern).chain(tree.descendants(pattern)) {
+        if tree.kind(node) != "Identifier" {
+            continue;
+        }
+        let Some(symbol) = symbol_at(parsed, node) else {
+            continue;
+        };
+        let declared = tree.span(node).contains(parsed.scopes.symbol(symbol).span);
+        if declared && !names.contains(&symbol) {
+            names.push(symbol);
+        }
+    }
+    names
 }
 
 /// One body's trace walk: the event grammar, driven over the owned tree, naming through the

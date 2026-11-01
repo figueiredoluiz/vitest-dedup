@@ -355,6 +355,28 @@ fn local_classes_render_by_content() {
     assert!(!complete(&events, "unprovable"));
 }
 
+/// The member rewrite moves a read of the object to each use, so it applies only when every read
+/// follows the declaration. A read before it, or inside it, keeps the binding, and traces whole.
+#[test]
+fn a_read_at_or_before_a_destructuring_declaration_keeps_the_binding() {
+    let traced = events(
+        r#"
+        const shared = { a: 1 };
+        test('before', () => { use(a); const { a } = shared; use(a); });
+        test('within', () => { const { a, [a]: b } = shared; use(a, b); });
+        test('after', () => { const { a } = shared; use(a); });
+        test('written-out', () => { use(shared.a); });
+    "#,
+        &[],
+    );
+    assert!(complete(&traced, "before"));
+    assert!(complete(&traced, "within"));
+    assert_eq!(of(&traced, "after"), of(&traced, "written-out"));
+    assert!(of(&traced, "before")
+        .iter()
+        .all(|event| event.contains(":prop:a")));
+}
+
 /// A class reading another twice doubles its text per level, so class rendering spends a budget:
 /// a short chain renders whole, and a long one finishes promptly with the trace incomplete.
 #[test]
@@ -1839,4 +1861,276 @@ fn inert_gap_forms_do_not_block_inlining() {
         );
         assert!(complete(&events, title), "{title} traces whole");
     }
+}
+
+/// Whether two bodies trace alike.
+fn traces_alike(left: &str, right: &str) -> bool {
+    let events = events(
+        &format!("test('left', () => {{ {left} }}); test('right', () => {{ {right} }});"),
+        &[],
+    );
+    of(&events, "left") == of(&events, "right")
+}
+
+/// A retained binding's reads carry what bound it, whatever binds it: they name only the local,
+/// and a bare identifier or member initializer emits no event of its own.
+#[test]
+fn a_retained_binding_keeps_its_source() {
+    for body in [
+        "use(a); var { a } = SOURCE; use(a);",
+        "use(a); const { a } = SOURCE; use(a);",
+        "let { a } = SOURCE; use(a);",
+        "const { a } = SOURCE; use(a); use(a);",
+        "const [a] = SOURCE; use(a); use(a);",
+        "const { p: { a } } = SOURCE; use(a); use(a);",
+        "const { ...a } = SOURCE; use(a); use(a);",
+        "const { a = 1 } = SOURCE; use(a); use(a);",
+        "const { a } = SOURCE.p; use(a); use(a);",
+        "const a = SOURCE; use(a); use(a);",
+        "for (const { a } of SOURCE) { use(a); }",
+        "for (const a in SOURCE) { use(a); }",
+        "for (let a = SOURCE; a; a--) { use(a); }",
+    ] {
+        let at = |source: &str| body.replace("SOURCE", source);
+        assert!(!traces_alike(&at("first"), &at("second")), "{body}");
+        assert!(traces_alike(&at("first"), &at("first")), "{body}");
+    }
+}
+
+/// The source stays with its own reads, so swapping which is read first is another program.
+#[test]
+fn a_source_stays_with_its_reads() {
+    assert!(!traces_alike(
+        "const a = first; const b = second; use(a); use(a); use(b); use(b);",
+        "const a = first; const b = second; use(b); use(b); use(a); use(a);"
+    ));
+    assert!(!traces_alike(
+        "const [a, b] = first; use(a); use(a); use(b); use(b);",
+        "const [a, b] = first; use(b); use(b); use(a); use(a);"
+    ));
+}
+
+/// Which local a source, a default or a computed key reads is part of the binding.
+#[test]
+fn a_binding_of_a_local_names_which_local() {
+    let body = |binding: &str| {
+        format!("const c = one; const d = two; {binding} use(a); use(a); c.x(); d.y();")
+    };
+    for (left, right) in [
+        ("const a = c;", "const a = d;"),
+        ("const { a = c } = first;", "const { a = d } = first;"),
+        ("const { [c]: a } = first;", "const { [d]: a } = first;"),
+    ] {
+        assert!(!traces_alike(&body(left), &body(right)), "{left}");
+    }
+}
+
+/// What a pattern binds is part of the binding, and how its names are spelled is not.
+#[test]
+fn a_binding_keeps_its_target_and_not_its_spelling() {
+    assert!(!traces_alike(
+        "const [a] = first; use(a); use(a);",
+        "const [, a] = first; use(a); use(a);"
+    ));
+    assert!(traces_alike(
+        "const { p: a } = first; use(a); use(a);",
+        "const { p: b } = first; use(b); use(b);"
+    ));
+    assert!(traces_alike(
+        "for (const a of first) { use(a); }",
+        "for (let a of first) { use(a); }"
+    ));
+    assert!(traces_alike(
+        "const a: string = first; use(a); use(a);",
+        "const b: string = first; use(b); use(b);"
+    ));
+}
+
+/// A tag takes no number and records no event, so the locals after a retained one keep theirs and
+/// a body of bindings alone stays empty.
+#[test]
+fn a_tag_leaves_numbering_and_events_alone() {
+    let events = events(
+        r#"
+        test('small', () => { const a = make(); a.x(); a.y(); });
+        test('large', () => {
+          const z = first; const a = make(); a.x(); a.y(); use(z); use(z);
+        });
+        test('reading', () => {
+          const y = first; const z = y; const a = make(); a.x(); a.y(); use(y); use(z); use(z);
+        });
+        test('bare', () => { const [a] = first; const { b } = second; });
+        test('nested', () => { function unused() { const [a] = first; } });
+    "#,
+        &[],
+    );
+    assert_eq!(of(&events, "small"), &of(&events, "large")[..3]);
+    assert_eq!(of(&events, "small"), &of(&events, "reading")[..3]);
+    assert!(of(&events, "bare").is_empty());
+    assert!(of(&events, "nested").is_empty());
+}
+
+/// A tag tells reads apart and never joins them: two equal sources keep their own numbers.
+#[test]
+fn a_tag_never_joins_two_locals() {
+    assert!(!traces_alike(
+        "const a = {}; const b = {}; use(a); use(b); use(a);",
+        "const a = {}; const b = {}; use(a); use(a); use(b);"
+    ));
+}
+
+/// A substitution already renders the source at the read, and an unread sibling adds nothing, so
+/// the body stays its written-out form.
+#[test]
+fn a_substituted_binding_carries_no_tag() {
+    let events = events(
+        r#"
+        const first = {};
+        test('member', () => { const { a } = first; expect(a).toBe(1); });
+        test('written member', () => { expect(first.a).toBe(1); });
+        test('partly', () => { const { a, b } = first; expect(a).toBe(1); });
+        test('alias', () => { const a = first; use(a); });
+        test('written alias', () => { use(first); });
+    "#,
+        &[],
+    );
+    assert_eq!(of(&events, "member"), of(&events, "written member"));
+    assert_eq!(of(&events, "partly"), of(&events, "written member"));
+    assert_eq!(of(&events, "alias"), of(&events, "written alias"));
+}
+
+/// A literal difference is parameterization's claim, and a source with its own event names itself
+/// there, so neither difference reaches every read.
+#[test]
+fn a_literal_or_a_call_difference_stays_out_of_the_tag() {
+    assert!(traces_alike(
+        "const a = 1; use(a); use(a);",
+        "const a = 2; use(a); use(a);"
+    ));
+    let events = events(
+        r#"
+        test('call', () => { const a = make(); use(a); use(a); });
+        test('awaited', async () => { const a = await make(); use(a); use(a); });
+        test('built', () => { const a = new Make(); use(a); use(a); });
+        test('function', () => { const a = () => first(); use(a); use(a); });
+        test('left', () => { const [a] = make(first); use(a); use(a); });
+        test('right', () => { const [a] = make(second); use(a); use(a); });
+    "#,
+        &[],
+    );
+    for title in ["call", "awaited", "built", "function"] {
+        let events = of(&events, title);
+        assert!(events.iter().all(|event| !event.contains('<')), "{title}");
+    }
+    assert_eq!(of(&events, "left")[1..], of(&events, "right")[1..]);
+    assert_ne!(of(&events, "left")[0], of(&events, "right")[0]);
+}
+
+/// A source with its own event still leaves the pattern to the tag: position, order of reads, and
+/// what a default or a computed key reads.
+#[test]
+fn a_pattern_over_a_call_keeps_its_target() {
+    for (left, right) in [
+        (
+            "const [a] = make(); use(a); use(a);",
+            "const [, a] = make(); use(a); use(a);",
+        ),
+        (
+            "const [a, b] = make(); use(a); use(a); use(b); use(b);",
+            "const [a, b] = make(); use(b); use(b); use(a); use(a);",
+        ),
+        (
+            "for (const [a] of make()) { use(a); }",
+            "for (const [, a] of make()) { use(a); }",
+        ),
+        (
+            "const { [first]: a } = make(); use(a); use(a);",
+            "const { [second]: a } = make(); use(a); use(a);",
+        ),
+        (
+            "const { a = first } = make(); use(a); use(a);",
+            "const { a = second } = make(); use(a); use(a);",
+        ),
+    ] {
+        assert!(!traces_alike(left, right), "{left}");
+    }
+}
+
+/// A source only partly a call keeps what the call's event does not name.
+#[test]
+fn a_source_beside_a_call_is_tagged() {
+    for body in [
+        "const a = await SOURCE; use(a); use(a);",
+        "const { a } = await SOURCE; use(a); use(a);",
+        "const a = [SOURCE, make()]; use(a); use(a);",
+        "const a = { x: SOURCE, y: make() }; use(a); use(a);",
+        "const a = flag ? SOURCE : make(); use(a); use(a);",
+        "const a = make().SOURCE; use(a); use(a);",
+    ] {
+        let at = |source: &str| body.replace("SOURCE", source);
+        assert!(!traces_alike(&at("first"), &at("second")), "{body}");
+    }
+}
+
+/// A default only reads its local, so that local's own reads carry no tag of the binding.
+#[test]
+fn a_default_read_is_not_tagged() {
+    let events = events(
+        "test('t', () => { const c = make(); const { a = c } = first; use(c); use(a); });",
+        &[],
+    );
+    let use_of_c = &of(&events, "t")[1];
+    assert!(!use_of_c.contains('<'), "{use_of_c}");
+    assert!(of(&events, "t")[2].contains('<'));
+}
+
+/// A source reading a local class spends none of the budget the events share, so an alias cannot
+/// leave a trace incomplete.
+#[test]
+fn an_alias_of_a_class_spends_no_budget() {
+    let mut body = "class A1 { a() { return 1; } b() { return 2; } }".to_owned();
+    for number in 2..=10 {
+        let previous = number - 1;
+        body.push_str(&format!(
+            "class A{number} {{ a() {{ return A{previous}; }} b() {{ return A{previous}; }} }}"
+        ));
+    }
+    let events = events(
+        &format!("test('t', () => {{ {body} const alias = A10; expect(1).toBe(1); }});"),
+        &[],
+    );
+    assert!(complete(&events, "t"));
+}
+
+/// A wrapper a type or a parenthesis adds changes nothing about the call inside it.
+#[test]
+fn a_wrapped_call_names_itself_like_a_bare_one() {
+    let bare = "const a = make(); use(a); use(a);";
+    for wrapped in ["(make())", "make() as unknown", "make()!", "await (make())"] {
+        let body = format!("const a = {wrapped}; use(a); use(a);");
+        if wrapped.starts_with("await") {
+            let async_form = "const a = await make(); use(a); use(a);";
+            let events = events(
+                &format!(
+                    "test('left', async () => {{ {async_form} }}); \
+                     test('right', async () => {{ {body} }});"
+                ),
+                &[],
+            );
+            assert_eq!(of(&events, "left"), of(&events, "right"));
+        } else {
+            assert!(traces_alike(bare, &body), "{wrapped}");
+        }
+    }
+}
+
+/// A private name's spelling is not part of a binding read from it.
+#[test]
+fn a_private_source_keeps_its_spelling_out_of_the_tag() {
+    let body = |name: &str| {
+        format!(
+            "class C {{ #{name} = 1; m() {{ const x = this.#{name}; use(x); use(x); }} }} new C();"
+        )
+    };
+    assert!(traces_alike(&body("a"), &body("b")));
 }
