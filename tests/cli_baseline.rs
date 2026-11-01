@@ -265,9 +265,11 @@ fn the_next_engine_refuses_a_malformed_baseline() {
 fn the_next_engine_still_refuses_a_base_revision() {
     let directory = tempfile::tempdir().unwrap();
     std::fs::write(directory.path().join("a.test.ts"), source(&["one"])).unwrap();
-    for flag in ["--baseline-from-ref", "--changed-since"] {
-        let (exit, _, stderr) = analyze(directory.path(), Some("next"), &[flag, "HEAD"]);
-        assert_eq!(exit, 2, "{stderr}");
-        assert!(stderr.contains("reads no base revision"), "{stderr}");
-    }
+    let (exit, _, stderr) = analyze(
+        directory.path(),
+        Some("next"),
+        &["--baseline-from-ref", "HEAD"],
+    );
+    assert_eq!(exit, 2, "{stderr}");
+    assert!(stderr.contains("historical helper resolution"), "{stderr}");
 }

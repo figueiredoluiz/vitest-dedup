@@ -705,6 +705,12 @@ struct JsonlMemoryRecord {
     peak_rss_bytes: Option<u64>,
     /// Why `peakRssBytes` is not the retained figure. See [`MEMORY_RSS_NOTICE`].
     peak_rss_notice: &'static str,
+    /// Only next-engine reports carry this disjoint owned-state breakdown.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    engine_fields: Option<crate::memory::EngineBytes>,
+    /// The stable-API estimate excludes private hash-table and allocator bookkeeping.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    engine_memory_notice: Option<&'static str>,
 }
 
 /// The per-field breakdown on a `"memory"` record.
@@ -725,6 +731,9 @@ struct JsonlMemoryFields {
     location: usize,
     spine: usize,
     scalars: usize,
+    /// Next-engine retained state; omitted at zero to preserve default-engine JSON shape.
+    #[serde(skip_serializing_if = "zero_bytes")]
+    engine: usize,
 }
 
 impl From<&FieldBytes> for JsonlMemoryFields {
@@ -742,6 +751,7 @@ impl From<&FieldBytes> for JsonlMemoryFields {
             location,
             spine,
             scalars,
+            engine,
         } = fields;
         Self {
             body: *body,
@@ -752,6 +762,7 @@ impl From<&FieldBytes> for JsonlMemoryFields {
             location: *location,
             spine: *spine,
             scalars: *scalars,
+            engine: *engine,
         }
     }
 }
@@ -802,6 +813,7 @@ impl From<&MemoryReport> for JsonlMemoryRecord {
             fields,
             declarations_retained,
             peak_rss_bytes,
+            engine_fields,
         } = report;
         Self {
             record_type: "memory",
@@ -817,6 +829,8 @@ impl From<&MemoryReport> for JsonlMemoryRecord {
             shared_text_attribution: MEMORY_SHARING_NOTICE,
             peak_rss_bytes: *peak_rss_bytes,
             peak_rss_notice: MEMORY_RSS_NOTICE,
+            engine_fields: *engine_fields,
+            engine_memory_notice: engine_fields.map(|_| "Retained owned capacity, excluding temporary parser state, private hash-table spare/control storage and allocator metadata; RSS is measured separately."),
         }
     }
 }
@@ -1787,4 +1801,48 @@ mod tests {
             .contains("chain"));
         assert_eq!(lines[2]["type"], "summary");
     }
+}
+
+/// Optional next-engine zero storage does not add a key to legacy records.
+fn zero_bytes(bytes: &usize) -> bool {
+    *bytes == 0
+}
+
+/// New-engine buckets sum to the same top-level total without changing legacy record keys.
+#[cfg(test)]
+#[test]
+fn next_engine_memory_record_is_disjoint_and_legacy_shape_is_preserved() {
+    use crate::memory::{EngineBytes, MemoryReport};
+    let fields = EngineBytes {
+        cases: 100,
+        suites: 20,
+        hooks: 30,
+        sites: 40,
+        blind: 50,
+        modules: 60,
+        exports: 70,
+        scalars: 0,
+    };
+    let report = MemoryReport::next_engine(fields, 2, 1, 3, None);
+    let json = serde_json::to_value(JsonlMemoryRecord::from(&report)).unwrap();
+    assert_eq!(json["retainedBytes"], 370);
+    assert_eq!(json["bytesPerTest"], 185);
+    assert_eq!(json["declarationsRetained"], 3);
+    let total: u64 = json["engineFields"]
+        .as_object()
+        .unwrap()
+        .values()
+        .map(|v| v.as_u64().unwrap())
+        .sum();
+    assert_eq!(total, json["retainedBytes"].as_u64().unwrap());
+    assert_eq!(json["fields"]["engine"], 370);
+    assert!(json["engineMemoryNotice"]
+        .as_str()
+        .unwrap()
+        .contains("private hash-table"));
+    let legacy = MemoryReport::post_extraction(&Vec::new(), 0, 0, None);
+    let json = serde_json::to_value(JsonlMemoryRecord::from(&legacy)).unwrap();
+    assert!(json.get("engineFields").is_none());
+    assert!(json.get("engineMemoryNotice").is_none());
+    assert!(json["fields"].get("engine").is_none());
 }

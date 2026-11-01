@@ -1038,3 +1038,19 @@ fn an_export_is_named_the_same_whichever_file_reads_it_first() {
     assert_eq!(form("one"), form("three"));
     assert_ne!(form("one"), form("two"));
 }
+
+/// Retained export-identity keys and strings remain charged after the file's parser is dropped.
+#[test]
+fn export_identity_cache_retains_owned_bytes() {
+    use crate::memory::HeapBytes;
+    let cache = super::Exports::default();
+    assert_eq!(cache.heap_bytes(), 0);
+    cache.known.borrow_mut().reserve(16);
+    let reserved = cache.heap_bytes();
+    assert!(reserved > 0);
+    cache.known.borrow_mut().insert(
+        ("module.ts".into(), "name".into()),
+        Some("identity".repeat(1024)),
+    );
+    assert!(cache.heap_bytes() > reserved);
+}

@@ -5,6 +5,7 @@
 //! dropped without one. Rules read this record and never the syntax.
 
 mod hooks;
+mod memory;
 mod suites;
 pub use hooks::{Hook, Hooks};
 
@@ -788,22 +789,23 @@ pub fn file(
 #[derive(Debug, Default)]
 pub struct Engine {
     /// Hook declarations and chains per relative file.
-    pub hooks: Vec<(PathBuf, Hooks)>,
+    hooks: Vec<(PathBuf, Hooks)>,
     run: Run,
     /// Tests read, rows counted one each.
     pub tests: usize,
     /// Tests left unresolved: excluded for a reason that has a report code.
     pub unresolved: usize,
     /// Registration sites, by the file's path relative to the root, when they are kept.
-    pub sites: Vec<(PathBuf, SiteRecord)>,
+    sites: Vec<(PathBuf, SiteRecord)>,
     /// Each file's cases, by the file's path relative to the root: what the rules read once
-    /// every file has been read. Charged to the RSS backstop alone until the engine's state is
-    /// measured onto `--max-memory`.
-    pub files: Vec<(PathBuf, Vec<TestCase>)>,
+    /// every file has been read. Retained payload and capacity feed the memory roof.
+    files: Vec<(PathBuf, Vec<TestCase>)>,
     /// Comparable suite containers, retained separately from the executable population.
-    pub suites: Vec<(PathBuf, Vec<TestCase>)>,
+    suites: Vec<(PathBuf, Vec<TestCase>)>,
     /// Files every test of which is unresolved.
     blind: Vec<BlindFile>,
+    /// Owned element heaps, excluding outer vector spines and separately measured caches.
+    retained: crate::memory::EngineBytes,
 }
 
 /// Why a file's read did not finish.
@@ -934,29 +936,34 @@ impl Engine {
                     .to_owned(),
             ));
         }
+        use crate::memory::HeapBytes;
         let case_count = corpus.tests.len();
         let mut corpus = corpus;
-        self.files
-            .push((relative.to_path_buf(), std::mem::take(&mut corpus.tests)));
-        self.suites
-            .push((relative.to_path_buf(), std::mem::take(&mut corpus.suites)));
-        self.hooks
-            .push((relative.to_path_buf(), std::mem::take(&mut corpus.hooks)));
+        let cases = (relative.to_path_buf(), std::mem::take(&mut corpus.tests));
+        self.retained.cases = self.retained.cases.saturating_add(cases.heap_bytes());
+        self.files.push(cases);
+        let suites = (relative.to_path_buf(), std::mem::take(&mut corpus.suites));
+        self.retained.suites = self.retained.suites.saturating_add(suites.heap_bytes());
+        self.suites.push(suites);
+        let hooks = (relative.to_path_buf(), std::mem::take(&mut corpus.hooks));
+        self.retained.hooks = self.retained.hooks.saturating_add(hooks.heap_bytes());
+        self.hooks.push(hooks);
         self.tests += case_count;
         self.unresolved += unresolved;
         if unresolved > 0 && unresolved == case_count {
-            self.blind.push(BlindFile {
+            let blind = BlindFile {
                 path: relative.to_path_buf(),
                 tests: unresolved,
-            });
+            };
+            self.retained.blind = self.retained.blind.saturating_add(blind.heap_bytes());
+            self.blind.push(blind);
         }
         if keep_sites {
-            self.sites.extend(
-                corpus
-                    .sites
-                    .into_iter()
-                    .map(|site| (relative.to_path_buf(), site)),
-            );
+            for site in corpus.sites {
+                let site = (relative.to_path_buf(), site);
+                self.retained.sites = self.retained.sites.saturating_add(site.heap_bytes());
+                self.sites.push(site);
+            }
         }
         let entry =
             exclusions::counted_file(relative.to_path_buf(), reasons, unresolved, case_count);

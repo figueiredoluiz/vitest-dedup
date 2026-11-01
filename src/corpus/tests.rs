@@ -1383,3 +1383,5 @@ fn subsumption_config() -> crate::config::Config {
         source: "test".into(),
     }
 }
+
+mod memory;

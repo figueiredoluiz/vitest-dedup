@@ -1071,33 +1071,28 @@ fn an_inline_suppression_above_a_multi_line_table_suppresses_a_next_engine_findi
     assert_eq!(run.json["modes"]["suppressionsApplied"], 1);
 }
 
-/// A mode that needs a base revision or an engine memory measure is refused before discovery under
-/// `VITEST_DEDUP_ENGINE=next`; another value of the variable is the default engine.
+/// Reference baselines remain refused until historical helper resolution is available;
+/// file baselines, changed-file filtering and memory reporting use their implemented paths.
 #[test]
 fn the_next_engine_refuses_modes_that_need_findings() {
     let directory = tempfile::tempdir().unwrap();
     write(directory.path(), "clean.test.ts", CLEAN);
-    for flags in [
-        vec!["--baseline-from-ref", "HEAD"],
-        vec!["--changed-since", "HEAD"],
-        vec!["--debug-memory"],
-    ] {
-        let output = assert_cmd::Command::cargo_bin("vitest-dedup")
-            .unwrap()
-            .arg(directory.path())
-            .args(["--reporters", "json,jsonl", "--no-metrics"])
-            .args(&flags)
-            .env("VITEST_DEDUP_ENGINE", "next")
-            .output()
-            .unwrap();
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        assert_eq!(output.status.code(), Some(2), "{flags:?}: {stderr}");
-        assert!(
-            stderr.contains("is not available under VITEST_DEDUP_ENGINE=next"),
-            "{flags:?}: {stderr}"
-        );
-        assert!(output.stdout.is_empty(), "{flags:?}");
-    }
+    let flags = ["--baseline-from-ref", "HEAD"];
+    let output = assert_cmd::Command::cargo_bin("vitest-dedup")
+        .unwrap()
+        .arg(directory.path())
+        .args(["--reporters", "json,jsonl", "--no-metrics"])
+        .args(flags)
+        .env("VITEST_DEDUP_ENGINE", "next")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(2), "{flags:?}: {stderr}");
+    assert!(
+        stderr.contains("is not available under VITEST_DEDUP_ENGINE=next"),
+        "{flags:?}: {stderr}"
+    );
+    assert!(output.stdout.is_empty(), "{flags:?}");
     let default = run_with(directory.path(), &[], &[("VITEST_DEDUP_ENGINE", "current")]);
     assert!(
         !default.stderr.contains("VITEST_DEDUP_ENGINE"),
