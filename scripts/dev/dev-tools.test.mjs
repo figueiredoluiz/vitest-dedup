@@ -57,6 +57,29 @@ test('each way the readings part is named, and agreement is silent', () => {
   assert.deepEqual(disagreements({ ...row, next: engine({ reasons: ['named-callback'] }) }), ['diagnostics-differ'])
 })
 
+test('a rule the next engine does not run never reads as disagreement', () => {
+  const ported = new Set(['duplicate-test'])
+  const shared = 'duplicate-test a.ts:1,a.ts:2'
+  const unported = 'pending-rule a.ts:1,a.ts:3'
+  const row = {
+    name: 'a',
+    vitest: ['a', 'b'],
+    sites: [],
+    next: engine({ findings: [shared] }),
+    current: engine({ findings: [shared, unported] }),
+  }
+  assert.deepEqual(disagreements(row, ported), [])
+  assert.match(render(row, ported), /^SAME a\n[\s\S]*default only, rule not ported: pending-rule a\.ts:1,a\.ts:3$/)
+  // A ported rule still disagrees beside it, and the row says so.
+  const parted = { ...row, next: engine({ findings: ['duplicate-test a.ts:1,a.ts:9'] }) }
+  assert.deepEqual(disagreements(parted, ported), ['findings-differ'])
+  assert.match(render(parted, ported), /^DIFF a \(findings-differ\)/)
+  assert.doesNotMatch(render({ ...row, current: engine({ findings: [shared] }) }, ported), /rule not ported/)
+  // A rule next should not run is a disagreement, or a stray claim would read as agreement.
+  const stray = { ...row, next: engine({ findings: [shared, unported] }), current: engine({ findings: [shared] }) }
+  assert.deepEqual(disagreements(stray, ported), ['findings-differ'])
+})
+
 test('a truncated or missing oracle view never reads as agreement', () => {
   const record = { file: '/owned/a.test.ts', tests: [{ title: 'one test' }], registrations: [], suiteHooks: {}, stubReads: [], collectErrors: [] }
   const views = [

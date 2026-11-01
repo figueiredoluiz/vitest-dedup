@@ -9,6 +9,7 @@ import { tmpdir } from 'node:os'
 import { basename, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { collectNextEngine, collectWithVitest } from '../check/lib/collection-oracle.mjs'
+import { PORTED_RULES } from '../check/lib/next-duplicates.mjs'
 import { parseJsonl } from '../check/lib/run-analyzer.mjs'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
@@ -43,12 +44,24 @@ export function summarize(records, exit, stderr = '') {
 }
 
 /**
+ * A run's findings, parted by whether the next engine runs their rule.
+ * @param {{findings: string[]}} run One engine's run.
+ * @param {Set<string>} ported The rules the next engine runs.
+ * @returns {{compared: string[], unported: string[]}} The findings each way.
+ */
+function split({ findings }, ported) {
+  const isPorted = (finding) => ported.has(finding.split(' ', 1)[0])
+  return { compared: findings.filter(isPorted), unported: findings.filter((finding) => !isPorted(finding)) }
+}
+
+/**
  * Where a case's three readings part: each engine's count against what Vitest collected, and the
  * findings of one engine against the other's.
  * @param {{vitest: string[]|null, next: object, current: object}} row One case.
+ * @param {Set<string>} [ported] The rules the next engine runs; the default's other findings say nothing.
  * @returns {string[]} Disagreements; empty when all three agree.
  */
-export function disagreements({ vitest, next, current }) {
+export function disagreements({ vitest, next, current }, ported = PORTED_RULES) {
   const notes = []
   if (next.failure !== null) notes.push('next-failed')
   if (current.failure !== null) notes.push('default-failed')
@@ -57,7 +70,8 @@ export function disagreements({ vitest, next, current }) {
     if (next.tests !== vitest.length) notes.push('next-count-differs')
     if (current.tests !== vitest.length) notes.push('default-count-differs')
   }
-  if (next.findings.join() !== current.findings.join()) notes.push('findings-differ')
+  // Only the default's side is filtered: a rule next should not run is itself a disagreement.
+  if (next.findings.join() !== split(current, ported).compared.join()) notes.push('findings-differ')
   if (next.incomplete !== current.incomplete) notes.push('completeness-differs')
   if (next.unresolved !== current.unresolved || next.reasons.join() !== current.reasons.join()) notes.push('diagnostics-differ')
   return notes
@@ -66,21 +80,24 @@ export function disagreements({ vitest, next, current }) {
 /**
  * Render one case for a terminal.
  * @param {{name: string, vitest: string[]|null, error?: string, sites: string[], next: object, current: object}} row One case.
+ * @param {Set<string>} [ported] The rules the next engine runs.
  * @returns {string} Its lines.
  */
-export function render(row) {
+export function render(row, ported = PORTED_RULES) {
   const engine = (label, run) =>
     `  ${label}: exit ${run.exit}, ${run.tests} analyzed, ${run.unresolved} unresolved` +
     `${run.incomplete ? ', incomplete' : ''}; rules [${run.rules.join(', ')}]` +
     `${run.reasons.length ? `; excluded [${run.reasons.join(', ')}]` : ''}` +
     `${run.failure === null ? '' : `; failed: ${run.failure}`}`
-  const notes = disagreements(row)
+  const notes = disagreements(row, ported)
+  const { unported } = split(row.current, ported)
   return [
     `${notes.length ? 'DIFF' : 'SAME'} ${row.name}${notes.length ? ` (${notes.join(', ')})` : ''}`,
     `  vitest: ${row.vitest === null ? `unread: ${row.error ?? ''}` : JSON.stringify(row.vitest)}`,
     `  sites: ${row.sites.join(' ') || 'none'}`,
     engine('next', row.next),
     engine('default', row.current),
+    ...(unported.length ? [`  default only, rule not ported: ${unported.join('; ')}`] : []),
   ].join('\n')
 }
 
