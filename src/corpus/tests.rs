@@ -1296,6 +1296,63 @@ fn subsumption_bound_rows_and_conditions() {
     assert_eq!(subsumption_claim_count(conditional, 2), 0);
 }
 
+/// The owned source stays silent, and removing only its failure markers makes every pair fire.
+#[test]
+fn subsumption_refuses_expected_failure_in_either_direction() {
+    let source = include_str!("../../fixtures/duplicates/not-subsumed-expected-failure.test.ts");
+    assert_eq!(subsumption_claim_count(source, 10), 0);
+    let plain = source
+        .replace("test.fails(", "test(")
+        .replace(", { fails: true }", "");
+    assert_eq!(subsumption_claim_count(&plain, 10), 5);
+}
+
+/// Every spelling of an expected failure reaches the refusal; a one-edit plain twin fires.
+#[test]
+fn subsumption_expected_failure_spellings() {
+    for (large, plain) in [
+        ("test.fails.each([[1]])", "test.each([[1]])"),
+        ("test.concurrent.fails", "test.concurrent"),
+        ("my.fails", "my"),
+    ] {
+        let source = format!(
+            "import {{test,expect}} from 'vitest'; const my = test.extend({{}}); \
+             {}('a',()=>{{expect(value).toBe(1)}}); \
+             {large}('b',()=>{{expect(value).toBe(1);expect(other).toBe(2)}});",
+            large.split('.').next().unwrap()
+        );
+        assert_eq!(subsumption_claim_count(&source, 2), 0, "{large}");
+        let twin = source.replace(large, plain);
+        assert_eq!(subsumption_claim_count(&twin, 2), 1, "{plain}");
+    }
+    for suite in [
+        "describe('o',{fails:true},()=>{describe('i',()=>{BODY})})",
+        "describe.each([[1]])('o',{fails:true},()=>{BODY})",
+    ] {
+        let body = "test('a',()=>{expect(value).toBe(1)});\
+                    test('b',()=>{expect(value).toBe(1);expect(other).toBe(2)});";
+        let source = format!(
+            "import {{test,describe,expect}} from 'vitest'; {}",
+            suite.replace("BODY", body)
+        );
+        assert_eq!(subsumption_claim_count(&source, 2), 0, "{suite}");
+        let twin = source.replace("fails:true", "fails:false");
+        assert_eq!(subsumption_claim_count(&twin, 2), 1, "{suite}");
+    }
+}
+
+/// Options that keep the expected outcome leave the pair comparable.
+#[test]
+fn subsumption_keeps_options_that_expect_to_pass() {
+    for options in ["{ fails: false }", "{ retry: 2 }"] {
+        let source = format!(
+            "import {{test,expect}} from 'vitest'; test('a',()=>{{expect(value).toBe(1)}}); \
+             test('b',{options},()=>{{expect(value).toBe(1);expect(other).toBe(2)}});"
+        );
+        assert_eq!(subsumption_claim_count(&source, 2), 1, "{options}");
+    }
+}
+
 /// Computed callees and awaited assertions are not additional placeholder admissions.
 #[test]
 fn subsumption_placeholder_static_boundary() {

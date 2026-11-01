@@ -121,7 +121,8 @@ pub struct TestCase {
     /// failure, options, unbound row cells, context and callback form — everything two
     /// near-duplicates must agree on before their events are compared at all.
     pub similarity_key: u64,
-    /// Subsumption context, callback form and unresolved row inputs; absent for placeholder bodies.
+    /// Subsumption context, callback form and unresolved row inputs; absent for placeholder bodies
+    /// and for a test expected to fail, by its own declaration or an enclosing suite's.
     pub subsumption_key: Option<u64>,
     /// Whether the callback's arrow and `function` forms act on the same object, and which was
     /// written when they do not.
@@ -480,6 +481,7 @@ pub fn file(
             continue;
         }
         let mut context = contexts.get(&None).cloned().unwrap_or_default();
+        let mut suite_expects_failure = false;
         for scope in &suites {
             // An enclosing suite's run condition, table or expected failure applies to the test
             // as well. How deep the suites nest changes nothing; only what each one adds does.
@@ -500,6 +502,7 @@ pub fn file(
                 let (suite_options, options_fail) =
                     normalizer.options(&suite_arguments, suite_body);
                 let fails = suite.fails || options_fail;
+                suite_expects_failure |= fails;
                 if suite.chain.contains('.') || fails || !suite_options.is_empty() {
                     context.push('|');
                     context.push_str(&suite.chain);
@@ -520,6 +523,8 @@ pub fn file(
         } else {
             ""
         };
+        // A larger passing test proves a smaller one's events only when both expect to pass.
+        let expects_failure = suite_expects_failure || !fails.is_empty();
         let options = options.join(",");
         // A row of a table the file spells out is the callback with its parameters bound to the
         // row's cells, so it compares with a test that spells those values itself.
@@ -691,7 +696,8 @@ pub fn file(
                 similarity_key: digest(&format!(
                     "{chain}{fails}\u{1}{options}\u{1}{unbound}\u{1}{context}\u{1}{form}"
                 )),
-                subsumption_key: (!(setting.dialect.placeholder)(&parsed.tree, traced_body)
+                subsumption_key: (!expects_failure
+                    && !(setting.dialect.placeholder)(&parsed.tree, traced_body)
                     && (!table_site(site) || modifiers.rows.is_some()))
                 .then(|| digest(&format!("{chain}\u{1}{unbound}\u{1}{context}\u{1}{form}"))),
                 callback_form,
