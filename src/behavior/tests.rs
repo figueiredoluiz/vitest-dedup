@@ -2064,8 +2064,6 @@ fn a_source_beside_a_call_is_tagged() {
     for body in [
         "const a = await SOURCE; use(a); use(a);",
         "const { a } = await SOURCE; use(a); use(a);",
-        "const a = [SOURCE, make()]; use(a); use(a);",
-        "const a = { x: SOURCE, y: make() }; use(a); use(a);",
         "const a = make().SOURCE; use(a); use(a);",
     ] {
         let at = |source: &str| body.replace("SOURCE", source);
@@ -2202,4 +2200,67 @@ fn a_decorated_class_leaves_the_trace_incomplete() {
     }
     let events = events("test('t', () => { class C {} use(1); use(2); });", &[]);
     assert!(complete(&events, "t"));
+}
+
+/// A literal or a container is data, even mentioning a name: tests differing only there want one
+/// table. Anything else stands for an object or a computation and parts two tests.
+#[test]
+fn only_data_stays_out_of_the_tag() {
+    let body = |source: &str| format!("const a = {source}; use(a); use(a);");
+    for (left, right) in [
+        ("{ x: 1 }", "{ y: [2] }"),
+        ("[1, 2]", "[{ a: 3 }]"),
+        ("{ x: undefined }", "{ x: null, y: 'z' }"),
+        ("`a`", "'b'"),
+        ("undefined", "null"),
+        ("-1", "1"),
+        ("[KIND.ONE, 1]", "[KIND.TWO]"),
+        ("{ x: first }", "{ y: second }"),
+    ] {
+        assert!(traces_alike(&body(left), &body(right)), "{left}");
+    }
+    for (left, right) in [
+        ("first", "second"),
+        ("first.a", "first.b"),
+        ("first[0]", "first[1]"),
+        ("first?.a", "first?.b"),
+        ("make().a", "make().b"),
+        ("first as any", "second as any"),
+        ("first + second", "first - second"),
+        ("!first", "!second"),
+        ("{ run: (x, y) => x + y }", "{ run: (x, y) => x - y }"),
+        (
+            "[function (x) { return x + 1; }]",
+            "[function (x) { return x - 1; }]",
+        ),
+        (
+            "{ run(x) { return x + 1; } }",
+            "{ run(x) { return x - 1; } }",
+        ),
+    ] {
+        assert!(!traces_alike(&body(left), &body(right)), "{left}");
+    }
+    let awaited = |source: &str| {
+        format!("test('t', async () => {{ const a = await {source}; use(a); use(a); }});")
+    };
+    let of_source = |source: &str| events(&awaited(source), &[])["t"].0.clone();
+    assert_ne!(of_source("first"), of_source("second"));
+    assert!(!traces_alike(
+        "const [a] = [1, 2]; use(a); use(a);",
+        "const [, a] = [1, 2]; use(a); use(a);"
+    ));
+}
+
+/// A shadowed `undefined` is an ordinary name, so it is a source like any other.
+#[test]
+fn a_shadowed_undefined_is_a_source() {
+    let events = events(
+        r#"
+        const undefined = {};
+        test('left', () => { const a = undefined; use(a); use(a); });
+        test('right', () => { const a = null; use(a); use(a); });
+    "#,
+        &[],
+    );
+    assert_ne!(of(&events, "left"), of(&events, "right"));
 }

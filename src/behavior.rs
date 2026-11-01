@@ -207,8 +207,8 @@ pub(crate) fn trace_text<'s>(
 /// Tags every read of a retained name with what bound it, since its reads name only the local and
 /// most sources emit no event. The tag spends no number and records no event, so numbering and a
 /// body of bindings alone stay as they were. A source with its own event stays out of the tag,
-/// which would make one difference every read's, and so does a plain name bound from one, which
-/// leaves nothing to tag. Source order, so a source reading an earlier local carries its tag.
+/// which would make one difference every read's, and so does data: two tests differing only there
+/// want one table. A plain name bound from either leaves nothing to tag. Source order, so a source reading an earlier local carries its tag.
 fn tag_retained_sources<'s>(
     normalizer: &mut Normalizer<'s>,
     parsed: &'s Parsed,
@@ -221,8 +221,8 @@ fn tag_retained_sources<'s>(
         let Some((target, source)) = binding_of(tree, node) else {
             continue;
         };
-        let named = names_itself(tree, source);
-        if named && tree.kind(target) == "Identifier" {
+        let silent = names_itself(tree, source) || is_data(parsed, source);
+        if silent && tree.kind(target) == "Identifier" {
             continue;
         }
         let names = bound_names(parsed, target);
@@ -233,7 +233,7 @@ fn tag_retained_sources<'s>(
             continue;
         }
         let mut bound = normalizer.detached_shape(target, walk);
-        if !named {
+        if !silent {
             bound.push_str(" = ");
             bound.push_str(&normalizer.detached_shape(source, walk));
         }
@@ -248,6 +248,28 @@ fn tag_retained_sources<'s>(
                 walk.suffixes.entry(*symbol).or_default().push_str(&tag);
             }
         }
+    }
+}
+
+/// Whether `source` is data: a literal, a template, the global `undefined`, or an array or object
+/// written out, even when it mentions a name. A function inside one is code, which no event
+/// records, so that container is not data; nor is anything else.
+fn is_data(parsed: &Parsed, source: NodeId) -> bool {
+    let tree = &parsed.tree;
+    let source = tree.inner(source);
+    match tree.kind(source) {
+        "Literal" | "TemplateLiteral" => true,
+        "ArrayExpression" | "ObjectExpression" => {
+            !tree.descendants(source).any(|node| tree.is_function(node))
+        }
+        "Identifier" => {
+            tree.text(source, "name") == Some("undefined")
+                && parsed.scopes.is_global_at(tree.span(source).start)
+        }
+        "UnaryExpression" => tree
+            .child(source, "argument")
+            .is_some_and(|argument| tree.kind(tree.inner(argument)) == "Literal"),
+        _ => false,
     }
 }
 

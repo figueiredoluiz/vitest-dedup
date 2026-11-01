@@ -3469,6 +3469,29 @@
       "expectedAbsent": []
     },
     {
+      "name": "near-duplicate-test-bound-data",
+      "path": "near-duplicate-test-bound-data",
+      "rule": "near-duplicate-test",
+      "role": "positive",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-02",
+      "expectedTests": 2,
+      "expectedIncomplete": false,
+      "expectedUnresolved": 0,
+      "expectedFindings": [
+        {
+          "rule": "near-duplicate-test",
+          "severity": "warning",
+          "titles": [
+            "passes one value through",
+            "passes an error through"
+          ]
+        }
+      ],
+      "expectedAbsent": []
+    },
+    {
       "name": "near-duplicate-test-globals-config",
       "path": "near-duplicate-test-globals-config",
       "rule": "near-duplicate-test",
