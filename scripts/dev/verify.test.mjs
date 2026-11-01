@@ -844,9 +844,19 @@ test('Rust runs its lints, tests, corpus gates and coverage, not the packaging a
     assert.deepEqual(hookScope([path]), ['rust'])
     const steps = prePush([path])
     for (const step of ['cargo fmt --all --check', 'cargo clippy --all-targets --all-features --locked', 'cargo doc --no-deps --document-private-items --locked', 'cargo test --all-targets --all-features --locked', 'cargo build --release --locked', 'npm run check:corpus', 'npm run check:recall', 'npm run verify:titles', 'npm run check:oracle', 'npm run check:behavior-runtime', 'npm run check:hooks-differential', 'npm run check:next-duplicates', 'npm run check:duplication', 'npm run check:coverage:rust']) assert.ok(steps.includes(step), step)
-    for (const step of ['npm test', 'npm run test:action', 'npm run pack:check', 'npm run check:coverage:js', 'npm run check']) assert.equal(steps.includes(step), false, step)
+    for (const step of ['npm test', 'npm run test:action', 'npm run test:dev-checks', 'npm run test:check-lib', 'npm run pack:check', 'npm run check:coverage:js', 'npm run check']) assert.equal(steps.includes(step), false, step)
     assert.equal(hookCommands('pre-commit', [path]).some(step => /^cargo (?:clippy|test|build)/.test(step.join(' '))), false)
   }
+})
+
+test('every gate in npm run check is selected by some scope, so a new gate cannot be missed', () => {
+  const { scripts } = JSON.parse(readFileSync(resolve('package.json'), 'utf8'))
+  const selected = new Set(['README.md', '.github/workflows/ci.yml', '.github/actions/vitest-dedup/a.js', 'npm/a.mjs', 'scripts/dev/a.mjs', 'scripts/check/a.mjs', 'fixtures/a.test.ts', 'src/a.rs'].flatMap(path => prePush([path])))
+  // Whole-history scanning and the closing note verify no change.
+  const unscoped = new Set(['npm run check:secrets', 'npm run check:not-run'])
+  const gates = scripts.check.split('&&').map(step => step.trim())
+  assert.ok(gates.length >= 20, 'the chain was read')
+  for (const gate of gates) assert.ok(selected.has(gate) || unscoped.has(gate), `${gate} has no scope`)
 })
 
 test('a mixed change selects each surface once', () => {
@@ -875,8 +885,8 @@ for (const name of [' docs/guide.md', '\ndocs/guide.md', 'src/空 白.rs']) test
   writeFileSync(join(root, name), 'content\n')
   git(root, 'add', '--', name)
   const [steps] = plannedChecks(root, 'pre-commit')
-  assert.ok(steps.includes('npm run test:dev-checks'), 'unknown staged path cannot become docs-only')
-  if (name.endsWith('.rs')) assert.ok(steps.includes('cargo fmt --all --check'))
+  const marker = name.endsWith('.rs') ? 'cargo fmt --all --check' : 'npm run test:dev-checks'
+  assert.ok(steps.includes(marker), 'unknown staged path cannot become docs-only')
 }))
 
 test('existing remote delta handles force updates and HEAD source refs without reading dirty HEAD', () => fixture(root => {

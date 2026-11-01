@@ -129,7 +129,7 @@ export function hookScope(paths) {
 /** The gates that run the analyzer over the owned corpora, with the binary they read. */
 const CORPUS_GATES = [
   ['cargo', 'build', '--release', '--locked'],
-  ...['check:corpus', 'check:recall', 'verify:titles', 'check:oracle', 'check:behavior-runtime', 'check:hooks-differential', 'check:next-duplicates'].map(gate => ['npm', 'run', gate]),
+  ...['check:corpus', 'check:recall', 'verify:titles', 'check:oracle', 'check:behavior-runtime', 'check:hooks-differential', 'check:next-duplicates', 'check:parameterization-runtime'].map(gate => ['npm', 'run', gate]),
 ]
 
 /**
@@ -149,8 +149,8 @@ export function hookCommands(mode, paths, docDiff) {
   if (has('action')) steps.push(['npm', 'run', 'test:action'])
   if (has('npm') || has('ci')) steps.push(['npm', 'test'])
   if (has('npm')) steps.push(['npm', 'run', 'pack:check'])
-  if (['ci', 'tooling', 'gates', 'fixtures', 'rust'].some(has)) steps.push(['npm', 'run', 'test:dev-checks'])
-  if (['tooling', 'gates', 'fixtures', 'rust'].some(has)) steps.push(['npm', 'run', 'test:check-lib'])
+  if (['ci', 'tooling', 'gates', 'fixtures'].some(has)) steps.push(['npm', 'run', 'test:dev-checks'])
+  if (['tooling', 'gates', 'fixtures'].some(has)) steps.push(['npm', 'run', 'test:check-lib'])
   if (!push) return steps
   if (has('rust')) {
     steps.push(

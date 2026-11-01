@@ -235,7 +235,7 @@ scope.
 | `scripts/dev/`, `.githooks/pre-commit` and `.githooks/pre-push` | Static checks and developer/check-helper tests | Same, plus duplication and JS coverage |
 | `scripts/check/` | Static checks and developer/check-helper tests | Same, plus the release build, corpus gates, duplication and JS coverage |
 | `fixtures/` | Static checks and developer/check-helper tests | Same, plus Rust tests, which read fixtures, the release build, corpus gates, duplication and JS coverage |
-| Rust sources, `Cargo.toml`, `Cargo.lock` | Static checks, format and developer/check-helper tests | Same, plus Clippy, rustdoc, Rust tests, the corpus gates, duplication and Rust coverage |
+| Rust sources, `Cargo.toml`, `Cargo.lock` | Static checks and format | Same, plus Clippy, rustdoc, Rust tests, the corpus gates, duplication and Rust coverage |
 | Dependency manifests, other paths, or unknown push scope | Compilation-free fast checks | Full checks, including Rust coverage |
 
 Static checks include touched-function docstrings, Action pins, release workflow/version consistency,
