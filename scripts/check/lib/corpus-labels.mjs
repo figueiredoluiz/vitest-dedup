@@ -340,6 +340,25 @@ export function summarizeLabels(labels) {
 }
 
 /**
+ * The files recall cases declare blind under the current analyzer, as paths under `fixtures/`.
+ * A case owns the list, so adding a blind case touches no shared one.
+ *
+ * @param {{cases: {path: string, blindUnderCurrent?: string[]}[]}} manifest The recall manifest.
+ * @returns {string[]} Declared files, in manifest order.
+ * @throws {Error} If a declaration is not a non-empty list of paths inside its case.
+ */
+export function blindRecallFiles(manifest) {
+  return manifest.cases.flatMap(({ path, blindUnderCurrent: blind }) => {
+    if (blind === undefined) return []
+    const inside = (file) => typeof file === 'string' && !file.startsWith('/') && !file.split('/').includes('..')
+    if (!Array.isArray(blind) || blind.length === 0 || !blind.every(inside)) {
+      throw new Error(`recall case ${path}: blindUnderCurrent must list paths inside the case`)
+    }
+    return blind.map((file) => `recall/${path}/${file}`)
+  })
+}
+
+/**
  * Reads and labels `<root>/manifest.json`; the only function here that touches the filesystem.
  *
  * @param {string} root The recall corpus root.

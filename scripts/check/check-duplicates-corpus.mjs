@@ -93,6 +93,7 @@ import { basename, join } from 'node:path'
 import { report as reportIsolation, run as runIsolation } from './check-fixture-isolation.mjs'
 import { enumerateFixtures, FIXTURE_NAME, parseFixture } from './lib/fixture-directives.mjs'
 import { findCallback, tokenize } from './lib/js-tokens.mjs'
+import { blindRecallFiles } from './lib/corpus-labels.mjs'
 import { blindCaseFiles, readCases } from './lib/oracle-cases.mjs'
 import { defaultBinary, runAnalyzerJsonl } from './lib/run-analyzer.mjs'
 
@@ -466,8 +467,8 @@ function checkTarget(target, failures, pendingHeld) {
 // count and the stream it emits must agree about the same corpus.
 //
 // The set is pinned in BOTH directions: a deliberate change (a fixture written to be blind, or
-// one deliberately recovered) edits this list in the same commit; anything else fails with the
-// path-level diff.
+// one deliberately recovered) edits this list, or the `blindUnderCurrent` of its oracle or recall
+// case, in the same commit; anything else fails with the path-level diff.
 const DELIBERATE_BLIND_FILES = new Set([
   'declarations/template-literal-title-dynamic.test.ts',
   'duplicates/each-computed-key-row.test.ts',
@@ -479,86 +480,36 @@ const DELIBERATE_BLIND_FILES = new Set([
   'edge/vi-domock-scoped.test.ts',
   'edge/vi-dounmock-scoped.test.ts',
   // API identity does not prove hoisting through renamed or namespace mock calls.
-  'recall/vitest-api-namespace-dynamic/alias.test.ts',
-  'recall/vitest-api-renamed/alias.test.ts',
-  'recall/vitest-api-renamed/renamed-vi.test.ts',
   'mixed/mixed-loop-each-in-non-idempotent-hook-scope.test.ts',
-  'recall/duplicate-suite-computed-condition/run.test.ts',
-  'recall/duplicate-test-dynamic-title/session.test.ts',
-  'recall/duplicate-test-past-the-depth-bound/run.test.ts',
-  'recall/duplicate-test-name-dynamic-title/tenants.test.ts',
   // Anonymous and binding-inferred function titles remain deliberately unresolved.
-  'recall/function-title-unresolved/run.test.ts',
-  'recall/mixed-loop-each-under-projects-entry/pkg/loops.spec.ts',
   // Framework-application shapes the analyzer cannot read yet: each file is blind on purpose until the
   // row that supports its shape lands, and leaves this list in the same change.
-  'recall/framework-auto-import-in-helper/unknown.test.ts',
-  'recall/framework-auto-import-ungenerated-control/known.test.ts',
-  'recall/framework-package-mock-call-uninstalled/users.test.ts',
   // Required generated metadata beyond the nesting budget must leave its callers unproved.
-  'recall/framework-auto-import-table-depth/clock.test.ts',
-  'recall/framework-package-manifest-oversized/metadata.test.ts',
   // `mockNuxtImport` factories that must stay refused: a redeclared `var` whose later value registers,
   // and a counter a hook increments (identical tests that observe different values).
-  'recall/framework-nuxt-mock-redeclared-binding/run.test.ts',
-  'recall/framework-nuxt-mock-accumulating-hook/count.test.ts',
   // Deliberately dynamic spy options remain unreadable; the recall case pins both excluded tests.
-  'recall/mock-spy-options-unreadable/unknown.test.ts',
   // A local overloaded helper reassigned before the call: refused on purpose.
-  'recall/local-helper-overloaded-reassigned/run.test.ts',
   // Hooks registered under control flow make their scope's contexts incomparable by design
   // (the runtime registration depends on control flow and values the analyzer does not
   // evaluate), so these files are blind for as long as their hook registrations are guarded.
-  'recall/guarded-hook-differing/run.test.ts',
-  'recall/guarded-hook-identical/run.test.ts',
-  'recall/guarded-hook-named-exit/run.test.ts',
-  'recall/nested-hook-after-exit-uncertainty/run.test.ts',
-  'recall/labeled-return-hook-uncertainty/run.test.ts',
-  'recall/guarded-return-before-break/run.test.ts',
-  'recall/labeled-return-before-break/run.test.ts',
-  'recall/braceless-return-hook-uncertainty/run.test.ts',
-  'recall/caught-helper-throw-hook-uncertainty/run.test.ts',
-  'recall/helper-guarded-hook-uncertainty/run.test.ts',
-  'recall/concise-suite-guarded-hook-uncertainty/run.test.ts',
   // A local helper reassigned with no overload signature: refused for the reassignment alone.
-  'recall/local-helper-reassigned/run.test.ts',
   // A generator helper, whose body a call does not run: refused, so the tests it declares are
   // neither invented nor dropped silently.
-  'recall/local-helper-generator/run.test.ts',
   // An inline `forEach` callback that registers tests, directly or through the parameter it is
   // handed, is not read: refused so the remaining test is unresolved.
-  'recall/callback-registers-foreach/run.test.ts',
-  'recall/callback-parameter-registers/run.test.ts',
   // A helper whose destructuring parameter cannot bind its argument: the call throws before the
   // body runs, so it is refused and the remaining test is unresolved.
-  'recall/local-helper-null-destructure/run.test.ts',
-  'recall/local-helper-noniterable-destructure/run.test.ts',
   // A called parameter, a `const` generator, and `const` helpers reached in their temporal dead
   // zone (through a hoisted function, or from another `switch` case): refused so the tests they
   // may declare are not dropped silently.
-  'recall/local-helper-parameter-callee/run.test.ts',
-  'recall/local-helper-const-tdz/run.test.ts',
-  'recall/local-helper-const-switch-case/run.test.ts',
-  'recall/local-helper-const-generator/run.test.ts',
-  'recall/local-helper-const-async-await/run.test.ts',
-  'recall/local-helper-const-switch-cross-case/run.test.ts',
   // Default exports a runner must keep refusing (a `let`, a reassigned declaration, an imported
   // binding): blind on purpose, permanently, as the controls for the default-identifier support.
-  'recall/framework-runner-default-imported-negative/slugs.test.ts',
-  'recall/framework-runner-default-let-negative/slugs.test.ts',
-  'recall/framework-runner-default-reassigned-negative/slugs.test.ts',
   // A runner module whose non-`declare` namespace registers a hook at import: blind on purpose,
   // permanently, as the control for admitting ambient declarations on a runner's chain.
-  'recall/framework-runner-namespace-hook-negative/observe.test.ts',
-  'recall/framework-runner-namespace-hook-negative/slugs.test.ts',
   // A runner module that switches to fake timers at import: blind on purpose, permanently, as the
   // control for admitting module-local values on a runner's chain.
-  'recall/framework-runner-fake-timers-negative/observe.test.ts',
-  'recall/framework-runner-fake-timers-negative/slugs.test.ts',
   // A runner module whose destructured getter registers a test at import: blind on purpose.
-  'recall/framework-runner-getter-value-negative/slugs.test.ts',
   // A runner whose imported module mocks a module at load: blind on purpose, permanently.
-  'recall/framework-runner-import-time-mock-negative/slugs.test.ts',
 ])
 
 /**
@@ -616,8 +567,13 @@ function checkBlindFiles(binary, failures) {
     )
   }
 
-  // Oracle cases record their own blind files, so adding a case touches no shared list.
-  const deliberate = new Set([...DELIBERATE_BLIND_FILES, ...blindCaseFiles(readCases(process.cwd()).cases)])
+  // Oracle and recall cases record their own blind files, so adding a case touches no shared list.
+  const recallManifest = JSON.parse(readFileSync('fixtures/recall/manifest.json', 'utf8'))
+  const deliberate = new Set([
+    ...DELIBERATE_BLIND_FILES,
+    ...blindCaseFiles(readCases(process.cwd()).cases),
+    ...blindRecallFiles(recallManifest),
+  ])
   const missing = [...deliberate].filter((path) => !blind.has(path))
   const extra = [...blind].filter((path) => !deliberate.has(path))
   if (missing.length > 0 || extra.length > 0) {
@@ -628,7 +584,7 @@ function checkBlindFiles(binary, failures) {
     )
   } else {
     console.log(
-      `blind files: ${blind.size} deliberate, set-equal (pinned by path in DELIBERATE_BLIND_FILES and oracle cases)`,
+      `blind files: ${blind.size} deliberate, set-equal (pinned by path in DELIBERATE_BLIND_FILES and the cases)`,
     )
   }
 }

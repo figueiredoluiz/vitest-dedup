@@ -724,6 +724,9 @@
             "resumes a session for ${_}"
           ]
         }
+      ],
+      "blindUnderCurrent": [
+        "session.test.ts"
       ]
     },
     {
@@ -962,6 +965,9 @@
             "tenant ${_} is isolated"
           ]
         }
+      ],
+      "blindUnderCurrent": [
+        "tenants.test.ts"
       ]
     },
     {
@@ -2275,6 +2281,9 @@
             "`reports default ${key} as %p`"
           ]
         }
+      ],
+      "blindUnderCurrent": [
+        "pkg/loops.spec.ts"
       ]
     },
     {
@@ -4218,6 +4227,9 @@
             "lists users: second check"
           ]
         }
+      ],
+      "blindUnderCurrent": [
+        "users.test.ts"
       ]
     },
     {
@@ -4647,6 +4659,9 @@
             "unknown: second check"
           ]
         }
+      ],
+      "blindUnderCurrent": [
+        "unknown.test.ts"
       ]
     },
     {
@@ -4669,6 +4684,9 @@
             "clock: second check"
           ]
         }
+      ],
+      "blindUnderCurrent": [
+        "known.test.ts"
       ]
     },
     {
@@ -4768,6 +4786,9 @@
             "page slug is lowercase"
           ]
         }
+      ],
+      "blindUnderCurrent": [
+        "slugs.test.ts"
       ]
     },
     {
@@ -4790,6 +4811,9 @@
             "page slug is lowercase"
           ]
         }
+      ],
+      "blindUnderCurrent": [
+        "slugs.test.ts"
       ]
     },
     {
@@ -4858,6 +4882,10 @@
             "page slug is lowercase"
           ]
         }
+      ],
+      "blindUnderCurrent": [
+        "observe.test.ts",
+        "slugs.test.ts"
       ]
     },
     {
@@ -4903,6 +4931,10 @@
             "page slug is lowercase"
           ]
         }
+      ],
+      "blindUnderCurrent": [
+        "observe.test.ts",
+        "slugs.test.ts"
       ]
     },
     {
@@ -4925,6 +4957,9 @@
             "page slug is lowercase"
           ]
         }
+      ],
+      "blindUnderCurrent": [
+        "slugs.test.ts"
       ]
     },
     {
@@ -4970,6 +5005,9 @@
             "page slug is lowercase"
           ]
         }
+      ],
+      "blindUnderCurrent": [
+        "slugs.test.ts"
       ]
     },
     {
@@ -4992,6 +5030,9 @@
             "page slug is lowercase"
           ]
         }
+      ],
+      "blindUnderCurrent": [
+        "slugs.test.ts"
       ]
     },
     {
@@ -5014,6 +5055,9 @@
             "reads the value again"
           ]
         }
+      ],
+      "blindUnderCurrent": [
+        "run.test.ts"
       ]
     },
     {
@@ -5036,6 +5080,9 @@
             "reads the count again"
           ]
         }
+      ],
+      "blindUnderCurrent": [
+        "count.test.ts"
       ]
     },
     {
@@ -5081,6 +5128,9 @@
             "independent"
           ]
         }
+      ],
+      "blindUnderCurrent": [
+        "run.test.ts"
       ]
     },
     {
@@ -5103,6 +5153,9 @@
             "independent"
           ]
         }
+      ],
+      "blindUnderCurrent": [
+        "run.test.ts"
       ]
     },
     {
@@ -5304,6 +5357,9 @@
             "visible"
           ]
         }
+      ],
+      "blindUnderCurrent": [
+        "run.test.ts"
       ]
     },
     {
@@ -5470,6 +5526,9 @@
             "visible"
           ]
         }
+      ],
+      "blindUnderCurrent": [
+        "run.test.ts"
       ]
     },
     {
@@ -5492,6 +5551,9 @@
             "visible"
           ]
         }
+      ],
+      "blindUnderCurrent": [
+        "run.test.ts"
       ]
     },
     {
@@ -5733,6 +5795,9 @@
             "visible"
           ]
         }
+      ],
+      "blindUnderCurrent": [
+        "run.test.ts"
       ]
     },
     {
@@ -5801,6 +5866,9 @@
             "visible"
           ]
         }
+      ],
+      "blindUnderCurrent": [
+        "run.test.ts"
       ]
     },
     {
@@ -5823,6 +5891,9 @@
             "visible"
           ]
         }
+      ],
+      "blindUnderCurrent": [
+        "run.test.ts"
       ]
     },
     {
@@ -5889,6 +5960,9 @@
             "visible"
           ]
         }
+      ],
+      "blindUnderCurrent": [
+        "run.test.ts"
       ]
     },
     {
@@ -5933,6 +6007,9 @@
             "visible"
           ]
         }
+      ],
+      "blindUnderCurrent": [
+        "run.test.ts"
       ]
     },
     {
@@ -5977,6 +6054,9 @@
             "visible"
           ]
         }
+      ],
+      "blindUnderCurrent": [
+        "run.test.ts"
       ]
     },
     {
@@ -6294,6 +6374,9 @@
             "suite-b > reads"
           ]
         }
+      ],
+      "blindUnderCurrent": [
+        "run.test.ts"
       ]
     },
     {
@@ -6316,6 +6399,9 @@
             "suite-b > reads"
           ]
         }
+      ],
+      "blindUnderCurrent": [
+        "run.test.ts"
       ]
     },
     {
@@ -6361,6 +6447,9 @@
             "suite-b > reads"
           ]
         }
+      ],
+      "blindUnderCurrent": [
+        "run.test.ts"
       ]
     },
     {
@@ -6429,6 +6518,9 @@
             "suite-b > reads"
           ]
         }
+      ],
+      "blindUnderCurrent": [
+        "run.test.ts"
       ]
     },
     {
@@ -6474,6 +6566,9 @@
             "outer > suite-b > reads"
           ]
         }
+      ],
+      "blindUnderCurrent": [
+        "run.test.ts"
       ]
     },
     {
@@ -6519,6 +6614,9 @@
             "suite-b > reads"
           ]
         }
+      ],
+      "blindUnderCurrent": [
+        "run.test.ts"
       ]
     },
     {
@@ -6541,6 +6639,9 @@
             "suite-b > reads"
           ]
         }
+      ],
+      "blindUnderCurrent": [
+        "run.test.ts"
       ]
     },
     {
@@ -6563,6 +6664,9 @@
             "suite-b > reads"
           ]
         }
+      ],
+      "blindUnderCurrent": [
+        "run.test.ts"
       ]
     },
     {
@@ -6608,6 +6712,9 @@
             "suite-b > reads"
           ]
         }
+      ],
+      "blindUnderCurrent": [
+        "run.test.ts"
       ]
     },
     {
@@ -6699,6 +6806,9 @@
             "suite-b > reads"
           ]
         }
+      ],
+      "blindUnderCurrent": [
+        "run.test.ts"
       ]
     },
     {
@@ -6767,6 +6877,9 @@
             "suite-b > reads"
           ]
         }
+      ],
+      "blindUnderCurrent": [
+        "run.test.ts"
       ]
     },
     {
@@ -6834,6 +6947,9 @@
             "second unknown observer"
           ]
         }
+      ],
+      "blindUnderCurrent": [
+        "unknown.test.ts"
       ]
     },
     {
@@ -6879,6 +6995,9 @@
             "clock: second check"
           ]
         }
+      ],
+      "blindUnderCurrent": [
+        "clock.test.ts"
       ]
     },
     {
@@ -6924,6 +7043,9 @@
             "keeps the second observation"
           ]
         }
+      ],
+      "blindUnderCurrent": [
+        "metadata.test.ts"
       ]
     },
     {
@@ -7150,6 +7272,9 @@
             "() => {}"
           ]
         }
+      ],
+      "blindUnderCurrent": [
+        "run.test.ts"
       ]
     },
     {
@@ -7457,6 +7582,10 @@
             "vi.test.ts:5"
           ]
         }
+      ],
+      "blindUnderCurrent": [
+        "alias.test.ts",
+        "renamed-vi.test.ts"
       ]
     },
     {
@@ -7479,6 +7608,9 @@
             "plain.test.ts:2"
           ]
         }
+      ],
+      "blindUnderCurrent": [
+        "alias.test.ts"
       ]
     },
     {
@@ -7622,6 +7754,9 @@
             "visible"
           ]
         }
+      ],
+      "blindUnderCurrent": [
+        "run.test.ts"
       ]
     },
     {
@@ -7644,6 +7779,9 @@
             "visible"
           ]
         }
+      ],
+      "blindUnderCurrent": [
+        "run.test.ts"
       ]
     },
     {
@@ -7742,6 +7880,9 @@
             "skipped"
           ]
         }
+      ],
+      "blindUnderCurrent": [
+        "run.test.ts"
       ]
     },
     {
@@ -7830,6 +7971,9 @@
             "two"
           ]
         }
+      ],
+      "blindUnderCurrent": [
+        "run.test.ts"
       ]
     },
     {

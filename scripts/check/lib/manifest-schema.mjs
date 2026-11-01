@@ -28,6 +28,7 @@ export const CASE_KEYS = new Set([
   'expectedTests',
   'expectedIncomplete',
   'expectedUnresolved',
+  'blindUnderCurrent',
   'expectedFindings',
   'expectedAbsent',
   'knownMisses',

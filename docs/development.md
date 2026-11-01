@@ -164,6 +164,17 @@ The full profile does not run the memory and scaling benchmarks, mutation campai
 CI self-check. Use `npm run check:not-run` and `ci.yml` to select those when a change needs them.
 This workflow relaxes no gate threshold or corpus exclusion.
 
+### Probing and proving a change
+
+`npm run probe -- <test file or directory>...` copies each input to a temporary project and prints
+what Vitest collects beside what both engines report, marking any disagreement. It reads
+`target/release/vitest-dedup` unless `--binary` names another.
+
+`npm run revert-proof -- <spec.json>` proves a fix fails its checks when undone. The spec lists
+`checks` and `mutants`, as `scripts/dev/revert-proof.mjs` documents. The checks must pass untouched,
+each mutant must match exactly once, and every file is restored and verified. A mutant that
+applies but fails no check, or does not build, fails the run.
+
 ### Docstring guard
 
 Both verification profiles first check documentation on touched named functions with an 80%

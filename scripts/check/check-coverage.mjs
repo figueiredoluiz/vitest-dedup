@@ -341,6 +341,9 @@ const JS_MIN_TESTS = 100 // 235 today across the 15 enumerated suite files.
 
 const JS_MODULES = {
   'scripts/dev/verify.mjs': 100,
+  // The rest of each is the entry point and the subprocess calls a real run makes.
+  'scripts/dev/probe.mjs': 77,
+  'scripts/dev/revert-proof.mjs': 97,
   // Action pin gate measured 67/67 lines with owned YAML cases.
   'scripts/check/check-action-pins.mjs': 100,
   'scripts/check/check-docstrings.mjs': 100,
@@ -472,6 +475,7 @@ const JS_NOT_MEASURED = {
 /** The JS suites the coverage run drives. Enumerated, never globbed -- see `run-npm-tests.mjs`. */
 const JS_TEST_FILES = [
   'scripts/dev/verify.test.mjs',
+  'scripts/dev/dev-tools.test.mjs',
   'scripts/check/check-docstrings.test.mjs',
   ...globSync('npm/test/*.test.mjs', { cwd: ROOT }).sort(),
   ...globSync('scripts/check/lib/*.test.mjs', { cwd: ROOT }).sort(),
