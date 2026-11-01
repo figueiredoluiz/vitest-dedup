@@ -168,6 +168,133 @@ fn parameterization_uses_proven_rows_once_per_declaration() {
     assert_eq!(candidates[0].titles, ["row %i", "manual"]);
 }
 
+/// The runtime and recall sources retain their declaration outcomes under each row ordering.
+#[test]
+fn parameterization_owned_row_order() {
+    for (source, count, expected) in [
+        (
+            include_str!(
+                "../../../fixtures/recall/parameterization-row-order-identical/main.test.ts"
+            ),
+            4,
+            0,
+        ),
+        (
+            include_str!(
+                "../../../fixtures/recall/parameterization-row-order-retained/main.test.ts"
+            ),
+            3,
+            1,
+        ),
+        (
+            include_str!("../../../fixtures/parameterization-runtime/overlap/main.test.ts"),
+            4,
+            1,
+        ),
+        (
+            include_str!("../../../fixtures/parameterization-runtime/covered/main.test.ts"),
+            3,
+            0,
+        ),
+    ] {
+        for api in ["test.each", "test.for"] {
+            for reverse in [false, true] {
+                let source = source.replace("test.each", api);
+                let source = if reverse {
+                    source.replacen("[1, 2]", "[2, 1]", 1)
+                } else {
+                    source
+                };
+                let corpus = eligible(&source, count);
+                assert!(corpus
+                    .tests
+                    .iter()
+                    .all(|case| case.parameterization_key.is_some() && case.trace_complete));
+                let findings: Vec<_> = owned_findings("a.test.ts", corpus)
+                    .findings
+                    .into_iter()
+                    .filter(|finding| finding.rule == Rule::ParameterizationCandidate)
+                    .collect();
+                assert_eq!(findings.len(), expected, "{source}\n{findings:#?}");
+                for finding in findings {
+                    assert_eq!(finding.locations.len(), 2);
+                    assert_eq!(finding.locations[0].span.start.line, 4);
+                    assert_eq!(finding.locations[1].span.start.line, 5);
+                }
+            }
+        }
+    }
+}
+
+/// Moving declarations or rows preserves candidate counts over the owned runtime sources.
+#[test]
+fn parameterization_owned_declaration_order() {
+    for (source, count, expected) in [
+        (
+            include_str!("../../../fixtures/parameterization-runtime/covered/main.test.ts"),
+            3,
+            0,
+        ),
+        (
+            include_str!("../../../fixtures/parameterization-runtime/overlap/main.test.ts"),
+            4,
+            1,
+        ),
+        (
+            include_str!("../../../fixtures/parameterization-runtime/bridge/main.test.ts"),
+            6,
+            2,
+        ),
+    ] {
+        let mut baseline = None;
+        for api in ["test.each", "test.for"] {
+            for reverse_rows in [false, true] {
+                let mut source = source.replace("test.each", api);
+                if reverse_rows {
+                    for (forward, reverse) in [
+                        ("[1, 2]", "[2, 1]"),
+                        ("[1, 3]", "[3, 1]"),
+                        ("[3, 4]", "[4, 3]"),
+                        ("[2, 3]", "[3, 2]"),
+                    ] {
+                        source = source.replace(forward, reverse);
+                    }
+                }
+                let lines: Vec<_> = source.lines().collect();
+                let header = lines[..3].join("\n");
+                let mut declarations = lines[3..].to_vec();
+                for _ in 0..declarations.len() {
+                    declarations.rotate_left(1);
+                    for reverse in [false, true] {
+                        let mut ordered = declarations.clone();
+                        if reverse {
+                            ordered.reverse();
+                        }
+                        let source = format!("{header}\n{}\n", ordered.join("\n"));
+                        let corpus = eligible(&source, count);
+                        assert!(corpus.tests.iter().all(|case| {
+                            case.parameterization_key.is_some() && case.trace_complete
+                        }));
+                        let findings: Vec<_> = owned_findings("a.test.ts", corpus)
+                            .findings
+                            .into_iter()
+                            .filter(|finding| finding.rule == Rule::ParameterizationCandidate)
+                            .collect();
+                        assert_eq!(findings.len(), expected, "{source}");
+                        let titles: std::collections::BTreeSet<_> = findings
+                            .iter()
+                            .flat_map(|finding| finding.titles.iter().cloned())
+                            .collect();
+                        let claims = (findings.len(), titles);
+                        let initial = baseline.get_or_insert_with(|| claims.clone());
+                        assert_eq!(&claims, initial, "{source}");
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// The permanent corpus source is also executed under Vitest, including its two table rows.
 #[test]
 fn parameterization_owned_contract() {

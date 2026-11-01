@@ -28,7 +28,7 @@ fn candidates(count: u32) -> Vec<TestCase> {
 
 /// Repeated bodies and repeated rows cannot create extra consolidation claims.
 #[test]
-fn parameterization_collapses_declarations_then_exact_bodies() {
+fn parameterization_collapses_exact_bodies_then_declarations() {
     let mut cases = candidates(4);
     cases[1].body = cases[0].body;
     let mut row = cases[0].clone();
@@ -40,6 +40,129 @@ fn parameterization_collapses_declarations_then_exact_bodies() {
     assert_eq!(outcome.findings.len(), 2);
     assert_eq!(outcome.findings[0].titles, ["t1", "t3"]);
     assert_eq!(outcome.findings[1].titles, ["t3", "t4"]);
+}
+
+/// All rows participate in exact-body coverage before one row represents each declaration.
+#[test]
+fn parameterization_row_order_preserves_declaration_claims() {
+    for (tables, expected) in [
+        (vec![vec![1, 2], vec![2, 1]], 0),
+        (vec![vec![1, 1, 2], vec![2, 1]], 0),
+        (vec![vec![1, 2], vec![2]], 0),
+        (vec![vec![1, 2]], 0),
+        (vec![vec![1, 2], vec![3]], 1),
+        (vec![vec![1, 2], vec![1, 3]], 1),
+        (vec![vec![1, 2], vec![3, 4]], 1),
+        (vec![vec![1, 2], vec![1, 3], vec![2], vec![3]], 1),
+        (vec![vec![1, 2], vec![1, 3], vec![2, 4]], 2),
+    ] {
+        let mut baseline = None;
+        for mask in 0..(1 << tables.len()) {
+            let mut cases = Vec::new();
+            for (declaration, bodies) in tables.iter().enumerate() {
+                let mut bodies = bodies.clone();
+                if mask & (1 << declaration) != 0 {
+                    bodies.reverse();
+                }
+                for (row, body) in bodies.into_iter().enumerate() {
+                    let site = declaration as u32 + 1;
+                    let mut entry = case(site, site * 100, body, body);
+                    entry.body = body;
+                    entry.row = Some(row);
+                    entry.parameterization_key = Some(10);
+                    cases.push(entry);
+                }
+            }
+            let files = [file("a.test.ts", cases)];
+            let cfg = config(Severity::Warning);
+            let outcome = run(&files, &cfg);
+            assert_eq!(outcome.findings.len(), expected, "{tables:?}, mask {mask}");
+            assert!(!outcome.budget_exhausted);
+            let initial = baseline.get_or_insert_with(|| outcome.findings.clone());
+            assert_eq!(&outcome.findings, initial, "{tables:?}, mask {mask}");
+            let bounded = run_with_budget(&files, &cfg, 0);
+            assert!(bounded.findings.is_empty());
+            assert_eq!(bounded.budget_exhausted, expected > 0);
+        }
+    }
+}
+
+/// Declaration permutations preserve participants and the exact comparison budget.
+#[test]
+fn parameterization_declaration_order_preserves_claims_and_budget() {
+    for (tables, expected) in [
+        (vec![vec![1, 2], vec![2]], 0),
+        (vec![vec![1, 2], vec![1, 2, 3]], 0),
+        (vec![vec![1, 2], vec![3]], 1),
+        (vec![vec![1, 2], vec![1, 3]], 1),
+        (vec![vec![1, 2], vec![3, 4], vec![2, 3]], 2),
+        (vec![vec![1, 2], vec![1, 3], vec![2, 3]], 1),
+    ] {
+        let mut order: Vec<_> = (0..tables.len()).collect();
+        let mut baseline = None;
+        for _ in 0..order.len() {
+            order.rotate_left(1);
+            for reverse in [false, true] {
+                let mut ordered = order.clone();
+                if reverse {
+                    ordered.reverse();
+                }
+                let mut cases = Vec::new();
+                for (position, &declaration) in ordered.iter().enumerate() {
+                    for (row, &body) in tables[declaration].iter().enumerate() {
+                        let site = position as u32 + 1;
+                        let mut entry = case(site, site * 100, body, body);
+                        entry.body = body;
+                        entry.full_title = Some(format!("declaration {declaration}"));
+                        entry.row = Some(row);
+                        entry.parameterization_key = Some(10);
+                        cases.push(entry);
+                    }
+                }
+                let files = [file("a.test.ts", cases)];
+                let cfg = config(Severity::Warning);
+                let outcome = run_with_budget(&files, &cfg, expected as u64);
+                assert!(!outcome.budget_exhausted);
+                assert_eq!(outcome.findings.len(), expected, "{tables:?}, {ordered:?}");
+                let titles: std::collections::BTreeSet<_> = outcome
+                    .findings
+                    .iter()
+                    .flat_map(|finding| finding.titles.iter().cloned())
+                    .collect();
+                let initial = baseline.get_or_insert_with(|| titles.clone());
+                assert_eq!(&titles, initial, "{tables:?}, {ordered:?}");
+                if expected > 0 {
+                    let short = run_with_budget(&files, &cfg, expected as u64 - 1);
+                    assert!(short.budget_exhausted);
+                    assert!(short.findings.is_empty());
+                }
+            }
+        }
+    }
+}
+
+/// Equal body sets share a representative while the novel declaration remains reported.
+#[test]
+fn parameterization_equal_tables_keep_the_first_location() {
+    for names in [["first", "copy"], ["copy", "first"]] {
+        let mut cases = Vec::new();
+        for (position, title) in names.into_iter().chain(["novel"]).enumerate() {
+            let bodies: &[u64] = if title == "novel" { &[3] } else { &[1, 2] };
+            for (row, &body) in bodies.iter().enumerate() {
+                let site = position as u32 + 1;
+                let mut entry = case(site, site * 100, body, body);
+                entry.full_title = Some(title.to_owned());
+                entry.body = body;
+                entry.row = Some(row);
+                entry.parameterization_key = Some(10);
+                cases.push(entry);
+            }
+        }
+        let outcome = run_with_budget(&[file("a.test.ts", cases)], &config(Severity::Warning), 1);
+        assert!(!outcome.budget_exhausted);
+        assert_eq!(outcome.findings.len(), 1);
+        assert_eq!(outcome.findings[0].titles, [names[0], "novel"]);
+    }
 }
 
 /// Every eligibility dimension is independently capable of preventing a finding.
