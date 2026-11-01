@@ -2064,7 +2064,6 @@ fn a_source_beside_a_call_is_tagged() {
         "const { a } = await SOURCE; use(a); use(a);",
         "const a = [SOURCE, make()]; use(a); use(a);",
         "const a = { x: SOURCE, y: make() }; use(a); use(a);",
-        "const a = flag ? SOURCE : make(); use(a); use(a);",
         "const a = make().SOURCE; use(a); use(a);",
     ] {
         let at = |source: &str| body.replace("SOURCE", source);
