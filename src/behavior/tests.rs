@@ -197,6 +197,28 @@ fn local_classes_render_by_content() {
     assert!(!complete(&events, "unprovable"));
 }
 
+/// The member rewrite moves a read of the object to each use, so it applies only when every read
+/// follows the declaration. A read before it, or inside it, keeps the binding, and traces whole.
+#[test]
+fn a_read_at_or_before_a_destructuring_declaration_keeps_the_binding() {
+    let traced = events(
+        r#"
+        const shared = { a: 1 };
+        test('before', () => { use(a); const { a } = shared; use(a); });
+        test('within', () => { const { a, [a]: b } = shared; use(a, b); });
+        test('after', () => { const { a } = shared; use(a); });
+        test('written-out', () => { use(shared.a); });
+    "#,
+        &[],
+    );
+    assert!(complete(&traced, "before"));
+    assert!(complete(&traced, "within"));
+    assert_eq!(of(&traced, "after"), of(&traced, "written-out"));
+    assert!(of(&traced, "before")
+        .iter()
+        .all(|event| event.contains(":prop:a")));
+}
+
 /// A class reading another twice doubles its text per level, so class rendering spends a budget:
 /// a short chain renders whole, and a long one finishes promptly with the trace incomplete.
 #[test]

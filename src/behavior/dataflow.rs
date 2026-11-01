@@ -349,10 +349,9 @@ fn try_register_members(
         let Some(reads) = read_statement_indices(tree, scopes, scan.statements, symbol) else {
             continue;
         };
-        let Some(&(last_use, _)) = reads.iter().max_by_key(|(index, _)| *index) else {
-            continue; // never read: nothing to substitute.
-        };
-        if last_use <= decl_index {
+        // Never read: nothing to substitute. Read at or before the declaration: that read runs
+        // first, or throws, so moving the object's read to it would change what it does.
+        if reads.is_empty() || reads.iter().any(|(index, _)| *index <= decl_index) {
             continue;
         }
         // The rewrite moves the object's read from the declaration to every use: for each read,
