@@ -187,6 +187,15 @@ pub struct BaselineUpdate {
 /// apparently-new findings, while one that fell back to "suppress everything" would turn it into a
 /// silent pass. Neither is an answer, so neither is offered.
 pub fn load_baseline(path: &Path) -> Result<Baseline> {
+    load_baseline_as(path, FINGERPRINT_VERSION)
+}
+
+/// [`load_baseline`], for the engine whose fingerprints carry `version`.
+///
+/// # Errors
+///
+/// As [`load_baseline`], including a file written under any other version.
+pub fn load_baseline_as(path: &Path, version: &str) -> Result<Baseline> {
     let text = crate::discovery::read_bounded(path, MAX_BASELINE_BYTES)
         .with_context(|| format!("reading baseline {}", path.display()))?
         .with_context(|| {
@@ -206,14 +215,14 @@ pub fn load_baseline(path: &Path) -> Result<Baseline> {
             BASELINE_SCHEMA_VERSION
         );
     }
-    if file.fingerprint_version != FINGERPRINT_VERSION {
+    if file.fingerprint_version != version {
         bail!(
             "baseline {} was computed with fingerprint version `{}` but this build emits `{}`; \
              its entries can no longer be matched. Regenerate it with --update-baseline and \
              re-review what it accepts.",
             path.display(),
             terminal_safe(&file.fingerprint_version),
-            FINGERPRINT_VERSION
+            version
         );
     }
     if file.findings.len() > MAX_BASELINE_ENTRIES {
@@ -233,9 +242,9 @@ pub fn load_baseline(path: &Path) -> Result<Baseline> {
                 path.display()
             );
         }
-        if !entry.fingerprint.starts_with(FINGERPRINT_VERSION) {
+        if !entry.fingerprint.starts_with(&format!("{version}:")) {
             bail!(
-                "baseline {} contains an entry whose fingerprint is not a `{FINGERPRINT_VERSION}` \
+                "baseline {} contains an entry whose fingerprint is not a `{version}` \
                  value; regenerate it with --update-baseline",
                 path.display()
             );
@@ -260,17 +269,28 @@ pub fn load_baseline(path: &Path) -> Result<Baseline> {
 /// Refusing to write from an incomplete run is the caller's job, not this function's -- see
 /// `main.rs`. This function only records what it was given.
 pub fn write_baseline(path: &Path, findings: &[Finding]) -> Result<BaselineUpdate> {
+    write_baseline_as(path, findings, FINGERPRINT_VERSION)
+}
+
+/// [`write_baseline`], for the engine whose fingerprints carry `version`.
+pub fn write_baseline_as(
+    path: &Path,
+    findings: &[Finding],
+    version: &str,
+) -> Result<BaselineUpdate> {
     let previous = if path.is_file() {
         // A previous file that cannot be read at all is still worth reporting against, but an
         // unreadable one must not stop the rewrite the user explicitly asked for: treat it as
         // empty for the added/removed arithmetic rather than failing to record the current run.
-        load_baseline(path).map(|baseline| baseline.allowance).ok()
+        load_baseline_as(path, version)
+            .map(|baseline| baseline.allowance)
+            .ok()
     } else {
         Some(BTreeMap::new())
     }
     .unwrap_or_default();
 
-    let file = build_baseline(findings);
+    let file = build_baseline(findings, version);
     let current: BTreeMap<String, usize> = file
         .findings
         .iter()
@@ -303,7 +323,7 @@ pub fn write_baseline(path: &Path, findings: &[Finding]) -> Result<BaselineUpdat
 }
 
 /// Builds the file body for `findings`: one entry per fingerprint, counted, sorted.
-fn build_baseline(findings: &[Finding]) -> BaselineFile {
+fn build_baseline(findings: &[Finding], version: &str) -> BaselineFile {
     let mut counts: BTreeMap<String, usize> = BTreeMap::new();
     let mut annotations: BTreeMap<String, (String, Vec<String>)> = BTreeMap::new();
     for finding in findings {
@@ -318,7 +338,7 @@ fn build_baseline(findings: &[Finding]) -> BaselineFile {
     }
     BaselineFile {
         schema_version: BASELINE_SCHEMA_VERSION,
-        fingerprint_version: FINGERPRINT_VERSION.to_owned(),
+        fingerprint_version: version.to_owned(),
         // `BTreeMap` iteration is already fingerprint-sorted, which is the diffable order this
         // file's whole shape exists for.
         findings: counts

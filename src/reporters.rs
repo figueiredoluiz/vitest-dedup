@@ -88,6 +88,7 @@ pub(crate) mod test_support {
     /// A two-participant finding of `rule` in `path`, both sharing one title.
     pub(crate) fn finding_with_title(rule: Rule, path: &str, title: &str) -> Finding {
         Finding {
+            identity: Default::default(),
             registration_files: Vec::new(),
             rule,
             severity: rule.default_severity(),
@@ -103,6 +104,7 @@ pub(crate) mod test_support {
     /// `duplicate-test` at Error severity, participants in two different files, distinct titles.
     pub(crate) fn finding_across_files(message: &str) -> Finding {
         Finding {
+            identity: Default::default(),
             registration_files: Vec::new(),
             rule: Rule::DuplicateTest,
             severity: Severity::Error,

@@ -1049,6 +1049,10 @@ pub struct Finding {
     /// `#[serde(default)]` so a JSON report written before baselines existed still deserializes.
     #[serde(default)]
     pub baselined: bool,
+    /// Which engine's identity [`Finding::fingerprint`] renders. Not a report field: the
+    /// fingerprint's own label carries it.
+    #[serde(skip)]
+    pub identity: Identity,
 }
 
 impl Finding {
@@ -1189,7 +1193,8 @@ impl Finding {
             .collect();
         participants.sort_unstable();
 
-        let mut input = String::from(FINGERPRINT_VERSION);
+        let version = self.identity.version();
+        let mut input = String::from(version);
         input.push('\u{0}');
         input.push_str(self.rule.id());
         for participant in &participants {
@@ -1197,7 +1202,29 @@ impl Finding {
             input.push_str(participant);
         }
 
-        format!("{FINGERPRINT_VERSION}:{}", stable_hash(&input))
+        format!("{version}:{}", stable_hash(&input))
+    }
+}
+
+/// Which engine's identity a finding carries. The derivation is shared, and the label is not: the
+/// engines pair and title tests differently, so a baseline written by one only partly matches the
+/// other, and a labeled mismatch is a refusal rather than a burst of unexplained new findings.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Identity {
+    /// The default engine's: [`FINGERPRINT_VERSION`].
+    #[default]
+    Current,
+    /// The next engine's: [`NEXT_FINGERPRINT_VERSION`].
+    Next,
+}
+
+impl Identity {
+    /// The label this identity's fingerprints carry.
+    pub fn version(self) -> &'static str {
+        match self {
+            Self::Current => FINGERPRINT_VERSION,
+            Self::Next => NEXT_FINGERPRINT_VERSION,
+        }
     }
 }
 
@@ -1206,6 +1233,9 @@ impl Finding {
 /// baseline computed against an older version reads as unmistakably stale rather than silently
 /// comparing hashes produced by two different schemes.
 pub const FINGERPRINT_VERSION: &str = "vitestDedupFingerprint/v1";
+
+/// The version segment of a next-engine [`Finding::fingerprint`].
+pub const NEXT_FINGERPRINT_VERSION: &str = "vitestDedupFingerprint/v2";
 
 /// Renders `path` with forward slashes regardless of host platform.
 ///
@@ -2602,6 +2632,7 @@ mod tests {
     /// baseline flag.
     fn finding(rule: Rule, participants: &[(&str, u32, &str)]) -> Finding {
         Finding {
+            identity: Default::default(),
             registration_files: Vec::new(),
             rule,
             severity: rule.default_severity(),

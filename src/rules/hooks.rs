@@ -90,6 +90,7 @@ pub(super) fn run(
             titles: vec![label.to_owned(), label.to_owned()],
             inert: vec![false, false],
             baselined: false,
+            identity: Default::default(),
         });
     }
     (exhausted, false)

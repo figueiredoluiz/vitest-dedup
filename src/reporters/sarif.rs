@@ -52,7 +52,7 @@
 //!
 //! # `partialFingerprints` and its collision behavior
 //!
-//! Keyed by [`FINGERPRINT_VERSION`] (`vitestDedupFingerprint/v1`) rather than CukeDedup's
+//! Keyed by the finding's own [`crate::model::Identity::version`] rather than CukeDedup's
 //! `cukeDedupFingerprint/v2` -- a distinct name for a distinct derivation, so the two tools'
 //! fingerprints can never be mistaken for each other if their reports are ever merged. The value
 //! is exactly [`Finding::fingerprint`]'s output, unmodified: that method's doc comment is explicit
@@ -128,9 +128,7 @@
 
 use super::shared::{report_registration_files, report_safe, report_safe_path};
 use super::Reporter;
-use crate::model::{
-    AnalysisResult, Finding, Location, Rule, Severity, Verdict, FINGERPRINT_VERSION,
-};
+use crate::model::{AnalysisResult, Finding, Location, Rule, Severity, Verdict};
 use anyhow::{Context, Result};
 use serde_json::{json, Value};
 use std::io::Write;
@@ -283,7 +281,7 @@ fn sarif_result(finding: &Finding) -> Value {
         "message": { "text": report_safe(&finding.message) },
         "locations": [primary],
         "relatedLocations": related,
-        "partialFingerprints": { FINGERPRINT_VERSION: finding.fingerprint() },
+        "partialFingerprints": { (finding.identity.version()): finding.fingerprint() },
         "suppressions": suppressions,
         "properties": {
             "verdict": verdict_id(finding.rule.verdict()),
@@ -363,6 +361,7 @@ fn verdict_id(verdict: Verdict) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::FINGERPRINT_VERSION;
     use crate::model::{IncompleteCauses, Rule, Severity};
     use crate::reporters::test_support::{
         all_fired_causes, append_third_participant, cross_file_result,
@@ -496,6 +495,20 @@ mod tests {
                 "rule {rule:?} did not surface its verdict in properties"
             );
         }
+    }
+
+    /// The key names the identity the value was computed under, on either engine.
+    #[test]
+    fn a_next_engine_fingerprint_is_keyed_by_its_own_version() {
+        let mut result = sample_result();
+        result.findings[0].identity = crate::model::Identity::Next;
+        let value = render_value(&result);
+        let fingerprints = &value["runs"][0]["results"][0]["partialFingerprints"];
+        assert_eq!(
+            fingerprints[crate::model::NEXT_FINGERPRINT_VERSION],
+            result.findings[0].fingerprint()
+        );
+        assert!(fingerprints[FINGERPRINT_VERSION].is_null());
     }
 
     /// Check SARIF output: fingerprint is keyed by the versioned label and matches the model

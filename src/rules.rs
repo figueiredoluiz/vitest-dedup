@@ -7,7 +7,7 @@
 
 use crate::config::Config;
 use crate::corpus::TestCase;
-use crate::model::{Finding, Location, Rule, Severity};
+use crate::model::{Finding, Identity, Location, Rule, Severity};
 use crate::pairs::{group_and_order, group_outcome, GroupOutcome, PairBudget};
 use std::cmp::Ordering;
 use std::collections::BTreeSet;
@@ -214,6 +214,11 @@ fn run_all(
     let (hook_scan_exhausted, hook_pairs_exhausted) =
         hooks::run(hooks, config, max_hook_scans, &mut budget, &mut findings);
     budget_exhausted |= hook_pairs_exhausted;
+    // One stamp for every rule: a finding left with another identity would make a baseline
+    // written from this run refuse to load.
+    for finding in &mut findings {
+        finding.identity = Identity::Next;
+    }
     crate::analysis::sort_findings(&mut findings);
     Outcome {
         hook_scan_exhausted,
@@ -393,6 +398,7 @@ fn over(rule: Rule, severity: Severity, members: &[Entry<'_>], message: String) 
             .collect(),
         inert: members.iter().map(|member| member.case.inert).collect(),
         baselined: false,
+        identity: Identity::default(),
     }
 }
 

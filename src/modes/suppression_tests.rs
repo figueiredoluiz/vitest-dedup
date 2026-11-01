@@ -18,6 +18,7 @@ fn location(path: &str, line: u32) -> Location {
 /// builds.
 fn finding(path: &str, line: u32) -> Finding {
     Finding {
+        identity: Default::default(),
         registration_files: Vec::new(),
         rule: Rule::DuplicateTest,
         severity: Severity::Error,

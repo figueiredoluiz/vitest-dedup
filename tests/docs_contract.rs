@@ -988,6 +988,7 @@ fn sample_analysis_result() -> AnalysisResult {
     };
     AnalysisResult {
         findings: vec![Finding {
+            identity: Default::default(),
             registration_files: Vec::new(),
             rule: Rule::DuplicateTest,
             severity: Severity::Error,
