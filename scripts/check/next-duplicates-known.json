@@ -673,8 +673,8 @@
       "reason": "Valid consolidation: the sibling-containing callbacks differ only in chosen and assertion literal values. The next normalizer retains the unused sibling, so this is a separate group from the declared 16/18 pair; the existing exact-normalization gap already holds both duplicate misses."
     },
     {
-      "id": "extra|fixtures/duplicates|external-instance-alias-control.test.ts:14|external-instance-alias-control.test.ts:16",
-      "reason": "Valid literal-shape candidate under the next normalizer: the erased cast and parentheses normalize equally, and only the discarded marker strings differ. Default extraction refuses the owned class alias; the next engine already admits and exact-compares each identical pair in this fixture."
+      "id": "miss|fixtures/duplicates|parameterization-modules.test.ts:14|parameterization-modules.test.ts:15|parameterization-candidate",
+      "reason": "The trace does not model a dynamic import's execution and now marks that walk incomplete. The structural forms could preserve these literal inputs, but parameterization requires a complete substance trace. Retain the default expectation until import behavior is modeled."
     },
     {
       "id": "extra|fixtures/duplicates|object-property-equivalents.test.ts:29|object-property-equivalents.test.ts:35",

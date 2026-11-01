@@ -16,6 +16,11 @@
 //!
 //! Nothing here knows a rule, and no framework API name is spelled: the assertion entries, their
 //! qualifiers and their meaning-changing members are [`Dialect`] data.
+//!
+//! Branch partitions and unmodeled runtime expressions make the trace incomplete. Recorded
+//! events may still support diagnostics, but cannot justify a trace-based comparison. Flat
+//! comparisons remain eligible independently. Atomic shapes retain their full expression tree;
+//! these refusals apply where an expression walk would otherwise omit behavior.
 
 pub(crate) mod dataflow;
 
@@ -138,11 +143,17 @@ pub(crate) fn trace_text<'s>(
         .collect();
     // A local class a shape names renders by its content, the way a constructor call already
     // does — otherwise two constructions over different classes share a shape inside any
-    // assertion built on them. An unprovable class is not registered: its reads keep the local's
-    // own name, which can only keep events apart, never merge them.
+    // assertion built on them. An unprovable class cannot fall back to an alpha name: two
+    // different classes would then share a trace, including through aliases and atomic shapes.
+    let mut classes_complete = true;
     {
         let tree = &parsed.tree;
         for node in tree.descendants(function) {
+            if matches!(tree.kind(node), "ClassDeclaration" | "ClassExpression")
+                && !class_provable(tree, node)
+            {
+                classes_complete = false;
+            }
             let candidate = match tree.kind(node) {
                 "ClassDeclaration" => tree
                     .child(node, "id")
@@ -176,7 +187,7 @@ pub(crate) fn trace_text<'s>(
         dataflow,
         root,
         events: Vec::new(),
-        complete: true,
+        complete: classes_complete,
     };
     walker.run(function);
     let complete = walker.complete && !walker.walk.class_budget_spent;
@@ -308,6 +319,7 @@ impl<'s> Walker<'_, 's> {
             }
             "ClassDeclaration" => self.class_definition(statement, deferred, depth + 1),
             "IfStatement" => {
+                self.complete = false;
                 self.push(deferred, "if".to_owned());
                 for key in ["test", "consequent", "alternate"] {
                     if let Some(part) = tree.child(statement, key) {
@@ -364,6 +376,7 @@ impl<'s> Walker<'_, 's> {
                 }
             }
             "TryStatement" => {
+                self.complete = false;
                 self.push(deferred, "try".to_owned());
                 for key in ["block", "handler", "finalizer"] {
                     if let Some(part) = tree.child(statement, key) {
@@ -377,8 +390,9 @@ impl<'s> Walker<'_, 's> {
                 }
             }
             "SwitchStatement" => {
-                // No marker of its own: the discriminant and the case bodies are the sequence
-                // (a known gap — swapped branches carry equal events).
+                self.complete = false;
+                // The sequence retains events for inspection, but not their case partition.
+                // Incompleteness prevents this flattened form from justifying a comparison.
                 if let Some(discriminant) = tree.child(statement, "discriminant") {
                     self.walk_expr(discriminant, deferred, depth + 1);
                 }
@@ -635,6 +649,9 @@ impl<'s> Walker<'_, 's> {
                 }
             }
             "BinaryExpression" | "LogicalExpression" => {
+                if tree.kind(expression) == "LogicalExpression" {
+                    self.complete = false;
+                }
                 for key in ["left", "right"] {
                     if let Some(part) = tree.child(expression, key) {
                         self.walk_expr(part, deferred, depth + 1);
@@ -647,6 +664,7 @@ impl<'s> Walker<'_, 's> {
                 }
             }
             "ConditionalExpression" => {
+                self.complete = false;
                 for key in ["test", "consequent", "alternate"] {
                     if let Some(part) = tree.child(expression, key) {
                         self.walk_expr(part, deferred, depth + 1);
@@ -670,11 +688,7 @@ impl<'s> Walker<'_, 's> {
                     .flatten()
                     .collect();
                 for element in elements {
-                    // A spread or a hole contributes no event of its own; the reads inside the
-                    // array's plain elements do.
-                    if tree.kind(element) != "SpreadElement" {
-                        self.walk_expr(element, deferred, depth + 1);
-                    }
+                    self.walk_expr(element, deferred, depth + 1);
                 }
             }
             "ObjectExpression" => {
@@ -684,6 +698,9 @@ impl<'s> Walker<'_, 's> {
                     .flatten()
                     .collect();
                 for property in properties {
+                    if tree.kind(property) == "SpreadElement" {
+                        self.complete = false;
+                    }
                     if tree.kind(property) == "Property" {
                         // A computed key evaluates when the literal does, before its value: its
                         // events belong to the sequence, or two orders would share one trace.
@@ -706,6 +723,12 @@ impl<'s> Walker<'_, 's> {
                     self.walk_expr(inner, deferred, depth);
                 }
             }
+            "TaggedTemplateExpression"
+            | "YieldExpression"
+            | "ImportExpression"
+            | "JSXElement"
+            | "JSXFragment"
+            | "SpreadElement" => self.complete = false,
             _ => {}
         }
     }
@@ -1071,7 +1094,11 @@ impl<'s> Walker<'_, 's> {
                     .map(|object| self.call_path(object, depth + 1))
                     .unwrap_or_default();
                 if tree.flag(callee, "computed") {
-                    return format!("{object}[]");
+                    let property = tree
+                        .child(callee, "property")
+                        .map(|property| self.shape(property))
+                        .unwrap_or_default();
+                    return format!("{object}[{property}]");
                 }
                 let property = tree
                     .child(callee, "property")

@@ -1,10 +1,10 @@
-// Runtime oracle for the behavior trace's await/.then splice: the claims the canonicalization
+// Runtime oracle for behavior tracing and its refusals: the claims the canonicalization
 // rests on, measured against the pinned Vitest rather than assumed from reading.
 //
 // The collection oracle compares what Vitest collects; it cannot see an outcome. The claims this
 // gate checks are outcome claims — a returned chain's continuation is the test's own behavior, an
 // unreturned chain is not awaited, and a rejection handler observes a path no `await` reaches —
-// so `fixtures/behavior-runtime/cases.test.ts` runs under the real Vitest and each named test's
+// so the tests in `fixtures/behavior-runtime` run under the real Vitest and each named test's
 // status must equal the one `expected.json` pins.
 //
 // Floors (a gate that measured nothing fails): every case in `expected.json` matched a result,
@@ -45,7 +45,7 @@ function runVitest() {
         "--reporter=json",
         "--outputFile",
         join(work, "out.json"),
-        resolve(ROOT, DIR, "cases.test.ts"),
+        resolve(ROOT, DIR),
       ],
       { cwd: ROOT, encoding: "utf8", maxBuffer: 64 << 20, timeout: 300_000 },
     );
@@ -73,7 +73,7 @@ function readReport(path) {
  */
 export function runCli({ expected = readExpected(), run = runVitest } = {}) {
   const { report, status, stderr } = run();
-  // Checked whatever the exit was: the expected run itself exits 1 (two cases must fail), and a
+  // Checked whatever the exit was: the expected run itself exits 1 (intentional failures), and a
   // crash that wrote no report must name Vitest's stderr, not surface as a missing-file error.
   if (report === undefined) {
     return {

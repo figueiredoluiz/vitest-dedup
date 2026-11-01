@@ -326,7 +326,7 @@ fn parameterization_owned_custom_snapshots() {
     only_candidate(corpus, ["retain a", "retain b"]);
 }
 
-/// Module identity is structural while data passed to the same imported operation may vary.
+/// An unmodeled import walk abstains even when a structural table could preserve its inputs.
 #[test]
 fn parameterization_owned_module_sources() {
     let source = include_str!("../../../fixtures/duplicates/parameterization-modules.test.ts");
@@ -334,8 +334,8 @@ fn parameterization_owned_module_sources() {
     assert!(corpus
         .tests
         .iter()
-        .all(|case| case.parameterization_key.is_some()));
-    only_candidate(corpus, ["same module zero", "same module one"]);
+        .all(|case| case.parameterization_key.is_none() && !case.trace_complete));
+    assert!(owned_findings("a.test.ts", corpus).findings.is_empty());
 }
 
 /// Opaque import sources and import options cannot prove the static module identity.
@@ -404,4 +404,83 @@ fn parameterization_requires_a_complete_substance_trace() {
         assert!(case.parameterization_key.is_none());
     }
     only_candidate(corpus, ["complete one", "complete two"]);
+}
+
+/// Trace refusals keep flat comparisons and ordinary literal candidates over the runtime source.
+#[test]
+fn owned_trace_soundness_preserves_flat_findings() {
+    let corpus = eligible(
+        include_str!("../../../fixtures/behavior-runtime/trace-soundness.test.ts"),
+        28,
+    );
+    let uncertain = [
+        "branch eager",
+        "branch moved",
+        "class a",
+        "class b",
+        "class alias a",
+        "class alias b",
+        "tag a",
+        "tag b",
+        "spread a",
+        "spread b",
+        "if pass",
+        "if fail",
+        "try pass",
+        "try fail",
+        "flat one",
+        "flat two",
+    ];
+    for case in &corpus.tests {
+        let title = case.title.as_deref().unwrap();
+        assert_eq!(case.trace_complete, !uncertain.contains(&title), "{title}");
+        if uncertain.contains(&title) {
+            assert!(case.parameterization_key.is_none(), "{title}");
+        }
+    }
+    let findings = owned_findings("a.test.ts", corpus).findings;
+    let candidates: Vec<_> = findings
+        .iter()
+        .filter(|finding| finding.rule == Rule::ParameterizationCandidate)
+        .collect();
+    assert_eq!(candidates.len(), 2, "{findings:#?}");
+    assert!(candidates
+        .iter()
+        .any(|finding| finding.titles == ["literal one", "literal two"]));
+    assert!(candidates
+        .iter()
+        .any(|finding| finding.titles == ["chai a", "chai b"]));
+    assert!(
+        findings
+            .iter()
+            .any(|finding| finding.rule == Rule::DuplicateTest
+                && finding.titles == ["flat one", "flat two"]),
+        "{findings:#?}"
+    );
+}
+
+/// Runtime expression refusals leave the owned cases eligible for flat rules without a table key.
+#[test]
+fn owned_expression_walks_preserve_flat_eligibility() {
+    let corpus = corpora(
+        &[
+            (
+                "cases.test.tsx",
+                include_str!("../../../fixtures/behavior-runtime/trace-expressions.test.tsx"),
+            ),
+            (
+                "trace-value.ts",
+                include_str!("../../../fixtures/behavior-runtime/trace-value.ts"),
+            ),
+        ],
+        &["cases.test.tsx"],
+    )
+    .remove(0);
+    assert_eq!(corpus.tests.len(), 10);
+    for case in &corpus.tests {
+        assert!(case.exclusion.is_none());
+        assert!(!case.trace_complete, "{:?}", case.title);
+        assert!(case.parameterization_key.is_none(), "{:?}", case.title);
+    }
+    assert!(owned_findings("cases.test.tsx", corpus).findings.is_empty());
 }
