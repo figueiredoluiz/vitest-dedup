@@ -1349,6 +1349,8 @@ fn next_name_findings_preserve_titles_severity_and_suppression() {
             "duplicate-test=off",
             "--rule",
             "cross-file-duplicate=off",
+            "--rule",
+            "parameterization-candidate=off",
         ],
         &environment,
     );
@@ -1384,6 +1386,8 @@ fn next_name_findings_preserve_titles_severity_and_suppression() {
                 "--rule",
                 "cross-file-duplicate=off",
                 "--rule",
+                "parameterization-candidate=off",
+                "--rule",
                 &format!("duplicate-test-name={severity}"),
                 "--reporters",
                 "jsonl",
@@ -1405,6 +1409,8 @@ fn next_name_findings_preserve_titles_severity_and_suppression() {
             "duplicate-test=off",
             "--rule",
             "cross-file-duplicate=off",
+            "--rule",
+            "parameterization-candidate=off",
         ],
         &environment,
     );

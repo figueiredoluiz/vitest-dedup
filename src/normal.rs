@@ -213,7 +213,7 @@ pub struct Walk {
     /// The trace's naming policy: an outside binding that holds one object is named by its
     /// declaration alone, without this walk's ordinal.
     pub(crate) trace: bool,
-    /// A literal renders as its kind, not its value (an assertion subject's shape).
+    /// Literals render by kind for body shapes and assertion-subject shapes.
     pub(crate) structural: bool,
     /// Text appended to a symbol's rendering wherever it appears (a destructured binding's
     /// property path). A suffix can only tell two events apart, never make them equal.
@@ -433,14 +433,36 @@ impl<'s> Normalizer<'s> {
         substitutions: HashMap<SymbolId, String>,
         bound_parameters: bool,
     ) -> String {
+        self.render(node, substitutions, bound_parameters, false)
+    }
+
+    /// The flat form with runtime literal values replaced by their kinds. Outside declarations,
+    /// property names, static module specifiers and type-level values retain their exact identities.
+    pub fn shape(
+        &mut self,
+        node: NodeId,
+        substitutions: HashMap<SymbolId, String>,
+        bound_parameters: bool,
+    ) -> String {
+        self.render(node, substitutions, bound_parameters, true)
+    }
+
+    /// Resolves outside identities once, then renders with the chosen literal policy.
+    fn render(
+        &mut self,
+        node: NodeId,
+        substitutions: HashMap<SymbolId, String>,
+        bound_parameters: bool,
+        structural: bool,
+    ) -> String {
         if !self.resolving && self.discovering.is_none() {
             self.discovering = Some(Vec::new());
-            let _ = self.walk(node, substitutions.clone(), bound_parameters);
+            let _ = self.walk(node, substitutions.clone(), bound_parameters, false);
             for read in self.discovering.take().unwrap_or_default() {
                 let _ = self.external(read);
             }
         }
-        self.walk(node, substitutions, bound_parameters)
+        self.walk(node, substitutions, bound_parameters, structural)
     }
 
     /// A walk a caller drives and shares across renders, naming by the policy the trace reads:
@@ -523,6 +545,7 @@ impl<'s> Normalizer<'s> {
         node: NodeId,
         substitutions: HashMap<SymbolId, String>,
         bound_parameters: bool,
+        structural: bool,
     ) -> String {
         let mut walk = Walk::new(
             self.tree.span(node),
@@ -531,9 +554,16 @@ impl<'s> Normalizer<'s> {
             bound_parameters,
             false,
         );
+        walk.structural = structural;
         let mut out = String::new();
         self.write_node(node, &mut walk, &mut out);
         out
+    }
+
+    /// Whether source-sensitive assertions, unresolved member names or lossy text in the body
+    /// and its local dependencies prevent a literal-shape consolidation claim.
+    pub fn parameterization_uncertain(&self, node: NodeId) -> bool {
+        form::parameterization_uncertain(self, node)
     }
 
     /// The callback the test registered at `site` passes; see [`callback`].

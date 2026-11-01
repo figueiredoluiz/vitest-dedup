@@ -627,6 +627,78 @@
     {
       "id": "recall-extra|duplicate-suite-computed-condition|duplicate-test-name|run.test.ts:13,run.test.ts:7|[\"skipped > child\",\"skipped > child\"]",
       "reason": "The next engine reads a bracket condition as the dotted form, whose skipped children still report; the default engine cannot read it."
+    },
+    {
+      "id": "miss|fixtures/duplicates|duplicates-each-composite-cells.test.ts:40|duplicates-each-composite-cells.test.ts:58|parameterization-candidate",
+      "reason": "NC14 bounded row proof: the destructured expected object is read three times, so the binder retains the exact whole row, including its different name. NC64 must prove composite allocation identity before structural row substitution can recover this candidate."
+    },
+    {
+      "id": "miss|fixtures/duplicates|each-object-key-ambiguity.test.ts:19|each-object-key-ambiguity.test.ts:20|parameterization-candidate",
+      "reason": "NC14 preserves object-cell structure and property keys; the default engine abstracts the substituted cell as one object value. A whole-value row model is needed before different object shapes can share a consolidation key. Deferred parameterization parity; NC64 supplies the value proof."
+    },
+    {
+      "id": "miss|fixtures/duplicates|each-object-key-ambiguity.test.ts:21|each-object-key-ambiguity.test.ts:22|parameterization-candidate",
+      "reason": "NC14 preserves object-cell structure and property keys; the default engine abstracts the substituted cell as one object value. A whole-value row model is needed before different object shapes can share a consolidation key. Deferred parameterization parity; NC64 supplies the value proof."
+    },
+    {
+      "id": "miss|fixtures/duplicates|each-object-key-ambiguity.test.ts:23|each-object-key-ambiguity.test.ts:24|parameterization-candidate",
+      "reason": "NC14 preserves object-cell structure and property keys; the default engine abstracts the substituted cell as one object value. A whole-value row model is needed before different object shapes can share a consolidation key. Deferred parameterization parity; NC64 supplies the value proof."
+    },
+    {
+      "id": "miss|fixtures/duplicates|escaped-instance-mismatch.test.ts:10|escaped-instance-mismatch.test.ts:11|parameterization-candidate",
+      "reason": "The next normal form preserves the observed class name, while the default engine treats the name as a parameterizable value. NC14 does not turn nominal declarations into row data; recovering this candidate needs a reviewed name/value model, with the differing runtime outcome retained."
+    },
+    {
+      "id": "miss|fixtures/duplicates|escaped-instance-name.test.ts:10|escaped-instance-name.test.ts:9|parameterization-candidate",
+      "reason": "The next normal form preserves the observed class name, while the default engine treats the name as a parameterizable value. NC14 does not turn nominal declarations into row data; recovering this candidate needs a reviewed name/value model, with the differing runtime outcome retained."
+    },
+    {
+      "id": "miss|fixtures/duplicates|instance-name-assertion.test.ts:10|instance-name-assertion.test.ts:9|parameterization-candidate",
+      "reason": "The next normal form preserves the observed class name, while the default engine treats the name as a parameterizable value. NC14 does not turn nominal declarations into row data; recovering this candidate needs a reviewed name/value model, with the differing runtime outcome retained."
+    },
+    {
+      "id": "miss|fixtures/duplicates|not-duplicates-concat-number-format.test.ts:20|not-duplicates-concat-number-format.test.ts:24|parameterization-candidate",
+      "reason": "The next row form retains a concatenation expression versus a string literal instead of folding both to runtime string values. NC14 does not introduce value evaluation; NC64 must retain JavaScript coercion and number formatting when recovering this candidate."
+    },
+    {
+      "id": "miss|fixtures/duplicates|not-duplicates-concat-tostring-vs-inspect.test.ts:28|not-duplicates-concat-tostring-vs-inspect.test.ts:32|parameterization-candidate",
+      "reason": "The next row form retains a concatenation expression versus a string literal instead of folding both to runtime string values. NC14 does not introduce value evaluation; NC64 must retain JavaScript coercion and number formatting when recovering this candidate."
+    },
+    {
+      "id": "miss|fixtures/duplicates|object-key-number-forms-distinct.test.ts:20|object-key-number-forms-distinct.test.ts:21|parameterization-candidate",
+      "reason": "The substituted objects have different runtime property keys. NC14 retains those keys; the default structural row form abstracts the whole object cell. Recovery waits on the whole-value row model, without making the exact duplicate keys equal."
+    },
+    {
+      "id": "extra|fixtures/duplicates|destructured-selected-sibling.test.ts:17|destructured-selected-sibling.test.ts:19",
+      "reason": "Valid consolidation: the sibling-containing callbacks differ only in chosen and assertion literal values. The next normalizer retains the unused sibling, so this is a separate group from the declared 16/18 pair; the existing exact-normalization gap already holds both duplicate misses."
+    },
+    {
+      "id": "extra|fixtures/duplicates|external-instance-alias-control.test.ts:14|external-instance-alias-control.test.ts:16",
+      "reason": "Valid literal-shape candidate under the next normalizer: the erased cast and parentheses normalize equally, and only the discarded marker strings differ. Default extraction refuses the owned class alias; the next engine already admits and exact-compares each identical pair in this fixture."
+    },
+    {
+      "id": "extra|fixtures/duplicates|object-property-equivalents.test.ts:29|object-property-equivalents.test.ts:35",
+      "reason": "Valid literal-shape candidate: the next normalizer equates x and computed literal x method keys, and only the discarded numeric marker differs. The default structural syntax separates these property spellings."
+    },
+    {
+      "id": "recall-miss|function-title-handlers-conflicting|parameterization-candidate|alpha,beta",
+      "reason": "The parameterization pair is present at the same source locations, but next reports dynamic-title fallbacks instead of alpha/beta for function-valued titles. This is the same held title-display parity difference as duplicate-test in this case, not a missing structural comparison."
+    },
+    {
+      "id": "recall-extra|function-title-handlers-conflicting|parameterization-candidate|run.test.ts:2,run.test.ts:3",
+      "reason": "The parameterization pair is present at the same source locations, but next reports dynamic-title fallbacks instead of alpha/beta for function-valued titles. This is the same held title-display parity difference as duplicate-test in this case, not a missing structural comparison."
+    },
+    {
+      "id": "recall-miss|function-title-options|parameterization-candidate|alpha,beta",
+      "reason": "The parameterization pair is present at the same source locations, but next reports dynamic-title fallbacks instead of alpha/beta for function-valued titles. This is the same held title-display parity difference as duplicate-test in this case, not a missing structural comparison."
+    },
+    {
+      "id": "recall-extra|function-title-options|parameterization-candidate|run.test.ts:2,run.test.ts:3",
+      "reason": "The parameterization pair is present at the same source locations, but next reports dynamic-title fallbacks instead of alpha/beta for function-valued titles. This is the same held title-display parity difference as duplicate-test in this case, not a missing structural comparison."
+    },
+    {
+      "id": "recall-miss|duplicate-test-lone-surrogate-values|parameterization-candidate|keeps the first high surrogate,keeps the second high surrogate",
+      "reason": "NC65: the owned tree uses replacement-character display encoding for lone surrogates, which can collide with literal replacement-character text in property names. NC14 conservatively refuses this text in callback/dependency shapes. This loses the valid string-value consolidation here until code-unit identity is lossless; the duplicate-test positive remains required."
     }
   ]
 }

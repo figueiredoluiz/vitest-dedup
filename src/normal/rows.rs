@@ -303,6 +303,25 @@ impl Normalizer<'_> {
         parameters: &[NodeId],
         row: &Row,
     ) -> Option<(HashMap<SymbolId, String>, bool)> {
+        self.bind_row_mode(parameters, row, false)
+    }
+
+    /// The same binding proof as [`Self::bind_row`], with cells rendered by literal kind.
+    pub fn bind_row_shape(
+        &mut self,
+        parameters: &[NodeId],
+        row: &Row,
+    ) -> Option<(HashMap<SymbolId, String>, bool)> {
+        self.bind_row_mode(parameters, row, true)
+    }
+
+    /// Binds cells using one proof for both exact and structural forms.
+    fn bind_row_mode(
+        &mut self,
+        parameters: &[NodeId],
+        row: &Row,
+        structural: bool,
+    ) -> Option<(HashMap<SymbolId, String>, bool)> {
         let tree = self.tree;
         let undefined = || "g:undefined".to_owned();
         let mut bound = HashMap::new();
@@ -314,7 +333,7 @@ impl Normalizer<'_> {
                     }
                     let symbol = self.scopes.symbol_at(tree.span(parameter).start)?;
                     let value = match cells.get(index) {
-                        Some(&cell) => self.cell(symbol, cell)?,
+                        Some(&cell) => self.cell(symbol, cell, structural)?,
                         None => undefined(),
                     };
                     bound.insert(symbol, value);
@@ -324,7 +343,7 @@ impl Normalizer<'_> {
                 None => {}
                 Some(parameter) if tree.kind(parameter) == "Identifier" => {
                     let symbol = self.scopes.symbol_at(tree.span(parameter).start)?;
-                    let cell = self.cell(symbol, *value)?;
+                    let cell = self.cell(symbol, *value, structural)?;
                     bound.insert(symbol, cell);
                 }
                 Some(parameter) if tree.kind(parameter) == "ObjectPattern" => {
@@ -341,7 +360,7 @@ impl Normalizer<'_> {
                         let key = property_name(tree, property)?.to_owned();
                         let symbol = self.scopes.symbol_at(tree.span(binding).start)?;
                         let value = match properties.iter().rev().find(|(name, _)| *name == key) {
-                            Some((_, cell)) => self.cell(symbol, *cell)?,
+                            Some((_, cell)) => self.cell(symbol, *cell, structural)?,
                             // A key the object lacks is read from `Object.prototype`.
                             None if OBJECT_PROTOTYPE.contains(&key.as_str()) => return None,
                             None => undefined(),
@@ -361,7 +380,7 @@ impl Normalizer<'_> {
     ///
     /// A cell that reads a binding something reassigns is not written in either: the row holds the
     /// value it had when the test registered, which the binding may no longer hold when it runs.
-    fn cell(&mut self, symbol: SymbolId, cell: NodeId) -> Option<String> {
+    fn cell(&mut self, symbol: SymbolId, cell: NodeId, structural: bool) -> Option<String> {
         let tree = self.tree;
         let reassigned = std::iter::once(cell)
             .chain(tree.descendants(cell))
@@ -379,6 +398,6 @@ impl Normalizer<'_> {
         }
         let reads = self.scopes.symbol(symbol).references.len();
         let fresh = form::creates(self, cell) || form::allocates(self.tree, cell);
-        (!fresh || reads <= 1).then(|| self.of(cell))
+        (!fresh || reads <= 1).then(|| self.render(cell, HashMap::new(), false, structural))
     }
 }

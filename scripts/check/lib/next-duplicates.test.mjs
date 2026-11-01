@@ -134,7 +134,7 @@ test('pending expectations and unported rules claim nothing', () => {
             ],
             { pending: 'waits on the dataflow gap' },
           ),
-          expectation('parameterization-candidate', [
+          expectation('near-duplicate-test', [
             ['pair.test.ts', 5],
             ['pair.test.ts', 20],
           ]),

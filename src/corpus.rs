@@ -106,6 +106,9 @@ pub struct TestCase {
     /// The normal body's digest: equal for equal text, differing whenever the bodies do, so a
     /// rule that keys on behavior can require the bodies to differ first.
     pub body: u64,
+    /// Same-file consolidation key: literal-shaped body under exact context and modifiers.
+    /// Absent without behavior or with source-sensitive assertions, unknown selectors or lossy text.
+    pub parameterization_key: Option<u64>,
     /// The body's behavior trace, one 128-bit digest per event in source order.
     pub trace: Vec<u128>,
     /// Whether the trace read the body to the end. A rule keyed on the trace must skip a case
@@ -387,6 +390,7 @@ pub fn file(
         key: 0,
         module_key: 0,
         body: 0,
+        parameterization_key: None,
         trace: Vec::new(),
         trace_complete: false,
         similarity_key: 0,
@@ -580,6 +584,7 @@ pub fn file(
         // Each row's body, rendered flat and traced. An incomplete trace says nothing about the
         // flat form, so it excludes nothing here: only a rule reading traces skips the row. A flat
         // form past the depth bound can match nothing, so its test is excluded out loud.
+        let parameterization_uncertain = normalizer.parameterization_uncertain(body);
         let mut traced: Vec<(String, crate::behavior::Trace, normal::CallbackForm)> = Vec::new();
         let mut truncated = false;
         // The trace walks the function itself, not the argument as written: a parenthesized or
@@ -603,7 +608,7 @@ pub fn file(
             tests.extend(excluded(Exclusion::TruncatedBody));
             continue;
         }
-        for (index, ((_, _, unbound), (normal_body, trace, callback_form))) in
+        for (index, ((_, every, unbound), (normal_body, trace, callback_form))) in
             rows.iter().zip(traced).enumerate()
         {
             let name =
@@ -654,12 +659,29 @@ pub fn file(
                 "{chain}{fails}\u{1}{options}\u{1}{unbound}\u{1}{normal_body}\u{1}{context}"
             );
             let form = callback_form.token();
+            let parameterization_key = (trace.complete
+                && !parameterization_uncertain
+                && !trace.events.is_empty())
+            .then(|| {
+                let bound = modifiers
+                    .rows
+                    .as_ref()
+                    .and_then(|rows| rows.get(index))
+                    .and_then(|row| normalizer.bind_row_shape(parameters.as_deref()?, row))
+                    .map(|(bound, _)| bound)
+                    .unwrap_or_default();
+                let shape = normalizer.shape(body, bound, *every);
+                digest(&format!(
+                    "{chain}{fails}\u{1}{options}\u{1}{unbound}\u{1}{shape}\u{1}{context}"
+                ))
+            });
             tests.push(TestCase {
                 row: table.then_some(index),
                 row_class,
                 key: digest(&key),
                 module_key: digest(&format!("{key}\u{1}{module_context}")),
                 body: digest(&normal_body),
+                parameterization_key,
                 trace: trace.events,
                 trace_complete: trace.complete,
                 similarity_key: digest(&format!(

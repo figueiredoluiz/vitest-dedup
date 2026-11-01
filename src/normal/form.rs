@@ -4,6 +4,7 @@ use super::{digest, Normalizer, Walk};
 use crate::framework::Dialect;
 use crate::lang::{Field, Name, NodeId, Tree};
 use serde_json::Value;
+use std::collections::HashSet;
 use std::fmt::Write as _;
 
 /// ESTree keys that carry source spelling or TypeScript-only information.
@@ -51,6 +52,85 @@ fn collect(field: &Field, out: &mut Vec<NodeId>) {
         Field::Object(fields) => fields.iter().for_each(|(_, field)| collect(field, out)),
         Field::Value(_) => {}
     }
+}
+
+/// A literal or constant template carries an exact selector without a value proof.
+fn static_selector(tree: &Tree, node: NodeId) -> bool {
+    let node = tree.inner(node);
+    tree.kind(node) == "Literal"
+        || (tree.kind(node) == "TemplateLiteral" && tree.list(node, "expressions").is_empty())
+}
+
+/// Known source-sensitive names and potentially lossy text cannot establish consolidation.
+fn uncertain_text(dialect: &Dialect, text: &str) -> bool {
+    text.contains('\u{fffd}')
+        || dialect
+            .source_keyed_matchers
+            .iter()
+            .any(|fragment| text.contains(fragment))
+}
+
+/// Source-sensitive matchers, unknown selectors and potentially lossy text refuse consolidation.
+/// Local dependency reads and aliases share one graph; cycles are visited once.
+pub(super) fn parameterization_uncertain(normalizer: &Normalizer, node: NodeId) -> bool {
+    let tree = normalizer.tree;
+    let mut pending = vec![node];
+    let mut seen = HashSet::new();
+    while let Some(node) = pending.pop() {
+        if !seen.insert(node) {
+            continue;
+        }
+        if tree.kind(node) == "ImportExpression"
+            && (tree
+                .child(node, "source")
+                .is_none_or(|source| !static_selector(tree, source))
+                || !is_empty(tree.field_of(node, "options")))
+        {
+            return true;
+        }
+        let property_field = match tree.kind(node) {
+            "MemberExpression" => Some("property"),
+            "Property"
+                if tree
+                    .parent(node)
+                    .is_some_and(|parent| tree.kind(parent) == "ObjectPattern") =>
+            {
+                Some("key")
+            }
+            _ => None,
+        };
+        if property_field.is_some()
+            && matches!(value(tree, node, "computed"), Value::Bool(true))
+            && property_field
+                .and_then(|field| tree.child(node, field))
+                .is_none_or(|property| !static_selector(tree, property))
+        {
+            return true;
+        }
+        if tree
+            .text(node, "name")
+            .or_else(|| tree.text(node, "value"))
+            .is_some_and(|name| uncertain_text(normalizer.setting.dialect, name))
+        {
+            return true;
+        }
+        if let Some(declaration) = (tree.kind(node) == "Identifier")
+            .then(|| normalizer.scopes.symbol_at(tree.span(node).start))
+            .flatten()
+            .and_then(|symbol| normalizer.scopes.declaration_node(symbol))
+        {
+            pending.push(declaration);
+        }
+        if tree.kind(node) == "TemplateElement"
+            && quasi_text(tree, node, "cooked")
+                .as_str()
+                .is_some_and(|name| uncertain_text(normalizer.setting.dialect, name))
+        {
+            return true;
+        }
+        pending.extend(children(tree, node));
+    }
+    false
 }
 
 /// Whether `node` can observe a declaration's name: `.name`, `.constructor`, `.toString`, or a
@@ -303,21 +383,12 @@ impl Normalizer<'_> {
         );
     }
 
-    /// [`Self::write_node`] below the depth bound.
-    fn write_kind(&mut self, node: NodeId, walk: &mut Walk, out: &mut String) {
+    /// Writes terminal forms outside the recursive frame so their formatting temporaries do not
+    /// consume stack space at every level of a deep expression.
+    #[inline(never)]
+    fn write_atom(&mut self, node: NodeId, walk: &mut Walk, out: &mut String) -> bool {
         let tree = self.tree;
-        let kind = tree.kind(node);
-        match kind {
-            "TSAsExpression"
-            | "TSSatisfiesExpression"
-            | "TSNonNullExpression"
-            | "TSTypeAssertion"
-            | "ParenthesizedExpression" => {
-                if let Some(inner) = tree.child(node, "expression") {
-                    return self.write_node(inner, walk, out);
-                }
-            }
-            "Identifier" | "JSXIdentifier" => return self.write_identifier(node, walk, out),
+        match tree.kind(node) {
             "PrivateIdentifier" => {
                 let name = tree.text(node, "name").unwrap_or_default();
                 let owner = walk
@@ -339,7 +410,7 @@ impl Normalizer<'_> {
                         let _ = write!(out, "#?{name}");
                     }
                 }
-                return;
+                return true;
             }
             // A tag reads the raw text, so `` String.raw`\n` `` is not a line break.
             "TemplateElement"
@@ -348,15 +419,14 @@ impl Normalizer<'_> {
                     .is_some_and(|literal| tagged(tree, literal)) =>
             {
                 let _ = write!(out, "R{}", quasi_text(tree, node, "raw"));
-                return;
+                return true;
             }
-            // `` `text` `` is the string it spells. The structural rendering keeps only its kind:
-            // an assertion subject's shape tells assertions apart by what they compare, not by
-            // which literal each compares.
+            // An untagged constant template is the string it spells. Runtime structural forms
+            // keep its kind; flat forms of type-level values keep the value too.
             "TemplateLiteral"
                 if tree.list(node, "expressions").is_empty() && !tagged(tree, node) =>
             {
-                if walk.structural {
+                if walk.structural && (walk.trace || walk.in_type == 0) {
                     let _ = write!(out, "L<string>");
                 } else {
                     let cooked = tree
@@ -368,10 +438,10 @@ impl Normalizer<'_> {
                         .unwrap_or(Value::Null);
                     let _ = write!(out, "L{cooked}");
                 }
-                return;
+                return true;
             }
             "Literal" => {
-                if walk.structural {
+                if walk.structural && (walk.trace || walk.in_type == 0) {
                     // A bigint or a regexp carries no JSON `value`, so its kind comes from the
                     // field that holds it: `1n`, `/a/` and `null` are three different subjects.
                     let kind = if !is_empty(tree.field_of(node, "regex")) {
@@ -396,7 +466,7 @@ impl Normalizer<'_> {
                         out.push_str(&value(tree, node, "raw").to_string());
                     }
                 }
-                return;
+                return true;
             }
             "JSXText" => {
                 let _ = write!(
@@ -404,9 +474,32 @@ impl Normalizer<'_> {
                     "J{:?}",
                     jsx_text(tree.text(node, "value").unwrap_or_default())
                 );
-                return;
+                return true;
             }
             _ => {}
+        }
+        false
+    }
+
+    /// [`Self::write_node`] below the depth bound.
+    fn write_kind(&mut self, node: NodeId, walk: &mut Walk, out: &mut String) {
+        let tree = self.tree;
+        let kind = tree.kind(node);
+        match kind {
+            "TSAsExpression"
+            | "TSSatisfiesExpression"
+            | "TSNonNullExpression"
+            | "TSTypeAssertion"
+            | "ParenthesizedExpression" => {
+                if let Some(inner) = tree.child(node, "expression") {
+                    return self.write_node(inner, walk, out);
+                }
+            }
+            "Identifier" | "JSXIdentifier" => return self.write_identifier(node, walk, out),
+            _ => {}
+        }
+        if self.write_atom(node, walk, out) {
+            return;
         }
         // `function () {}` is `() => {}` when it never reads its own `this`, `arguments` or
         // `new.target`, and is the callback being normalized, which the runner only calls. Any
@@ -518,7 +611,14 @@ impl Normalizer<'_> {
                 // The trailing comma is the one a written-out statement list carries.
                 out.push_str("),])");
             } else {
+                let structural = walk.structural;
+                if !walk.trace
+                    && (property_key(key) || (kind == "ImportExpression" && &**key == "source"))
+                {
+                    walk.structural = false;
+                }
                 self.write_field(field, walk, out);
+                walk.structural = structural;
             }
         }
         if class_body {

@@ -306,6 +306,7 @@ const RUST_MODULES = {
   'src/rules.rs': 100,
   'src/rules/names.rs': 100,
   'src/rules/rows.rs': 100,
+  'src/rules/parameters.rs': 100,
   // Suite reporting and child suppression: measured at 99.00% (99/100 lines).
   'src/rules/suites.rs': 99,
   // The behavior trace: measured at 84.78% (802/946 lines), its first recorded floor.

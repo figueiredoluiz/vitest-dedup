@@ -130,6 +130,7 @@ pub(super) fn collect(
             key,
             module_key: 0,
             body: 0,
+            parameterization_key: None,
             trace: Vec::new(),
             trace_complete: false,
             similarity_key: 0,

@@ -117,6 +117,7 @@ pub static DIALECT: Dialect = Dialect {
     ],
     scheduling_options: &["timeout", "retry", "repeats"],
     name_observing_matchers: &["Snapshot"],
+    source_keyed_matchers: &["InlineSnapshot"],
 };
 
 /// Vitest's default file globs.
