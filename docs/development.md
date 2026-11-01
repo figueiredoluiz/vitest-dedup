@@ -161,8 +161,9 @@ parameterization group already reports is not claimed twice. Tests with fewer th
 nothing to compare.
 
 Baselines under the next engine carry `vitestDedupFingerprint/v2`: the same derivation, but the engines pair
-and title tests differently, so each refuses the other's file rather than half matching it. Modes that
-need a base revision remain refused there.
+and title tests differently, so each refuses the other's file rather than half matching it.
+`--baseline-from-ref` remains unavailable under the next engine pending historical helper resolution.
+
 The experimental `subsumed-test` rule is opt-in. It compares complete same-file traces under
 the same context and callback form for strict ordered subsequences, preserving repeated events.
 It reports the smaller test first, charges every candidate pair to the shared budget, and never
