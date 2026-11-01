@@ -312,6 +312,7 @@ const RUST_MODULES = {
   'src/rules/names.rs': 100,
   'src/rules/rows.rs': 100,
   'src/rules/parameters.rs': 100,
+  'src/rules/near.rs': 100,
   // Suite reporting and child suppression: measured at 99.00% (99/100 lines).
   'src/rules/suites.rs': 99,
   // Hook pair reporting: measured at 98.84% (85/86 lines).

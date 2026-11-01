@@ -538,9 +538,10 @@ fn parameterization_requires_a_complete_substance_trace() {
 fn owned_trace_soundness_preserves_flat_findings() {
     let corpus = eligible(
         include_str!("../../../fixtures/behavior-runtime/trace-soundness.test.ts"),
-        28,
+        32,
     );
     let uncertain = [
+        "using pass",
         "branch eager",
         "branch moved",
         "class a",

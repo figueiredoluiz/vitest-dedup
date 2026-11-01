@@ -42,6 +42,10 @@
     "object spread pass": "pass",
     "object spread fail": "fail",
     "import pass": "pass",
-    "import fail": "fail"
+    "import fail": "fail",
+    "delete pass": "pass",
+    "delete fail": "fail",
+    "using pass": "pass",
+    "using fail": "fail"
   }
 }

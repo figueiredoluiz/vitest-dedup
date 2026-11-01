@@ -912,6 +912,20 @@ impl Engine {
             }
         }
         reasons.extend(further);
+        // Last, so it never outranks a cause that excludes a test, and not counted: only the rules
+        // that read a trace leave the case out.
+        if corpus
+            .tests
+            .iter()
+            .any(|test| test.exclusion.is_none() && !test.trace_complete)
+        {
+            reasons.push((
+                ExclusionReason::IncompleteTrace,
+                "a test's behavior was not read to the end, so near-duplicate-test and \
+                 parameterization-candidate do not compare it"
+                    .to_owned(),
+            ));
+        }
         let case_count = corpus.tests.len();
         let mut corpus = corpus;
         self.files

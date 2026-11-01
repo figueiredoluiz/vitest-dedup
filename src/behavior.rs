@@ -40,8 +40,8 @@ fn symbol_at(parsed: &Parsed, node: NodeId) -> Option<SymbolId> {
 }
 
 /// Whether the trace can prove a class's behavior from its content: it cannot when a key is
-/// computed from anything but a literal (its value, and when it evaluates, are unproved), or when
-/// a `with` statement may bind arbitrary names. A dependency the trace cannot name is an
+/// computed from anything but a literal (its value, and when it evaluates, are unproved), when it
+/// holds a decorator, or when a `with` statement may bind arbitrary names. A dependency the trace cannot name is an
 /// abstention, never a claim.
 fn class_provable(tree: &Tree, class: NodeId) -> bool {
     !tree.descendants(class).any(|node| match tree.kind(node) {
@@ -51,7 +51,8 @@ fn class_provable(tree: &Tree, class: NodeId) -> bool {
                     .child(node, "key")
                     .is_some_and(|key| tree.kind(key) != "Literal")
         }
-        "WithStatement" => true,
+        // A decorator runs when the class is defined, and no event records it.
+        "WithStatement" | "Decorator" => true,
         _ => false,
     })
 }
@@ -145,14 +146,22 @@ pub(crate) fn trace_text<'s>(
     // does — otherwise two constructions over different classes share a shape inside any
     // assertion built on them. An unprovable class cannot fall back to an alpha name: two
     // different classes would then share a trace, including through aliases and atomic shapes.
-    let mut classes_complete = true;
+    let mut provable = true;
     {
         let tree = &parsed.tree;
         for node in tree.descendants(function) {
             if matches!(tree.kind(node), "ClassDeclaration" | "ClassExpression")
                 && !class_provable(tree, node)
             {
-                classes_complete = false;
+                provable = false;
+            }
+            // A `using` runs its disposal when the scope ends, which no event records.
+            if tree.kind(node) == "VariableDeclaration"
+                && tree
+                    .text(node, "kind")
+                    .is_some_and(|kind| kind.contains("using"))
+            {
+                provable = false;
             }
             let candidate = match tree.kind(node) {
                 "ClassDeclaration" => tree
@@ -188,7 +197,7 @@ pub(crate) fn trace_text<'s>(
         dataflow,
         root,
         events: Vec::new(),
-        complete: classes_complete,
+        complete: provable,
     };
     walker.run(function);
     let complete = walker.complete && !walker.walk.class_budget_spent;
@@ -756,6 +765,10 @@ impl<'s> Walker<'_, 's> {
             }
             "UnaryExpression" => {
                 if let Some(argument) = tree.child(expression, "argument") {
+                    if dataflow::is_deletion(tree, expression) {
+                        let target = self.shape(argument);
+                        self.push(deferred, format!("delete:{target}"));
+                    }
                     self.walk_expr(argument, deferred, depth + 1);
                 }
             }

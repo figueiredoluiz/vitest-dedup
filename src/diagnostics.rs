@@ -1,7 +1,7 @@
 //! CLI diagnostic rendering. No analysis, environment access or hardcoded output streams.
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use vitest_dedup::model::AnalysisResult;
+use vitest_dedup::model::{AnalysisResult, ExclusionReason};
 
 /// A stderr line that is guaranteed to have been sanitized.
 ///
@@ -133,16 +133,30 @@ const MAX_REASON_KINDS: usize = 5;
 /// carry the files. Reason codes are a closed set, so they need no sanitizing.
 fn write_exclusion_histogram(writer: &mut dyn Write, result: &AnalysisResult) -> io::Result<()> {
     let summary = &result.exclusions;
-    if summary.files == 0 {
+    // Listed, but excluded from nothing: only the rules that read a trace leave its tests out.
+    let (noted, reasons): (Vec<_>, Vec<_>) = summary
+        .reasons
+        .iter()
+        .partition(|tally| tally.reason == ExclusionReason::IncompleteTrace);
+    if let Some(tally) = noted.first() {
+        writeln!(
+            writer,
+            "\nvitest-dedup: {} file(s) hold a test near-duplicate-test and \
+             parameterization-candidate could not compare; the other rules compared it.",
+            tally.files
+        )?;
+    }
+    if reasons.is_empty() {
         return Ok(());
     }
+    let files = summary.files - noted.first().map_or(0, |tally| tally.files);
     writeln!(
         writer,
-        "\nvitest-dedup: {} file(s) were excluded from comparison in whole or in part ({} \
+        "\nvitest-dedup: {files} file(s) were excluded from comparison in whole or in part ({} \
          test(s) excluded), by primary reason:",
-        summary.files, summary.tests
+        summary.tests
     )?;
-    for tally in summary.reasons.iter().take(MAX_REASON_KINDS) {
+    for tally in reasons.iter().take(MAX_REASON_KINDS) {
         writeln!(
             writer,
             "  {:<28} {:>6} file(s) {:>7} test(s)",
@@ -151,7 +165,7 @@ fn write_exclusion_histogram(writer: &mut dyn Write, result: &AnalysisResult) ->
             tally.tests
         )?;
     }
-    if let Some(more) = summary.reasons.len().checked_sub(MAX_REASON_KINDS) {
+    if let Some(more) = reasons.len().checked_sub(MAX_REASON_KINDS) {
         if more > 0 {
             writeln!(writer, "  ... and {more} more kind(s)")?;
         }
@@ -404,6 +418,34 @@ mod tests {
             "{text}"
         );
         assert!(!text.contains("past the list cap"), "{text}");
+        // A file that only one rule left a test of stays out of what was excluded.
+        let noted = ExclusionTally {
+            reason: ExclusionReason::IncompleteTrace,
+            files: 7,
+            tests: 0,
+        };
+        let mut mixed = result.clone();
+        mixed.exclusions.files += noted.files;
+        mixed.exclusions.reasons.insert(0, noted.clone());
+        let text = render(&mixed);
+        assert!(
+            text.contains("7 file(s) hold a test near-duplicate-test and"),
+            "{text}"
+        );
+        assert!(text.contains("40 file(s) were excluded"), "{text}");
+        assert!(!text.contains("incomplete-trace"), "{text}");
+        let only = AnalysisResult {
+            exclusions: ExclusionSummary {
+                files: 7,
+                tests: 0,
+                omitted: 0,
+                reasons: vec![noted],
+            },
+            ..AnalysisResult::default()
+        };
+        let text = render(&only);
+        assert!(text.contains("7 file(s) hold"), "{text}");
+        assert!(!text.contains("excluded from comparison"), "{text}");
         result.exclusions.omitted = 7;
         assert!(render(&result).contains("7 file(s) past the list cap"));
         assert_writer_failures(|writer| write_exclusion_histogram(writer, &result));

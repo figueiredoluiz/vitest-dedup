@@ -80,8 +80,9 @@
 //! membership in the `blindFiles` count. The list is capped at
 //! [`crate::exclusions::MAX_EXCLUDED_FILES`], keeping the files with the most excluded tests;
 //! `exclusions` counts every file, so `exclusions.files - len(excludedFiles)` equals
-//! `exclusions.omitted`. The list is empty on a run that excluded nothing. HTML and SARIF carry
-//! `incompleteCauses` only.
+//! `exclusions.omitted`. A file listed only under `incomplete-trace` has `testsExcluded: 0`: the rules that
+//! read a trace left its test out and the others compared it. The list is otherwise empty on a run that excluded
+//! nothing. HTML and SARIF carry `incompleteCauses` only.
 //!
 //! `verdict` is [`crate::model::Rule::verdict`]'s output (`redundant` / `consolidatable` /
 //! `similar-uncertain` / `name-collision`): what the finding claims, and therefore what remedy is

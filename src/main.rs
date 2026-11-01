@@ -281,7 +281,7 @@ fn run_with_engine(
         }
         writeln!(
             stderr,
-            "vitest-dedup: VITEST_DEDUP_ENGINE=next runs duplicate-test, duplicate-test-name, duplicate-each-row, duplicate-suite, parameterization-candidate, redundant-hook and cross-file-duplicate \
+            "vitest-dedup: VITEST_DEDUP_ENGINE=next runs duplicate-test, duplicate-test-name, duplicate-each-row, duplicate-suite, parameterization-candidate, near-duplicate-test, redundant-hook and cross-file-duplicate \
              only; the other rules do not run yet"
         )?;
     }
@@ -1429,6 +1429,7 @@ mod tests {
             "duplicate-each-row",
             "duplicate-suite",
             "parameterization-candidate",
+            "near-duplicate-test",
             "redundant-hook",
             "cross-file-duplicate",
         ] {

@@ -90,7 +90,7 @@ fails, so its entry goes when support lands.
 
 `npm run check:next-duplicates` runs the analyzer under `VITEST_DEDUP_ENGINE=next` over
 `fixtures/duplicates/`, `fixtures/observed/` and `fixtures/mixed/` and judges the rules the
-next engine ports (`duplicate-test`, `duplicate-test-name`, `duplicate-each-row`, `duplicate-suite`, `parameterization-candidate`, `redundant-hook`, `cross-file-duplicate`) pairwise against the fixture
+next engine ports (`duplicate-test`, `duplicate-test-name`, `duplicate-each-row`, `duplicate-suite`, `parameterization-candidate`, `near-duplicate-test`, `redundant-hook`, `cross-file-duplicate`) pairwise against the fixture
 headers: every pair a positive expectation declares must be linked by its rule, no pair declared
 silent may be linked, and any other linked pair is a failure until it is adjudicated into a
 header or into `scripts/check/next-duplicates-known.json` with a reason. A listed delta that
@@ -141,6 +141,12 @@ Replacement-character text in callbacks and their local dependencies is also ref
 owned tree preserves JavaScript code units without display encoding.
 Row binding uses the existing proof; unsupported row values and observed class names still limit
 parity with the default engine.
+
+The experimental near-duplicate rule compares same-file tests under the same context whose behavior
+events form an exact multiset and whose bodies differ. A body whose trace is incomplete, such as one
+with a branch, is left out under `incomplete-trace`, as it is by parameterization; the other rules still read it. A pair a
+parameterization group already reports is not claimed twice. Tests with fewer than two events have
+nothing to compare.
 
 The experimental hook rule compares proven synchronous, idempotent setup within one lifecycle
 chain. It supports `let` bindings whose complete recorded write set assigns one primitive

@@ -177,6 +177,18 @@ fn assert_listed(run: &Run, expected: &[Expect]) {
             .unwrap_or_else(|| panic!("{} missing from {summary}", want.reason));
         let files = tally["files"].as_u64().unwrap();
         let tests = tally["tests"].as_u64().unwrap();
+        // It excludes no test, so it has a line of its own rather than a histogram row.
+        if want.reason == "incomplete-trace" {
+            assert_eq!(tests, 0);
+            assert!(
+                run.stderr.contains(&format!(
+                    "{files} file(s) hold a test near-duplicate-test and"
+                )),
+                "{}",
+                run.stderr
+            );
+            continue;
+        }
         let line = run
             .stderr
             .lines()
@@ -826,6 +838,7 @@ test('kept', () => { expect(1).toBe(1); });
             unresolved("named.test.ts", "named-callback", &[], 1, 1),
             unresolved("order.test.ts", "order-dependent-state", &[], 1, 2),
             unresolved("spread.test.ts", "unreadable-callback", &[], 1, 2),
+            unresolved("unprovable.test.ts", "incomplete-trace", &[], 0, 1),
             unresolved(
                 "wrapped.test.ts",
                 "registered-inside-function",
@@ -839,7 +852,7 @@ test('kept', () => { expect(1).toBe(1); });
     assert_eq!(run.json["unresolvedTests"], 6);
     assert_eq!(run.json["incompleteCauses"]["unresolvedContexts"], 6);
     // `named.test.ts` has every test unresolved; `assert_listed` ties each count to its entry.
-    // `unprovable.test.ts` holds a class the trace cannot read, which excludes nothing.
+    // `unprovable.test.ts` holds a class the trace cannot read: reported, and it excludes nothing.
     assert_eq!(run.json["blindFiles"], 1);
     // The one relationship the ported rules claim: three files spell the identical `kept` test,
     // reported as the spanning set of pairs. Every excluded test above stays out of every group,
@@ -1131,6 +1144,7 @@ fn every_closed_code_has_a_scenario_or_a_named_unit_test() {
         "named-callback",
         "unreadable-callback",
         "unsupported-benchmark",
+        "incomplete-trace",
         "registered-elsewhere",
     ];
     // `unsupported-source` and `extraction-failed` need a path the CLI cannot reach (an extension

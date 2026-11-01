@@ -2333,6 +2333,9 @@ pub enum ExclusionReason {
     UnreadableCallback,
     /// A benchmark, which the next engine counts but does not compare yet.
     UnsupportedBenchmark,
+    /// A test's behavior was not read to the end, so the rules that read its trace leave it out.
+    /// The other rules still compare it, and the run stays complete.
+    IncompleteTrace,
     /// A wrapper call, a module load or a registration function read as a value registers tests
     /// the file does not spell.
     RegisteredElsewhere,
@@ -2367,7 +2370,7 @@ pub enum ExclusionReason {
 
 impl ExclusionReason {
     /// Every code, in the order that breaks ties between a file's reasons.
-    pub const ALL: [Self; 29] = [
+    pub const ALL: [Self; 30] = [
         Self::HelperExportUnreadable,
         Self::HelperSetupEffects,
         Self::HelperEffectsUnproved,
@@ -2383,6 +2386,7 @@ impl ExclusionReason {
         Self::NamedCallback,
         Self::UnreadableCallback,
         Self::UnsupportedBenchmark,
+        Self::IncompleteTrace,
         Self::RegisteredElsewhere,
         Self::UnsupportedStatement,
         Self::ParseError,
@@ -2417,6 +2421,7 @@ impl ExclusionReason {
             Self::NamedCallback => "named-callback",
             Self::UnreadableCallback => "unreadable-callback",
             Self::UnsupportedBenchmark => "unsupported-benchmark",
+            Self::IncompleteTrace => "incomplete-trace",
             Self::RegisteredElsewhere => "registered-elsewhere",
             Self::UnsupportedStatement => "unsupported-statement",
             Self::ParseError => "parse-error",
@@ -2435,7 +2440,9 @@ impl ExclusionReason {
     }
 }
 
-/// One file excluded from comparison in whole or in part, for the machine reports.
+/// One file excluded from comparison in whole or in part, for the machine reports. A file listed
+/// only under [`ExclusionReason::IncompleteTrace`] excludes no test: only the rules that read a
+/// trace left one out.
 ///
 /// Files that were never parsed (`file-too-large`, `unreadable`, ...) carry `tests_total == 0`: their
 /// test count is unknown, not zero.
