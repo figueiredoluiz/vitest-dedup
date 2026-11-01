@@ -341,7 +341,7 @@ const JS_MIN_TESTS = 100 // 235 today across the 15 enumerated suite files.
 const JS_MODULES = {
   'scripts/dev/verify.mjs': 100,
   // The rest of each is the entry point and the subprocess calls a real run makes.
-  'scripts/dev/probe.mjs': 70,
+  'scripts/dev/probe.mjs': 77,
   'scripts/dev/revert-proof.mjs': 97,
   // Action pin gate measured 67/67 lines with owned YAML cases.
   'scripts/check/check-action-pins.mjs': 100,

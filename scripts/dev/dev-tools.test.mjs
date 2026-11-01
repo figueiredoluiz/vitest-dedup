@@ -7,22 +7,28 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import test from 'node:test'
 
-import { disagreements, parseArguments, project, render, summarize } from './probe.mjs'
+import { analyze, disagreements, parseArguments, project, render, summarize } from './probe.mjs'
 import { caught, compileStep, mutate, problems, prove } from './revert-proof.mjs'
 
-const engine = (over = {}) => ({ exit: 0, failure: null, rules: [], tests: 2, unresolved: 0, incomplete: false, reasons: [], ...over })
+const engine = (over = {}) => ({ exit: 0, failure: null, findings: [], rules: [], tests: 2, unresolved: 0, incomplete: false, reasons: [], ...over })
 
 test('a summary reads rules, counts and reasons from the records', () => {
   const records = [
-    { type: 'finding', rule: 'duplicate-test' },
+    { type: 'finding', rule: 'duplicate-test', locations: [{ path: 'b.ts', line: 3 }, { path: 'a.ts', line: 1 }] },
     { type: 'finding', rule: 'duplicate-test' },
     { type: 'excluded-file', reason: 'registered-elsewhere' },
     { type: 'summary', testsAnalyzed: 3, unresolvedTests: 1, incomplete: true },
   ]
   assert.deepEqual(summarize(records, 1), {
-    exit: 1, failure: null, rules: ['duplicate-test'], tests: 3, unresolved: 1, incomplete: true, reasons: ['registered-elsewhere'],
+    exit: 1, failure: null, findings: ['duplicate-test ', 'duplicate-test a.ts:1,b.ts:3'], rules: ['duplicate-test'], tests: 3, unresolved: 1, incomplete: true, reasons: ['registered-elsewhere'],
   })
-  assert.equal(summarize([], 0).failure, null)
+  assert.equal(summarize([{ type: 'summary' }], 0).failure, null)
+  assert.equal(summarize([{ type: 'summary' }], 0).tests, 0)
+})
+
+test('an exit with no summary record is a failure', () => {
+  assert.equal(summarize([], 0).failure, 'no summary record')
+  assert.equal(summarize([], 1, 'said why').failure, 'said why')
 })
 
 test('an operational failure is kept, and never reads as agreement', () => {
@@ -39,9 +45,32 @@ test('each way the readings part is named, and agreement is silent', () => {
   const row = { vitest: ['a', 'b'], next: engine(), current: engine() }
   assert.deepEqual(disagreements(row), [])
   assert.deepEqual(disagreements({ ...row, vitest: null }), ['vitest-unread'])
-  assert.deepEqual(disagreements({ ...row, next: engine({ tests: 1 }) }), ['next-counts-fewer'])
-  assert.deepEqual(disagreements({ ...row, next: engine({ rules: ['duplicate-test'] }) }), ['rules-differ'])
+  assert.deepEqual(disagreements({ ...row, next: engine({ tests: 1 }) }), ['next-count-differs'])
+  assert.deepEqual(disagreements({ ...row, next: engine({ tests: 3 }) }), ['next-count-differs'])
+  assert.deepEqual(disagreements({ ...row, current: engine({ tests: 3 }) }), ['default-count-differs'])
+  const on = (place) => engine({ findings: [`duplicate-test ${place}`], rules: ['duplicate-test'] })
+  assert.deepEqual(disagreements({ ...row, next: on('a.ts:1'), current: on('a.ts:9') }), ['findings-differ'])
+  assert.deepEqual(disagreements({ ...row, next: on('a.ts:1'), current: on('a.ts:1') }), [])
   assert.deepEqual(disagreements({ ...row, next: engine({ incomplete: true }) }), ['completeness-differs'])
+  assert.deepEqual(disagreements({ ...row, next: engine({ unresolved: 1 }) }), ['diagnostics-differ'])
+  assert.deepEqual(disagreements({ ...row, next: engine({ reasons: ['named-callback'] }) }), ['diagnostics-differ'])
+})
+
+test('a run that cannot start or prints no JSONL fails its own row, and does not throw', () => {
+  const work = mkdtempSync(join(tmpdir(), 'probe-test-'))
+  try {
+    const missing = analyze(join(work, 'absent'), work, null)
+    assert.equal(missing.exit, null)
+    assert.match(missing.failure, /ENOENT/)
+    const noise = join(work, 'noise')
+    writeFileSync(noise, '#!/bin/sh\necho not json\n', { mode: 0o755 })
+    assert.notEqual(analyze(noise, work, 'next').failure, null)
+    const clean = join(work, 'clean')
+    writeFileSync(clean, '#!/bin/sh\necho \'{"type":"summary","testsAnalyzed":1}\'\n', { mode: 0o755 })
+    assert.equal(analyze(clean, work, 'next').failure, null)
+  } finally {
+    rmSync(work, { recursive: true, force: true })
+  }
 })
 
 test('a row shows all three readings and leads with its verdict', () => {
@@ -53,7 +82,7 @@ test('a row shows all three readings and leads with its verdict', () => {
     name: 'b', vitest: null, error: 'broke', sites: [],
     next: engine({ incomplete: true, reasons: ['named-callback'] }), current: engine(),
   })
-  assert.match(diff, /^DIFF b \(vitest-unread, completeness-differs\)/)
+  assert.match(diff, /^DIFF b \(vitest-unread, completeness-differs, diagnostics-differ\)/)
   assert.match(diff, /unread: broke/)
   assert.match(diff, /sites: none/)
   assert.match(diff, /next: exit 0, 2 analyzed, 0 unresolved, incomplete; rules \[\]; excluded \[named-callback\]/)

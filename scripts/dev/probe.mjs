@@ -13,29 +13,38 @@ import { parseJsonl } from '../check/lib/run-analyzer.mjs'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 
+/** Which claim a finding makes: its rule and where. */
+const identity = ({ rule, locations = [] }) =>
+  `${rule} ${locations.map(({ path, line }) => `${path}:${line}`).sort().join(',')}`
+
 /**
  * What one analyzer run reported.
  * @param {object[]} records The run's JSONL records.
  * @param {number|null} exit Its exit code, `null` when a signal ended it.
  * @param {string} [stderr] What it printed, kept for a run that failed.
- * @returns {{exit: number|null, failure: string|null, rules: string[], tests: number, unresolved: number, incomplete: boolean, reasons: string[]}} The summary.
+ * @returns {{exit: number|null, failure: string|null, findings: string[], rules: string[], tests: number, unresolved: number, incomplete: boolean, reasons: string[]}} The summary.
  */
 export function summarize(records, exit, stderr = '') {
-  const summary = records.find((record) => record?.type === 'summary') ?? {}
+  const summary = records.find((record) => record?.type === 'summary')
+  const findings = records.filter((record) => record?.type === 'finding')
+  // 0 is clean and 1 is findings; anything else, or no summary, is a failure, never agreement.
+  const ran = (exit === 0 || exit === 1) && summary !== undefined
   return {
     exit,
-    // 0 is clean and 1 is findings; anything else is an operational failure, never agreement.
-    failure: exit === 0 || exit === 1 ? null : stderr.trim().split('\n').slice(-2).join(' ').slice(0, 200),
-    rules: [...new Set(records.filter((record) => record?.type === 'finding').map((record) => record.rule))].sort(),
-    tests: summary.testsAnalyzed ?? 0,
-    unresolved: summary.unresolvedTests ?? 0,
-    incomplete: summary.incomplete === true,
+    failure: ran ? null : stderr.trim().split('\n').slice(-2).join(' ').slice(0, 200) || 'no summary record',
+    // By place, not fingerprint: the two engines fingerprint the same finding differently.
+    findings: findings.map(identity).sort(),
+    rules: [...new Set(findings.map((record) => record.rule))].sort(),
+    tests: summary?.testsAnalyzed ?? 0,
+    unresolved: summary?.unresolvedTests ?? 0,
+    incomplete: summary?.incomplete === true,
     reasons: [...new Set(records.filter((record) => record?.type === 'excluded-file').map((record) => record.reason))].sort(),
   }
 }
 
 /**
- * Where a case's three readings part. `tests` compares what Vitest collected with what next counted.
+ * Where a case's three readings part: each engine's count against what Vitest collected, and the
+ * findings of one engine against the other's.
  * @param {{vitest: string[]|null, next: object, current: object}} row One case.
  * @returns {string[]} Disagreements; empty when all three agree.
  */
@@ -44,9 +53,13 @@ export function disagreements({ vitest, next, current }) {
   if (next.failure !== null) notes.push('next-failed')
   if (current.failure !== null) notes.push('default-failed')
   if (vitest === null) notes.push('vitest-unread')
-  else if (next.tests < vitest.length) notes.push('next-counts-fewer')
-  if (next.rules.join() !== current.rules.join()) notes.push('rules-differ')
+  else {
+    if (next.tests !== vitest.length) notes.push('next-count-differs')
+    if (current.tests !== vitest.length) notes.push('default-count-differs')
+  }
+  if (next.findings.join() !== current.findings.join()) notes.push('findings-differ')
   if (next.incomplete !== current.incomplete) notes.push('completeness-differs')
+  if (next.unresolved !== current.unresolved || next.reasons.join() !== current.reasons.join()) notes.push('diagnostics-differ')
   return notes
 }
 
@@ -85,14 +98,25 @@ export function project(source, work) {
   return directory
 }
 
-/** One engine's run over `directory`. */
-function analyze(binary, directory, engine) {
+/**
+ * One engine's run over `directory`. A run that cannot start, times out or prints something that is
+ * not JSONL is that row's failure, so it never costs the other inputs their rows.
+ * @param {string} binary The analyzer.
+ * @param {string} directory The project.
+ * @param {string|null} engine The engine to select, or null for the default.
+ * @returns {object} The run's summary.
+ */
+export function analyze(binary, directory, engine) {
   const env = { ...process.env }
   delete env.VITEST_DEDUP_ENGINE
   if (engine) env.VITEST_DEDUP_ENGINE = engine
   const run = spawnSync(binary, [directory, '--reporters', 'jsonl'], { encoding: 'utf8', env, maxBuffer: 256 << 20, timeout: 120_000 })
-  if (run.error) throw run.error
-  return summarize(parseJsonl(run.stdout), run.status, run.stderr)
+  try {
+    if (run.error) throw run.error
+    return summarize(parseJsonl(run.stdout), run.status, run.stderr)
+  } catch (error) {
+    return summarize([], null, String(error.message))
+  }
 }
 
 /** The next engine's sites in `directory`; a run that cannot report any is shown by `analyze`. */

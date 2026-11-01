@@ -1,7 +1,7 @@
 // Tests for the recall label adapter. Counts over the real manifest are pinned so a case dropped
 // from the adapter's view cannot shrink the population unnoticed.
 import assert from 'node:assert/strict'
-import { mkdtempSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import test from 'node:test'
@@ -355,6 +355,12 @@ test('a recall case declares its own blind files, each inside the case', () => {
 test('the real recall manifest labels to the populations the recall gate counts', () => {
   const result = readRecallManifest(REAL_ROOT)
   const summary = summarizeLabels(result)
+  // Against the manifest itself, so a generator that drops a case cannot hide above the floors.
+  const manifest = JSON.parse(readFileSync(join(REAL_ROOT, 'manifest.json'), 'utf8'))
+  assert.equal(summary.cases, manifest.cases.length)
+  assert.equal(summary.byKind['expected-finding'], manifest.cases.flatMap((c) => c.expectedFindings).length)
+  assert.equal(summary.byKind['expected-absent'], manifest.cases.flatMap((c) => c.expectedAbsent).length)
+  assert.equal(result.controls.length, manifest.mixedRuleCoverage.length)
   // Floors: a gate that measured less must fail, and adding a case must not edit this test.
   assert.ok(summary.cases >= 280, `${summary.cases} cases`)
   assert.ok(summary.byKind['expected-finding'] >= 237, 'expected findings')
