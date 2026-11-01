@@ -198,13 +198,15 @@ export const NEXT_CORE = {
 // code. Selected with `--scope trace` (`npm run mutants:trace`).
 export const TRACE = {
   scope: [
-    { file: 'src/behavior.rs', minimumMutants: 0 }, // enumerated below
-    { file: 'src/behavior/dataflow.rs', minimumMutants: 0 }, // enumerated below
+    { file: 'src/behavior.rs', minimumMutants: 314 }, // enumerated
+    { file: 'src/behavior/dataflow.rs', minimumMutants: 135 }, // enumerated
   ],
-  // Floors recorded from the first measured run; 0 placeholders are replaced with the measured
-  // counts and score before the scope ships.
-  minimumScore: 0.0,
-  minimumScored: 0,
+  // 2026-11-01: 246 caught, 180 missed, 23 unviable, 0 timeouts in 85 minutes at `--jobs 4`;
+  // 246/426 = 57.75%. The survivors are dominated by depth-arithmetic equivalents, which the
+  // floor absorbs; the match-arm deletions with observable events are pinned by the trace's
+  // controls and can only raise the score.
+  minimumScore: 57.7,
+  minimumScored: 426,
 }
 
 /** The scope `argv` selects, with the floors it is checked against. */
@@ -212,15 +214,7 @@ export function selectScope(argv) {
   const named = argv.find((argument) => argument.startsWith('--scope'))
   if (named === undefined) return { scope: SCOPE, minimumScore: MINIMUM_SCORE, minimumScored: MINIMUM_SCORED }
   if (named === '--scope=next-core') return NEXT_CORE
-  if (named === '--scope=trace') {
-    // The floors below are placeholders until the first full run lands; a scope whose floor
-    // cannot fail would be a gate that measures nothing, which is refused rather than wired.
-    assert.ok(
-      TRACE.minimumScored > 0,
-      'the trace scope has no recorded floor yet; run npm run mutants:trace to completion and record the measured score',
-    )
-    return TRACE
-  }
+  if (named === '--scope=trace') return TRACE
   assert.fail(`unknown scope ${named}; the named scopes are --scope=next-core and --scope=trace`)
 }
 

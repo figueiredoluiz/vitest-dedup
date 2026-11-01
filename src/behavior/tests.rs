@@ -1481,3 +1481,175 @@ fn edge_callee_and_chain_shapes_trace() {
         "the inner function's body is deferred behavior: {guarded:?}"
     );
 }
+// Prepared mutation kills for the survivors of run 4 (see /tmp/nc76-missed.txt).
+// Landed after the clean re-run records the floor; they can only raise the score.
+
+/// A binary or logical expression's operands are walked: `a === b && g()` records g.
+#[test]
+fn binary_and_logical_operands_are_walked() {
+    let events = events(
+        r#"
+        test('binary', () => { if (a === b && g()) { h(); } });
+        test('logical', () => { const s = a || g(); h(s); });
+    "#,
+        &[],
+    );
+    assert!(of(&events, "binary")
+        .iter()
+        .any(|event| event.starts_with("call:g:g")));
+    assert!(of(&events, "logical")
+        .iter()
+        .any(|event| event.starts_with("call:g:g")));
+}
+
+/// A unary expression's operand is walked: `!g()` records g.
+#[test]
+fn a_unary_operand_is_walked() {
+    let events = events(
+        r#"
+        test('unary', () => { const v = !g(); h(v); });
+    "#,
+        &[],
+    );
+    assert!(of(&events, "unary")
+        .iter()
+        .any(|event| event.starts_with("call:g:g")));
+}
+
+/// An array literal's elements are walked: `[g()]` records g.
+#[test]
+fn an_array_element_is_walked() {
+    let events = events(
+        r#"
+        test('array', () => { const s = [g()]; h(s); });
+    "#,
+        &[],
+    );
+    assert!(of(&events, "array")
+        .iter()
+        .any(|event| event.starts_with("call:g:g")));
+}
+
+/// A `this`-receiver call inside a deferred body spells `this.run`.
+#[test]
+fn a_this_callee_spells_this() {
+    let events = events(
+        r#"
+        test('this-callee', () => { function bound() { this.run(); } });
+    "#,
+        &[],
+    );
+    let evts = of(&events, "this-callee");
+    assert!(
+        evts.iter()
+            .any(|event| event.starts_with("deferred-call:this.run")),
+        "`this` spells its path: {evts:?}"
+    );
+}
+
+/// A fluent chain's outer event carries the inner call: `expectTypeOf<A>().toEqualTypeOf<B>()`
+/// spells the whole path, not a prefix.
+#[test]
+fn a_fluent_outer_event_carries_the_inner_call() {
+    let events = events(
+        r#"
+        test('fluent', () => { expectTypeOf<A>().toEqualTypeOf<B>(); });
+    "#,
+        &[],
+    );
+    let fluent = of(&events, "fluent");
+    assert!(
+        fluent.iter().any(
+            |event| event.starts_with("call:g:expectTypeOf") && event.contains("toEqualTypeOf")
+        ),
+        "the outer event carries the inner call: {fluent:?}"
+    );
+}
+
+/// A static block records its effects even when its class is never constructed: the
+/// definition-time event is the only record.
+#[test]
+fn a_static_block_records_without_construction() {
+    let events = events(
+        r#"
+        test('never-constructed', () => { class C { static { g(); } } h(); });
+    "#,
+        &[],
+    );
+    let evts = of(&events, "never-constructed");
+    assert!(
+        evts.iter()
+            .any(|event| event.starts_with("class-eval:") && event.contains("static-block")),
+        "the static block is a definition-time event: {evts:?}"
+    );
+    assert!(
+        evts.iter().any(|event| event == "call:g:h"),
+        "the unrelated call survives: {evts:?}"
+    );
+}
+
+/// An array walked to under a key tags the whole route: `const { a: [b] } = o` and
+/// `const { c: [b] } = o` read different properties of the same object.
+#[test]
+fn an_array_under_a_key_carries_the_route() {
+    let events = events(
+        r#"
+        import { o } from './helpers';
+        test('a-route', () => { const { a: [b] } = o; use(b); });
+        test('c-route', () => { const { c: [b] } = o; use(b); });
+    "#,
+        &[("helpers.ts", "export const o = { a: [1], c: [1] }\n")],
+    );
+    assert_ne!(of(&events, "a-route"), of(&events, "c-route"));
+}
+
+/// Inert statements in the scanned gap stay inert: an initializer moves across an empty
+/// statement, a bare block, an inert expression statement, and every inert container form.
+#[test]
+fn inert_gap_forms_do_not_block_inlining() {
+    let events = events(
+        r#"
+        test('empties', () => { const x = f(); ;; {} g(x); });
+        test('empties-written', () => { ;; {} g(f()); });
+        test('inert-expr', () => { const x = f(); 1; g(x); });
+        test('inert-expr-written', () => { 1; g(f()); });
+        test('inert-array', () => { const x = f(); const a = [1, 2]; g(x); });
+        test('inert-array-written', () => { const a = [1, 2]; g(f()); });
+        test('inert-object', () => { const x = f(); const a = { k: 1 }; g(x); });
+        test('inert-object-written', () => { const a = { k: 1 }; g(f()); });
+        test('inert-template', () => { const x = f(); const a = `t`; g(x); });
+        test('inert-template-written', () => { const a = `t`; g(f()); });
+        test('inert-binary', () => { const x = f(); const a = 1 + 2; g(x); });
+        test('inert-binary-written', () => { const a = 1 + 2; g(f()); });
+        test('inert-unary', () => { const x = f(); const a = -1; g(x); });
+        test('inert-unary-written', () => { const a = -1; g(f()); });
+        test('inert-conditional', () => { const x = f(); const a = c ? 1 : 2; g(x); });
+        test('inert-conditional-written', () => { const a = c ? 1 : 2; g(f()); });
+        test('inert-wrapped', () => { const x = f(); const a = 1 as unknown; g(x); });
+        test('inert-wrapped-written', () => { const a = 1 as unknown; g(f()); });
+        test('inert-member', () => { const x = f(); const a = o.p; g(x); });
+        test('inert-member-written', () => { const a = o.p; g(f()); });
+    "#,
+        &[("helpers.ts", "export const o = { p: 1 }\n")],
+    );
+    for title in [
+        "empties",
+        "inert-expr",
+        "inert-array",
+        "inert-object",
+        "inert-template",
+        "inert-binary",
+        "inert-unary",
+        "inert-conditional",
+        "inert-wrapped",
+        "inert-member",
+    ] {
+        let written = format!("{title}-written");
+        assert_eq!(
+            of(&events, title),
+            of(&events, &written),
+            "{title} moves across the inert gap"
+        );
+        assert!(complete(&events, title), "{title} traces whole");
+    }
+}
