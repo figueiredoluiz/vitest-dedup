@@ -20,6 +20,7 @@ fn location(path: &str, line: u32) -> Location {
 /// baseline flag.
 fn finding(rule: Rule, participants: &[(&str, u32, &str)]) -> Finding {
     Finding {
+        identity: Default::default(),
         registration_files: Vec::new(),
         rule,
         severity: rule.default_severity(),

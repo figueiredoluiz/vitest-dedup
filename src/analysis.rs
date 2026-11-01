@@ -1818,6 +1818,7 @@ fn emit_redundant_hook(
         }
         let label = kind.label();
         let mut finding = Finding {
+            identity: Default::default(),
             registration_files: Vec::new(),
             rule: Rule::RedundantHook,
             severity,
@@ -2145,6 +2146,7 @@ fn emit_cross_file_duplicate(
 /// way it is here.
 fn finding_over(rule: Rule, severity: Severity, members: &[&TestCase], message: String) -> Finding {
     let mut finding = Finding {
+        identity: Default::default(),
         registration_files: Vec::new(),
         rule,
         severity,

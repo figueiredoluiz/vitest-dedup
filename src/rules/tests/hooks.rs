@@ -110,3 +110,27 @@ fn hook_cross_scope_uniformity_preserves_all_phase_effects() {
         );
     }
 }
+
+/// Every finding of a run names the next engine's identity, a hook pair like any other: one left
+/// on another would make a baseline written from the run refuse to load.
+#[test]
+fn every_rule_stamps_the_next_identity() {
+    let (hooks, files) = (population(), same_file_pair());
+    let outcome = run_all(&files, &[], &hooks, &config_with(&[]), &[], 100, 100);
+    assert!(outcome
+        .findings
+        .iter()
+        .any(|finding| finding.rule == Rule::RedundantHook));
+    assert!(outcome
+        .findings
+        .iter()
+        .any(|finding| finding.rule == Rule::DuplicateTest));
+    for finding in &outcome.findings {
+        assert_eq!(
+            finding.identity,
+            crate::model::Identity::Next,
+            "{:?}",
+            finding.rule
+        );
+    }
+}

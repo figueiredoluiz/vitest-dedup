@@ -1071,21 +1071,13 @@ fn an_inline_suppression_above_a_multi_line_table_suppresses_a_next_engine_findi
     assert_eq!(run.json["modes"]["suppressionsApplied"], 1);
 }
 
-/// Modes that filter or record findings against recorded ones are refused under the next engine,
-/// which carries no baseline of its match keys and measures no engine memory (`--fail-on-new`
-/// needs `--baseline`); another value of the variable is the default engine.
+/// A mode that needs a base revision or an engine memory measure is refused before discovery under
+/// `VITEST_DEDUP_ENGINE=next`; another value of the variable is the default engine.
 #[test]
 fn the_next_engine_refuses_modes_that_need_findings() {
     let directory = tempfile::tempdir().unwrap();
     write(directory.path(), "clean.test.ts", CLEAN);
-    let baseline = directory.path().join("baseline.json");
     for flags in [
-        vec!["--baseline", baseline.to_str().unwrap()],
-        vec![
-            "--baseline",
-            baseline.to_str().unwrap(),
-            "--update-baseline",
-        ],
         vec!["--baseline-from-ref", "HEAD"],
         vec!["--changed-since", "HEAD"],
         vec!["--debug-memory"],

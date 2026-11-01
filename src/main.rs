@@ -14,7 +14,7 @@ use vitest_dedup::cli::{ExitCode, ParsedArgs, ReporterKind};
 use vitest_dedup::config::Config;
 use vitest_dedup::exclusions::{self, ExclusionCollector};
 use vitest_dedup::frontend::{self, Globals};
-use vitest_dedup::model::{AnalysisResult, ExclusionReason, IncompleteCauses};
+use vitest_dedup::model::{AnalysisResult, ExclusionReason, Identity, IncompleteCauses};
 use vitest_dedup::modes;
 use vitest_dedup::reporters::{
     terminal_safe, DetectionTiming, HtmlReporter, JsonReporter, JsonlReporter, Reporter,
@@ -260,13 +260,10 @@ fn run_with_engine(
     let mut stderr: std::io::Stderr = std::io::stderr();
     let config = Config::load(&args.root, args.to_overrides())?;
 
-    // The next engine's match keys are its own (the baseline format that would carry them is
-    // still to come), and its memory is not charged yet, so a mode that filters or records
-    // findings would mislead on both ends: refused before any work.
+    // The next engine reads no base revision and its memory is not charged yet, so a mode that
+    // needs either would mislead: refused before any work.
     if next_engine.is_some() {
         let findings_mode = [
-            ("--baseline", args.baseline.is_some()),
-            ("--update-baseline", args.update_baseline),
             ("--baseline-from-ref", args.baseline_from_ref.is_some()),
             ("--changed-since", args.changed_since.is_some()),
             ("--debug-memory", args.debug_memory),
@@ -275,8 +272,8 @@ fn run_with_engine(
         .find_map(|(flag, given)| given.then_some(flag));
         if let Some(flag) = findings_mode {
             anyhow::bail!(
-                "{flag} is not available under VITEST_DEDUP_ENGINE=next, which carries no \
-                 baseline and measures no engine memory yet"
+                "{flag} is not available under VITEST_DEDUP_ENGINE=next, which reads no base \
+                 revision and measures no engine memory yet"
             );
         }
         writeln!(
@@ -299,8 +296,13 @@ fn run_with_engine(
     // Skipped under `--update-baseline`: that run rewrites the file from scratch, so applying the
     // old one first would mark this run's findings against a baseline that is about to be replaced
     // -- and, worse, would make an unreadable old file block the very command meant to fix it.
+    let identity = if next_engine.is_some() {
+        Identity::Next
+    } else {
+        Identity::Current
+    };
     let baseline = match (&args.baseline, args.update_baseline) {
-        (Some(path), false) => Some(modes::load_baseline(path)?),
+        (Some(path), false) => Some(modes::load_baseline_as(path, identity.version())?),
         _ => None,
     };
 
@@ -1038,9 +1040,9 @@ fn run_with_engine(
                 outcome.findings,
                 causes,
                 analysis::RunModes {
-                    // Modes that filter findings against recorded ones are refused above.
+                    // A changed-file filter and a base revision are refused above.
                     changed_files: None,
-                    baseline: None,
+                    baseline: baseline.as_ref(),
                     suppressions: &inline_suppressions,
                 },
             );
@@ -1108,7 +1110,7 @@ fn run_with_engine(
                 path.display()
             );
         }
-        let update = modes::write_baseline(path, &result.findings)?;
+        let update = modes::write_baseline_as(path, &result.findings, identity.version())?;
         writeln!(
             stderr,
             "vitest-dedup: wrote baseline {}: {} finding(s) recorded ({} added, {} removed).",
