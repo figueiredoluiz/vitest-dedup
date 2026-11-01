@@ -7,6 +7,7 @@
 //! A test's key and its context are assembled from the pieces here.
 
 mod form;
+mod hooks;
 pub(crate) use form::{MAX_CLASS_RENDER_BYTES, UNSCOPED_PRIVATE};
 mod identity;
 pub(crate) mod row_identity;
@@ -376,6 +377,10 @@ pub struct Normalizer<'s> {
     setting: Setting<'s>,
     structure: &'s Structure,
     externals: HashMap<SymbolId, String>,
+    /// The one literal assigned by every recorded write to a hook's lexical cell, if proven.
+    hook_writes: HashMap<SymbolId, Option<String>>,
+    /// Dynamic lexical evaluation would invalidate the recorded write set.
+    hook_eval: Option<bool>,
     /// While a declaration's dependencies are listed, the outside bindings its walks read.
     discovering: Option<Vec<SymbolId>>,
     /// Whether identities are being resolved, so every read must already be named.
@@ -404,6 +409,8 @@ impl<'s> Normalizer<'s> {
             setting,
             structure,
             externals: HashMap::new(),
+            hook_writes: HashMap::new(),
+            hook_eval: None,
             discovering: None,
             resolving: false,
             shallow_imports: false,

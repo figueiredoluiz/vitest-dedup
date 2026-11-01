@@ -13,7 +13,7 @@ Set a rule to `off`, `warning` or `error` in [configuration](configuration.md) o
 | `subsumed-test` | Off | One test's behavior is a strict ordered subsequence of another's. Off by default: its findings are frequently distinct tests rather than redundant ones. |
 | `duplicate-suite` | Warning | A whole `describe` block is duplicated within one file, reported once instead of per test. |
 | `duplicate-each-row` | Warning | Two rows of one parameterized test, benchmark, or suite carry the same case. |
-| `redundant-hook` | Warning | A nested lifecycle hook repeats work an ancestor hook already performs. |
+| `redundant-hook` | Warning | A lifecycle hook repeats work another hook in its execution chain already performs. |
 
 ## Verdicts
 

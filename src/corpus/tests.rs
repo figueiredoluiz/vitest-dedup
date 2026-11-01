@@ -1090,9 +1090,10 @@ fn owned_findings(path: &str, corpus: FileCorpus) -> crate::rules::Outcome {
         threshold: 100,
         source: "test".to_owned(),
     };
-    crate::rules::run_with_suites(
+    crate::rules::run_with_hooks(
         &[(path.into(), corpus.tests)],
         &[(path.into(), corpus.suites)],
+        &[(path.into(), corpus.hooks)],
         &config,
         &[],
     )
@@ -1145,4 +1146,5 @@ fn row_names_refuse_derived_suite_prefixes() {
 
 mod suites;
 
+mod hooks;
 mod parameters;

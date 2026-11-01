@@ -90,7 +90,7 @@ fails, so its entry goes when support lands.
 
 `npm run check:next-duplicates` runs the analyzer under `VITEST_DEDUP_ENGINE=next` over
 `fixtures/duplicates/`, `fixtures/observed/` and `fixtures/mixed/` and judges the rules the
-next engine ports (`duplicate-test`, `duplicate-test-name`, `duplicate-each-row`, `duplicate-suite`, `parameterization-candidate`, `cross-file-duplicate`) pairwise against the fixture
+next engine ports (`duplicate-test`, `duplicate-test-name`, `duplicate-each-row`, `duplicate-suite`, `parameterization-candidate`, `redundant-hook`, `cross-file-duplicate`) pairwise against the fixture
 headers: every pair a positive expectation declares must be linked by its rule, no pair declared
 silent may be linked, and any other linked pair is a failure until it is adjudicated into a
 header or into `scripts/check/next-duplicates-known.json` with a reason. A listed delta that
@@ -137,6 +137,17 @@ Replacement-character text in callbacks and their local dependencies is also ref
 owned tree preserves JavaScript code units without display encoding.
 Row binding uses the existing proof; unsupported row values and observed class names still limit
 parity with the default engine.
+
+The experimental hook rule compares proven synchronous, idempotent setup within one lifecycle
+chain. It supports `let` bindings whose complete recorded write set assigns one primitive
+literal value. Dynamic lexical evaluation refuses the proof. Calls and property writes
+remain opaque until their effect and object-stability proofs are modeled. Opaque or conflicting
+intervening hooks block a claim. Once-per-suite hooks are compared only within the same scope. Every registration scope
+must be closed, including scopes off the anchoring test's path. Conditional registrations, table
+suites, indirect wrappers, erased type declarations and uncertain activation remain outside this proof. Configuration-level
+concurrency is not modeled; the scheduling proof assumes sequential execution unless the source
+explicitly requests concurrency, which is refused. `npm run check:hooks-runtime` executes the owned
+hook outcome fixtures under Vitest; the collection oracle separately checks their registrations.
 
 ## Writing documentation
 

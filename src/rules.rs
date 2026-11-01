@@ -1,6 +1,6 @@
 //! The findings the corpus supports: one rule per equality claim.
 //!
-//! A rule reads [`crate::corpus::TestCase`] records and nothing else. Its equality key is the key
+//! A rule reads owned test, suite and hook records. Its equality key is the key
 //! the corpus computed, its participants are the cases themselves, and its severity comes from the
 //! configuration. A case carrying an exclusion never anchors a finding: the corpus refused to
 //! compare it, so no rule may claim it.
@@ -13,6 +13,7 @@ use std::cmp::Ordering;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
+mod hooks;
 mod names;
 mod parameters;
 mod rows;
@@ -25,6 +26,8 @@ pub type Files = [(PathBuf, Vec<TestCase>)];
 /// What one pass of the ported rules found.
 #[derive(Debug, Default)]
 pub struct Outcome {
+    /// Hook-chain candidate scanning ran out before every chain was inspected.
+    pub hook_scan_exhausted: bool,
     /// Findings in report order.
     pub findings: Vec<Finding>,
     /// The pair budget ran out before every group was processed.
@@ -100,6 +103,46 @@ fn run_with_suites_and_budget(
     suppressions: &[crate::modes::InlineSuppression],
     max_pair_comparisons: u64,
 ) -> Outcome {
+    run_all(
+        files,
+        suites,
+        &[],
+        config,
+        suppressions,
+        max_pair_comparisons,
+        crate::analysis::MAX_HOOK_PAIR_SCANS,
+    )
+}
+
+/// Runs all ported rules over the separate test, suite and hook populations.
+pub fn run_with_hooks(
+    files: &Files,
+    suites: &Files,
+    hooks: &[(PathBuf, crate::corpus::Hooks)],
+    config: &Config,
+    suppressions: &[crate::modes::InlineSuppression],
+) -> Outcome {
+    run_all(
+        files,
+        suites,
+        hooks,
+        config,
+        suppressions,
+        crate::analysis::MAX_PAIR_COMPARISONS,
+        crate::analysis::MAX_HOOK_PAIR_SCANS,
+    )
+}
+
+/// Shares the finding budget while bounding hook candidate scans separately.
+fn run_all(
+    files: &Files,
+    suites: &Files,
+    hooks: &[(PathBuf, crate::corpus::Hooks)],
+    config: &Config,
+    suppressions: &[crate::modes::InlineSuppression],
+    max_pair_comparisons: u64,
+    max_hook_scans: u64,
+) -> Outcome {
     let mut findings = Vec::new();
     let mut budget = PairBudget::new(max_pair_comparisons);
     let (twins, mut budget_exhausted) =
@@ -162,8 +205,12 @@ fn run_with_suites_and_budget(
     }
 
     twins.suppress(&mut findings);
+    let (hook_scan_exhausted, hook_pairs_exhausted) =
+        hooks::run(hooks, config, max_hook_scans, &mut budget, &mut findings);
+    budget_exhausted |= hook_pairs_exhausted;
     crate::analysis::sort_findings(&mut findings);
     Outcome {
+        hook_scan_exhausted,
         findings,
         budget_exhausted,
     }

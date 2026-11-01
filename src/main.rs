@@ -281,7 +281,7 @@ fn run_with_engine(
         }
         writeln!(
             stderr,
-            "vitest-dedup: VITEST_DEDUP_ENGINE=next runs duplicate-test, duplicate-test-name, duplicate-each-row, duplicate-suite, parameterization-candidate and cross-file-duplicate \
+            "vitest-dedup: VITEST_DEDUP_ENGINE=next runs duplicate-test, duplicate-test-name, duplicate-each-row, duplicate-suite, parameterization-candidate, redundant-hook and cross-file-duplicate \
              only; the other rules do not run yet"
         )?;
     }
@@ -1026,13 +1026,15 @@ fn run_with_engine(
         .map(|engine| std::mem::take(&mut engine.files));
     let mut result = match engine_files {
         Some(files) => {
-            let outcome = vitest_dedup::rules::run_with_suites(
+            let outcome = vitest_dedup::rules::run_with_hooks(
                 &files,
                 &next_engine.as_ref().expect("selected engine").suites,
+                &next_engine.as_ref().expect("selected engine").hooks,
                 &config,
                 &inline_suppressions,
             );
             causes.pair_budget_exhausted |= outcome.budget_exhausted;
+            causes.hook_scan_exhausted |= outcome.hook_scan_exhausted;
             let finished = analysis::finish_findings(
                 outcome.findings,
                 causes,
@@ -1427,6 +1429,7 @@ mod tests {
             "duplicate-each-row",
             "duplicate-suite",
             "parameterization-candidate",
+            "redundant-hook",
             "cross-file-duplicate",
         ] {
             assert!(stderr.contains(rule), "{rule} missing from: {stderr}");

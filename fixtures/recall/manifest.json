@@ -8084,6 +8084,41 @@
       "blindUnderCurrent": [
         "run.test.ts"
       ]
+    },
+    {
+      "name": "redundant-hook-lexical-overwrite",
+      "path": "redundant-hook-lexical-overwrite",
+      "rule": "redundant-hook",
+      "role": "positive",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-10-31",
+      "expectedTests": 2,
+      "expectedIncomplete": false,
+      "expectedUnresolved": 0,
+      "expectedFindings": [
+        {
+          "rule": "redundant-hook",
+          "severity": "warning",
+          "titles": [
+            "beforeEach",
+            "beforeEach"
+          ],
+          "locations": [
+            "main.test.ts:14",
+            "main.test.ts:15"
+          ]
+        }
+      ],
+      "expectedAbsent": [
+        {
+          "rule": "redundant-hook",
+          "locations": [
+            "main.test.ts:21",
+            "main.test.ts:23"
+          ]
+        }
+      ]
     }
   ],
   "knownFalsePositiveBaseline": 1,

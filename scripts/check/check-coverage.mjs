@@ -300,15 +300,21 @@ const RUST_MODULES = {
   'src/normal/titles.rs': 93,
   // Active suite admission: measured at 98.08% (51/52 lines).
   'src/normal/suites.rs': 98,
+  // Hook effect proof: measured at 99.23% (129/130 lines).
+  'src/normal/hooks.rs': 99.2,
   'src/corpus.rs': 99,
   // Whole-suite collection: measured at 93.60% (117/125 lines).
   'src/corpus/suites.rs': 93,
+  // Hook-chain collection: measured at 99.47% (189/190 lines).
+  'src/corpus/hooks.rs': 99.4,
   'src/rules.rs': 100,
   'src/rules/names.rs': 100,
   'src/rules/rows.rs': 100,
   'src/rules/parameters.rs': 100,
   // Suite reporting and child suppression: measured at 99.00% (99/100 lines).
   'src/rules/suites.rs': 99,
+  // Hook pair reporting: measured at 98.84% (85/86 lines).
+  'src/rules/hooks.rs': 98.8,
   // The behavior trace: raised from its first floor (84.78%) after a pass driven by llvm-cov's
   // own uncovered-line list — statement and expression families, splice and recognizer
   // rejections, callee and destructuring paths. The 57 remaining uncovered lines are depth
