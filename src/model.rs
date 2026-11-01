@@ -774,7 +774,7 @@ pub enum Rule {
     DuplicateSuite,
     /// Two rows of one parameterized test, benchmark, or suite carry the same case.
     DuplicateEachRow,
-    /// A nested lifecycle hook repeats the work an ancestor hook already performs.
+    /// A lifecycle hook repeats work another hook in its execution chain already performs.
     RedundantHook,
 }
 
@@ -933,7 +933,7 @@ impl Rule {
                 "Two rows of one parameterized test, benchmark, or suite carry the same case."
             }
             Self::RedundantHook => {
-                "A nested lifecycle hook repeats the work an ancestor hook already performs."
+                "A lifecycle hook repeats work another hook in its execution chain already performs."
             }
         }
     }
@@ -991,9 +991,9 @@ impl Rule {
                  that does not exist."
             }
             Self::RedundantHook => {
-                "A nested hook's body repeats what an ancestor hook of the same kind already \
-                 performs, so every test under it pays for the same setup twice. Deleting the \
-                 nested hook loses nothing the ancestor does not provide."
+                "A hook repeats work another hook of the same kind in its execution chain already \
+                 performs. Confirm that work is idempotent before removing the repeated hook; \
+                 across scopes, keep the outer one."
             }
         }
     }

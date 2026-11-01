@@ -391,7 +391,7 @@ fn suggested_action(rule: Rule) -> &'static str {
             "Review whether to remove a duplicate row while retaining every distinct case."
         }
         Rule::RedundantHook => {
-            "Review whether to remove the nested hook; its ancestor already provides the same setup."
+            "Review whether the work is idempotent before removing the repeated hook; across scopes, keep the outer one."
         }
     }
 }
@@ -821,7 +821,7 @@ mod tests {
             ),
             (
                 Rule::RedundantHook,
-                &["nested hook", "ancestor", "same setup"],
+                &["repeated hook", "across scopes", "outer one"],
             ),
         ];
         assert_eq!(cases.len(), Rule::ALL.len());

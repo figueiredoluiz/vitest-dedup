@@ -1,0 +1,55 @@
+{
+  "files": {
+    "concise.test.ts": {
+      "tasks": 2,
+      "wrapperSites": [],
+      "next": {}
+    },
+    "ambient.test.ts": {
+      "tasks": 1,
+      "wrapperSites": [],
+      "next": {}
+    },
+    "reset-alias.test.ts": {
+      "tasks": 2,
+      "wrapperSites": [],
+      "next": {
+        "reasons": [
+          "order-dependent-state"
+        ],
+        "testsExcluded": 1
+      }
+    },
+    "reset-result.test.ts": {
+      "tasks": 3,
+      "wrapperSites": [],
+      "next": {
+        "reasons": [
+          "order-dependent-state"
+        ],
+        "testsExcluded": 1
+      }
+    },
+    "microtask-write.test.ts": {
+      "tasks": 2,
+      "wrapperSites": [],
+      "next": {}
+    }
+  },
+  "knownTitles": [
+    {
+      "path": "concise.test.ts",
+      "kind": "missing-test",
+      "item": "conditional registration in an expression body > requires the only registered overwrite",
+      "reason": "The default collector does not enter this expression-bodied suite callback; Vitest and the next inventory collect its active declarations.",
+      "waitsOn": "the default collector following expression-bodied suite callbacks"
+    },
+    {
+      "path": "concise.test.ts",
+      "kind": "missing-hook",
+      "item": "beforeEach@concise.test.ts:5",
+      "reason": "The default collector does not enter this expression-bodied suite callback; Vitest and the next inventory collect its active declarations.",
+      "waitsOn": "the default collector following expression-bodied suite callbacks"
+    }
+  ]
+}

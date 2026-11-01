@@ -676,4 +676,5 @@ fn row_rule_preserves_spanning_edges_clusters_and_budget() {
 
 mod suites;
 
+mod hooks;
 mod parameters;

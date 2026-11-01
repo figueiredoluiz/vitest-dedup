@@ -135,9 +135,9 @@ changing test behavior or hiding coverage gaps.
   whole block is the remedy, not deleting individual children.
 - `duplicate-each-row` (Warning), the same table row appears twice, so the same case runs twice.
   Delete one row from the table; keep every distinct row.
-- `redundant-hook` (Warning), a nested hook repeats what an ancestor of the same kind already
-  performs; every test under it pays for the same setup twice. Delete the nested hook only after
-  confirming the bodies really are equivalent, not merely similar.
+- `redundant-hook` (Warning), a lifecycle hook repeats work another hook of the same kind in its
+  execution chain already performs. Delete the repeated hook only after confirming the work is
+  idempotent, not merely similar; across scopes, keep the outer one.
 - Never delete a test solely because a finding exists. Preserve framework conventions, hooks,
   fixtures, mocks, and every call site.
 - Do not weaken a rule, raise the threshold, or record findings into the baseline to make a run

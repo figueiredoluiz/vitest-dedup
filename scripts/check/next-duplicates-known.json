@@ -703,6 +703,102 @@
     {
       "id": "recall-extra|parameterization-class-alias|parameterization-candidate|run.test.ts:3,run.test.ts:88",
       "reason": "The default engine abstains on these local classes as unresolved. The next engine reads them, and an unread alias of one must not spend the budget that keeps the trace complete."
+    },
+    {
+      "id": "miss|fixtures/duplicates|redundant-hook-describe-each-suite.test.ts:18|redundant-hook-describe-each-suite.test.ts:22|redundant-hook",
+      "reason": "Table-driven suite execution is not yet a proven ordinary lifecycle chain in the next engine."
+    },
+    {
+      "id": "miss|fixtures/duplicates|redundant-hook-guarded-connect.test.ts:24|redundant-hook-guarded-connect.test.ts:34|redundant-hook",
+      "reason": "A guarded initializer needs a truthiness and effect proof; an arbitrary call may return falsy and execute twice. The next engine refuses this legacy classification."
+    },
+    {
+      "id": "miss|fixtures/duplicates|redundant-hook-nested-beforeeach.test.ts:29|redundant-hook-nested-beforeeach.test.ts:39|redundant-hook",
+      "reason": "The hook writes a property rather than a resolved lexical cell. The next engine has no property/setter effect proof and refuses that redundancy claim."
+    },
+    {
+      "id": "miss|fixtures/duplicates|redundant-hook-pure-config-twin.test.ts:11|redundant-hook-pure-config-twin.test.ts:20|redundant-hook",
+      "reason": "Once-per-suite hooks in different scopes may have test execution between them; the next engine does not claim deletion is safe across that boundary."
+    },
+    {
+      "id": "recall-miss|mixed-cross-file-and-redundant-hook|redundant-hook|unit.test.ts:27,unit.test.ts:32",
+      "reason": "The hook writes a property rather than a resolved lexical cell. The next engine has no property/setter effect proof and refuses that redundancy claim."
+    },
+    {
+      "id": "recall-miss|mixed-each-row-and-redundant-hook|redundant-hook|main.test.ts:17,main.test.ts:22",
+      "reason": "The hook writes a property rather than a resolved lexical cell. The next engine has no property/setter effect proof and refuses that redundancy claim."
+    },
+    {
+      "id": "recall-miss|mixed-name-and-redundant-hook|redundant-hook|main.test.ts:17,main.test.ts:22",
+      "reason": "The hook writes a property rather than a resolved lexical cell. The next engine has no property/setter effect proof and refuses that redundancy claim."
+    },
+    {
+      "id": "recall-miss|mixed-near-duplicate-and-redundant-hook|redundant-hook|main.test.ts:16,main.test.ts:21",
+      "reason": "The hook writes a property rather than a resolved lexical cell. The next engine has no property/setter effect proof and refuses that redundancy claim."
+    },
+    {
+      "id": "recall-miss|mixed-parameterization-and-redundant-hook|redundant-hook|main.test.ts:17,main.test.ts:22",
+      "reason": "The hook writes a property rather than a resolved lexical cell. The next engine has no property/setter effect proof and refuses that redundancy claim."
+    },
+    {
+      "id": "recall-miss|mixed-subsumed-and-redundant-hook|redundant-hook|main.test.ts:17,main.test.ts:22",
+      "reason": "The hook writes a property rather than a resolved lexical cell. The next engine has no property/setter effect proof and refuses that redundancy claim."
+    },
+    {
+      "id": "recall-miss|mixed-suite-and-redundant-hook|redundant-hook|billing.test.ts:21,billing.test.ts:26",
+      "reason": "The hook writes a property rather than a resolved lexical cell. The next engine has no property/setter effect proof and refuses that redundancy claim."
+    },
+    {
+      "id": "recall-miss|mixed-suite-and-redundant-hook|redundant-hook|billing.test.ts:37,billing.test.ts:42",
+      "reason": "The hook writes a property rather than a resolved lexical cell. The next engine has no property/setter effect proof and refuses that redundancy claim."
+    },
+    {
+      "id": "recall-miss|redundant-hook-after-all|redundant-hook|db.test.ts:9,db.test.ts:15",
+      "reason": "Once-per-suite hooks in different scopes may have test execution between them; the next engine does not claim deletion is safe across that boundary."
+    },
+    {
+      "id": "recall-miss|redundant-hook-before-all|redundant-hook|db.test.ts:19,db.test.ts:24",
+      "reason": "Once-per-suite hooks in different scopes may have test execution between them; the next engine does not claim deletion is safe across that boundary."
+    },
+    {
+      "id": "miss|fixtures/duplicates|redundant-hook-idempotent-event-twin.test.ts:14|redundant-hook-idempotent-event-twin.test.ts:23|redundant-hook",
+      "reason": "Framework reset calls require a proof that the utility methods remain stable and their returned object cannot escape. That property is not modeled by the next engine yet, so calls remain opaque."
+    },
+    {
+      "id": "miss|fixtures/duplicates|redundant-hook-same-scope-adjacent.test.ts:14|redundant-hook-same-scope-adjacent.test.ts:18|redundant-hook",
+      "reason": "Framework reset calls require a proof that the utility methods remain stable and their returned object cannot escape. That property is not modeled by the next engine yet, so calls remain opaque."
+    },
+    {
+      "id": "miss|fixtures/duplicates|redundant-hook-three-level-chain.test.ts:21|redundant-hook-three-level-chain.test.ts:27|redundant-hook",
+      "reason": "Framework reset calls require a proof that the utility methods remain stable and their returned object cannot escape. That property is not modeled by the next engine yet, so calls remain opaque."
+    },
+    {
+      "id": "miss|fixtures/duplicates|redundant-hook-three-level-chain.test.ts:21|redundant-hook-three-level-chain.test.ts:33|redundant-hook",
+      "reason": "Framework reset calls require a proof that the utility methods remain stable and their returned object cannot escape. That property is not modeled by the next engine yet, so calls remain opaque."
+    },
+    {
+      "id": "miss|fixtures/duplicates|redundant-hook-three-level-chain.test.ts:27|redundant-hook-three-level-chain.test.ts:33|redundant-hook",
+      "reason": "Framework reset calls require a proof that the utility methods remain stable and their returned object cannot escape. That property is not modeled by the next engine yet, so calls remain opaque."
+    },
+    {
+      "id": "recall-miss|mixed-duplicate-test-and-redundant-hook|redundant-hook|checkout.test.ts:18,checkout.test.ts:23",
+      "reason": "Framework reset calls require a proof that the utility methods remain stable and their returned object cannot escape. That property is not modeled by the next engine yet, so calls remain opaque."
+    },
+    {
+      "id": "recall-miss|redundant-hook-after-each|redundant-hook|db.test.ts:14,db.test.ts:20",
+      "reason": "Framework reset calls require a proof that the utility methods remain stable and their returned object cannot escape. That property is not modeled by the next engine yet, so calls remain opaque."
+    },
+    {
+      "id": "recall-miss|redundant-hook-globals-config|redundant-hook|db.test.ts:12,db.test.ts:18",
+      "reason": "Framework reset calls require a proof that the utility methods remain stable and their returned object cannot escape. That property is not modeled by the next engine yet, so calls remain opaque."
+    },
+    {
+      "id": "recall-miss|redundant-hook-non-adjacent|redundant-hook|db.test.ts:19,db.test.ts:26",
+      "reason": "Framework reset calls require a proof that the utility methods remain stable and their returned object cannot escape. That property is not modeled by the next engine yet, so calls remain opaque."
+    },
+    {
+      "id": "recall-miss|redundant-hook-positive|redundant-hook|db.test.ts:18,db.test.ts:24",
+      "reason": "Framework reset calls require a proof that the utility methods remain stable and their returned object cannot escape. That property is not modeled by the next engine yet, so calls remain opaque."
     }
   ]
 }

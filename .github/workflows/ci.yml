@@ -175,6 +175,7 @@ jobs:
       - run: node scripts/check/check-collection-oracle.mjs
       # Generated helpers against the next engine's hooks-only claim (docs/development.md).
       - run: node scripts/check/check-hooks-differential.mjs
+      - run: npm run check:hooks-runtime
       # The next engine's ported rules against the fixture headers (docs/development.md).
       - run: node scripts/check/check-next-duplicates.mjs
       # What the behavior trace claims about the runtime, against the pinned Vitest.

@@ -129,7 +129,7 @@ export function hookScope(paths) {
 /** The gates that run the analyzer over the owned corpora, with the binary they read. */
 const CORPUS_GATES = [
   ['cargo', 'build', '--release', '--locked'],
-  ...['check:corpus', 'check:recall', 'verify:titles', 'check:oracle', 'check:behavior-runtime', 'check:hooks-differential', 'check:next-duplicates', 'check:parameterization-runtime'].map(gate => ['npm', 'run', gate]),
+  ...['check:corpus', 'check:recall', 'verify:titles', 'check:oracle', 'check:behavior-runtime', 'check:hooks-runtime', 'check:hooks-differential', 'check:next-duplicates', 'check:parameterization-runtime'].map(gate => ['npm', 'run', gate]),
 ]
 
 /**

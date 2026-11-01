@@ -4,7 +4,9 @@
 //! key and a cross-file key, or excluded, carrying the [`Exclusion`] that says why: no test is
 //! dropped without one. Rules read this record and never the syntax.
 
+mod hooks;
 mod suites;
+pub use hooks::{Hook, Hooks};
 
 use crate::exclusions;
 use crate::framework::{Dialect, Registers};
@@ -149,6 +151,8 @@ pub struct SiteRecord {
 /// What the corpus holds for one file.
 #[derive(Clone, Debug, Default)]
 pub struct FileCorpus {
+    /// Hook declarations and distinct lifecycle chains, separate from executable tests.
+    pub hooks: Hooks,
     /// Its tests, in source order, rows in table order.
     pub tests: Vec<TestCase>,
     /// Comparable whole suites, separate from executable tests and exclusion counts.
@@ -756,6 +760,15 @@ pub fn file(
         (setting, source),
     );
     Ok(FileCorpus {
+        hooks: hooks::collect(
+            &parsed,
+            &found,
+            &structure,
+            &tests,
+            &mut normalizer,
+            setting.dialect,
+            source,
+        ),
         suites,
         tests,
         sites,
@@ -766,6 +779,8 @@ pub fn file(
 /// The next engine inside the shell's file loop: what it read, summed over the run.
 #[derive(Debug, Default)]
 pub struct Engine {
+    /// Hook declarations and chains per relative file.
+    pub hooks: Vec<(PathBuf, Hooks)>,
     run: Run,
     /// Tests read, rows counted one each.
     pub tests: usize,
@@ -903,6 +918,8 @@ impl Engine {
             .push((relative.to_path_buf(), std::mem::take(&mut corpus.tests)));
         self.suites
             .push((relative.to_path_buf(), std::mem::take(&mut corpus.suites)));
+        self.hooks
+            .push((relative.to_path_buf(), std::mem::take(&mut corpus.hooks)));
         self.tests += case_count;
         self.unresolved += unresolved;
         if unresolved > 0 && unresolved == case_count {
