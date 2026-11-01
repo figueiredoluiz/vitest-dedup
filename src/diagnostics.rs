@@ -141,8 +141,8 @@ fn write_exclusion_histogram(writer: &mut dyn Write, result: &AnalysisResult) ->
     if let Some(tally) = noted.first() {
         writeln!(
             writer,
-            "\nvitest-dedup: {} file(s) hold a test near-duplicate-test and \
-             parameterization-candidate could not compare; the other rules compared it.",
+            "\nvitest-dedup: {} file(s) hold a test with an incomplete trace; \
+             enabled trace-based rules cannot compare it.",
             tally.files
         )?;
     }
@@ -429,7 +429,7 @@ mod tests {
         mixed.exclusions.reasons.insert(0, noted.clone());
         let text = render(&mixed);
         assert!(
-            text.contains("7 file(s) hold a test near-duplicate-test and"),
+            text.contains("7 file(s) hold a test with an incomplete trace"),
             "{text}"
         );
         assert!(text.contains("40 file(s) were excluded"), "{text}");

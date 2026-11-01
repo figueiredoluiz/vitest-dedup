@@ -182,7 +182,7 @@ fn assert_listed(run: &Run, expected: &[Expect]) {
             assert_eq!(tests, 0);
             assert!(
                 run.stderr.contains(&format!(
-                    "{files} file(s) hold a test near-duplicate-test and"
+                    "{files} file(s) hold a test with an incomplete trace"
                 )),
                 "{}",
                 run.stderr
@@ -892,7 +892,8 @@ test('kept', () => { expect(1).toBe(1); });
         ]
     );
     assert!(
-        run.stderr.contains("the other rules do not run yet"),
+        run.stderr
+            .contains("near-duplicate-test, subsumed-test, redundant-hook"),
         "{}",
         run.stderr
     );

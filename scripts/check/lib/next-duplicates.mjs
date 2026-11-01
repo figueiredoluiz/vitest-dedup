@@ -20,7 +20,7 @@
 import { describeMatcher, findingMatches } from './recall-runner.mjs'
 
 /** The rules the next engine runs. */
-export const PORTED_RULES = new Set(['duplicate-test', 'duplicate-test-name', 'duplicate-each-row', 'duplicate-suite', 'parameterization-candidate', 'near-duplicate-test', 'redundant-hook', 'cross-file-duplicate'])
+export const PORTED_RULES = new Set(['duplicate-test', 'duplicate-test-name', 'duplicate-each-row', 'duplicate-suite', 'parameterization-candidate', 'near-duplicate-test', 'subsumed-test', 'redundant-hook', 'cross-file-duplicate'])
 
 /** The identity one participant is matched by, the way the spike evaluator matched: file:line. */
 function endpoint(participant) {

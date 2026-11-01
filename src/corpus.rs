@@ -121,8 +121,8 @@ pub struct TestCase {
     /// failure, options, unbound row cells, context and callback form — everything two
     /// near-duplicates must agree on before their events are compared at all.
     pub similarity_key: u64,
-    /// Equal for two tests of one file the subsumed rule may pair: context and callback form.
-    pub subsumption_key: u64,
+    /// Subsumption context, callback form and unresolved row inputs; absent for placeholder bodies.
+    pub subsumption_key: Option<u64>,
     /// Whether the callback's arrow and `function` forms act on the same object, and which was
     /// written when they do not.
     pub callback_form: normal::CallbackForm,
@@ -398,7 +398,7 @@ pub fn file(
         trace: Vec::new(),
         trace_complete: false,
         similarity_key: 0,
-        subsumption_key: 0,
+        subsumption_key: None,
         callback_form: normal::CallbackForm::Interchangeable,
         inert: false,
         exclusion,
@@ -691,7 +691,9 @@ pub fn file(
                 similarity_key: digest(&format!(
                     "{chain}{fails}\u{1}{options}\u{1}{unbound}\u{1}{context}\u{1}{form}"
                 )),
-                subsumption_key: digest(&format!("{context}\u{1}{form}")),
+                subsumption_key: (!(setting.dialect.placeholder)(&parsed.tree, traced_body)
+                    && (!table_site(site) || modifiers.rows.is_some()))
+                .then(|| digest(&format!("{chain}\u{1}{unbound}\u{1}{context}\u{1}{form}"))),
                 callback_form,
                 full_title: full_title.clone(),
                 name,
@@ -921,7 +923,7 @@ impl Engine {
         {
             reasons.push((
                 ExclusionReason::IncompleteTrace,
-                "a test's behavior was not read to the end, so near-duplicate-test and \
+                "a test's behavior was not read to the end, so near-duplicate-test, subsumed-test and \
                  parameterization-candidate do not compare it"
                     .to_owned(),
             ));
