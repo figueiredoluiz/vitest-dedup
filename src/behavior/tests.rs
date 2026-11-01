@@ -11,6 +11,155 @@ use crate::model::sha256_128;
 use crate::normal::CallbackForm;
 use std::collections::HashMap;
 
+/// Runtime-different owned pairs never supply equal complete traces; safe extraction still does.
+#[test]
+fn owned_trace_soundness_preserves_runtime_distinctions() {
+    let source = include_str!("../../fixtures/behavior-runtime/trace-soundness.test.ts");
+    let events = events(source, &[]);
+    assert_eq!(events.len(), 28);
+    for title in [
+        "branch eager",
+        "branch moved",
+        "class a",
+        "class b",
+        "class alias a",
+        "class alias b",
+        "tag a",
+        "tag b",
+        "spread a",
+        "spread b",
+        "if pass",
+        "if fail",
+        "try pass",
+        "try fail",
+        "flat one",
+        "flat two",
+    ] {
+        assert!(
+            !complete(&events, title),
+            "{title} must not certify a partial trace"
+        );
+    }
+    for (left, right) in [
+        ("closure eager", "closure moved"),
+        ("tdz eager", "tdz moved"),
+        ("call a", "call b"),
+        ("chai a", "chai b"),
+    ] {
+        assert_ne!(of(&events, left), of(&events, right), "{left}/{right}");
+    }
+    assert_eq!(of(&events, "positive a"), of(&events, "positive b"));
+}
+
+/// The enclosing statement participates in read safety for both substitution mechanisms.
+#[test]
+fn trace_substitutions_never_cross_a_control_or_closure_root() {
+    for statement in [
+        "if (flag) use(x)",
+        "for (;flag;) use(x)",
+        "for (const item of items) use(x)",
+        "for (const item in items) use(x)",
+        "while (flag) use(x)",
+        "do { use(x) } while (flag)",
+        "switch (flag) { case true: use(x) }",
+        "try { use(x) } catch {}",
+        "function later() { use(x) }",
+    ] {
+        for declaration in ["const x = make();", "const { x } = outside;"] {
+            let source = format!(
+                "const outside = {{ x: 1 }}; test('case', () => {{ {declaration} {statement} }});"
+            );
+            crate::testing::project(
+                &format!("import {{ test }} from 'vitest'; {source}"),
+                &[],
+                false,
+                |_, parsed, found, normalizer| {
+                    assert_eq!(found.sites.len(), 1);
+                    let callback = normalizer.callback(found.sites[0].node).unwrap();
+                    let flow = super::dataflow::analyze(parsed, callback.function.unwrap());
+                    assert!(flow.inline.is_empty(), "{source}");
+                    assert!(flow.member.is_empty(), "{source}");
+                },
+            );
+        }
+    }
+}
+
+/// A selector's whole value survives ordinary, optional, nested and fluent callee paths.
+#[test]
+fn computed_callee_keys_keep_identity() {
+    for (left, right) in [
+        ("handlers['a']()", "handlers['b']()"),
+        ("handlers[0]()", "handlers[1]()"),
+        ("handlers[a]()", "handlers[b]()"),
+        ("handlers['a']?.()", "handlers['b']?.()"),
+        ("handlers['a'].run()", "handlers['b'].run()"),
+        ("handlers['a']().run()", "handlers['b']().run()"),
+    ] {
+        let source = format!("const a = 'a'; const b = 'b'; test('a', () => {{ {left} }}); test('b', () => {{ {right} }});");
+        let events = events(&source, &[]);
+        assert_eq!(events.len(), 2);
+        assert_ne!(of(&events, "a"), of(&events, "b"), "{source}");
+    }
+}
+
+/// Atomic assertions and alias reads cannot hide an unprovable local class.
+#[test]
+fn unprovable_classes_refuse_all_local_read_routes() {
+    for body in [
+        "class C { [key]() {} } expect(new C()).toBeDefined()",
+        "class C { [key]() {} } use(C)",
+        "class C { [key]() {} } const D = C; expect(D).toBeDefined()",
+        "const C = class { [key]() {} }; expect(C).toBeDefined()",
+        "const C = (class { [key]() {} } as any); expect(C).toBeDefined()",
+        "expect(class { [key]() {} }).toBeDefined()",
+        "function unused() { class C { [key]() {} } }; expect(1).toBe(1)",
+    ] {
+        let events = events(&format!("test('case', () => {{ {body} }});"), &[]);
+        assert_eq!(events.len(), 1);
+        assert!(!complete(&events, "case"), "{body}");
+    }
+}
+
+/// Omitted runtime expressions and branch partitions cannot certify a complete trace.
+#[test]
+fn unmodeled_expression_and_branch_walks_are_incomplete() {
+    for body in [
+        "tag`a`",
+        "import('./x')",
+        "const a = [...values]",
+        "const a = { ...values }",
+        "function* gen() { yield 1 }",
+        "flag ? a() : b()",
+        "flag && a()",
+        "flag || a()",
+        "flag ?? a()",
+        "(tag`a` as unknown)",
+        "(flag ? a() : b()) satisfies unknown",
+        "switch (flag) { case true: a() }",
+    ] {
+        let events = events(
+            &format!("test('case', () => {{ {body}; expect(1).toBe(1) }});"),
+            &[],
+        );
+        assert_eq!(events.len(), 1);
+        assert!(!complete(&events, "case"), "{body}");
+    }
+}
+
+/// The omitted JSX, iterator, object-copy and import effects use the permanent runtime source.
+#[test]
+fn owned_expression_walks_refuse_partial_traces() {
+    let events = events(
+        include_str!("../../fixtures/behavior-runtime/trace-expressions.test.tsx"),
+        &[],
+    );
+    assert_eq!(events.len(), 10);
+    for (title, (_, complete, _)) in events {
+        assert!(!complete, "{title}");
+    }
+}
+
 /// The text events of every inline test callback of `main`, by title, in a project holding
 /// `files`, with the callback form beside them and whether the trace completed.
 fn events(
@@ -59,6 +208,15 @@ fn of<'a>(
 /// Whether the test titled `title` traced to completion.
 fn complete(events: &HashMap<String, (Vec<String>, bool, CallbackForm)>, title: &str) -> bool {
     events[title].1
+}
+
+/// Recorded events remain inspectable, but a partial trace must never reach a comparison.
+fn partial<'a>(
+    events: &'a HashMap<String, (Vec<String>, bool, CallbackForm)>,
+    title: &str,
+) -> &'a [String] {
+    assert!(!complete(events, title), "{title} must be incomplete");
+    &events[title].0
 }
 
 /// A call's arguments render into its event: an inlined local reads as its initializer, a
@@ -383,7 +541,10 @@ fn a_single_use_local_inlines_at_its_read() {
     assert_eq!(of(&events, "inlined"), of(&events, "written-out"));
     assert_ne!(of(&events, "written-out"), of(&events, "two-reads"));
     assert_ne!(of(&events, "written-out"), of(&events, "effect-between"));
-    assert_ne!(of(&events, "written-out"), of(&events, "read-under-branch"));
+    assert_ne!(
+        of(&events, "written-out"),
+        partial(&events, "read-under-branch")
+    );
 }
 
 /// A destructured property of an outside object reads as the member access: equal to the body
@@ -534,7 +695,7 @@ fn a_read_under_a_condition_is_never_inlined() {
     "#,
         &[],
     );
-    assert_ne!(of(&events, "extracted"), of(&events, "written"));
+    assert_ne!(partial(&events, "extracted"), partial(&events, "written"));
 }
 
 /// An unbraced control-flow body is a statement: its calls are behavior, and the braced spelling
@@ -549,8 +710,11 @@ fn an_unbraced_body_keeps_its_behavior() {
     "#,
         &[],
     );
-    assert_ne!(of(&events, "unbraced-a"), of(&events, "unbraced-b"));
-    assert_eq!(of(&events, "unbraced-a"), of(&events, "braced-a"));
+    assert_ne!(
+        partial(&events, "unbraced-a"),
+        partial(&events, "unbraced-b")
+    );
+    assert_eq!(partial(&events, "unbraced-a"), partial(&events, "braced-a"));
 }
 
 /// A constructor event keeps its ordered arguments: two constructions over different literals
@@ -593,7 +757,7 @@ fn a_spread_blocks_inlining_across_it() {
     "#,
         &[],
     );
-    assert_ne!(of(&events, "before"), of(&events, "after"));
+    assert_ne!(partial(&events, "before"), partial(&events, "after"));
 }
 
 /// A computed terminal link reads a value, not an assertion name: it is no chain event, so the
@@ -844,16 +1008,20 @@ fn statement_families_all_record() {
         &[],
     );
     assert!(of(&events, "loops").iter().any(|event| event == "loop"));
-    assert!(of(&events, "try").iter().any(|event| event == "try"));
-    assert!(of(&events, "try").iter().any(|event| event == "call:g:h"));
-    assert!(of(&events, "try").iter().any(|event| event == "call:g:i"));
-    assert!(of(&events, "switch")
-        .iter()
-        .any(|event| event == "call:g:g"));
-    assert!(of(&events, "switch")
+    assert!(partial(&events, "try").iter().any(|event| event == "try"));
+    assert!(partial(&events, "try")
         .iter()
         .any(|event| event == "call:g:h"));
-    let throw_return = of(&events, "throw-return");
+    assert!(partial(&events, "try")
+        .iter()
+        .any(|event| event == "call:g:i"));
+    assert!(partial(&events, "switch")
+        .iter()
+        .any(|event| event == "call:g:g"));
+    assert!(partial(&events, "switch")
+        .iter()
+        .any(|event| event == "call:g:h"));
+    let throw_return = partial(&events, "throw-return");
     assert!(throw_return.iter().any(|event| event == "throw"));
     assert!(throw_return.iter().any(|event| event == "return"));
 }
@@ -880,11 +1048,11 @@ fn a_guarded_function_declaration_walks_deferred() {
         &[],
     );
     assert!(
-        of(&events, "guarded")
+        partial(&events, "guarded")
             .iter()
             .any(|event| event == "deferred-call:g:g"),
         "the declaration's body is deferred: {:?}",
-        of(&events, "guarded")
+        partial(&events, "guarded")
     );
 }
 
@@ -918,7 +1086,7 @@ fn deferred_reaches_the_statement_families() {
     "#,
         &[],
     );
-    let evts = of(&events, "nested");
+    let evts = partial(&events, "nested");
     assert!(evts.iter().any(|event| event == "deferred-loop"));
     assert!(evts.iter().any(|event| event == "deferred-try"));
     assert!(evts.iter().any(|event| event == "deferred-call:g:h"));
@@ -989,7 +1157,7 @@ fn expression_families_all_record() {
         chains.iter().any(|event| event.starts_with("call:g:g")),
         "the optional call spells its dotted path: {chains:?}"
     );
-    let operators = of(&events, "operators");
+    let operators = partial(&events, "operators");
     assert!(operators.iter().any(|event| event == "call:g:h"));
     assert!(operators.iter().any(|event| event == "call:g:i"));
     assert!(operators.iter().any(|event| event == "call:g:g"));
@@ -1019,8 +1187,8 @@ fn callee_paths_all_spell_their_path() {
     );
     let computed = of(&events, "computed-callee");
     assert!(
-        computed.iter().any(|event| event == "call:g:obj[]"),
-        "a computed callee spells the empty-key path: {computed:?}"
+        computed.iter().any(|event| event == "call:g:obj[g:k]"),
+        "a computed callee retains its key: {computed:?}"
     );
     let fluent = of(&events, "fluent-types");
     assert!(
@@ -1141,7 +1309,7 @@ fn unrewritable_destructuring_forms_stay_named() {
             .any(|event| event.starts_with("call:g:use args=")),
         "the array pattern's read stays an ordinary event: {array_pattern:?}"
     );
-    // Every body traces to completion: an unsupported shape is not an abstention.
+    // Unsupported substitutions keep their names; the catch partition is incomplete.
     for title in [
         "array-pattern",
         "default",
@@ -1150,7 +1318,7 @@ fn unrewritable_destructuring_forms_stay_named() {
         "for-of-head",
         "catch-param",
     ] {
-        assert!(complete(&events, title), "{title} traces whole");
+        assert_eq!(complete(&events, title), title != "catch-param", "{title}");
     }
 }
 
@@ -1180,12 +1348,15 @@ fn effect_forms_block_inlining() {
         "wrapped",
         "import-call",
     ] {
-        let evts = of(&events, title);
+        let evts = if ["spread-prop", "conditional", "import-call"].contains(&title) {
+            partial(&events, title)
+        } else {
+            of(&events, title)
+        };
         assert!(
             evts.iter().any(|event| event == "call:g:f"),
             "{title} keeps its initializer's event in place: {evts:?}"
         );
-        assert!(complete(&events, title), "{title} traces whole");
     }
 }
 
@@ -1210,7 +1381,11 @@ fn remaining_class_and_callee_paths_record() {
         "dynamic-import",
         "tagged",
     ] {
-        assert!(complete(&events, title), "{title} traces whole");
+        assert_eq!(
+            complete(&events, title),
+            !["dynamic-import", "tagged"].contains(&title),
+            "{title}"
+        );
     }
     let accessor = of(&events, "accessor");
     assert!(
@@ -1231,10 +1406,10 @@ fn remaining_class_and_callee_paths_record() {
         !shadowed.iter().any(|event| event.starts_with("assert:")),
         "a body-local shadowing the entry is not the API: {shadowed:?}"
     );
-    let tagged = of(&events, "tagged");
+    let tagged = partial(&events, "tagged");
     assert!(
         tagged.is_empty(),
-        "a tagged template records no event: {tagged:?}"
+        "a tagged template records no event and must refuse comparison: {tagged:?}"
     );
 }
 
@@ -1297,7 +1472,11 @@ fn remaining_statement_shapes_record() {
         "decl-for",
         "empties",
     ] {
-        assert!(complete(&events, title), "{title} traces whole");
+        assert_eq!(
+            complete(&events, title),
+            !["finally-only", "bare-return"].contains(&title),
+            "{title}"
+        );
     }
     assert!(
         of(&events, "labeled").iter().any(|event| event == "loop"),
@@ -1308,7 +1487,7 @@ fn remaining_statement_shapes_record() {
         decl_for.iter().any(|event| event == "call:g:f"),
         "the declaration head's initializer is walked: {decl_for:?}"
     );
-    assert!(of(&events, "finally-only")
+    assert!(partial(&events, "finally-only")
         .iter()
         .any(|event| event == "call:g:h"));
 }
@@ -1427,7 +1606,7 @@ fn exotic_destructuring_patterns_record() {
         "non-const",
         "multi-declarator",
     ] {
-        assert!(complete(&events, title), "{title} traces whole");
+        assert_eq!(complete(&events, title), title != "unsafe-read", "{title}");
     }
 }
 
@@ -1473,9 +1652,13 @@ fn edge_callee_and_chain_shapes_trace() {
         &[],
     );
     for title in ["guarded-function", "chain-in-callee", "nonnull-in-chain"] {
-        assert!(complete(&events, title), "{title} traces whole");
+        assert_eq!(
+            complete(&events, title),
+            title != "guarded-function",
+            "{title}"
+        );
     }
-    let guarded = of(&events, "guarded-function");
+    let guarded = partial(&events, "guarded-function");
     assert!(
         guarded.iter().any(|event| event == "deferred-call:g:g"),
         "the inner function's body is deferred behavior: {guarded:?}"
@@ -1494,10 +1677,10 @@ fn binary_and_logical_operands_are_walked() {
     "#,
         &[],
     );
-    assert!(of(&events, "binary")
+    assert!(partial(&events, "binary")
         .iter()
         .any(|event| event.starts_with("call:g:g")));
-    assert!(of(&events, "logical")
+    assert!(partial(&events, "logical")
         .iter()
         .any(|event| event.starts_with("call:g:g")));
 }
@@ -1645,6 +1828,10 @@ fn inert_gap_forms_do_not_block_inlining() {
         "inert-member",
     ] {
         let written = format!("{title}-written");
+        if title == "inert-conditional" {
+            assert_eq!(partial(&events, title), partial(&events, &written));
+            continue;
+        }
         assert_eq!(
             of(&events, title),
             of(&events, &written),

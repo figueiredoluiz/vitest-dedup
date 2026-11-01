@@ -90,6 +90,9 @@ This directory contains a comprehensive fixture corpus of small Vitest test file
 - **modifiers/** - Skip, only, todo, fails, concurrent, skipIf, runIf, sequential, shuffle chains (11 files)
 - **each/** - .each and .for table forms, title interpolation, describe.each (9 files)
 - **hooks/** - beforeAll/beforeEach/afterEach/afterAll, nesting, cleanup, onTestFinished/Failed (6 files)
+- **behavior-runtime/** - Owned runtime outcomes for trace normalization and conservative refusals.
+  `check:behavior-runtime` runs every test here against `expected.json`; trace and corpus tests
+  consume the same sources to retain positive findings and refuse incomplete comparisons.
 - **fixtures/** - test.extend, dependency chains, scopes, override, scoped hooks (8 files)
 - **resolution/** - Named/renamed/namespace imports, globals config, shadowing (8 files)
 - **insource/** - import.meta.vitest patterns, includeSource globs (3 files + 1 config)

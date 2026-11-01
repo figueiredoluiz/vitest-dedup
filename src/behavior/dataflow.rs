@@ -302,7 +302,8 @@ fn try_register_inline(
 /// for a read past those statements would evaluate it after their declarations run, turning a
 /// crash into a run or the reverse.
 fn reads_declared_in(tree: &Tree, scopes: &Scopes, within: NodeId, gap: &[NodeId]) -> bool {
-    tree.descendants(within)
+    std::iter::once(within)
+        .chain(tree.descendants(within))
         .filter(|node| tree.kind(*node) == "Identifier")
         .filter_map(|node| scopes.symbol_at(tree.span(node).start))
         .any(|symbol| {
@@ -441,7 +442,7 @@ fn directly_in(tree: &Tree, reference: Span, statement: NodeId) -> bool {
         };
         current = parent;
     }
-    true
+    !is_unsafe_nesting(tree.kind(statement))
 }
 
 /// Whether this node kind sits between a read and its statement's direct execution.
