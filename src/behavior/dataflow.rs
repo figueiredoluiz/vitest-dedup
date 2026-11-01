@@ -412,17 +412,23 @@ fn an_effect_precedes(tree: &Tree, statement: NodeId, read: Span) -> bool {
 /// The expression kinds that are themselves an evaluation, not a container of one: everything
 /// else the effect scan reaches through.
 fn is_effect_leaf(tree: &Tree, node: NodeId) -> bool {
-    matches!(
-        tree.kind(node),
-        "CallExpression"
-            | "NewExpression"
-            | "AwaitExpression"
-            | "YieldExpression"
-            | "UpdateExpression"
-            | "AssignmentExpression"
-            | "ImportExpression"
-            | "TaggedTemplateExpression"
-    )
+    is_deletion(tree, node)
+        || matches!(
+            tree.kind(node),
+            "CallExpression"
+                | "NewExpression"
+                | "AwaitExpression"
+                | "YieldExpression"
+                | "UpdateExpression"
+                | "AssignmentExpression"
+                | "ImportExpression"
+                | "TaggedTemplateExpression"
+        )
+}
+
+/// Whether `node` is a `delete`: a write, whatever operand it spells.
+pub(super) fn is_deletion(tree: &Tree, node: NodeId) -> bool {
+    tree.kind(node) == "UnaryExpression" && tree.text(node, "operator") == Some("delete")
 }
 
 /// Whether `reference`'s walk from its identifier up to `statement` crosses no branch, loop,
@@ -570,9 +576,12 @@ pub(super) fn expression_has_effect(tree: &Tree, expression: NodeId, depth: u32)
             tree.child(expression, key)
                 .is_some_and(|child| expression_has_effect(tree, child, depth + 1))
         }),
-        "UnaryExpression" => tree
-            .child(expression, "argument")
-            .is_some_and(|argument| expression_has_effect(tree, argument, depth + 1)),
+        "UnaryExpression" => {
+            is_deletion(tree, expression)
+                || tree
+                    .child(expression, "argument")
+                    .is_some_and(|argument| expression_has_effect(tree, argument, depth + 1))
+        }
         "ConditionalExpression" => ["test", "consequent", "alternate"].into_iter().any(|key| {
             tree.child(expression, key)
                 .is_some_and(|child| expression_has_effect(tree, child, depth + 1))

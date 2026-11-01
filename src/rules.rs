@@ -15,6 +15,7 @@ use std::path::{Path, PathBuf};
 
 mod hooks;
 mod names;
+mod near;
 mod parameters;
 mod rows;
 mod suites;
@@ -177,7 +178,9 @@ fn run_all(
 
     budget_exhausted |= !names::run(files, config, &mut budget, &mut findings);
     budget_exhausted |= !rows::run(files, config, &mut budget, &mut findings);
-    budget_exhausted |= !parameters::run(files, config, &mut budget, &mut findings);
+    let (parameterized, reported) = parameters::run(files, config, &mut budget, &mut findings);
+    budget_exhausted |= !parameterized;
+    budget_exhausted |= !near::run(files, config, &reported, &mut budget, &mut findings);
 
     let cross_file_severity = config.severity(Rule::CrossFileDuplicate);
     if cross_file_severity != Severity::Off {
@@ -242,6 +245,16 @@ fn one_per_declaration(group: &[usize], entries: &[Entry<'_>]) -> Vec<usize> {
         .collect()
 }
 
+/// Keeps at most one member per exact body: equal bodies are `duplicate-test`'s claim.
+fn one_per_body(group: &[usize], entries: &[Entry<'_>]) -> Vec<usize> {
+    let mut bodies = BTreeSet::new();
+    group
+        .iter()
+        .copied()
+        .filter(|&index| bodies.insert(entries[index].case.body))
+        .collect()
+}
+
 /// Keeps at most one member per file: a relationship inside one file is `duplicate-test`'s claim,
 /// whether or not that rule is enabled.
 fn one_per_file(group: &[usize], entries: &[Entry<'_>]) -> Vec<usize> {
@@ -284,6 +297,30 @@ fn emit(
     budget: &mut PairBudget,
     findings: &mut Vec<Finding>,
 ) -> bool {
+    emit_where(
+        rule,
+        severity,
+        entries,
+        groups,
+        message,
+        |_| true,
+        budget,
+        findings,
+    )
+}
+
+/// [`emit`], for only the claims `keep` accepts.
+#[allow(clippy::too_many_arguments)]
+fn emit_where(
+    rule: Rule,
+    severity: Severity,
+    entries: &[Entry<'_>],
+    groups: Vec<Vec<usize>>,
+    message: fn(&[Entry<'_>]) -> String,
+    keep: impl Fn(&[Entry<'_>]) -> bool,
+    budget: &mut PairBudget,
+    findings: &mut Vec<Finding>,
+) -> bool {
     let mut claimed = BTreeSet::new();
     for group in &groups {
         match group_outcome(group) {
@@ -291,6 +328,7 @@ fn emit(
                 let pairs: Vec<[Entry; 2]> = pairs
                     .into_iter()
                     .map(|(left, right)| [entries[left], entries[right]])
+                    .filter(|members| keep(members))
                     .filter(|members| {
                         claimed.insert((declarations(rule, members), name_claim(rule, members)))
                     })
@@ -304,7 +342,9 @@ fn emit(
             }
             GroupOutcome::Cluster(members) => {
                 let members: Vec<Entry> = members.iter().map(|&index| entries[index]).collect();
-                if !claimed.insert((declarations(rule, &members), name_claim(rule, &members))) {
+                if !keep(&members)
+                    || !claimed.insert((declarations(rule, &members), name_claim(rule, &members)))
+                {
                     continue;
                 }
                 if !budget.charge((members.len() - 1) as u64) {

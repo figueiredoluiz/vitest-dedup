@@ -813,6 +813,35 @@ fn the_engine_lists_blind_files_most_tests_first() {
     );
 }
 
+/// An incomplete trace is listed behind any real cause, and excludes no test from the run.
+#[test]
+fn an_incomplete_trace_is_listed_last_and_excludes_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let setting = Setting {
+        dialect: &DIALECT,
+        globals: false,
+        root: dir.path(),
+    };
+    let source = "import { test, expect } from 'vitest';\n\
+                  test('t', () => { if (x()) { expect(1).toBe(1); } });\n";
+    let path = dir.path().join("a.test.ts");
+    let read = |further| {
+        let mut engine = Engine::default();
+        let (entry, partial) =
+            engine.read(&path, "a.test.ts".as_ref(), source, setting, false, further);
+        assert!(!partial);
+        assert_eq!(engine.unresolved, 0);
+        entry.unwrap()
+    };
+    let alone = read(Vec::new());
+    assert_eq!(alone.reason, ExclusionReason::IncompleteTrace);
+    assert_eq!(alone.tests_excluded, 0);
+    let real = (ExclusionReason::GlobalsUndetermined, "unknown".to_owned());
+    let behind = read(vec![real]);
+    assert_eq!(behind.reason, ExclusionReason::GlobalsUndetermined);
+    assert_eq!(behind.other_reasons, [ExclusionReason::IncompleteTrace]);
+}
+
 /// A recovered panic excludes its file and drops the run's caches, which it may have left
 /// half-written; a thread that could not start excludes its file and keeps them.
 #[test]

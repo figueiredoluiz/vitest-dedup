@@ -16,8 +16,9 @@ use std::collections::HashMap;
 fn owned_trace_soundness_preserves_runtime_distinctions() {
     let source = include_str!("../../fixtures/behavior-runtime/trace-soundness.test.ts");
     let events = events(source, &[]);
-    assert_eq!(events.len(), 28);
+    assert_eq!(events.len(), 32);
     for title in [
+        "using pass",
         "branch eager",
         "branch moved",
         "class a",
@@ -45,6 +46,7 @@ fn owned_trace_soundness_preserves_runtime_distinctions() {
         ("tdz eager", "tdz moved"),
         ("call a", "call b"),
         ("chai a", "chai b"),
+        ("delete pass", "delete fail"),
     ] {
         assert_ne!(of(&events, left), of(&events, right), "{left}/{right}");
     }
@@ -2132,4 +2134,72 @@ fn a_private_source_keeps_its_spelling_out_of_the_tag() {
         )
     };
     assert!(traces_alike(&body("a"), &body("b")));
+}
+
+/// A deletion is behavior: dropping it would trace a test that deletes like one that does not.
+#[test]
+fn a_deletion_is_an_event() {
+    let body = |statement: &str| format!("const o = {{ a: 1, b: 2 }}; {statement} use(o); use(o);");
+    for statement in [
+        "delete o.a;",
+        "void delete o.a;",
+        "(delete o.a);",
+        "delete o?.a;",
+    ] {
+        assert!(!traces_alike(&body(""), &body(statement)), "{statement}");
+    }
+    assert!(!traces_alike(&body("delete o.a;"), &body("delete o.b;")));
+}
+
+/// A `using` disposes when its scope ends, which the trace does not model.
+#[test]
+fn a_using_declaration_leaves_the_trace_incomplete() {
+    for form in ["using", "await using"] {
+        let events = events(
+            &format!("test('t', async () => {{ {form} r = first; use(r); use(r); }});"),
+            &[],
+        );
+        assert!(!complete(&events, "t"), "{form}");
+    }
+    let events = events(
+        "test('t', () => { const r = first; use(r); use(r); });",
+        &[],
+    );
+    assert!(complete(&events, "t"));
+}
+
+/// A deletion is a write, so a read must not move across it, whichever way it would move.
+#[test]
+fn a_read_does_not_move_across_a_deletion() {
+    assert!(!traces_alike(
+        "const t = make(); const v = t.value; delete t.value; use(v); use(t);",
+        "const t = make(); delete t.value; const v = t.value; use(v); use(t);"
+    ));
+    assert!(!traces_alike(
+        "const t = make(); const v = t.value; consume(delete t.value, v); use(t);",
+        "const t = make(); consume(delete t.value, t.value); use(t);"
+    ));
+    let events = events(
+        r#"
+        const shared = {};
+        test('before', () => { const { value } = shared; delete shared.value; use(value); });
+        test('after', () => { delete shared.value; const { value } = shared; use(value); });
+    "#,
+        &[],
+    );
+    assert_ne!(of(&events, "before"), of(&events, "after"));
+}
+
+/// A decorator runs when its class is defined, which no event records.
+#[test]
+fn a_decorated_class_leaves_the_trace_incomplete() {
+    for class in ["@one class C {}", "class C { @one m() {} }"] {
+        let events = events(
+            &format!("test('t', () => {{ {class} use(1); use(2); }});"),
+            &[],
+        );
+        assert!(!complete(&events, "t"), "{class}");
+    }
+    let events = events("test('t', () => { class C {} use(1); use(2); });", &[]);
+    assert!(complete(&events, "t"));
 }

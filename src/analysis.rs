@@ -570,7 +570,7 @@ const MIN_BEHAVIOR_EVENTS_FOR_PARAMETERIZATION: usize = 1;
 /// stays at 1 because that rule keys on `structural` (shape), where a single assertion event is
 /// already the whole comparable shape; this rule keys on the behavior multiset itself, where a
 /// reordering claim needs at least two elements to reorder.
-const MIN_BEHAVIOR_EVENTS_FOR_NEAR_DUPLICATE: usize = 2;
+pub(crate) const MIN_BEHAVIOR_EVENTS_FOR_NEAR_DUPLICATE: usize = 2;
 
 /// Runs every enabled duplication rule over `tests` and returns a fully sorted, deterministic
 /// report.
@@ -2467,19 +2467,22 @@ fn near_duplicate_test_message(members: &[&TestCase]) -> String {
             .iter()
             .any(|member| member.body.behavior.events() != first.body.behavior.events())
     });
+    near_duplicate_text(members.len(), reordered)
+}
+
+/// The `near-duplicate-test` claim over `count` tests, whichever engine found them.
+pub(crate) fn near_duplicate_text(count: usize, reordered: bool) -> String {
     if reordered {
         format!(
-            "{} tests execute the same behavior events with at least one different ordering under \
-             an equivalent context; if the reordered statements are independent this may be \
-             redundant coverage, but {NEAR_DUPLICATE_REMEDY}",
-            members.len()
+            "{count} tests execute the same behavior events with at least one different ordering \
+             under an equivalent context; if the reordered statements are independent this may be \
+             redundant coverage, but {NEAR_DUPLICATE_REMEDY}"
         )
     } else {
         format!(
-            "{} tests execute the same behavior events in the same order under an equivalent \
+            "{count} tests execute the same behavior events in the same order under an equivalent \
              context, but their normalized bodies differ; a supported normalization may explain \
-             the similarity, but {NEAR_DUPLICATE_REMEDY}",
-            members.len()
+             the similarity, but {NEAR_DUPLICATE_REMEDY}"
         )
     }
 }

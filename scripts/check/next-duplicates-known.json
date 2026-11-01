@@ -799,6 +799,18 @@
     {
       "id": "recall-miss|redundant-hook-positive|redundant-hook|db.test.ts:18,db.test.ts:24",
       "reason": "Framework reset calls require a proof that the utility methods remain stable and their returned object cannot escape. That property is not modeled by the next engine yet, so calls remain opaque."
+    },
+    {
+      "id": "miss|fixtures/duplicates|behavior-depth-truncation.test.ts:41|behavior-depth-truncation.test.ts:49|near-duplicate-test",
+      "reason": "A branch leaves the trace incomplete until branch partitions are modeled, so the next engine refuses this pair. The default engine compares the flattened branch."
+    },
+    {
+      "id": "recall-miss|near-duplicate-test-each-rows|near-duplicate-test|seeds 3 users then configures,configures then seeds three users",
+      "reason": "The pair is present at the same locations, but next reports the unrendered `%i` title of a table row. This is the held title-display parity difference, not a missing comparison."
+    },
+    {
+      "id": "recall-extra|near-duplicate-test-each-rows|near-duplicate-test|seeding.test.ts:19,seeding.test.ts:25",
+      "reason": "The pair is present at the same locations, but next reports the unrendered `%i` title of a table row. This is the held title-display parity difference, not a missing comparison."
     }
   ]
 }

@@ -86,7 +86,8 @@ alone. Past the cap the files with the fewest excluded tests are left out of the
 `exclusions.omitted`; the summary totals always count every file.
 
 - `json`: `excludedFiles`, sorted by path. `jsonl`: one `excluded-file` record per file, after the
-  findings and before the summary; a run that excluded nothing writes none.
+  findings and before the summary; a run that excluded nothing writes none, apart from files listed
+  only under `incomplete-trace`, whose `testsExcluded` is `0`.
 - Each entry has `path`, `reason`, `otherReasons`, `detail` (the cause; for a refused helper, the sentence the terminal prints),
   `testsExcluded`, `testsTotal` and `everyTestExcluded`. `reason` is the first reason recorded for
   the file; `otherReasons` holds the rest in the order of the table below. An import that left the
@@ -123,6 +124,7 @@ alone. Past the cap the files with the fewest excluded tests are left out of the
 | `named-callback` | A test's callback is passed by name rather than written inline; the analyzer does not read it. |
 | `unreadable-callback` | A spread argument may hide the callback a test runs. |
 | `unsupported-benchmark` | A benchmark is counted but not compared. |
+| `incomplete-trace` | A test holds a branch or a shape the behavior trace does not model, so `near-duplicate-test` and `parameterization-candidate` leave it out. The other rules still compare it, and the run stays complete. |
 | `registered-elsewhere` | A wrapper call, an import of a module that registers while it loads, or a registration function read as a value registers tests the file does not spell. One test is counted per such call, import or read. A call of a helper found to register only hooks is not counted: it registers no test, and its hooks are part of the context of the tests around it. |
 | `unsupported-statement` | A statement form the walker does not enter, such as `with`, may hide declarations. |
 | `parse-error` | The parser reported errors. |

@@ -5,29 +5,52 @@ use crate::config::Config;
 use crate::model::{Finding, Rule, Severity};
 use crate::pairs::PairBudget;
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::Path;
+
+/// One declaration of a group, under the shape that grouped it.
+pub(super) type Declaration<'a> = (&'a Path, u32, u64);
+
+/// The declarations of each group this rule reported.
+pub(super) type Reported<'a> = Vec<BTreeSet<Declaration<'a>>>;
+
+/// The declaration `entry` stands for, when it has a shape.
+pub(super) fn declaration<'a>(entry: &Entry<'a>) -> Option<Declaration<'a>> {
+    let key = entry.case.parameterization_key?;
+    Some((entry.path, entry.case.span.start_byte, key))
+}
 
 /// Groups eligible shapes within one file using all rows to select distinct representatives.
-pub(super) fn run(
-    files: &Files,
+/// Returns whether the budget lasted, and the groups reported.
+pub(super) fn run<'a>(
+    files: &'a Files,
     config: &Config,
     budget: &mut PairBudget,
     findings: &mut Vec<Finding>,
-) -> bool {
+) -> (bool, Reported<'a>) {
     let severity = config.severity(Rule::ParameterizationCandidate);
     if severity == Severity::Off {
-        return true;
+        return (true, Vec::new());
     }
     let (entries, groups) = keyed(files, |entry| {
         let case = entry.case;
         case.exclusion.is_none().then_some(())?;
         Some((entry.path, case.parameterization_key?))
     });
-    let groups = groups
+    let groups: Vec<Vec<usize>> = groups
         .iter()
         .map(|group| representatives(group, &entries))
         .filter(|group| group.len() >= 2)
         .collect();
-    emit(
+    let reported = groups
+        .iter()
+        .map(|group| {
+            group
+                .iter()
+                .filter_map(|&index| declaration(&entries[index]))
+                .collect()
+        })
+        .collect();
+    let finished = emit(
         Rule::ParameterizationCandidate,
         severity,
         &entries,
@@ -35,7 +58,8 @@ pub(super) fn run(
         message,
         budget,
         findings,
-    )
+    );
+    (finished, reported)
 }
 
 /// Covers bodies in stable content order, then reports representatives in source order.

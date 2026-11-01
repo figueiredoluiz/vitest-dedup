@@ -33,3 +33,31 @@ test('literal one', () => { expect(10).toBe(10) })
 test('literal two', () => { expect(20).toBe(20) })
 test('flat one', () => { if (false) expect(10).toBe(20) })
 test('flat two', () => { if (false) expect(10).toBe(20) })
+
+test('delete pass', () => {
+  const target: { value?: number } = { value: 1 }
+  delete target.value
+  expect(target).toBeDefined()
+  expect(target.value).toBeUndefined()
+})
+test('delete fail', () => {
+  const target: { value?: number } = { value: 1 }
+  expect(target).toBeDefined()
+  expect(target.value).toBeUndefined()
+})
+test('using pass', () => {
+  const log: string[] = []
+  {
+    using resource = { [Symbol.dispose]: () => { log.push('disposed') } }
+    expect(resource).toBeDefined()
+  }
+  expect(log).toEqual(['disposed'])
+})
+test('using fail', () => {
+  const log: string[] = []
+  {
+    const resource = { [Symbol.dispose]: () => { log.push('disposed') } }
+    expect(resource).toBeDefined()
+  }
+  expect(log).toEqual(['disposed'])
+})
