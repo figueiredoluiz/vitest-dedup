@@ -228,7 +228,7 @@ fn a_group_past_the_spanning_limit_is_one_cluster() {
 fn inert_participants_are_marked_and_named() {
     let mut skipped = case(5, 100, 1, 1);
     skipped.inert = true;
-    skipped.full_title = Some("outer > t5".to_owned());
+    skipped.name = Some(vec!["outer".to_owned(), "t5".to_owned()]);
     let files = [file("a.test.ts", vec![skipped, case(9, 200, 1, 1)])];
     let outcome = run(&files, &config_with(&[]));
     assert_eq!(outcome.findings[0].inert, vec![true, false]);
@@ -241,12 +241,24 @@ fn inert_participants_are_marked_and_named() {
     );
 }
 
+/// A title that could not be rendered is reported as spelled.
+#[test]
+fn an_unrendered_title_is_reported_as_spelled() {
+    let mut unrendered = case(5, 100, 1, 1);
+    unrendered.full_title = Some("t %O".to_owned());
+    unrendered.name = None;
+    let files = [file("a.test.ts", vec![unrendered, case(9, 200, 1, 1)])];
+    let outcome = run(&files, &config_with(&[]));
+    assert_eq!(outcome.findings[0].titles, vec!["t %O", "t9"]);
+}
+
 /// A case the source gives no full title is named by where it is, never by an invented title, in
 /// the titles and in the message that calls out an inert participant.
 #[test]
 fn a_participant_without_a_spelled_title_is_named_by_its_line() {
     let mut dynamic = case(5, 100, 1, 1);
     dynamic.full_title = None;
+    dynamic.name = None;
     dynamic.inert = true;
     let files = [file("a.test.ts", vec![dynamic, case(9, 200, 1, 1)])];
     let outcome = run(&files, &config_with(&[]));

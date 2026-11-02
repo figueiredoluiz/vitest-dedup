@@ -31,6 +31,8 @@ pub struct Modifiers {
     pub fails: bool,
     /// The rows of a table the chain carries, when the file spells it out.
     pub rows: Option<Vec<Row>>,
+    /// Whether those rows reach the callback whole.
+    pub whole_rows: bool,
     /// Whether the chain keeps the test from running (`skip`, `todo`), the way a report marks a
     /// participant inert.
     pub inert: bool,
@@ -112,15 +114,18 @@ impl Normalizer<'_> {
                                 .and_then(|property| tree.text(property, "name"))
                                 .and_then(|name| dialect.chain_member(name));
                             match member {
-                                Some(Chain::Table(rows)) => self.table_rows(*table, rows),
+                                Some(Chain::Table(form)) => self
+                                    .table_rows(*table, form)
+                                    .map(|rows| (rows, form == TableRows::Whole)),
                                 _ => None,
                             }
                         }
                         _ => None,
                     };
                     match table {
-                        Some(rows) => {
+                        Some((rows, whole_rows)) => {
                             modifiers.rows = Some(rows);
+                            modifiers.whole_rows = whole_rows;
                             steps.push("(rows)".to_owned());
                             table_at = Some(steps.len());
                         }

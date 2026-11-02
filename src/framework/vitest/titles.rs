@@ -2,14 +2,21 @@
 
 use serde_json::{Map, Value};
 
-/// Renders scalar printf and named fields without interpreting unknown cells as undefined.
-/// Composite inspection, dotted fields and percent escaping are deliberately refused.
+/// Renders what Vitest's `formatTitle` renders for scalar items, or nothing: unknown cells are
+/// never undefined, and composite inspection, dotted fields and percent escaping are refused.
 pub(super) fn render(
     pattern: &str,
     arguments: &[Option<Value>],
     fields: Option<&Map<String, Value>>,
     index: usize,
 ) -> Option<String> {
+    if pattern.contains("%%") {
+        return None;
+    }
+    // Substituted first, so these can spell a `$` key.
+    let pattern = pattern
+        .replace("%#", &index.to_string())
+        .replace("%$", &(index + 1).to_string());
     let chars: Vec<char> = pattern.chars().collect();
     let mut text = String::new();
     let mut cursor = 0;
@@ -19,9 +26,7 @@ pub(super) fn render(
         if c == '%' && position + 1 < chars.len() {
             let directive = chars[position + 1];
             let rendered = match directive {
-                '%' | 'O' | 'c' => return None,
-                '#' => Some(index.to_string()),
-                '$' => Some((index + 1).to_string()),
+                'O' | 'c' => return None,
                 's' | 'd' | 'i' | 'f' | 'j' | 'o' => {
                     let argument = match arguments.get(cursor) {
                         Some(value) => Some(value.as_ref()?),
@@ -50,8 +55,14 @@ pub(super) fn render(
                 if field.contains('.') || !field.is_ascii() {
                     return None;
                 }
-                let value = if let Ok(index) = field.parse::<usize>() {
-                    arguments.get(index)?.as_ref()?
+                let value = if field.bytes().all(|byte| byte.is_ascii_digit()) {
+                    // `$01` is a key no item has; an object first item answers before position.
+                    if (field.len() > 1 && field.starts_with('0'))
+                        || matches!(arguments.first(), Some(None | Some(Value::Object(_))))
+                    {
+                        return None;
+                    }
+                    arguments.get(field.parse::<usize>().ok()?)?.as_ref()?
                 } else {
                     fields?.get(&field)?
                 };
@@ -119,12 +130,13 @@ fn format(value: Option<&Value>, directive: char) -> Option<String> {
                 {
                     return None;
                 }
-                let number = text.parse::<f64>().ok()?;
-                if directive == 'i' {
-                    number.trunc()
+                // `parseInt` stops at the point: what follows it cannot round the result.
+                let digits = if directive == 'i' {
+                    text.split('.').next()?
                 } else {
-                    number
-                }
+                    &text
+                };
+                digits.parse::<f64>().ok()?
             };
             (number.is_finite() && !(number == 0.0 && number.is_sign_negative())).then(|| {
                 ryu_js::Buffer::new()
@@ -136,8 +148,7 @@ fn format(value: Option<&Value>, directive: char) -> Option<String> {
     }
 }
 
-/// Refuses the unresolved named-field and string integer conversions for row equality.
-/// The name rule retains its existing rendering until its separate formatter correction.
+/// Refuses named fields and string integer conversions for row equality.
 pub(super) fn render_row(
     pattern: &str,
     arguments: &[Option<Value>],

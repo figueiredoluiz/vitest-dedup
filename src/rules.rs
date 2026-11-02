@@ -409,14 +409,16 @@ fn name_claim<'a>(rule: Rule, members: &[Entry<'a>]) -> Option<&'a Vec<String>> 
         .flatten()
 }
 
-/// A participant's name: its full title when every segment is spelled, else where it is declared,
-/// since a title only known at run time cannot be rendered and a blank name says nothing.
+/// A participant's name: as rendered, else its full title when every segment is spelled, else where
+/// it is declared, since a title only known at run time cannot be rendered and a blank name says
+/// nothing.
 fn title(member: &Entry<'_>) -> String {
-    member
-        .case
-        .full_title
-        .clone()
-        .unwrap_or_else(|| format!("<dynamic title at line {}>", member.case.span.start.line))
+    let case = member.case;
+    case.name
+        .as_ref()
+        .map(|name| name.join(" > "))
+        .or_else(|| case.full_title.clone())
+        .unwrap_or_else(|| format!("<dynamic title at line {}>", case.span.start.line))
 }
 
 /// Words a `duplicate-test` finding, calling out any inert (`.skip`/`.todo`) participant by full
