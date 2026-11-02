@@ -136,24 +136,39 @@ fn historical_reexports_and_package_main_are_isolated() {
 /// Historical alias mappings apply even when current config and helper files disagree.
 #[test]
 fn historical_tsconfig_uses_its_own_aliases() {
-    let caller = CALLER
-        .replace("'./left'", "'@left'")
-        .replace("'./right'", "'@right'");
-    let old = r#"{"compilerOptions":{"baseUrl":".","paths":{"@left":["left.ts"],"@right":["right.ts"]}}}"#;
-    let changed = old.replace("right.ts", "left.ts");
-    let dir = project(
-        &caller,
-        &[
-            ("left.ts", LEFT),
-            ("right.ts", RIGHT),
-            ("tsconfig.json", old),
-        ],
+    const ALIAS_CALLER: &str =
+        include_str!("../../fixtures/recall/duplicate-test-revision-tsconfig-paths/run.test.ts");
+    const CURRENT: &str = include_str!(
+        "../../fixtures/recall/duplicate-test-revision-tsconfig-paths/current.source.ts"
     );
-    std::fs::write(dir.path().join("tsconfig.json"), changed).unwrap();
-    std::fs::remove_file(dir.path().join("right.ts")).unwrap();
-    let (code, records, stderr) = baseline(dir.path(), &[]);
-    assert_eq!(code, 1, "{stderr}");
-    assert_modes(&records, 4, 1, 1);
+    const CONFIG: &str =
+        include_str!("../../fixtures/recall/duplicate-test-revision-tsconfig-paths/tsconfig.json");
+    for same_target in [false, true] {
+        let config = if same_target {
+            CONFIG.replace("right.ts", "left.ts")
+        } else {
+            CONFIG.to_owned()
+        };
+        let dir = project(
+            ALIAS_CALLER,
+            &[
+                ("left.ts", LEFT),
+                ("right.ts", RIGHT),
+                ("tsconfig.json", &config),
+            ],
+        );
+        std::fs::write(dir.path().join("tsconfig.json"), "{}").unwrap();
+        std::fs::write(dir.path().join("run.test.ts"), CURRENT).unwrap();
+        std::fs::remove_file(dir.path().join("right.ts")).unwrap();
+        let (code, records, stderr) = baseline(dir.path(), &[]);
+        assert_eq!(code, i32::from(!same_target), "{stderr}");
+        assert_modes(
+            &records,
+            4,
+            if same_target { 2 } else { 1 },
+            u64::from(!same_target),
+        );
+    }
 }
 
 /// A reference suppression cannot be replaced with the present caller's missing directive.
@@ -230,18 +245,25 @@ fn historical_ancestor_config_is_used_for_nested_projects() {
             ("nested/right.ts", RIGHT),
             (
                 "tsconfig.json",
-                r#"{"compilerOptions":{"baseUrl":".","paths":{"@left":["nested/left.ts"],"@right":["nested/right.ts"]}}}"#,
+                r#"{"compilerOptions":{"baseUrl":".","paths":{"@left":["nested/left.ts"],"@right":["nested/left.ts"]}}}"#,
             ),
         ],
     );
     let path = dir.path().join("tsconfig.json");
     let changed = std::fs::read_to_string(&path)
         .unwrap()
-        .replace("nested/right.ts", "nested/left.ts");
+        .replace("nested/left.ts", "nested/right.ts");
     std::fs::write(path, changed).unwrap();
+    std::fs::write(
+        dir.path().join("nested/run.test.ts"),
+        include_str!(
+            "../../fixtures/recall/duplicate-test-revision-tsconfig-paths/current.source.ts"
+        ),
+    )
+    .unwrap();
     let (code, records, stderr) = baseline(&dir.path().join("nested"), &[]);
-    assert_eq!(code, 1, "{stderr}");
-    assert_modes(&records, 4, 1, 1);
+    assert_eq!(code, 0, "{stderr}");
+    assert_modes(&records, 4, 2, 0);
 }
 
 /// The base's actual invalid helper bytes cannot be replaced by a valid present-day helper.

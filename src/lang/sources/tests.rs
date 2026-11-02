@@ -274,3 +274,71 @@ fn ordinary_absence_only_records_a_real_bare_package_request() {
         ["unresolved package: @acme/workspace"]
     );
 }
+
+/// A virtual catalog can record one canonical identity for an alternate importer spelling.
+#[derive(Debug)]
+struct ImporterTree {
+    catalog: crate::modes::RevisionFiles,
+    presented: PathBuf,
+    canonical: PathBuf,
+}
+
+impl SourceTree for ImporterTree {
+    /// Every byte still comes from the pinned catalog.
+    fn read(&self, path: &Path) -> io::Result<Vec<u8>> {
+        self.catalog.read(path)
+    }
+    /// Alternate identity handling does not add filesystem entries.
+    fn kind(&self, path: &Path) -> Option<SourceKind> {
+        self.catalog.kind(path)
+    }
+    /// Record the importer's canonical identity without touching the host filesystem.
+    fn canonicalize(&self, path: &Path) -> io::Result<PathBuf> {
+        if path == self.presented {
+            Ok(self.canonical.clone())
+        } else {
+            self.catalog.canonicalize(path)
+        }
+    }
+    /// Preserve the catalog's sticky refusal handling.
+    fn reject(&self, message: String) {
+        self.catalog.reject(message);
+    }
+    /// Preserve the catalog's incomplete-configuration policy.
+    fn configuration_gap(&self) {
+        self.catalog.configuration_gap();
+    }
+    /// Package absence still uses the committed metadata catalog.
+    fn unresolved_package(&self, name: &str) {
+        self.catalog.unresolved_package(name);
+    }
+    /// This test uses the catalog's retained-ownership measurement.
+    fn retained_bytes(&self) -> usize {
+        self.catalog.retained_bytes()
+    }
+}
+
+/// Resolve known importer identities before parsing them, while retaining supplied-source callers.
+#[test]
+fn resolver_uses_the_catalogs_importer_identity() {
+    let dir = crate::modes::tests::repository_with(&[
+        ("run.test.ts", b"import './helper';"),
+        ("helper.ts", b"export const value = 1;"),
+    ]);
+    let root = dir.path().canonicalize().unwrap();
+    let catalog = crate::modes::RevisionFiles::load(&root, "HEAD", None).unwrap();
+    let canonical = catalog.canonicalize(&root.join("run.test.ts")).unwrap();
+    let presented = root.join("presentation/run.test.ts");
+    let tree = Arc::new(ImporterTree {
+        catalog,
+        presented: presented.clone(),
+        canonical: canonical.clone(),
+    });
+    let sources = Sources::committed(tree.clone());
+    let expected = tree.canonicalize(&root.join("helper.ts")).unwrap();
+    for from in [presented, canonical, root.join("supplied.test.ts")] {
+        let resolved = sources.resolve_file(&from, "./helper", &root).unwrap();
+        assert_eq!(tree.canonicalize(&resolved).unwrap(), expected);
+    }
+    tree.catalog.ensure_readable().unwrap();
+}

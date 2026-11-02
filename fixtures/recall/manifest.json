@@ -8285,6 +8285,40 @@
           ]
         }
       ]
+    },
+    {
+      "name": "duplicate-test-revision-tsconfig-paths",
+      "path": "duplicate-test-revision-tsconfig-paths",
+      "rule": "duplicate-test",
+      "role": "positive",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-02",
+      "expectedTests": 4,
+      "expectedIncomplete": false,
+      "expectedFindings": [
+        {
+          "rule": "duplicate-test",
+          "severity": "error",
+          "titles": [
+            "plain one",
+            "plain two"
+          ],
+          "locations": [
+            "run.test.ts:6",
+            "run.test.ts:7"
+          ]
+        }
+      ],
+      "expectedAbsent": [
+        {
+          "rule": "duplicate-test",
+          "titles": [
+            "left",
+            "right"
+          ]
+        }
+      ]
     }
   ],
   "knownFalsePositiveBaseline": 1,

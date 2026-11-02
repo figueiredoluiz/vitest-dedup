@@ -81,7 +81,10 @@ impl Sources {
             CommittedFs(Some(Arc::clone(tree))),
             resolve::options(),
         );
-        let file = match resolver.resolve_file(from, specifier) {
+        // A verbatim Windows prefix contains `?`, which the resolver parses as a query.
+        // Use the catalog's identity; supplied caller text may have no catalog entry.
+        let from = tree.canonicalize(from).unwrap_or_else(|_| from.to_owned());
+        let file = match resolver.resolve_file(&from, specifier) {
             Ok(file) => file.into_path_buf(),
             Err(
                 error @ (ResolveError::NotFound(_)
