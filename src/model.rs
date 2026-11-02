@@ -2038,8 +2038,8 @@ impl PackageWorkerFailure {
 pub struct IncompleteCauses {
     /// Directory traversal failed, so the file list itself may be short.
     pub discovery_failed: bool,
-    /// A resolved Vitest project's configuration could not be read well enough to scope
-    /// discovery, so a file that should have been analyzed may have been set aside.
+    /// Project configuration could not be read well enough to scope discovery or resolve
+    /// historical imports, so the affected pass cannot establish its complete finding set.
     pub project_config_degraded: bool,
     /// Every discovered file failed to read: nothing was analyzed at all.
     pub nothing_read: bool,

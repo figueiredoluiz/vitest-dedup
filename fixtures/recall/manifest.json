@@ -8191,6 +8191,100 @@
         }
       ],
       "expectedAbsent": []
+    },
+    {
+      "name": "duplicate-test-revision-helper-isolation",
+      "path": "duplicate-test-revision-helper-isolation",
+      "rule": "duplicate-test",
+      "role": "positive",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-02",
+      "expectedTests": 4,
+      "expectedIncomplete": false,
+      "expectedFindings": [
+        {
+          "rule": "duplicate-test",
+          "severity": "error",
+          "titles": [
+            "plain one",
+            "plain two"
+          ],
+          "locations": [
+            "run.test.ts:6",
+            "run.test.ts:7"
+          ]
+        }
+      ],
+      "expectedAbsent": [
+        {
+          "rule": "duplicate-test",
+          "titles": [
+            "left",
+            "right"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "duplicate-test-revision-workspace",
+      "path": "duplicate-test-revision-workspace",
+      "rule": "duplicate-test",
+      "role": "positive",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-02",
+      "expectedTests": 2,
+      "expectedIncomplete": false,
+      "expectedFindings": [
+        {
+          "rule": "duplicate-test",
+          "severity": "error",
+          "titles": [
+            "one",
+            "two"
+          ],
+          "locations": [
+            "run.test.ts:3",
+            "run.test.ts:4"
+          ]
+        }
+      ],
+      "expectedAbsent": []
+    },
+    {
+      "name": "duplicate-test-revision-tsconfig-gap",
+      "path": "duplicate-test-revision-tsconfig-gap",
+      "rule": "duplicate-test",
+      "role": "positive",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-02",
+      "expectedTests": 4,
+      "expectedIncomplete": false,
+      "expectedFindings": [
+        {
+          "rule": "duplicate-test",
+          "severity": "error",
+          "titles": [
+            "plain one",
+            "plain two"
+          ],
+          "locations": [
+            "run.test.ts:6",
+            "run.test.ts:7"
+          ]
+        }
+      ],
+      "expectedAbsent": [
+        {
+          "rule": "duplicate-test",
+          "titles": [
+            "left",
+            "right"
+          ]
+        }
+      ]
     }
   ],
   "knownFalsePositiveBaseline": 1,

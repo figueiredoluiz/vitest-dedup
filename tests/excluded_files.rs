@@ -1071,10 +1071,9 @@ fn an_inline_suppression_above_a_multi_line_table_suppresses_a_next_engine_findi
     assert_eq!(run.json["modes"]["suppressionsApplied"], 1);
 }
 
-/// Reference baselines remain refused until historical helper resolution is available;
-/// file baselines, changed-file filtering and memory reporting use their implemented paths.
+/// Reference baselines require a repository before any analysis or report is emitted.
 #[test]
-fn the_next_engine_refuses_modes_that_need_findings() {
+fn the_next_engine_requires_git_for_reference_baselines() {
     let directory = tempfile::tempdir().unwrap();
     write(directory.path(), "clean.test.ts", CLEAN);
     let flags = ["--baseline-from-ref", "HEAD"];
@@ -1089,7 +1088,7 @@ fn the_next_engine_refuses_modes_that_need_findings() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert_eq!(output.status.code(), Some(2), "{flags:?}: {stderr}");
     assert!(
-        stderr.contains("is not available under VITEST_DEDUP_ENGINE=next"),
+        stderr.contains("requires a Git repository"),
         "{flags:?}: {stderr}"
     );
     assert!(output.stdout.is_empty(), "{flags:?}");

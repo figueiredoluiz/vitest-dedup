@@ -68,6 +68,9 @@
 //! cannot reach a terminal through this path at all. They are sanitized and length-bounded on the
 //! way *in* to the file as well, so the file itself stays reviewable.
 
+mod revision;
+pub use revision::RevisionFiles;
+
 use crate::model::{Finding, FINGERPRINT_VERSION};
 use crate::reporters::terminal_safe;
 use anyhow::{bail, Context, Result};
@@ -527,15 +530,7 @@ pub fn revision_sources(
     exclude_globs: &[String],
     mut visit: impl FnMut(RevisionSource) -> Result<bool>,
 ) -> Result<usize> {
-    if revision.trim().is_empty() || revision.starts_with('-') {
-        bail!(
-            "invalid --baseline-from-ref revision `{}`",
-            terminal_safe(revision)
-        );
-    }
-    ensure_git_repository(root, "--baseline-from-ref")?;
-    ensure_not_shallow(root, "--baseline-from-ref")?;
-    let commit = resolve_commit(root, revision, "--baseline-from-ref")?;
+    let commit = revision_commit(root, revision)?;
 
     let include = compile_revision_globs(include_globs, "include")?;
     let exclude = compile_revision_globs(exclude_globs, "exclude")?;
@@ -680,6 +675,19 @@ pub fn revision_sources(
         reader.finish()?;
     }
     Ok(unread)
+}
+
+/// Validate and pin a revision once before either root streaming or dependency lookup.
+fn revision_commit(root: &Path, revision: &str) -> Result<String> {
+    if revision.trim().is_empty() || revision.starts_with('-') {
+        bail!(
+            "invalid --baseline-from-ref revision `{}`",
+            terminal_safe(revision)
+        );
+    }
+    ensure_git_repository(root, "--baseline-from-ref")?;
+    ensure_not_shallow(root, "--baseline-from-ref")?;
+    resolve_commit(root, revision, "--baseline-from-ref")
 }
 
 /// One `git cat-file --batch` process answering blob reads by object id, one at a time.
@@ -1231,4 +1239,4 @@ fn path_from_git_bytes(bytes: &[u8]) -> Result<PathBuf> {
 mod suppression_tests;
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

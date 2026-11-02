@@ -246,7 +246,12 @@ impl Normalizer<'_> {
                 // equal helpers in two modules are one identity. Inside such a module, its own
                 // imports are named by where they resolve: one module deep, never a cycle.
                 if !self.shallow_imports {
-                    if let Some(file) = crate::lang::resolve(self.path, source, self.setting.root) {
+                    if let Some(file) =
+                        self.setting
+                            .exports
+                            .sources
+                            .resolve(self.path, source, self.setting.root)
+                    {
                         if let Some(exported) = exported(&file, &imported, self.setting) {
                             return Some(exported);
                         }
@@ -254,7 +259,11 @@ impl Normalizer<'_> {
                 }
                 // Anything else is the file it resolves to (a stylesheet two test files name with
                 // one spelling may be two files), or its spelling when it resolves to none.
-                let module = crate::lang::resolve_file(self.path, source, self.setting.root)
+                let module = self
+                    .setting
+                    .exports
+                    .sources
+                    .resolve_file(self.path, source, self.setting.root)
                     .map_or_else(|| source.to_owned(), |file| file.display().to_string());
                 Some(format!("import:{module}:{imported}"))
             }
@@ -448,8 +457,7 @@ fn export_of(file: &Path, name: &str, setting: Setting) -> Option<String> {
     let mut visited: HashSet<(PathBuf, String)> = HashSet::new();
     while visited.insert(at.clone()) {
         let (file, name) = &at;
-        let source = crate::discovery::read_bounded(file, crate::discovery::MAX_SOURCE_FILE_BYTES)
-            .ok()??;
+        let source = setting.exports.sources.read(file)?;
         let parsed = crate::lang::parse(file, &source).ok()?;
         match declaration_of(file, name, &parsed, setting)? {
             Export::Named(identity) => return identity,
@@ -497,7 +505,10 @@ fn declaration_of(
                     else {
                         continue;
                     };
-                    let target = crate::lang::resolve(file, source, setting.root)?;
+                    let target = setting
+                        .exports
+                        .sources
+                        .resolve(file, source, setting.root)?;
                     let local = export_name(tree, tree.child(specifier, "local")?);
                     return Some(Export::Reexport((target, local)));
                 }

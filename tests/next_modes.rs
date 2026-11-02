@@ -1,4 +1,6 @@
 //! Next-engine shell modes preserve full analysis while narrowing only final findings.
+#[path = "next_modes/revision.rs"]
+mod revision;
 use serde_json::Value;
 use std::path::Path;
 use std::process::Command;
@@ -26,7 +28,7 @@ fn run(root: &Path, flags: &[&str]) -> (i32, Vec<Value>, String) {
 }
 
 /// Run a fixture operation independently of inherited Git repository/configuration overrides.
-fn git(root: &Path, args: &[&str]) -> std::process::Output {
+fn git_command(root: &Path) -> Command {
     let mut command = Command::new("git");
     for (name, _) in std::env::vars_os() {
         if name
@@ -37,7 +39,13 @@ fn git(root: &Path, args: &[&str]) -> std::process::Output {
             command.env_remove(name);
         }
     }
-    let output = command.current_dir(root).args(args).output().unwrap();
+    command.current_dir(root);
+    command
+}
+
+/// Execute a fixture command through the same isolated repository environment.
+fn git(root: &Path, args: &[&str]) -> std::process::Output {
+    let output = git_command(root).args(args).output().unwrap();
     assert!(
         output.status.success(),
         "{}",

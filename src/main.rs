@@ -213,10 +213,13 @@ fn report_path(prefix: &std::path::Path, extension: &str) -> std::path::PathBuf 
 
 /// The memory roof `--max-memory`/`--no-memory-cap` selected.
 fn memory_roof(args: &ParsedArgs) -> vitest_dedup::memory::MemoryRoof {
-    vitest_dedup::memory::MemoryRoof::new(
-        args.memory_budget_mib
-            .map(|mib| mib.saturating_mul(1024 * 1024)),
-    )
+    vitest_dedup::memory::MemoryRoof::new(memory_budget_bytes(args))
+}
+
+/// The resolved byte limit shared by retained corpus and historical-index construction.
+fn memory_budget_bytes(args: &ParsedArgs) -> Option<u64> {
+    args.memory_budget_mib
+        .map(|mib| mib.saturating_mul(1024 * 1024))
 }
 
 /// Names where the memory roof stopped a pass and what to do about it.
@@ -260,18 +263,7 @@ fn run_with_engine(
     let mut stderr: std::io::Stderr = std::io::stderr();
     let config = Config::load(&args.root, args.to_overrides())?;
 
-    // File baselines use the selected engine identity. Reference baselines still need
-    // historical helper resolution before the next engine can safely analyze them.
     if next_engine.is_some() {
-        let findings_mode = [("--baseline-from-ref", args.baseline_from_ref.is_some())]
-            .into_iter()
-            .find_map(|(flag, given)| given.then_some(flag));
-        if let Some(flag) = findings_mode {
-            anyhow::bail!(
-                "{flag} is not available under VITEST_DEDUP_ENGINE=next: historical helper \
-                 resolution is not supported yet"
-            );
-        }
         writeln!(
             stderr,
             "vitest-dedup: VITEST_DEDUP_ENGINE=next runs duplicate-test, duplicate-test-name, duplicate-each-row, duplicate-suite, parameterization-candidate, near-duplicate-test, subsumed-test, redundant-hook and cross-file-duplicate"
@@ -422,14 +414,60 @@ fn run_with_engine(
             let mut base_causes = IncompleteCauses::default();
             let mut base_roof = memory_roof(&args);
             let mut base_files = 0;
+            let revision_files = if next_engine.is_some() {
+                Some(std::sync::Arc::new(modes::RevisionFiles::load(
+                    &config.root,
+                    revision,
+                    memory_budget_bytes(&args),
+                )?))
+            } else {
+                None
+            };
+            let mut base_engine = revision_files.as_ref().map(|files| {
+                vitest_dedup::corpus::Engine::with_sources(vitest_dedup::lang::Sources::committed(
+                    files.clone(),
+                ))
+            });
+            let mut base_suppressions = Vec::new();
             // One base file is held at a time; the roof stops the read, not only the extraction.
             let unread = modes::revision_sources(
                 &config.root,
-                revision,
+                revision_files
+                    .as_ref()
+                    .map_or(revision.as_str(), |files| files.commit()),
                 &config.include,
                 &config.exclude,
                 |source| {
                     base_files += 1;
+                    if let Some(engine) = base_engine.as_mut() {
+                        let files = revision_files.as_ref().expect("selected historical view");
+                        let path = config.root.join(&source.relative);
+                        files.regular_root(&path)?;
+                        base_suppressions.extend(modes::scan_inline_suppressions(
+                            &source.content,
+                            source.relative.clone(),
+                        ));
+                        let (_, partial) = engine.read(
+                            &path,
+                            &source.relative,
+                            &source.content,
+                            vitest_dedup::corpus::Setting {
+                                dialect: vitest_dedup::framework::current().dialect(),
+                                globals: resolved_globals == Globals::Enabled,
+                                root: &config.root,
+                            },
+                            false,
+                            Vec::new(),
+                        );
+                        files.ensure_readable()?;
+                        base_causes.files_partially_read += usize::from(partial);
+                        base_causes.unresolved_contexts = engine.unresolved;
+                        return Ok(!base_roof.exceeded_with_retained(
+                            &base_tests,
+                            vitest_dedup::memory::HeapBytes::heap_bytes(engine),
+                            &mut resident,
+                        ));
+                    }
                     let Some((language, module_flavor)) =
                         discovery::classify_source_file(&source.relative)
                     else {
@@ -459,13 +497,42 @@ fn run_with_engine(
                 base_causes.files_over_memory_budget = unread;
                 write_roof_diagnostic(&mut stderr, "base revision", &args, base_files, unread)?;
             }
-            // Drains the resolver's failures too, so the main pass below starts from zero.
-            base_causes.missing_prerequisites = vitest_dedup::prerequisites::assess(
-                &config.root,
-                &vitest_dedup::frontend::take_resolution_gaps(),
-            );
-            base_causes.package_worker_failures = frontend::take_package_worker_failures();
-            let base_result = analysis::analyze(base_tests, &config, base_files, base_causes)?;
+            let configuration_degraded = revision_files
+                .as_ref()
+                .is_some_and(|files| files.configuration_degraded());
+            base_causes.project_config_degraded |= configuration_degraded;
+            let (mut base_findings, base_incomplete) = if let Some(mut engine) = base_engine {
+                let files = engine.take_files();
+                let outcome = vitest_dedup::rules::run_with_hooks(
+                    &files,
+                    engine.suites(),
+                    engine.hooks(),
+                    &config,
+                    &base_suppressions,
+                );
+                base_causes.pair_budget_exhausted |= outcome.budget_exhausted;
+                base_causes.hook_scan_exhausted |= outcome.hook_scan_exhausted;
+                let finished = analysis::finish_findings(
+                    outcome.findings,
+                    base_causes,
+                    analysis::RunModes {
+                        changed_files: None,
+                        baseline: None,
+                        suppressions: &base_suppressions,
+                    },
+                );
+                (finished.findings, finished.causes.any())
+            } else {
+                // Drain only the default resolver's failures, preserving its existing base pass.
+                base_causes.missing_prerequisites = vitest_dedup::prerequisites::assess(
+                    &config.root,
+                    &frontend::take_resolution_gaps(),
+                );
+                base_causes.package_worker_failures = frontend::take_package_worker_failures();
+                let result = analysis::analyze(base_tests, &config, base_files, base_causes)?;
+                let incomplete = result.incomplete();
+                (result.findings, incomplete)
+            };
             // A base run that could not see the whole tree (oversized, non-UTF-8, or skipped
             // files) produces a PARTIAL baseline: it accepts less than the base really had, so
             // the gate reports findings as new that the base would have accepted. The safe
@@ -473,7 +540,12 @@ fn run_with_engine(
             // `--update-baseline` on an incomplete run, expressed as a warning because the file
             // baseline's refusal has no equivalent here: there is nothing to refuse, the
             // baseline already is what it is.
-            if base_result.incomplete() {
+            if configuration_degraded {
+                // Unknown aliases can affect any cached identity; none is proved allowance.
+                base_findings.clear();
+                writeln!(stderr, "vitest-dedup: unavailable historical package resolution; withholding all revision baseline allowance.")?;
+            }
+            if base_incomplete {
                 writeln!(
                     stderr,
                     "vitest-dedup: warning: the {} analysis was incomplete, so the \
@@ -481,7 +553,7 @@ fn run_with_engine(
                     terminal_safe(revision)
                 )?;
             }
-            let baseline = modes::baseline_from_findings(&base_result.findings);
+            let baseline = modes::baseline_from_findings(&base_findings);
             writeln!(stderr,
                 "vitest-dedup: baseline from {}: {} finding(s) in the base revision are treated as accepted.",
                 terminal_safe(revision),
@@ -1046,7 +1118,7 @@ fn run_with_engine(
                 causes,
                 analysis::RunModes {
                     changed_files: changed_files.as_ref(),
-                    baseline: baseline.as_ref(),
+                    baseline: baseline.as_ref().or(ref_baseline.as_ref()),
                     suppressions: &inline_suppressions,
                 },
             );

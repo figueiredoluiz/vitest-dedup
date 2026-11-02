@@ -145,6 +145,7 @@ const MAX_DEPTH: usize = 8;
 /// project with globals reads free names as the API), shared by every file of one run.
 #[derive(Debug, Default)]
 pub struct Modules {
+    sources: crate::lang::Sources,
     cache: crate::memory::RetainedMap<(PathBuf, bool), HashMap<String, Export>>,
     active: HashSet<PathBuf>,
     /// How many lookups the depth limit has cut short. A module whose analysis saw a cut is not
@@ -166,6 +167,14 @@ pub struct Setting<'a> {
 }
 
 impl Modules {
+    /// One private cache belongs to one source authority for its whole lifetime.
+    pub(crate) fn with_sources(sources: crate::lang::Sources) -> Self {
+        Self {
+            sources,
+            ..Self::default()
+        }
+    }
+
     /// The registering exports of the module at `path`, with what each may register, analysed
     /// once unless the depth limit cut the analysis short. A cut import reads as exporting
     /// nothing, so no hooks-only answer rests on it (see `Module::closed`).
@@ -182,9 +191,9 @@ impl Modules {
             return HashMap::new();
         }
         let cuts = self.deep_cuts;
-        let exports = crate::discovery::read_bounded(path, crate::discovery::MAX_SOURCE_FILE_BYTES)
-            .ok()
-            .flatten()
+        let exports = self
+            .sources
+            .read(path)
             .and_then(|source| {
                 let parsed = crate::lang::parse(path, &source).ok()?;
                 Some(module::analyse(path, &source, &parsed, setting, self, depth).1)
@@ -227,6 +236,8 @@ impl crate::memory::HeapBytes for Modules {
     /// Charge retained export maps and active-set capacity, never temporary parsed trees.
     fn heap_bytes(&self) -> usize {
         let Self {
+            // The owning Run charges this shared catalog once, alongside the module cache.
+            sources: _,
             cache,
             active,
             deep_cuts,

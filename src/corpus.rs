@@ -179,8 +179,25 @@ impl FileCorpus {
 /// Caches one run shares across its files.
 #[derive(Debug, Default)]
 pub struct Run {
+    sources: lang::Sources,
     modules: inventory::Modules,
     exports: normal::Exports,
+}
+
+impl Run {
+    /// Pin every import consumer to the same view, keeping their caches separate from other runs.
+    pub fn with_sources(sources: lang::Sources) -> Self {
+        Self {
+            modules: inventory::Modules::with_sources(sources.clone()),
+            exports: normal::Exports::with_sources(sources.clone()),
+            sources,
+        }
+    }
+
+    /// Recovery discards uncertain cached answers without changing the source authority.
+    fn clear(&mut self) {
+        *self = Self::with_sources(self.sources.clone());
+    }
 }
 
 /// What a file is read with.
@@ -328,7 +345,7 @@ pub fn file(
                 .child(statement, "source")
                 .and_then(|source| tree.text(source, "value"))
                 .filter(|_| bare_import)
-                .and_then(|source| crate::lang::resolve_file(path, source, setting.root))
+                .and_then(|source| run.sources.resolve_file(path, source, setting.root))
             {
                 module_context.push_str(&file.display().to_string());
             }
@@ -822,6 +839,14 @@ enum Failure {
 const ENGINE_VARIABLE: (&str, &str) = ("VITEST_DEDUP_ENGINE", "next");
 
 impl Engine {
+    /// An engine whose imports and resolver metadata come from one explicit source view.
+    pub fn with_sources(sources: lang::Sources) -> Self {
+        Self {
+            run: Run::with_sources(sources),
+            ..Self::default()
+        }
+    }
+
     /// The engine, when the environment selects it.
     pub fn selected() -> Option<Self> {
         let (variable, value) = ENGINE_VARIABLE;
@@ -901,7 +926,7 @@ impl Engine {
             Err(Failure::Panicked) => {
                 // A panic may have left the caches half-written. Keys do not depend on what was
                 // read before, so the files after this one key the same from empty caches.
-                self.run = Run::default();
+                self.run.clear();
                 return unparsed(
                     ExclusionReason::ExtractionFailed,
                     "the file could not be read: the analysis failed and was recovered".to_owned(),

@@ -5,7 +5,21 @@ use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
 /// Extensions of the source files a project import may name.
-const EXTENSIONS: [&str; 8] = ["ts", "tsx", "mts", "cts", "js", "jsx", "mjs", "cjs"];
+pub(super) const EXTENSIONS: [&str; 8] = ["ts", "tsx", "mts", "cts", "js", "jsx", "mjs", "cjs"];
+
+/// Identical resolution policy for working files and committed virtual files.
+pub(super) fn options() -> ResolveOptions {
+    ResolveOptions {
+        extensions: EXTENSIONS
+            .iter()
+            .map(|extension| format!(".{extension}"))
+            .collect(),
+        condition_names: vec!["module".into(), "import".into()],
+        main_fields: vec!["module".into(), "main".into()],
+        tsconfig: Some(TsconfigDiscovery::Auto),
+        ..ResolveOptions::default()
+    }
+}
 
 /// The project source file `specifier` names from the module at `from`, as a bundler resolves it:
 /// relative paths and tsconfig `paths` aliases. `None` for a package, a file under `node_modules`,
@@ -23,24 +37,22 @@ pub fn resolve(from: &Path, specifier: &str, root: &Path) -> Option<PathBuf> {
 /// file), resolved as [`resolve`] does; `None` for a package, a file under `node_modules` or one
 /// outside `root`.
 pub fn resolve_file(from: &Path, specifier: &str, root: &Path) -> Option<PathBuf> {
-    static RESOLVER: LazyLock<Resolver> = LazyLock::new(|| {
-        Resolver::new(ResolveOptions {
-            extensions: EXTENSIONS
-                .iter()
-                .map(|extension| format!(".{extension}"))
-                .collect(),
-            condition_names: vec!["module".into(), "import".into()],
-            main_fields: vec!["module".into(), "main".into()],
-            tsconfig: Some(TsconfigDiscovery::Auto),
-            ..ResolveOptions::default()
-        })
-    });
+    static RESOLVER: LazyLock<Resolver> = LazyLock::new(|| Resolver::new(options()));
     let file = RESOLVER.resolve_file(from, specifier).ok()?.into_path_buf();
+    project_file(file, root, |path| std::fs::canonicalize(path))
+}
+
+/// Packages and paths outside the analysis root stay opaque in either source view.
+pub(super) fn project_file(
+    file: PathBuf,
+    root: &Path,
+    canonicalize: impl Fn(&Path) -> std::io::Result<PathBuf>,
+) -> Option<PathBuf> {
     let in_packages = file
         .components()
         .any(|component| component.as_os_str() == "node_modules");
     // Compared canonically, so a symlinked or differently spelled root does not decide it.
-    let inside = match (std::fs::canonicalize(&file), std::fs::canonicalize(root)) {
+    let inside = match (canonicalize(&file), canonicalize(root)) {
         (Ok(file), Ok(root)) => file.starts_with(root),
         _ => false,
     };
