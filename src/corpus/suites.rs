@@ -118,6 +118,7 @@ pub(super) fn collect(
             Position { line, column }
         };
         suites.push(TestCase {
+            origin: None,
             span: Span {
                 start: position(site.span.start),
                 end: position(site.span.end),

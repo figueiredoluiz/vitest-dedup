@@ -11,6 +11,7 @@
 //! API names are read from the [`Dialect`]; this module spells none.
 
 mod module;
+pub mod runners;
 
 use crate::framework::{Dialect, Registers};
 use crate::lang::{NodeId, Parsed, Span};
@@ -44,6 +45,8 @@ pub enum Export {
     Namespace,
     /// A registration function the API's module exports, re-exported as it is.
     Api(Registers),
+    /// A framework registration value exported through a local alias or builder.
+    Derived(Registers),
     /// A function or value that registers when called.
     Wrapper(Reach),
 }
@@ -69,6 +72,8 @@ pub enum Provenance {
     Global,
     /// A wrapper, or a value a call handed a registration function returns.
     Wrapper,
+    /// An exported framework registration value, rather than a user-defined runner body.
+    Derived,
 }
 
 /// A lexical fact around a site.
@@ -125,6 +130,11 @@ pub struct Escape {
 /// What one module registers.
 #[derive(Clone, Debug, Default)]
 pub struct Inventory {
+    /// Intrinsic direct eval may write lexical bindings without ordinary assignment references.
+    pub direct_eval: bool,
+    /// The module can read non-registration, non-assertion framework utilities. An invocation
+    /// proof must account for their setup/mocking semantics even when a read is in a callback.
+    pub setup_access: bool,
     /// Registering calls, in source order.
     pub sites: Vec<Site>,
     /// Imports of project modules that may register while they load, by where the import starts.
@@ -134,6 +144,78 @@ pub struct Inventory {
     /// Nodes whose value is a registration function (`test.extend({...})`, `describe`), so the
     /// normal form can tell building one from creating an object.
     pub registration_values: HashSet<NodeId>,
+}
+
+/// Whether a module can read framework setup utilities whose effects this inventory does not model.
+/// This is deliberately a capability refusal, not a prediction of which calls are hoisted.
+pub(crate) fn setup_access(parsed: &Parsed, setting: Setting) -> bool {
+    use crate::lang::{Declaration, Imported, Name};
+    let tree = &parsed.tree;
+    let safe = |name: &str| {
+        setting.dialect.registration(name).is_some()
+            || setting
+                .dialect
+                .assertions
+                .iter()
+                .any(|entry| entry.name == name)
+    };
+    for symbol in parsed.scopes.symbols() {
+        let Declaration::Import {
+            import,
+            specifier,
+            ref imported,
+            ..
+        } = parsed.scopes.symbol(symbol).declaration
+        else {
+            continue;
+        };
+        if tree.text(import, "importKind") == Some("type")
+            || tree.text(specifier, "importKind") == Some("type")
+        {
+            continue;
+        }
+        if tree
+            .child(import, "source")
+            .and_then(|node| tree.text(node, "value"))
+            .is_some_and(|source| setting.dialect.is_api_module(source))
+            && !matches!(imported, Imported::Named(name) if safe(name))
+        {
+            return true;
+        }
+    }
+    for statement in tree.list(tree.root(), "body").into_iter().flatten() {
+        if tree.kind(statement) == "ExportNamedDeclaration"
+            && tree.text(statement, "exportKind") != Some("type")
+            && tree
+                .child(statement, "source")
+                .and_then(|node| tree.text(node, "value"))
+                .is_some_and(|source| setting.dialect.is_api_module(source))
+            && tree
+                .list(statement, "specifiers")
+                .into_iter()
+                .flatten()
+                .any(|specifier| {
+                    tree.text(specifier, "exportKind") != Some("type")
+                        && tree
+                            .child(specifier, "local")
+                            .is_none_or(|local| !safe(&crate::lang::export_name(tree, local)))
+                })
+        {
+            return true;
+        }
+    }
+    tree.nodes().any(|node| {
+        tree.kind(node) == "Identifier"
+            && parsed.scopes.name_at(tree.span(node).start) == Some(Name::Reference(None))
+            && tree.text(node, "name").is_some_and(|name| {
+                setting
+                    .dialect
+                    .namespaces
+                    .iter()
+                    .any(|entry| entry.name == name)
+                    && !safe(name)
+            })
+    })
 }
 
 /// The export name standing for "registers while the module loads".
@@ -226,7 +308,7 @@ impl crate::memory::HeapBytes for Export {
     fn heap_bytes(&self) -> usize {
         match self {
             Self::Namespace => 0,
-            Self::Api(kind) => kind.heap_bytes(),
+            Self::Api(kind) | Self::Derived(kind) => kind.heap_bytes(),
             Self::Wrapper(Reach::Hook | Reach::Hooks | Reach::Tasks) => 0,
         }
     }

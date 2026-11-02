@@ -5,6 +5,8 @@ use crate::lang::{parse, NodeId, Tree};
 use std::collections::HashMap;
 use std::fs;
 
+mod registration;
+
 /// Runs `with` on a normalizer over `main` (written as `a.test.tsx`) in a project holding `files`,
 /// with the tree and the inventory it was read with.
 fn with_normalizer<T>(

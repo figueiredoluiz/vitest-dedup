@@ -88,6 +88,45 @@ fn historical_helpers_do_not_read_current_source() {
     assert_eq!(summary(&records, 4)["modes"]["withheldUnchanged"], 2);
 }
 
+/// A nested runner's historical child cannot borrow the current child's newly matching body.
+#[test]
+fn historical_nested_runner_children_keep_their_committed_source() {
+    let caller = include_str!("../../fixtures/recall/runner-nested-forwarded-capture/run.test.ts");
+    let runner = include_str!("../../fixtures/recall/runner-nested-forwarded-capture/runner.ts");
+    let distinct =
+        include_str!("../../fixtures/recall/runner-nested-forwarded-capture/leaf-distinct.ts");
+    let matching = include_str!("../../fixtures/recall/runner-nested-forwarded-capture/leaf.ts");
+    let dir = project(caller, &[("runner.ts", runner), ("leaf.ts", distinct)]);
+    std::fs::write(dir.path().join("leaf.ts"), matching).unwrap();
+    for changed in [false, true] {
+        let mut flags = vec![
+            "--rule",
+            "parameterization-candidate=off",
+            "--rule",
+            "near-duplicate-test=off",
+        ];
+        if changed {
+            flags.extend(["--changed-since", "HEAD"]);
+        }
+        let (code, records, stderr) = baseline(dir.path(), &flags);
+        assert_eq!(code, 1, "changed={changed}: {stderr}");
+        assert_modes(&records, 3, 0, 1);
+        assert_eq!(summary(&records, 3)["unresolvedTests"], 0);
+        assert_eq!(summary(&records, 3)["incomplete"], false);
+        assert!(!stderr.contains("baseline may be partial"), "{stderr}");
+        let finding = records
+            .iter()
+            .find(|record| record["type"] == "finding")
+            .unwrap();
+        assert_eq!(finding["rule"], "duplicate-test");
+        assert_eq!(finding["locations"].as_array().unwrap().len(), 2);
+        assert_eq!(
+            finding["registrationFiles"],
+            serde_json::json!([["run.test.ts"], ["run.test.ts"]])
+        );
+    }
+}
+
 /// Removing a historical positive in current helpers cannot spend unrelated baseline allowance.
 #[test]
 fn historical_equal_helpers_keep_their_positive() {
@@ -185,25 +224,21 @@ fn historical_suppressions_precede_reference_allowance() {
     assert_modes(&records, 4, 0, 1);
 }
 
-/// Inventory classification uses old helper registration reach, not its new hook-only body.
+/// An unproved committed invocation withholds scope allowance instead of borrowing working hooks.
 #[test]
 fn historical_inventory_keeps_its_own_uncertainty() {
-    let caller = "import {test,expect} from 'vitest';import {setup} from './helper';setup();test('one',()=>expect(1).toBe(1));test('two',()=>expect(1).toBe(1));";
-    let dir = project(
-        caller,
-        &[(
-            "helper.ts",
-            "import {test} from 'vitest';export function setup(){test('hidden',()=>{})}",
-        )],
-    );
+    let caller =
+        include_str!("../../fixtures/recall/runner-unproved-scope-retention/unsafe.test.ts");
+    let helper = include_str!("../../fixtures/recall/runner-unproved-scope-retention/helper.ts");
+    let dir = project(caller, &[("helper.ts", helper)]);
     std::fs::write(
         dir.path().join("helper.ts"),
         "import {beforeEach} from 'vitest';export function setup(){beforeEach(()=>{})}",
     )
     .unwrap();
     let (code, records, stderr) = baseline(dir.path(), &[]);
-    assert_eq!(code, 0, "{stderr}");
-    assert_modes(&records, 2, 1, 0);
+    assert_eq!(code, 1, "{stderr}");
+    assert_modes(&records, 2, 0, 1);
     assert_eq!(summary(&records, 2)["incomplete"], false);
     assert!(stderr.contains("baseline may be partial"), "{stderr}");
 }

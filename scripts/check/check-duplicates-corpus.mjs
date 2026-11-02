@@ -510,6 +510,10 @@ const DELIBERATE_BLIND_FILES = new Set([
   // control for admitting module-local values on a runner's chain.
   // A runner module whose destructured getter registers a test at import: blind on purpose.
   // A runner whose imported module mocks a module at load: blind on purpose, permanently.
+  // The unproved-runner recall case's unsafe half: the default engine refuses the imported
+  // runner, so the file spells no comparable test here; the next-engine recall loop pins what
+  // that engine does with it instead.
+  'recall/runner-unproved-scope-retention/unsafe.test.ts',
 ])
 
 /**

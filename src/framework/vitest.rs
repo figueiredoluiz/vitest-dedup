@@ -93,6 +93,14 @@ pub static DIALECT: Dialect = Dialect {
             name: "expect",
             canonical: "expect",
         },
+        Namespace {
+            name: "expectTypeOf",
+            canonical: "expectTypeOf",
+        },
+        Namespace {
+            name: "assertType",
+            canonical: "assertType",
+        },
     ],
     assertions: &[AssertionEntry {
         name: "expect",

@@ -48,6 +48,11 @@
 //                       positive integer even for a pending case -- a case that could never
 //                       extract anything would measure nothing, and the floor exists precisely so
 //                       that shape is written down instead of worked around.
+//   `engine: "next"`    a CASE-level marker for behaviour the default engine refuses outright
+//                       (exit 2), so this gate can neither observe nor judge it. The case stays
+//                       out of this gate's run and its floors, and is asserted by the
+//                       next-engine recall loop in `check-next-duplicates.mjs`, which runs every
+//                       case. Declared, counted and printed -- never a silent `continue`.
 //
 // ---------------------------------------------------------------------------------------------
 // The rule that makes it a barrier: expectations are established, never recorded
@@ -170,6 +175,13 @@ function validateManifest(manifest, failures) {
     }
     if (!['positive', 'negative', 'variant'].includes(testCase.role)) {
       failures.push(`FAIL ${where}: role must be positive, negative, or variant`)
+    }
+    if (testCase.engine !== undefined && testCase.engine !== 'next') {
+      failures.push(
+        `FAIL ${where}: \`engine\` must be "next" when set -- the only engine whose facts a case ` +
+          `may withhold from this gate. Any other value would skip the case here while no other ` +
+          `gate claimed it`,
+      )
     }
     if (!Number.isInteger(testCase.expectedTests) || testCase.expectedTests < 1) {
       failures.push(
@@ -439,9 +451,22 @@ function main() {
   }
 
   const pendingHeld = []
+  const nextEngineCases = manifest.cases.filter((testCase) => testCase.engine === 'next')
   const totals = newTotals()
 
   for (const testCase of manifest.cases) {
+    if (testCase.engine === 'next') {
+      // Declared next-engine facts: the default engine refuses the case outright, so the
+      // next-engine recall loop in `check-next-duplicates.mjs` asserts it. The directory must
+      // still exist: a vanished case fails here, not only in the other gate.
+      if (!existsSync(join(root, testCase.path))) {
+        failures.push(
+          `FAIL case ${testCase.name} (${testCase.path}): case directory is missing. A vanished ` +
+            `case cannot fail its own expectations, so it has to fail here`,
+        )
+      }
+      continue
+    }
     judgeRecallCase(
       testCase,
       observeRecallCase({ binary, root, testCase }),
@@ -449,10 +474,17 @@ function main() {
     )
   }
 
-  if (totals.ran !== manifest.cases.length) {
+  if (totals.ran !== manifest.cases.length - nextEngineCases.length) {
     failures.push(
-      `FAIL: ${totals.ran} of ${manifest.cases.length} manifest case(s) actually ran. A recall ` +
-        `figure computed over a subset of the corpus is not the corpus's recall`,
+      `FAIL: ${totals.ran} of ${manifest.cases.length - nextEngineCases.length} manifest case(s) ` +
+        `actually ran. A recall figure computed over a subset of the corpus is not the corpus's ` +
+        `recall`,
+    )
+  }
+  if (nextEngineCases.length > 0) {
+    console.error(
+      `note: ${nextEngineCases.length} next-engine case(s) held out of this gate's run; the ` +
+        `next-engine recall loop in check-next-duplicates asserts them`,
     )
   }
   if (totals.testsAnalyzed === 0) {

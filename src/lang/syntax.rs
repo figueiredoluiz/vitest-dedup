@@ -2,6 +2,35 @@
 
 use super::{NodeId, Scopes, SymbolId, Tree};
 
+/// Whether a subtree reads its surrounding invocation's receiver or implicit arguments.
+/// Arrow functions inherit those values; ordinary functions and class bodies bind their own.
+pub fn uses_receiver(tree: &Tree, root: NodeId) -> bool {
+    let binds = |node| {
+        matches!(
+            tree.kind(node),
+            "FunctionExpression" | "FunctionDeclaration" | "ClassBody"
+        )
+    };
+    if binds(root) {
+        return false;
+    }
+    if tree.kind(root) == "Identifier" {
+        return tree.text(root, "name") == Some("arguments");
+    }
+    std::iter::once(root)
+        .chain(tree.descendants(root))
+        .any(|node| {
+            let reads = matches!(tree.kind(node), "ThisExpression" | "Super" | "MetaProperty")
+                || (tree.kind(node) == "Identifier"
+                    && tree.text(node, "name") == Some("arguments"));
+            reads
+                && !tree
+                    .ancestors(node)
+                    .take_while(|&ancestor| ancestor != root)
+                    .any(|ancestor| binds(ancestor) || tree.kind(ancestor) == "Identifier")
+        })
+}
+
 /// The name an import or export specifier's `imported`, `local` or `exported` field spells.
 pub fn export_name(tree: &Tree, name: NodeId) -> String {
     tree.text(name, "name")

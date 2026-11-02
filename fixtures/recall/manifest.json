@@ -6,6 +6,111 @@
   "recallDestination": 1,
   "cases": [
     {
+      "name": "runner-unproved-scope-retention",
+      "path": "runner-unproved-scope-retention",
+      "rule": "duplicate-test",
+      "role": "positive",
+      "engine": "next",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-02",
+      "expectedTests": 5,
+      "expectedIncomplete": true,
+      "expectedUnresolved": 3,
+      "expectedFindings": [
+        {
+          "rule": "duplicate-test",
+          "severity": "error",
+          "titles": [
+            "safe first",
+            "safe second"
+          ]
+        }
+      ],
+      "expectedAbsent": [
+        {
+          "rule": "duplicate-test",
+          "titles": [
+            "uncertain first",
+            "uncertain second"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "runner-shared-declaration-retention",
+      "path": "runner-shared-declaration-retention",
+      "rule": "cross-file-duplicate",
+      "role": "negative",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-02",
+      "expectedTests": 2,
+      "expectedIncomplete": false,
+      "expectedUnresolved": 0,
+      "expectedFindings": [],
+      "expectedAbsent": [
+        {
+          "rule": "cross-file-duplicate",
+          "titles": ["normalizes the label", "normalizes the label"]
+        }
+      ]
+    },
+    {
+      "name": "runner-declaration-origin-collision",
+      "path": "runner-declaration-origin-collision",
+      "rule": "duplicate-test",
+      "role": "positive",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-02",
+      "expectedTests": 2,
+      "expectedIncomplete": false,
+      "expectedUnresolved": 0,
+      "expectedFindings": [
+        {
+          "rule": "duplicate-test",
+          "severity": "error",
+          "titles": [
+            "normalizes the label",
+            "normalizes the label"
+          ]
+        },
+        {
+          "rule": "duplicate-test-name",
+          "severity": "warning",
+          "titles": [
+            "normalizes the label",
+            "normalizes the label"
+          ]
+        }
+      ],
+      "expectedAbsent": []
+    },
+    {
+      "name": "runner-repeated-registration-ownership",
+      "path": "runner-repeated-registration-ownership",
+      "rule": "duplicate-test",
+      "role": "positive",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-02",
+      "expectedTests": 4,
+      "expectedIncomplete": false,
+      "expectedUnresolved": 0,
+      "expectedFindings": [
+        {
+          "rule": "duplicate-test",
+          "severity": "error",
+          "titles": [
+            "runner normalizes first label",
+            "runner normalizes second label"
+          ]
+        }
+      ],
+      "expectedAbsent": []
+    },
+    {
       "name": "duplicate-test-git-mode-retention",
       "path": "duplicate-test-git-mode-retention",
       "rule": "duplicate-test",
@@ -8385,6 +8490,188 @@
           "titles": [
             "left",
             "right"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "runner-nested-forwarded-capture",
+      "path": "runner-nested-forwarded-capture",
+      "rule": "duplicate-test",
+      "role": "positive",
+      "engine": "next",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-02",
+      "arguments": [
+        "--rule",
+        "parameterization-candidate=off",
+        "--rule",
+        "near-duplicate-test=off"
+      ],
+      "expectedTests": 3,
+      "expectedIncomplete": false,
+      "expectedUnresolved": 0,
+      "expectedFindings": [
+        {
+          "rule": "duplicate-test",
+          "severity": "error",
+          "titles": [
+            "page leaf",
+            "page local"
+          ]
+        }
+      ],
+      "expectedAbsent": [
+        {
+          "rule": "duplicate-test",
+          "titles": [
+            "other shadow",
+            "page local"
+          ]
+        },
+        {
+          "rule": "duplicate-test",
+          "titles": [
+            "other shadow",
+            "page leaf"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "runner-nested-module-const",
+      "path": "runner-nested-module-const",
+      "rule": "duplicate-test",
+      "role": "positive",
+      "engine": "next",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-02",
+      "arguments": [
+        "--rule",
+        "parameterization-candidate=off",
+        "--rule",
+        "near-duplicate-test=off"
+      ],
+      "expectedTests": 2,
+      "expectedIncomplete": false,
+      "expectedUnresolved": 0,
+      "expectedFindings": [
+        {
+          "rule": "duplicate-test",
+          "severity": "error",
+          "titles": [
+            "page first",
+            "page second"
+          ]
+        }
+      ],
+      "expectedAbsent": []
+    },
+    {
+      "name": "runner-nested-binding-isolation",
+      "path": "runner-nested-binding-isolation",
+      "rule": "duplicate-test",
+      "role": "positive",
+      "engine": "next",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-02",
+      "arguments": [
+        "--rule",
+        "parameterization-candidate=off",
+        "--rule",
+        "near-duplicate-test=off"
+      ],
+      "expectedTests": 3,
+      "expectedIncomplete": false,
+      "expectedUnresolved": 0,
+      "expectedFindings": [
+        {
+          "rule": "duplicate-test",
+          "severity": "error",
+          "titles": [
+            "page literal",
+            "page bound"
+          ]
+        }
+      ],
+      "expectedAbsent": [
+        {
+          "rule": "duplicate-test",
+          "titles": [
+            "other fixed",
+            "page literal"
+          ]
+        },
+        {
+          "rule": "duplicate-test",
+          "titles": [
+            "other fixed",
+            "page bound"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "runner-eval-binding-guard",
+      "path": "runner-eval-binding-guard",
+      "rule": "duplicate-test",
+      "role": "positive",
+      "engine": "next",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-03",
+      "arguments": [
+        "--rule",
+        "parameterization-candidate=off",
+        "--rule",
+        "near-duplicate-test=off",
+        "--rule",
+        "cross-file-duplicate=off"
+      ],
+      "expectedTests": 9,
+      "expectedIncomplete": true,
+      "expectedUnresolved": 5,
+      "expectedFindings": [
+        {
+          "rule": "duplicate-test",
+          "severity": "error",
+          "titles": [
+            "safe first",
+            "safe second"
+          ]
+        },
+        {
+          "rule": "duplicate-test",
+          "severity": "error",
+          "titles": [
+            "safe row first",
+            "safe row second"
+          ]
+        }
+      ],
+      "expectedAbsent": [
+        {
+          "rule": "duplicate-test",
+          "titles": [
+            "unsafe first",
+            "unsafe second"
+          ]
+        },
+        {
+          "rule": "duplicate-test",
+          "titles": [
+            "unsafe row first",
+            "unsafe row second"
+          ]
+        },
+        {
+          "rule": "duplicate-test",
+          "titles": [
+            "unsafe name first",
+            "unsafe name second"
           ]
         }
       ]

@@ -339,6 +339,9 @@ impl Normalizer<'_> {
         row: &Row,
         structural: bool,
     ) -> Option<(HashMap<SymbolId, String>, bool)> {
+        if self.structure.direct_eval {
+            return None;
+        }
         let tree = self.tree;
         let undefined = || "g:undefined".to_owned();
         let mut bound = HashMap::new();

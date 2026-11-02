@@ -1,5 +1,5 @@
 //! Retained next-engine ownership, excluding per-file parser/normalizer scratch.
-use super::{Engine, Exclusion, Hook, Hooks, Run, SiteRecord, TestCase};
+use super::{Engine, Exclusion, Hook, Hooks, Origin, Run, SiteRecord, TestCase};
 use crate::memory::{EngineBytes, HeapBytes};
 use crate::model::BlindFile;
 
@@ -15,7 +15,9 @@ impl HeapBytes for Exclusion {
             | Self::TruncatedBody
             | Self::NamedCallback
             | Self::Benchmark
-            | Self::RegisteredElsewhere => 0,
+            | Self::RegisteredElsewhere
+            | Self::UnprovedRunner
+            | Self::DynamicBindings => 0,
         }
     }
 }
@@ -24,6 +26,7 @@ impl HeapBytes for TestCase {
     /// Account every owned case field, including display names and retained trace capacity.
     fn heap_bytes(&self) -> usize {
         let Self {
+            origin,
             span,
             title,
             full_title,
@@ -44,6 +47,7 @@ impl HeapBytes for TestCase {
             exclusion,
         } = self;
         [
+            origin.heap_bytes(),
             span.heap_bytes(),
             title.heap_bytes(),
             full_title.heap_bytes(),
@@ -65,6 +69,18 @@ impl HeapBytes for TestCase {
         ]
         .into_iter()
         .fold(0, usize::saturating_add)
+    }
+}
+
+impl HeapBytes for Origin {
+    /// Source and registration ownership are disjoint owned path payloads.
+    fn heap_bytes(&self) -> usize {
+        let Self {
+            path,
+            registration_files,
+        } = self;
+        path.heap_bytes()
+            .saturating_add(registration_files.heap_bytes())
     }
 }
 
@@ -141,6 +157,7 @@ impl Engine {
             run,
             tests,
             unresolved,
+            empty_tables,
             sites,
             files,
             suites,
@@ -180,7 +197,10 @@ impl Engine {
                 .saturating_add(blind.capacity().saturating_mul(size_of::<BlindFile>())),
             modules: modules.heap_bytes().saturating_add(sources.heap_bytes()),
             exports: exports.heap_bytes(),
-            scalars: tests.heap_bytes().saturating_add(unresolved.heap_bytes()),
+            scalars: tests
+                .heap_bytes()
+                .saturating_add(unresolved.heap_bytes())
+                .saturating_add(empty_tables.heap_bytes()),
         }
     }
 

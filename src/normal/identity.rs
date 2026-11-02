@@ -22,6 +22,13 @@ impl Normalizer<'_> {
         if let Some(substitute) = walk.substitutions.get(&symbol) {
             return substitute.clone();
         }
+        if let Some(value) = self.registration_bindings.get(&symbol) {
+            return if walk.structural && (walk.trace || walk.in_type == 0) {
+                value.shape.clone()
+            } else {
+                value.form.clone()
+            };
+        }
         let declared = self.scopes.symbol(symbol).span;
         if walk.root.contains(declared) {
             if walk.names_observed && self.named(symbol) {

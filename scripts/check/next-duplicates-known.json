@@ -81,18 +81,6 @@
       "reason": "False positive: a row parameter that is reassigned is still substituted by its row."
     },
     {
-      "id": "recall-miss|framework-runner-default-const|duplicate-test|page lowercases,page slug is lowercase",
-      "reason": "Tests a helper registers are excluded, not compared, until they are compared where the helper is called."
-    },
-    {
-      "id": "recall-miss|framework-runner-default-alias-control|duplicate-test|page lowercases,page slug is lowercase",
-      "reason": "Tests a helper registers are excluded, not compared, until they are compared where the helper is called."
-    },
-    {
-      "id": "recall-miss|framework-runner-named-control|duplicate-test|page lowercases,page slug is lowercase",
-      "reason": "Tests a helper registers are excluded, not compared, until they are compared where the helper is called."
-    },
-    {
       "id": "recall-absent|framework-package-mock-call-uninstalled|duplicate-test|users.test.ts:14,users.test.ts:19",
       "reason": "The default engine abstains on this file; the next engine compares identical text in an identical context, as decided."
     },
@@ -115,22 +103,6 @@
     {
       "id": "recall-absent|framework-auto-import-ungenerated-control|duplicate-test|known.test.ts:12,known.test.ts:16",
       "reason": "The default engine abstains on this file; the next engine compares identical text in an identical context, as decided."
-    },
-    {
-      "id": "recall-miss|framework-runner-default-function-declared-after|duplicate-test|page lowercases,page slug is lowercase",
-      "reason": "Tests a helper registers are excluded, not compared, until they are compared where the helper is called."
-    },
-    {
-      "id": "recall-miss|framework-runner-named-and-default|duplicate-test|page lowercases,page slug is lowercase",
-      "reason": "Tests a helper registers are excluded, not compared, until they are compared where the helper is called."
-    },
-    {
-      "id": "recall-miss|framework-runner-ambient-module-augmentation|duplicate-test|page lowercases,page slug is lowercase",
-      "reason": "Tests a helper registers are excluded, not compared, until they are compared where the helper is called."
-    },
-    {
-      "id": "recall-miss|framework-runner-ambient-declarations|duplicate-test|page lowercases,page slug is lowercase",
-      "reason": "Tests a helper registers are excluded, not compared, until they are compared where the helper is called."
     },
     {
       "id": "recall-miss|framework-runner-module-values|duplicate-test|page lowercases,page slug is lowercase",
@@ -482,14 +454,6 @@
     },
     {
       "id": "recall-tests|concise-suite-guarded-hook-uncertainty|all|4",
-      "reason": "The next engine counts a helper's call and the tests its file spells; the default engine inlines what the helper registers."
-    },
-    {
-      "id": "recall-tests|helper-initializer-hook|all|3",
-      "reason": "The next engine counts a helper's call and the tests its file spells; the default engine inlines what the helper registers."
-    },
-    {
-      "id": "recall-tests|helper-initializer-equivalent-hooks|all|4",
       "reason": "The next engine counts a helper's call and the tests its file spells; the default engine inlines what the helper registers."
     },
     {

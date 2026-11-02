@@ -1,11 +1,21 @@
 //! Bounded literal values for names, independent of callback normalization.
 
 use super::{form, Row};
-use crate::lang::{property_name, Declaration, Field, NodeId, Parsed};
+use crate::lang::{property_name, Declaration, Field, NodeId, Parsed, SymbolId};
 use serde_json::{Map, Value};
+use std::collections::HashMap;
 
 /// A title string whose value is proved by the source, or a named function used as a title.
 pub(crate) fn title(parsed: &Parsed, call: NodeId) -> Option<String> {
+    title_with_bindings(parsed, call, &HashMap::new())
+}
+
+/// A title under one proved invocation's immutable positional values.
+pub(crate) fn title_with_bindings(
+    parsed: &Parsed,
+    call: NodeId,
+    bindings: &HashMap<SymbolId, Value>,
+) -> Option<String> {
     let tree = &parsed.tree;
     let node = tree.inner(tree.list(call, "arguments").first().copied()??);
     if tree.kind(node) == "FunctionExpression" {
@@ -14,7 +24,7 @@ pub(crate) fn title(parsed: &Parsed, call: NodeId) -> Option<String> {
             .and_then(|id| tree.text(id, "name"))
             .map(str::to_owned);
     }
-    match value(parsed, node, 0, &mut 256)? {
+    match value_with_bindings(parsed, node, 0, &mut 256, bindings)? {
         Value::String(text) => Some(text),
         _ => None,
     }
@@ -67,13 +77,24 @@ pub(super) fn value(
     depth: usize,
     budget: &mut usize,
 ) -> Option<Value> {
+    value_with_bindings(parsed, node, depth, budget, &HashMap::new())
+}
+
+/// Read a bounded literal value with caller bindings; nested lexical bindings keep their IDs.
+pub(crate) fn value_with_bindings(
+    parsed: &Parsed,
+    node: NodeId,
+    depth: usize,
+    budget: &mut usize,
+    bindings: &HashMap<SymbolId, Value>,
+) -> Option<Value> {
     if depth >= 32 || *budget == 0 {
         return None;
     }
     *budget -= 1;
     let tree = &parsed.tree;
     let node = tree.inner(node);
-    let mut child = |node| value(parsed, node, depth + 1, budget);
+    let mut child = |node| value_with_bindings(parsed, node, depth + 1, budget, bindings);
     match tree.kind(node) {
         "Literal" => match tree.field_of(node, "value") {
             Field::Value(value @ (Value::String(_) | Value::Bool(_) | Value::Number(_))) => {
@@ -85,6 +106,13 @@ pub(super) fn value(
             _ => None,
         },
         "Identifier" => {
+            if let Some(value) = parsed
+                .scopes
+                .symbol_at(tree.span(node).start)
+                .and_then(|symbol| bindings.get(&symbol))
+            {
+                return Some(value.clone());
+            }
             let symbol = parsed
                 .scopes
                 .symbol(parsed.scopes.symbol_at(tree.span(node).start)?);

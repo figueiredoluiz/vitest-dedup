@@ -33,7 +33,7 @@ pub(super) fn run(
                 }
                 let a = entries[group[left]];
                 let b = entries[group[right]];
-                if a.case.span.start_byte == b.case.span.start_byte || a.case.body == b.case.body {
+                if a.declaration() == b.declaration() || a.case.body == b.case.body {
                     continue;
                 }
                 let members = if a.case.ordinary_events < b.case.ordinary_events
@@ -49,8 +49,8 @@ pub(super) fn run(
                 };
                 if !claimed.insert((
                     members[0].path,
-                    members[0].case.span.start_byte,
-                    members[1].case.span.start_byte,
+                    members[0].declaration(),
+                    members[1].declaration(),
                 )) {
                     continue;
                 }

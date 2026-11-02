@@ -58,6 +58,53 @@ impl SourceTree for Tree {
     }
 }
 
+/// Declaration ownership uses one authority for both paths, including missing virtual identities.
+#[test]
+fn relative_identities_cannot_borrow_a_host_file_or_a_host_root() {
+    let root = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    let live = root.path().join("live.ts");
+    let foreign = outside.path().join("foreign.ts");
+    std::fs::write(&live, "live").unwrap();
+    std::fs::write(&foreign, "foreign").unwrap();
+    let working = Sources::default();
+    assert_eq!(
+        working.relative(&live, root.path()),
+        Some(PathBuf::from("live.ts"))
+    );
+    assert_eq!(working.relative(&foreign, root.path()), None);
+    assert_eq!(
+        working.relative(&root.path().join("missing.ts"), root.path()),
+        None
+    );
+    assert_eq!(
+        working.relative(&live, &root.path().join("missing-root")),
+        None
+    );
+    let virtual_path = root.path().join("virtual.ts");
+    assert!(!virtual_path.exists());
+    let committed = Sources::committed(Arc::new(Tree {
+        path: virtual_path.clone(),
+        bytes: b"committed".to_vec(),
+        kind: SourceKind::File,
+        errors: Mutex::default(),
+    }));
+    assert_eq!(
+        committed.relative(&virtual_path, root.path()),
+        Some(PathBuf::from("virtual.ts"))
+    );
+    assert_eq!(
+        committed.relative(&live, root.path()),
+        None,
+        "an existing host file has no committed identity"
+    );
+    assert_eq!(
+        committed.relative(&virtual_path, outside.path()),
+        None,
+        "a host-only root cannot normalize a committed declaration"
+    );
+}
+
 /// Default construction cannot expose even an existing working file; committed reads win.
 #[test]
 fn factories_and_reads_preserve_the_source_authority() {

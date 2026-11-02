@@ -8,9 +8,10 @@
       "next": {},
       "nextToday": {
         "reasons": [
-          "registered-elsewhere"
+          "registered-elsewhere",
+          "helper-effects-unproved"
         ],
-        "testsExcluded": 1
+        "testsExcluded": 2
       },
       "waitsOn": "tests a wrapper registers compared where it is called"
     }

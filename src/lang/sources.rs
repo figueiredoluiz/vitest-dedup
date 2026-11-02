@@ -42,6 +42,20 @@ pub trait SourceTree: Debug + Send + Sync {
 pub struct Sources(Option<Arc<dyn SourceTree>>);
 
 impl Sources {
+    /// Relativize identities through this authority, including equivalent host/root spellings.
+    /// A committed catalog never borrows filesystem canonicalization from the working tree.
+    pub(crate) fn relative(&self, path: &Path, root: &Path) -> Option<PathBuf> {
+        let canonical = |path: &Path| match &self.0 {
+            None => std::fs::canonicalize(path),
+            Some(tree) => tree.canonicalize(path),
+        };
+        canonical(path)
+            .ok()?
+            .strip_prefix(canonical(root).ok()?)
+            .ok()
+            .map(Path::to_path_buf)
+    }
+
     /// Pin a committed source tree; a missing virtual path can never become a working file.
     pub fn committed(tree: Arc<dyn SourceTree>) -> Self {
         Self(Some(tree))
