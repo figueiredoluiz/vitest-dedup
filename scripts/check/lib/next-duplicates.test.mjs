@@ -294,6 +294,21 @@ test('a case that analyzed another number of tests is a delta carrying the count
   assert.deepEqual(judgeRecall({ name: 'c', expectedTests: 2 }, []).failures.map((f) => f.id), ['recall-tests|c|all|undefined'])
 })
 
+test('a next-engine case declares its completeness and unresolved counts beside the findings', () => {
+  const whole = { ...summary(2), incomplete: false, unresolvedTests: 0 }
+  const next = { engine: 'next' }
+  const complete = judgeRecall({ name: 'c', expectedTests: 2, expectedIncomplete: false, expectedUnresolved: 0, ...next }, [whole])
+  assert.deepEqual(complete.failures, [])
+  const flipped = judgeRecall({ name: 'c', expectedTests: 2, expectedIncomplete: false, expectedUnresolved: 0, ...next }, [{ ...whole, incomplete: true }])
+  assert.deepEqual(flipped.failures.map((f) => f.id), ['recall-incomplete|c|all|true'])
+  const unresolved = judgeRecall({ name: 'c', expectedTests: 2, expectedIncomplete: false, expectedUnresolved: 0, ...next }, [{ ...whole, unresolvedTests: 1 }])
+  assert.deepEqual(unresolved.failures.map((f) => f.id), ['recall-unresolved|c|all|1'])
+  // A case that does not declare `expectedUnresolved` asserts nothing about it.
+  assert.deepEqual(judgeRecall({ name: 'c', expectedTests: 2, expectedIncomplete: false, ...next }, [whole]).failures, [])
+  // A shared-corpus case keeps its default-engine facts: the default recall gate judges them.
+  assert.deepEqual(judgeRecall({ name: 'c', expectedTests: 2, expectedIncomplete: false, expectedUnresolved: 0 }, [{ ...whole, incomplete: true }]).failures, [])
+})
+
 test('a recall expectation is met by rule and locations, whatever title the next engine renders', () => {
   const matcher = { rule: 'duplicate-test', titles: ['row 1'], locations: ['a.test.ts:3', 'a.test.ts:6'] }
   const outcome = judgeRecall({ name: 'c', expectedTests: 2, expectedFindings: [matcher] }, [summary(2), located('duplicate-test', [6, 3])])

@@ -164,9 +164,23 @@ export function judgeRecall(testCase, records) {
     return found
   }
   // A case that read fewer tests can pass its silences without having compared anything.
-  const analyzed = records.find((record) => record?.type === 'summary')?.testsAnalyzed
+  const summary = records.find((record) => record?.type === 'summary')
+  const analyzed = summary?.testsAnalyzed
   if (analyzed !== testCase.expectedTests) {
     delta('tests', 'all', String(analyzed), `the next engine analyzed ${analyzed} test(s), and the case expects ${testCase.expectedTests}`)
+  }
+  // A next-engine case's declared silence is evidence only when the run's completeness and
+  // unresolved counts are the ones it declares (`distinct` vs `not-compared`): this judge is the
+  // only gate that reads it, so a change flipping either value without moving the findings must
+  // fail here. Shared-corpus cases keep their default-engine facts and are judged by the default
+  // recall gate instead.
+  if (testCase.engine === 'next' && summary) {
+    if (summary.incomplete !== testCase.expectedIncomplete) {
+      delta('incomplete', 'all', String(summary.incomplete), `the next engine reported incomplete=${summary.incomplete}, and the case expects ${testCase.expectedIncomplete}`)
+    }
+    if (testCase.expectedUnresolved !== undefined && summary.unresolvedTests !== testCase.expectedUnresolved) {
+      delta('unresolved', 'all', String(summary.unresolvedTests), `the next engine left ${summary.unresolvedTests} test(s) unresolved, and the case expects ${testCase.expectedUnresolved}`)
+    }
   }
   const expected = ported(testCase.expectedFindings)
   for (const matcher of expected) {
