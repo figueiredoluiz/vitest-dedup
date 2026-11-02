@@ -2038,8 +2038,9 @@ impl PackageWorkerFailure {
 pub struct IncompleteCauses {
     /// Directory traversal failed, so the file list itself may be short.
     pub discovery_failed: bool,
-    /// Project configuration could not be read well enough to scope discovery or resolve
-    /// historical imports, so the affected pass cannot establish its complete finding set.
+    /// Project configuration could not be read well enough to scope discovery, so this run
+    /// cannot establish its complete finding set. A degraded `--baseline-from-ref` historical
+    /// pass is reported on stderr and withholds its allowance; it does not set this flag.
     pub project_config_degraded: bool,
     /// Every discovered file failed to read: nothing was analyzed at all.
     pub nothing_read: bool,

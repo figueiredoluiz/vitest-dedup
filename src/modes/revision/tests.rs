@@ -62,7 +62,7 @@ fn immutable_catalog_reads_only_its_pinned_objects() {
         files
             .canonicalize(&root.join("nested/../tsconfig.json"))
             .unwrap(),
-        root.join("tsconfig.json")
+        lexical(&root.join("tsconfig.json")).unwrap()
     );
     assert!(files.canonicalize(&root.join("../outside")).is_err());
     assert!(files.regular_root(&root.join("nested")).is_err());
@@ -129,7 +129,10 @@ fn catalog_rejects_nonregular_and_oversized_dependencies() {
         let dir = repository_with(&[("helper.ts", b"old")]);
         let root = dir.path().canonicalize().unwrap();
         let mut files = RevisionFiles::load(&root, "HEAD", None).unwrap();
-        let entry = files.files.get_mut(&root.join("helper.ts")).unwrap();
+        let entry = files
+            .files
+            .get_mut(&lexical(&root.join("helper.ts")).unwrap())
+            .unwrap();
         entry.kind = kind;
         entry.size = Some(size);
         assert!(files.read(&root.join("helper.ts")).is_err());
@@ -147,7 +150,11 @@ fn unavailable_objects_do_not_turn_into_empty_source() {
     let dir = repository_with(&[("helper.ts", b"old")]);
     let root = dir.path().canonicalize().unwrap();
     let mut files = RevisionFiles::load(&root, "HEAD", None).unwrap();
-    files.files.get_mut(&root.join("helper.ts")).unwrap().object = "0".repeat(40);
+    files
+        .files
+        .get_mut(&lexical(&root.join("helper.ts")).unwrap())
+        .unwrap()
+        .object = "0".repeat(40);
     assert!(files.read(&root.join("helper.ts")).is_err());
     assert!(files
         .ensure_readable()
@@ -261,7 +268,7 @@ fn uncertain_project_metadata_never_claims_a_complete_package_catalog() {
         if body == br#"{"name":"valid"}"# {
             files
                 .files
-                .get_mut(&root.join("pkg/package.json"))
+                .get_mut(&lexical(&root.join("pkg/package.json")).unwrap())
                 .unwrap()
                 .size = None;
         }
@@ -287,7 +294,7 @@ fn uncertain_project_metadata_never_claims_a_complete_package_catalog() {
     let mut files = RevisionFiles::load(&root, "HEAD", None).unwrap();
     files
         .files
-        .get_mut(&root.join("a/package.json"))
+        .get_mut(&lexical(&root.join("a/package.json")).unwrap())
         .unwrap()
         .object = "0".repeat(40);
     files.unresolved_package("anything");
