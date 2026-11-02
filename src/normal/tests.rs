@@ -1,4 +1,4 @@
-use super::{Exports, Normalizer, Row, Setting, Structure};
+use super::{Exports, Normalizer, Row, Setting, Structure, TableRow};
 use crate::framework::vitest::DIALECT;
 use crate::inventory::{inventory, Inventory, Modules, SiteKind};
 use crate::lang::{parse, NodeId, Tree};
@@ -68,7 +68,7 @@ fn site_forms(normalizer: &mut Normalizer, tree: &Tree, site: NodeId) -> Vec<Opt
         Some(rows) => rows
             .iter()
             .map(|row| {
-                let (bound, every) = normalizer.bind_row(&parameters, row)?;
+                let (bound, every) = normalizer.bind_row(&parameters, &row.value)?;
                 Some(normalizer.substituted(callback, bound, every))
             })
             .collect(),
@@ -511,14 +511,17 @@ fn literal_table_rows_bind_into_the_callback() {
                 .modifiers(tree.child(found.sites[2].node, "callee").unwrap())
                 .rows
                 .as_deref(),
-            Some([Row::Whole(_, Some(_))])
+            Some([TableRow {
+                value: Row::Whole(_, Some(_)),
+                ..
+            }])
         ));
     })
 }
 
-/// `for` passes each row whole, and a table with holes or spreads is not read.
+/// `for` passes each row whole; outer elisions are skipped while spreads remain unreadable.
 #[test]
-fn whole_rows_are_never_spread_and_holes_are_unread() {
+fn whole_rows_are_never_spread_and_outer_holes_are_skipped() {
     let found = modifiers(
         "test.for([[1, 2]])('a', (row) => {})\n\
          test.each([[1], 2])('b', (row) => {})\n\
@@ -528,15 +531,43 @@ fn whole_rows_are_never_spread_and_holes_are_unread() {
     let chains: Vec<_> = found.iter().map(|(chain, ..)| chain.clone()).collect();
     assert_eq!(chains[0], "api:test.for.(rows)");
     assert_eq!(chains[1], "api:test.each.(rows)");
-    assert!(
-        chains[2].starts_with("api:test.each.((ArrayExpression"),
-        "{}",
-        chains[2]
-    );
+    assert_eq!(chains[2], "api:test.each.(rows)");
     assert!(
         chains[3].starts_with("api:test.each.((ArrayExpression"),
         "{}",
         chains[3]
+    );
+}
+
+/// Erasing a table wrapper does not admit spreads, dynamic tables or sparse callback inputs.
+#[test]
+fn wrapped_tables_keep_unreadable_input_boundaries() {
+    with_normalizer(
+        "test.each(([...[1, 1]]) as const)('spread', value => {})\n\
+         test.each(([[, 1], [, 1]]) as const)('cells', value => {})\n\
+         test.each((rows) as readonly number[])('dynamic', value => {})\n\
+         test.each(([1, , 2]) as const)('literal', value => {})",
+        &[],
+        true,
+        |normalizer, tree, found| {
+            let rows: Vec<_> = found
+                .sites
+                .iter()
+                .filter(|site| site.kind == SiteKind::Registers(crate::framework::Registers::Test))
+                .map(|site| {
+                    normalizer
+                        .modifiers(tree.child(site.node, "callee").unwrap())
+                        .rows
+                })
+                .collect();
+            assert_eq!(rows.len(), 4);
+            assert!(rows[..3].iter().all(Option::is_none));
+            let literal = rows[3].as_ref().unwrap();
+            assert_eq!(
+                literal.iter().map(|row| row.index).collect::<Vec<_>>(),
+                [0, 2]
+            );
+        },
     );
 }
 

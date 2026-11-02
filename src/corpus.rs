@@ -447,23 +447,24 @@ pub fn file(
         record.inert = modifiers.as_ref().is_some_and(|modifiers| modifiers.inert)
             || normalizer.inert_options(&arguments);
         // An excluded test is still one case per row of a table the file spells out.
-        let row_count = modifiers
+        let table_rows = modifiers
             .as_ref()
-            .and_then(|modifiers| modifiers.rows.as_ref())
-            .map(Vec::len);
+            .and_then(|modifiers| modifiers.rows.as_ref());
         let excluded = |exclusion| -> Vec<TestCase> {
             let case = |row| TestCase {
                 row,
                 exclusion: Some(exclusion),
                 ..record.clone()
             };
-            match row_count {
+            match table_rows {
                 None => vec![case(None)],
-                Some(count) => (0..count).map(|index| case(Some(index))).collect(),
+                Some(rows) => rows.iter().map(|row| case(Some(row.index))).collect(),
             }
         };
         let unread_callee = modifiers.is_none();
-        let (Some(modifiers), Some(callback)) = (modifiers, normalizer.callback(site.node)) else {
+        let (Some(modifiers), Some(callback)) =
+            (modifiers.as_ref(), normalizer.callback(site.node))
+        else {
             // A spread may expand to the callback Vitest runs; only a test with none is a todo.
             let hidden = unread_callee
                 || arguments
@@ -564,11 +565,11 @@ pub fn file(
                 .map(|row| {
                     match parameters
                         .as_deref()
-                        .and_then(|parameters| normalizer.bind_row(parameters, row))
+                        .and_then(|parameters| normalizer.bind_row(parameters, &row.value))
                     {
                         Some((bound, every)) => (bound, every, String::new()),
                         None => {
-                            let cells: Vec<NodeId> = match row {
+                            let cells: Vec<NodeId> = match &row.value {
                                 normal::Row::Spread(cells) => cells.clone(),
                                 normal::Row::Whole(row, _) => vec![*row],
                             };
@@ -646,12 +647,12 @@ pub fn file(
                         let title = if table_site(site) {
                             let row = modifiers.rows.as_ref()?.get(index)?;
                             let (arguments, fields) =
-                                normal::titles::row(&parsed, row, modifiers.whole_rows);
+                                normal::titles::row(&parsed, &row.value, modifiers.whole_rows);
                             (setting.dialect.render_title)(
                                 pattern,
                                 &arguments,
                                 fields.as_ref(),
-                                index,
+                                row.index,
                             )?
                         } else {
                             pattern.to_owned()
@@ -664,13 +665,14 @@ pub fn file(
                     return None;
                 }
                 let row = modifiers.rows.as_ref()?.get(index)?;
-                let identity = normal::row_identity::identity(&parsed, row, function?)?;
-                let (arguments, fields) = normal::titles::row(&parsed, row, modifiers.whole_rows);
+                let identity = normal::row_identity::identity(&parsed, &row.value, function?)?;
+                let (arguments, fields) =
+                    normal::titles::row(&parsed, &row.value, modifiers.whole_rows);
                 let rendered = (setting.dialect.render_row_title)(
                     pattern.as_deref()?,
                     &arguments,
                     fields.as_ref(),
-                    index,
+                    row.index,
                 )?;
                 if name.as_ref()?.last()? != &rendered {
                     return None;
@@ -695,7 +697,7 @@ pub fn file(
                     .rows
                     .as_ref()
                     .and_then(|rows| rows.get(index))
-                    .and_then(|row| normalizer.bind_row_shape(parameters.as_deref()?, row))
+                    .and_then(|row| normalizer.bind_row_shape(parameters.as_deref()?, &row.value))
                     .map(|(bound, _)| bound)
                     .unwrap_or_default();
                 let shape = normalizer.shape(body, bound, *every);
@@ -704,7 +706,7 @@ pub fn file(
                 ))
             });
             tests.push(TestCase {
-                row: table.then_some(index),
+                row: modifiers.rows.as_ref().map(|rows| rows[index].index),
                 row_class,
                 key: digest(&key),
                 module_key: digest(&format!("{key}\u{1}{module_context}")),

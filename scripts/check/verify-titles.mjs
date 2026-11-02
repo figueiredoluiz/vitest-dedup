@@ -225,3 +225,24 @@ if (collisions.length !== RENDERING_COLLISIONS || invented.length > 0) {
   )
 }
 console.log(`ok: ${collisions.length} next-engine collisions are repeated by real Vitest ${installed}`)
+
+// Wrapped and sparse literal tables must retain both collection scope and proven duplicate rows.
+const TABLES_DIR = 'fixtures/oracle/wrapped-sparse-tables'
+const tables = collectWithVitest(resolve('.'), TABLES_DIR).get('cases.test.ts')
+if (!tables || tables.unprobed || tables.overlapping || tables.collectErrors.length || tables.stubReads.length
+  || tables.tests.length !== 40) {
+  throw new Error('Wrapped and sparse tables must collect 40 tests without errors or stubs')
+}
+const tableTitles = countTitles(tables.tests)
+const tableRecords = runAnalyzerJsonl(binary, [TABLES_DIR], { VITEST_DEDUP_ENGINE: 'next' }).records
+const tableSummary = tableRecords.find((record) => record.type === 'summary')
+if (tableSummary?.testsAnalyzed !== 40 || tableSummary.unresolvedTests !== 0 || tableSummary.incomplete !== false) {
+  throw new Error('The next engine must analyze all 40 wrapped and sparse table tests without unresolved scope')
+}
+const repeatedRows = tableRecords.filter((record) => record.type === 'finding' && record.rule === 'duplicate-each-row')
+if (repeatedRows.length !== 10 || new Set(repeatedRows.map((record) => record.titles[0])).size !== 10
+  || repeatedRows.some((record) => record.locations.length !== 2 || record.titles.length !== 2
+    || record.titles[0] !== record.titles[1] || tableTitles.get(record.titles[0]) !== 2)) {
+  throw new Error('Wrapped and sparse tables must retain exactly ten distinct, runtime-confirmed duplicate-row pairs')
+}
+console.log(`ok: 40 wrapped/sparse table tests and 10 repeated-row pairs match real Vitest ${installed}`)

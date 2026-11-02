@@ -17,6 +17,15 @@ pub enum Row {
     Whole(NodeId, Option<Vec<(String, NodeId)>>),
 }
 
+/// A present table element and its index in the written array, counting outer elisions.
+#[derive(Clone, Debug)]
+pub struct TableRow {
+    /// The array index used by title formatting and row ordering.
+    pub index: usize,
+    /// The callback inputs represented by this element.
+    pub value: Row,
+}
+
 /// What a registration's callee chain says beyond scheduling.
 #[derive(Clone, Debug, Default)]
 pub struct Modifiers {
@@ -30,7 +39,7 @@ pub struct Modifiers {
     /// set it too.
     pub fails: bool,
     /// The rows of a table the chain carries, when the file spells it out.
-    pub rows: Option<Vec<Row>>,
+    pub rows: Option<Vec<TableRow>>,
     /// Whether those rows reach the callback whole.
     pub whole_rows: bool,
     /// Whether the chain keeps the test from running (`skip`, `todo`), the way a report marks a
@@ -107,7 +116,7 @@ impl Normalizer<'_> {
                     let callee = tree.inner(callee);
                     let table = match (tree.kind(callee), arguments.as_slice()) {
                         ("MemberExpression", [Some(table)])
-                            if tree.kind(*table) == "ArrayExpression" =>
+                            if tree.kind(tree.inner(*table)) == "ArrayExpression" =>
                         {
                             let member = tree
                                 .child(callee, "property")
@@ -115,7 +124,7 @@ impl Normalizer<'_> {
                                 .and_then(|name| dialect.chain_member(name));
                             match member {
                                 Some(Chain::Table(form)) => self
-                                    .table_rows(*table, form)
+                                    .table_rows(tree.inner(*table), form)
                                     .map(|rows| (rows, form == TableRows::Whole)),
                                 _ => None,
                             }
@@ -252,22 +261,24 @@ impl Normalizer<'_> {
     }
 
     /// The rows of a table literal: a spreading table spreads array rows when every row is one,
-    /// a whole-row table never does. `None` when a row is a hole or a spread.
-    fn table_rows(&self, table: NodeId, form: TableRows) -> Option<Vec<Row>> {
+    /// a whole-row table never does. Outer holes register nothing; spreads remain unreadable.
+    fn table_rows(&self, table: NodeId, form: TableRows) -> Option<Vec<TableRow>> {
         let tree = self.tree;
-        let rows: Vec<NodeId> = tree
+        let rows: Vec<(usize, NodeId)> = tree
             .list(table, "elements")
             .into_iter()
-            .map(|row| row.filter(|row| tree.kind(*row) != "SpreadElement"))
+            .enumerate()
+            .filter_map(|(index, row)| row.map(|row| (index, row)))
+            .map(|(index, row)| (tree.kind(row) != "SpreadElement").then_some((index, row)))
             .collect::<Option<_>>()?;
         let spread = form == TableRows::Spread
             && rows
                 .iter()
-                .all(|row| tree.kind(tree.inner(*row)) == "ArrayExpression");
+                .all(|(_, row)| tree.kind(tree.inner(*row)) == "ArrayExpression");
         rows.into_iter()
-            .map(|row| {
+            .map(|(index, row)| {
                 let inner = tree.inner(row);
-                match tree.kind(inner) {
+                let value = match tree.kind(inner) {
                     "ArrayExpression" if spread => tree
                         .list(inner, "elements")
                         .into_iter()
@@ -295,7 +306,8 @@ impl Normalizer<'_> {
                         Some(Row::Whole(row, properties))
                     }
                     _ => Some(Row::Whole(row, None)),
-                }
+                }?;
+                Some(TableRow { index, value })
             })
             .collect()
     }
