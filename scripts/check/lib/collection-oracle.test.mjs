@@ -573,6 +573,18 @@ test('a project the rewrite would collect differently is refused, not probed', (
   }
 })
 
+test('a project naming the declaring config runs as the root project, probed', () => {
+  inScratchProject('oracle-self-project-', (dir, write) => {
+    write('vitest.config.ts', "export default { test: { globals: true, include: ['*.test.ts'], projects: ['vitest.config.ts', 'pkg'] } }\n")
+    write('pkg/vitest.config.ts', 'export default { test: { globals: true } }\n')
+    write('r.test.ts', "test('root', () => {})\n")
+    write('pkg/p.test.ts', "test('pkg', () => {})\n")
+    const files = collectWithVitest(CHECKOUT, dir)
+    assert.deepEqual(files.get('r.test.ts')?.tests, ['root'])
+    assert.deepEqual(files.get('pkg/p.test.ts')?.tests, ['pkg'])
+  })
+})
+
 test('a nested project list is caught when the config only re-exports the one declaring it', () => {
   inScratchProject('oracle-reexported-projects-', (dir, write) => {
     write('vitest.config.ts', "export { default } from './base.config'\n")

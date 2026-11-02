@@ -108,6 +108,8 @@ const project = async (entry) => {
   if (entry && typeof entry === 'object' && !('then' in entry)) return withProbe(entry)
   const file = typeof entry === 'string' ? projectFile(entry) : null
   if (!file) return entry
+  // Vitest runs a project naming the declaring config as that config's own project.
+  if (file === ${JSON.stringify(own)}) return withProbe({})
   if (seen.has(file)) return refuse(entry, \`\${file}: named by more than one project entry\`)
   seen.add(file)
   if (base.test?.project) return refuse(entry, \`\${file}: the root config filters projects by name\`)

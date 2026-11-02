@@ -175,6 +175,7 @@ fn an_ignore_in_an_unread_spelling_stays_unresolved() {
         "pkg/[b]/**".to_owned(),
         "pkg/[b/**".to_owned(),
         "pkg/\u{e9}/**".to_owned(),
+        "{!pkg/b/**,pkg/x}".to_owned(),
     ] {
         write(
             directory.path(),

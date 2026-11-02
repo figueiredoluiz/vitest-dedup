@@ -3714,13 +3714,13 @@ fn glob_sync_ignore(
 /// Whether one brace-free `ignore` alternative means to [`IgnoreMatcher`] what it means to glob
 /// 13.0.6: ASCII, relative, `/`-separated segments that are neither empty (a leading, trailing or
 /// doubled `/`) nor `.` or `..`, with `**` only as a whole segment and never twice in a row, and
-/// no brace, escape, extglob group, drive colon or character pattern (`?`, `[...]`) left. glob
-/// reads each of those its own way, and matches `?` and case per character where the matcher
-/// works per byte.
+/// no brace, escape, negation, extglob group, drive colon or character pattern (`?`, `[...]`)
+/// left. glob reads each of those its own way, and matches `?` and case per character where the
+/// matcher works per byte.
 fn ignore_spelling_is_read(alternative: &str) -> bool {
     let segments: Vec<&str> = alternative.split('/').collect();
     alternative.is_ascii()
-        && !alternative.contains(['{', '}', '\\', '(', ')', ':', '?', '[', ']'])
+        && !alternative.contains(['{', '}', '\\', '(', ')', ':', '?', '[', ']', '!'])
         && segments.iter().all(|segment| {
             !segment.is_empty()
                 && *segment != "."
