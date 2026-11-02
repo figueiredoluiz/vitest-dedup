@@ -70,13 +70,31 @@ export function configSource(absoluteDir, cacheDir) {
     return `${stubs}const probe = ${probe}\nexport default { ...probe, test: { ...probe.test, ...${JSON.stringify(test)} } }\n`
   }
   const vitestConfig = pathToFileURL(join(dirname(PROBE_RUNNER), '..', '..', '..', 'node_modules', 'vitest', 'dist', 'config.js')).href
-  return `${stubs}import { mergeConfig } from ${JSON.stringify(vitestConfig)}
+  // A string entry naming a config file, or a directory holding one, becomes an inline project
+  // extending that file from its own directory, which is how Vitest roots a file project; a glob
+  // or a missing path stays a string, and its files are reported unprobed.
+  return `${stubs}import { existsSync, statSync } from 'node:fs'
+import { dirname, join, resolve } from 'node:path'
+import { mergeConfig } from ${JSON.stringify(vitestConfig)}
 import own from ${JSON.stringify(pathToFileURL(own).href)}
 const probe = ${probe}
 const base = await (typeof own === 'function' ? own({ command: 'serve', mode: 'test' }) : own)
 const withProbe = (config) => mergeConfig(config, probe)
 const merged = withProbe(base)
-const projects = base.test?.projects?.map((project) => (project && typeof project === 'object' && !('then' in project) ? withProbe(project) : project))
+const configFiles = ${JSON.stringify(CONFIG_FILES)}
+const projectFile = (entry) => {
+  const path = resolve(${JSON.stringify(absoluteDir)}, entry)
+  if (!existsSync(path)) return null
+  if (statSync(path).isFile()) return path
+  const name = configFiles.find((file) => existsSync(join(path, file)))
+  return name ? join(path, name) : null
+}
+const project = (entry) => {
+  if (entry && typeof entry === 'object' && !('then' in entry)) return withProbe(entry)
+  const file = typeof entry === 'string' ? projectFile(entry) : null
+  return file ? withProbe({ extends: file, root: dirname(file) }) : entry
+}
+const projects = base.test?.projects?.map(project)
 export default projects ? { ...merged, test: { ...merged.test, projects } } : merged
 `
 }

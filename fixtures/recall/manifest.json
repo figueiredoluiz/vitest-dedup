@@ -1023,6 +1023,37 @@
       "expectedAbsent": []
     },
     {
+      "name": "duplicate-test-name-glob-sync-ignore",
+      "path": "duplicate-test-name-glob-sync-ignore",
+      "rule": "duplicate-test-name",
+      "role": "variant",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-02",
+      "expectedTests": 2,
+      "expectedIncomplete": false,
+      "expectedUnresolved": 0,
+      "expectedFindings": [
+        {
+          "rule": "duplicate-test-name",
+          "severity": "warning",
+          "titles": [
+            "slug > normalizes the input",
+            "slug > normalizes the input"
+          ]
+        }
+      ],
+      "expectedAbsent": [
+        {
+          "rule": "duplicate-test-name",
+          "titles": [
+            "opens the page",
+            "opens the page"
+          ]
+        }
+      ]
+    },
+    {
       "name": "duplicate-test-name-negative",
       "path": "duplicate-test-name-negative",
       "rule": "duplicate-test-name",
