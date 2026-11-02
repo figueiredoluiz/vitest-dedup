@@ -148,7 +148,8 @@ fn each_brace_alternative_drops_its_own_directory() {
 /// An `ignore` alternative is read only in a spelling whose glob 13.0.6 meaning the matcher
 /// reproduces. Each refused one is measured to differ: an absolute path is matched from glob's
 /// working directory, `{a..b}` is a range, `{b}` is literal, `pkg/b/` and `pkg/./b/**` drop
-/// `pkg/b`, `pkg//b/**` collapses the empty segment, and a backslash escapes.
+/// `pkg/b`, `pkg//b/**` collapses the empty segment, a backslash escapes, `pkg/b/**/**` drops
+/// `pkg/b`, and `?` or a non-ASCII letter matches per character (`pkg/?/**` drops `pkg/é`).
 #[test]
 fn an_ignore_in_an_unread_spelling_stays_unresolved() {
     let directory = two_projects("");
@@ -169,6 +170,11 @@ fn an_ignore_in_an_unread_spelling_stays_unresolved() {
         "pkg/b**/x".to_owned(),
         "pkg/\\\\b/**".to_owned(),
         "C:/pkg/b/**".to_owned(),
+        "pkg/b/**/**".to_owned(),
+        "pkg/?/**".to_owned(),
+        "pkg/[b]/**".to_owned(),
+        "pkg/[b/**".to_owned(),
+        "pkg/\u{e9}/**".to_owned(),
     ] {
         write(
             directory.path(),
@@ -221,12 +227,19 @@ fn other_glob_sync_options_stay_unresolved() {
     }
 }
 
-/// An `ignore` pattern that does not compile refuses the list and says why.
+/// An `ignore` pattern past the compilation budget refuses the list as truncated, and a brace
+/// with more alternatives than are enumerated refuses it too.
 #[test]
-fn an_uncompilable_ignore_pattern_is_reported() {
-    let directory = two_projects(", { ignore: 'pkg/[b/**' }");
-    let set = resolve_projects(directory.path());
-    assert_unresolved_with_diagnostic(&set, "`ignore` pattern cannot be compiled");
+fn an_ignore_past_the_budget_stays_unresolved() {
+    let long = format!("pkg/{}/**", "0".repeat(MAX_PROJECT_GLOB_BYTES));
+    let set = resolve_projects(two_projects(&format!(", {{ ignore: '{long}' }}")).path());
+    assert_unresolved_with_diagnostic(&set, "compilation budget exhausted");
+    assert!(set.truncated);
+    let many: Vec<String> = (0..65).map(|n| n.to_string()).collect();
+    let braces = format!("pkg/{{{}}}/**", many.join(","));
+    let set = resolve_projects(two_projects(&format!(", {{ ignore: '{braces}' }}")).path());
+    assert!(set.has_unresolved_entries, "{set:?}");
+    assert!(set.projects.is_empty());
 }
 
 /// A directory `x/**` ignores is not walked, so it cannot spend the entry budget that the

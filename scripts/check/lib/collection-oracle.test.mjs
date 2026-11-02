@@ -557,6 +557,22 @@ test('a nested project that changes only how a shared file runs is refused too',
   })
 })
 
+test('a project the rewrite would collect differently is refused, not probed', () => {
+  const cases = [
+    ["export default { test: { projects: ['pkg'] } }\n", "export default { plugins: [{ name: 'adds-projects' }], test: { globals: true } }\n", /has plugins/],
+    ["export default { test: { projects: ['pkg'], project: ['pkg'] } }\n", 'export default { test: { globals: true } }\n', /filters projects by name/],
+    ["export default { test: { projects: ['pkg', 'pkg/vitest.config.ts'] } }\n", 'export default { test: { globals: true } }\n', /more than one project entry/],
+  ]
+  for (const [rootConfig, projectConfig, refusal] of cases) {
+    inScratchProject('oracle-refused-', (dir, write) => {
+      write('vitest.config.ts', rootConfig)
+      write('pkg/vitest.config.ts', projectConfig)
+      write('pkg/a.test.ts', "test('a', () => {})\n")
+      assert.throws(() => collectWithVitest(CHECKOUT, dir), refusal)
+    })
+  }
+})
+
 test('a nested project list is caught when the config only re-exports the one declaring it', () => {
   inScratchProject('oracle-reexported-projects-', (dir, write) => {
     write('vitest.config.ts', "export { default } from './base.config'\n")

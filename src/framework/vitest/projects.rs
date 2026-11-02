@@ -3712,17 +3712,22 @@ fn glob_sync_ignore(
 }
 
 /// Whether one brace-free `ignore` alternative means to [`IgnoreMatcher`] what it means to glob
-/// 13.0.6: relative, `/`-separated segments that are neither empty (a leading, trailing or
-/// doubled `/`) nor `.` or `..`, with `**` only as a whole segment, and no brace, escape,
-/// extglob group or drive colon left, each of which glob reads its own way.
+/// 13.0.6: ASCII, relative, `/`-separated segments that are neither empty (a leading, trailing or
+/// doubled `/`) nor `.` or `..`, with `**` only as a whole segment and never twice in a row, and
+/// no brace, escape, extglob group, drive colon or character pattern (`?`, `[...]`) left. glob
+/// reads each of those its own way, and matches `?` and case per character where the matcher
+/// works per byte.
 fn ignore_spelling_is_read(alternative: &str) -> bool {
-    !alternative.contains(['{', '}', '\\', '(', ')', ':'])
-        && alternative.split('/').all(|segment| {
+    let segments: Vec<&str> = alternative.split('/').collect();
+    alternative.is_ascii()
+        && !alternative.contains(['{', '}', '\\', '(', ')', ':', '?', '[', ']'])
+        && segments.iter().all(|segment| {
             !segment.is_empty()
-                && segment != "."
-                && segment != ".."
-                && (segment == "**" || !segment.contains("**"))
+                && *segment != "."
+                && *segment != ".."
+                && (*segment == "**" || !segment.contains("**"))
         })
+        && !segments.windows(2).any(|pair| pair == ["**", "**"])
 }
 
 /// The arguments of a `glob.sync('<literal>'[, { ignore }])` call whose callee starts at
@@ -3874,19 +3879,16 @@ fn resolve_projects_array(
                 .iter()
                 .map(|one| IgnoreMatcher::compile(one, budget))
                 .collect();
+            // `ignore_spelling_is_read` admits only spellings the matcher compiles, so a pattern
+            // that yields no matcher was refused by the compilation budget.
             let Some(ignore) = ignore.filter(|_| !budget.compilation_refused) else {
-                diagnostics.push(if budget.compilation_refused {
+                debug_assert!(budget.compilation_refused);
+                diagnostics.push(
                     "project glob compilation budget exhausted; project map is incomplete"
-                        .to_owned()
-                } else {
-                    format!(
-                        "{} sets `test.projects` to a `glob.sync` call whose `ignore` pattern \
-                         cannot be compiled",
-                        display_path(config_path, root)
-                    )
-                });
+                        .to_owned(),
+                );
                 let mut set = unresolved_set(root, diagnostics, true);
-                set.truncated = budget.compilation_refused;
+                set.truncated = true;
                 return set;
             };
             let expanded = expand_project_path_ignoring(root, &pattern, &ignore, budget);
