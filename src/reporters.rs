@@ -97,7 +97,21 @@ pub(crate) mod test_support {
             titles: vec![title.to_string(), format!("{title} (copy)")],
             inert: vec![false, false],
             baselined: false,
+            covers: None,
         }
+    }
+
+    /// A Warning `duplicate-suite` finding standing for Error child findings on two tests.
+    pub(crate) fn covering_suite() -> crate::model::AnalysisResult {
+        let mut suite = finding_with_title(Rule::DuplicateSuite, "src/a.test.ts", "copy");
+        suite.covers = Some(crate::model::Covers {
+            severity: Severity::Error,
+            locations: vec![
+                location("src/a.test.ts", 11, 5),
+                location("src/a.test.ts", 21, 5),
+            ],
+        });
+        rendered_result(vec![suite])
     }
 
     /// The two-participant finding every format's `sample_result` is built on: one
@@ -116,6 +130,7 @@ pub(crate) mod test_support {
             titles: vec!["suite > a".to_string(), "suite > b".to_string()],
             inert: vec![false, false],
             baselined: false,
+            covers: None,
         }
     }
 

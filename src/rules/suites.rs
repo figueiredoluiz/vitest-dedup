@@ -2,10 +2,10 @@
 
 use super::{emit, keyed, one_per_declaration, Entry, Files};
 use crate::config::Config;
-use crate::model::{Finding, Location, Rule, Severity};
+use crate::model::{Covers, Finding, Location, Rule, Severity};
 use crate::modes::{apply_inline_suppressions, InlineSuppression};
 use crate::pairs::PairBudget;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// Successfully reported suite groups. No unreported or suppressed claim covers a child.
 #[derive(Default)]
@@ -51,12 +51,91 @@ impl Twins {
                 == scopes.len()
     }
 
-    /// Removes only child test/name claims whose relationships were all reported as suites.
-    pub(super) fn suppress(&self, findings: &mut Vec<Finding>) {
-        findings.retain(|finding| {
-            !matches!(finding.rule, Rule::DuplicateTest | Rule::DuplicateTestName)
-                || !self.covered(&finding.locations)
+    /// The copies `locations` sit in, when every one sits in a reported copy.
+    fn copies(&self, locations: &[Location]) -> Option<Vec<&Location>> {
+        locations
+            .iter()
+            .map(|location| {
+                let (group, index) = self.scope(location)?;
+                Some(&self.0[group][index])
+            })
+            .collect()
+    }
+
+    /// Removes a child test/name claim only when one reported suite finding names every copy it
+    /// spans: that finding stands for the relationship and carries it to the gate, so baselining
+    /// or suppressing either one acts on both. A child no single suite finding stands for stays
+    /// visible. A child the user suppressed inline would not have counted, so nothing carries it.
+    pub(super) fn suppress(&self, findings: &mut Vec<Finding>, suppressions: &[InlineSuppression]) {
+        // Suite findings by the copies they name, so a child's representatives are found from its
+        // first copy instead of by scanning every suite finding.
+        let mut by_copy: BTreeMap<&Location, Vec<usize>> = BTreeMap::new();
+        for (index, finding) in findings.iter().enumerate() {
+            if finding.rule == Rule::DuplicateSuite {
+                for copy in &finding.locations {
+                    by_copy.entry(copy).or_default().push(index);
+                }
+            }
+        }
+        // Each child's copies are computed once.
+        let represented: Vec<(usize, Vec<usize>)> = findings
+            .iter()
+            .enumerate()
+            .filter(|(_, finding)| {
+                matches!(finding.rule, Rule::DuplicateTest | Rule::DuplicateTestName)
+                    && self.covered(&finding.locations)
+            })
+            .filter_map(|(index, child)| {
+                let copies = self.copies(&child.locations)?;
+                let suites: Vec<usize> = by_copy
+                    .get(copies.first()?)?
+                    .iter()
+                    .copied()
+                    .filter(|&suite| {
+                        copies
+                            .iter()
+                            .all(|copy| findings[suite].locations.contains(copy))
+                    })
+                    .collect();
+                (!suites.is_empty()).then_some((index, suites))
+            })
+            .collect();
+        for (child, suites) in &represented {
+            let child = findings[*child].clone();
+            if apply_inline_suppressions(&mut vec![child.clone()], suppressions) > 0 {
+                continue;
+            }
+            for &suite in suites {
+                carry(
+                    &mut findings[suite],
+                    child.severity,
+                    child.locations.clone(),
+                );
+            }
+        }
+        let removed: BTreeSet<usize> = represented.iter().map(|(child, _)| *child).collect();
+        let mut index = 0;
+        findings.retain(|_| {
+            index += 1;
+            !removed.contains(&(index - 1))
         });
+    }
+}
+
+/// Folds `locations` at `severity` into `suite`'s covers, keeping only the highest severity's.
+pub(super) fn carry(suite: &mut Finding, severity: Severity, locations: Vec<Location>) {
+    let covers = suite.covers.get_or_insert_with(|| Covers {
+        severity,
+        locations: Vec::new(),
+    });
+    if severity > covers.severity {
+        covers.severity = severity;
+        covers.locations.clear();
+    }
+    if severity == covers.severity {
+        covers.locations.extend(locations);
+        covers.locations.sort();
+        covers.locations.dedup();
     }
 }
 

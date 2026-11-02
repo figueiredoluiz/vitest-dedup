@@ -6,7 +6,7 @@
       "next": {}
     },
     "conditions.test.ts": {
-      "tasks": 32,
+      "tasks": 40,
       "wrapperSites": [],
       "next": {}
     }

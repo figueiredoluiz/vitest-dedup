@@ -53,6 +53,9 @@
 //! repository has accepted *and* that it was accepted, which is strictly more than a stream that
 //! omitted it could convey.
 //!
+//! `covers`, only on a `duplicate-suite` finding that replaced child findings, holds their highest
+//! severity and their locations at it; the exit code and threshold count the finding that way.
+//!
 //! The summary record carries `modes` ([`crate::model::ModeSummary`]) for the same reason
 //! `incomplete` and `unresolvedTests` are there — a silence needs a reason attached to it.
 //!
@@ -152,8 +155,8 @@
 //! [`crate::memory`].
 
 use super::shared::{
-    report_registration_files, report_safe, report_safe_path, JsonExcludedFile, JsonLocation,
-    SeverityCounts, SummaryCounters,
+    report_registration_files, report_safe, report_safe_path, JsonCovers, JsonExcludedFile,
+    JsonLocation, SeverityCounts, SummaryCounters,
 };
 use super::Reporter;
 use crate::corpus::SiteRecord;
@@ -452,6 +455,9 @@ struct JsonlFindingRecord {
     /// Whether a `--baseline` file accounts for this finding, and it therefore does not affect the
     /// exit code. See the module doc for why the record is still emitted.
     baselined: bool,
+    /// On a suite finding, the child findings it replaced as the exit code and gate count them.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    covers: Option<JsonCovers>,
     /// A location-independent identity for this finding. See
     /// [`crate::model::Finding::fingerprint`].
     fingerprint: String,
@@ -518,6 +524,16 @@ impl From<&Finding> for JsonlFindingRecord {
             any_inert: finding.has_inert_participant(),
             inert: finding.inert.clone(),
             baselined: finding.baselined,
+            covers: JsonCovers::of(finding).map(|mut covers| {
+                for (index, location) in covers.locations.iter_mut().enumerate() {
+                    location.path = bounded_text(
+                        &location.path,
+                        &format!("covers.locations[{index}].path"),
+                        &mut truncated_fields,
+                    );
+                }
+                covers
+            }),
             fingerprint: finding.fingerprint(),
             truncated_fields,
             content_notice: if finding.registration_files.is_empty() {
@@ -1034,6 +1050,15 @@ mod tests {
     /// Renders `result` and returns every line parsed independently as a [`Value`], asserting
     /// along the way that each line is standalone, valid JSON — the property the whole format
     /// exists to guarantee.
+    /// `covers` appears only on a record that carries it, with its severity and locations.
+    #[test]
+    fn covers_is_reported_only_when_set() {
+        let lines = render_lines(&crate::reporters::test_support::covering_suite());
+        assert_eq!(lines[0]["covers"]["severity"], "error");
+        assert_eq!(lines[0]["covers"]["locations"][0]["line"], 11);
+        assert!(render_lines(&sample_result())[0].get("covers").is_none());
+    }
+
     fn render_lines(result: &AnalysisResult) -> Vec<Value> {
         let mut buffer = Vec::new();
         JsonlReporter::new()

@@ -197,17 +197,38 @@ fn suite_ancestry_is_keyed_and_nested_copies_report_each_level() {
 #[test]
 fn owned_suite_conditions_and_options() {
     let source = include_str!("../../../fixtures/oracle/duplicate-suites/conditions.test.ts");
-    let corpus = read(source, 16);
+    let corpus = read(source, 20);
     assert!(corpus.tests.iter().all(|test| test.exclusion.is_none()));
     let result = owned_findings("a.test.ts", corpus);
-    let mut titles: Vec<_> = result
-        .findings
-        .iter()
-        .filter(|f| f.rule == Rule::DuplicateSuite)
-        .map(|f| f.titles[0].as_str())
-        .collect();
-    titles.sort();
-    assert_eq!(titles, ["option false", "run active", "skip active"]);
+    let titles = |rule| {
+        let mut titles: Vec<_> = result
+            .findings
+            .iter()
+            .filter(|f| f.rule == rule)
+            .map(|f| f.titles[0].as_str())
+            .collect();
+        titles.sort();
+        titles
+    };
+    assert_eq!(
+        titles(Rule::DuplicateSuite),
+        ["option false", "run active", "skip active"]
+    );
+    // A suite not proven active, like an explicit skip, leaves its copies' children compared.
+    for refused in [
+        "explicit skip",
+        "option true",
+        "run inactive",
+        "skip inactive",
+        "skip unknown",
+    ] {
+        let child = format!("{refused} > child");
+        assert!(
+            result.findings.iter().any(|f| f.rule == Rule::DuplicateTest
+                && f.titles.iter().filter(|title| **title == child).count() == 2),
+            "{refused}"
+        );
+    }
 }
 
 /// Renaming suite-local bindings preserves equality while unknown options and conditions refuse it.

@@ -301,6 +301,24 @@ impl From<&Location> for JsonLocation {
     }
 }
 
+/// What a suite finding stands for at the quality gate, shared by the JSON, `jsonl` and SARIF
+/// reports. See [`crate::model::Covers`].
+#[derive(Debug, Serialize)]
+pub(super) struct JsonCovers {
+    pub(super) severity: Severity,
+    pub(super) locations: Vec<JsonLocation>,
+}
+
+impl JsonCovers {
+    /// The covers of `finding`, when it replaced child findings.
+    pub(super) fn of(finding: &Finding) -> Option<Self> {
+        finding.covers.as_ref().map(|covers| Self {
+            severity: covers.severity,
+            locations: covers.locations.iter().map(JsonLocation::from).collect(),
+        })
+    }
+}
+
 /// Groups findings by their first participant's file, in path order -- the layout both the
 /// terminal and HTML reporters render under each rule heading.
 ///

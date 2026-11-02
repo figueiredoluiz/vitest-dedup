@@ -35,6 +35,7 @@ fn finding(rule: Rule, participants: &[(&str, u32, &str)]) -> Finding {
             .collect(),
         inert: participants.iter().map(|_| false).collect(),
         baselined: false,
+        covers: None,
     }
 }
 

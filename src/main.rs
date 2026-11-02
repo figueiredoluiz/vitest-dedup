@@ -1485,6 +1485,34 @@ mod tests {
         std::fs::write(root.join("src/companion.test.ts"), ORDINARY_TEST).unwrap();
     }
 
+    /// A copied block fails the gate its tests fail written out: the owned copy exits 1 under
+    /// the next engine, where reporting it as one Warning suite finding once let it pass.
+    #[test]
+    fn a_copied_block_fails_the_gate_under_the_next_engine() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(
+            directory.path().join("cases.test.ts"),
+            include_str!("../fixtures/oracle/duplicate-suites/cases.test.ts"),
+        )
+        .unwrap();
+        let output = assert_cmd::Command::cargo_bin("vitest-dedup")
+            .unwrap()
+            .arg(directory.path())
+            .args(["--reporters", "jsonl"])
+            .env("VITEST_DEDUP_ENGINE", "next")
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(1));
+        let suite: serde_json::Value = String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+            .find(|record| record["rule"] == "duplicate-suite")
+            .expect("the copy is reported as a suite");
+        assert_eq!(suite["severity"], "warning");
+        assert_eq!(suite["covers"]["severity"], "error");
+        assert_eq!(suite["covers"]["locations"].as_array().unwrap().len(), 4);
+    }
+
     /// The next-engine notice names every rule the engine runs: a rule it leaves out reads as not
     /// running beside its own findings.
     #[test]

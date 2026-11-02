@@ -122,9 +122,14 @@ todos. Unknown title values, unsupported formatting and suite-table titles do no
 findings. Distinct rendered titles across copied tables remain separate findings.
 
 The experimental suite rule compares complete inline blocks with matching literal title paths,
-modifiers, options and enclosing setup. It excludes uncertain activation, table-derived suites,
-inert suites and blocks containing excluded tests. Suite containers do not increase test counts.
-Reported copies suppress cross-copy test and name findings; within-copy and unrelated findings
+modifiers, options and enclosing setup. It reports a block only when every run condition is a
+literal that keeps it active (`skipIf(false)`, `runIf(true)`): an inactive or unknown condition is
+treated like `describe.skip`, so the copies' children are compared one by one. It also excludes
+table-derived suites, inert suites and blocks containing excluded tests. Suite containers do not
+increase test counts. Reported copies suppress cross-copy test and name findings, and the suite
+finding's `covers` keeps their highest severity and locations: the exit code and threshold count
+it as those findings, so copying a whole block never gates more leniently than the same tests
+written out. A child suppressed inline is not carried. Within-copy and unrelated findings
 remain visible. Nested suite copies remain independent suite findings. Mixed child clusters stay
 visible when they also contain unrelated or within-copy evidence.
 
