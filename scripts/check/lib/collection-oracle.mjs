@@ -18,7 +18,6 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'no
 import { tmpdir } from 'node:os'
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import { isDeepStrictEqual } from 'node:util'
 import { defaultBinary, parseJsonl, runAnalyzerJsonl } from './run-analyzer.mjs'
 
 const LIB = dirname(fileURLToPath(import.meta.url))
@@ -58,7 +57,7 @@ export function ownConfig(absoluteDir) {
  * root's settings, and a project left without the runner is caught by the completeness check in
  * `collectWithVitest`.
  */
-export function configSource(absoluteDir, cacheDir, rewritten) {
+export function configSource(absoluteDir, cacheDir, containers) {
   const stubs = `import { missingModuleStubs } from ${JSON.stringify(pathToFileURL(STUBS).href)}\n`
   // No cache survives a run: a stub transformed while a module was missing must not be reused once
   // the module exists (`fsModuleCache`), and nothing is written into a shared `node_modules`.
@@ -76,9 +75,10 @@ export function configSource(absoluteDir, cacheDir, rewritten) {
   // A string entry naming a config file, or a directory holding one, becomes an inline project
   // extending that file, rooted where Vitest roots a file project: the file's own `test.root` or
   // `root`, resolved from its directory, else the directory. A glob or a missing path stays a
-  // string, and its files are reported unprobed. A rewrite touches `rewritten`, so
-  // `collectWithVitest` knows to compare against an unprobed listing.
-  return `${stubs}import { existsSync, statSync, writeFileSync } from 'node:fs'
+  // string, and its files are reported unprobed. A file declaring its own `projects` cannot be
+  // rewritten, since an inline project drops them and their settings: it is left as it is and
+  // named in `containers`, which `collectWithVitest` refuses.
+  return `${stubs}import { appendFileSync, existsSync, statSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { mergeConfig } from ${JSON.stringify(vitestConfig)}
 import { loadConfigFromFile } from ${JSON.stringify(vite)}
@@ -88,7 +88,7 @@ const base = await (typeof own === 'function' ? own({ command: 'serve', mode: 't
 const withProbe = (config) => mergeConfig(config, probe)
 const merged = withProbe(base)
 const configFiles = ${JSON.stringify(CONFIG_FILES)}
-const rewritten = ${JSON.stringify(rewritten ?? null)}
+const containers = ${JSON.stringify(containers ?? null)}
 const projectFile = (entry) => {
   const path = resolve(${JSON.stringify(absoluteDir)}, entry)
   if (!existsSync(path)) return null
@@ -96,16 +96,16 @@ const projectFile = (entry) => {
   const name = configFiles.find((file) => existsSync(join(path, file)))
   return name ? join(path, name) : null
 }
-const projectRoot = async (file) => {
-  const config = (await loadConfigFromFile({ command: 'serve', mode: 'test' }, file, undefined, 'silent'))?.config ?? {}
-  return resolve(dirname(file), config.test?.root ?? config.root ?? '.')
-}
 const project = async (entry) => {
   if (entry && typeof entry === 'object' && !('then' in entry)) return withProbe(entry)
   const file = typeof entry === 'string' ? projectFile(entry) : null
   if (!file) return entry
-  if (rewritten) writeFileSync(rewritten, '')
-  return withProbe({ extends: file, root: await projectRoot(file) })
+  const config = (await loadConfigFromFile({ command: 'serve', mode: 'test' }, file, undefined, 'silent'))?.config ?? {}
+  if (config.test?.projects) {
+    if (containers) appendFileSync(containers, file + '\\n')
+    return entry
+  }
+  return withProbe({ extends: file, root: resolve(dirname(file), config.test?.root ?? config.root ?? '.') })
 }
 const projects = base.test?.projects && await Promise.all(base.test.projects.map(project))
 export default projects ? { ...merged, test: { ...merged.test, projects } } : merged
@@ -162,37 +162,6 @@ export function oracleEnvironment(environment, out) {
 }
 
 /**
- * Fails when the probe config changed which files Vitest collects. Rewriting a string
- * `test.projects` entry into an inline project drops what that config's own `projects` lists, so
- * after a rewrite the directory is also listed by Vitest unchanged and the two file sets must
- * agree.
- * @param {string} root - repository root.
- * @param {string} dir - the directory being collected, for the message.
- * @param {string} absoluteDir - the same directory, absolute.
- * @param {string} work - scratch directory for the listing.
- * @param {string[]} probed - the files the probe run listed.
- * @throws {Error} when the plain listing fails or differs.
- */
-function assertProbeKeepsProjects(root, dir, absoluteDir, work, probed) {
-  const listed = join(work, 'plain.json')
-  const result = spawnSync(
-    process.execPath,
-    [join(root, 'node_modules', 'vitest', 'vitest.mjs'), 'list', '--root', absoluteDir, `--json=${listed}`,
-      '--fsModuleCache=false', '--allowOnly', '--filesOnly'],
-    { cwd: absoluteDir, encoding: 'utf8', env: { ...process.env, CI: '1' }, maxBuffer: 64 << 20, timeout: 300_000 },
-  )
-  if (result.error) throw result.error
-  if (!existsSync(listed)) {
-    throw new Error(`plain vitest list failed in ${dir} (exit ${result.status ?? result.signal}):\n${(result.stderr ?? '').trim().slice(-2000)}`)
-  }
-  const plain = [...new Set(JSON.parse(readFileSync(listed, 'utf8')).map((t) => t.file))].sort()
-  const withProbe = [...new Set(probed)].sort()
-  if (!isDeepStrictEqual(plain, withProbe)) {
-    throw new Error(`the probe config changed the files Vitest collects in ${dir}:\n  plain: ${plain.join(', ')}\n  probed: ${withProbe.join(', ')}`)
-  }
-}
-
-/**
  * Collects `dir` with real Vitest through the probe runner.
  *
  * @param {string} root - checkout root; `node_modules/vitest` is resolved from it.
@@ -201,7 +170,8 @@ function assertProbeKeepsProjects(root, dir, absoluteDir, work, probed) {
  *   (titles), `hooks` (`kind@path:line` sites), `suiteHookCount`, `registrationCount`,
  *   `unlocatedRegistrations`, `stubReads`, `collectErrors`, and `unprobed` for a file Vitest
  *   listed that the probe runner never saw.
- * @throws {Error} when Vitest exits non-zero having collected nothing.
+ * @throws {Error} when Vitest exits non-zero having collected nothing, or a project config
+ *   declares projects of its own.
  */
 export function collectWithVitest(root, dir) {
   const work = mkdtempSync(join(tmpdir(), 'vitest-dedup-oracle-'))
@@ -210,8 +180,8 @@ export function collectWithVitest(root, dir) {
     const listed = join(work, 'listed.json')
     const config = join(work, 'vitest.config.mjs')
     const absoluteDir = resolve(root, dir)
-    const rewritten = join(work, 'rewritten')
-    writeFileSync(config, configSource(absoluteDir, join(work, 'cache'), rewritten))
+    const containers = join(work, 'containers')
+    writeFileSync(config, configSource(absoluteDir, join(work, 'cache'), containers))
     writeFileSync(out, '')
     const result = spawnSync(
       process.execPath,
@@ -227,6 +197,9 @@ export function collectWithVitest(root, dir) {
       },
     )
     if (result.error) throw result.error
+    if (existsSync(containers)) {
+      throw new Error(`a project config in ${dir} declares its own projects, which the probe cannot reach:\n  ${readFileSync(containers, 'utf8').trim().split('\n').join('\n  ')}`)
+    }
     const lines = readFileSync(out, 'utf8').split('\n').filter((line) => line.trim() !== '')
     const listedFiles = existsSync(listed) ? JSON.parse(readFileSync(listed, 'utf8')).map((t) => t.file) : []
     // Collecting nothing is a result (a config whose projects hold no test file); failing to is not.
@@ -236,7 +209,6 @@ export function collectWithVitest(root, dir) {
           `${(result.stderr ?? '').trim()}\n${(result.stdout ?? '').trim()}`.slice(-4000),
       )
     }
-    if (existsSync(rewritten)) assertProbeKeepsProjects(root, dir, absoluteDir, work, listedFiles)
     return vitestView(lines.map((line) => JSON.parse(line)), listedFiles, absoluteDir)
   } finally {
     rmSync(work, { recursive: true, force: true })

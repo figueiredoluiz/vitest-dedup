@@ -540,10 +540,20 @@ test('a probe config that drops a nested project list fails instead of collectin
   inScratchProject('oracle-nested-projects-', (dir, write) => {
     write('vitest.config.ts', "export default { test: { projects: ['pkg/vitest.config.ts'] } }\n")
     writeNestedProjects(write)
-    assert.throws(() => collectWithVitest(CHECKOUT, dir), /changed the files Vitest collects/)
+    assert.throws(() => collectWithVitest(CHECKOUT, dir), /declares its own projects/)
     // The same entry with no nested list is probed as before.
     write('pkg/vitest.config.ts', "export default { test: { include: ['top.test.ts'], globals: true } }\n")
     assert.deepEqual(collectWithVitest(CHECKOUT, dir).get('pkg/top.test.ts')?.tests, ['top'])
+  })
+})
+
+test('a nested project that changes only how a shared file runs is refused too', () => {
+  inScratchProject('oracle-nested-env-', (dir, write) => {
+    write('vitest.config.ts', "export default { test: { projects: ['pkg/vitest.config.ts'] } }\n")
+    write('pkg/vitest.config.ts', "export default { test: { projects: ['inner'], include: ['inner/shared.test.ts'], globals: true } }\n")
+    write('pkg/inner/vitest.config.ts', "export default { test: { include: ['shared.test.ts'], globals: true, env: { TITLE: 'nested' } } }\n")
+    write('pkg/inner/shared.test.ts', "test(process.env.TITLE || 'outer', () => {})\n")
+    assert.throws(() => collectWithVitest(CHECKOUT, dir), /declares its own projects/)
   })
 })
 
@@ -552,7 +562,7 @@ test('a nested project list is caught when the config only re-exports the one de
     write('vitest.config.ts', "export { default } from './base.config'\n")
     write('base.config.ts', "export default { test: { projects: ['pkg/vitest.config.ts'] } }\n")
     writeNestedProjects(write)
-    assert.throws(() => collectWithVitest(CHECKOUT, dir), /changed the files Vitest collects/)
+    assert.throws(() => collectWithVitest(CHECKOUT, dir), /declares its own projects/)
   })
 })
 

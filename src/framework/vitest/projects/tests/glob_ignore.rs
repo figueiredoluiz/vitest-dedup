@@ -145,10 +145,12 @@ fn each_brace_alternative_drops_its_own_directory() {
     }
 }
 
-/// glob matches an absolute `ignore` against the full path from its working directory, which
-/// this scan cannot know, so the list stays unresolved; a `..` pattern is refused alike.
+/// An `ignore` alternative is read only in a spelling whose glob 13.0.6 meaning the matcher
+/// reproduces. Each refused one is measured to differ: an absolute path is matched from glob's
+/// working directory, `{a..b}` is a range, `{b}` is literal, `pkg/b/` and `pkg/./b/**` drop
+/// `pkg/b`, `pkg//b/**` collapses the empty segment, and a backslash escapes.
 #[test]
-fn an_ignore_outside_the_relative_tree_stays_unresolved() {
+fn an_ignore_in_an_unread_spelling_stays_unresolved() {
     let directory = two_projects("");
     let absolute = directory
         .path()
@@ -159,6 +161,14 @@ fn an_ignore_outside_the_relative_tree_stays_unresolved() {
         format!("{absolute}/**"),
         "{pkg/x,/pkg/b/**}".to_owned(),
         "../pkg/b/**".to_owned(),
+        "pkg/{a..b}/**".to_owned(),
+        "pkg/{b}/**".to_owned(),
+        "pkg/b/".to_owned(),
+        "pkg/./b/**".to_owned(),
+        "pkg//b/**".to_owned(),
+        "pkg/b**/x".to_owned(),
+        "pkg/\\\\b/**".to_owned(),
+        "C:/pkg/b/**".to_owned(),
     ] {
         write(
             directory.path(),
@@ -169,6 +179,21 @@ fn an_ignore_outside_the_relative_tree_stays_unresolved() {
         assert!(set.has_unresolved_entries, "{ignore}: {set:?}");
         assert!(set.projects.is_empty(), "{ignore}");
     }
+}
+
+/// glob 13.0.6 ignores without regard to case by default on macOS and Windows, and with it
+/// elsewhere: `pkg/B/**` drops `pkg/b` on a Mac.
+#[test]
+fn an_ignore_matches_case_as_glob_does_on_this_platform() {
+    let directory = two_projects(", { ignore: 'pkg/B/**' }");
+    let set = resolve_projects(directory.path());
+    assert!(!set.has_unresolved_entries, "{:?}", set.diagnostics);
+    let expected: &[&str] = if cfg!(any(target_os = "macos", windows)) {
+        &["pkg/a"]
+    } else {
+        &["pkg/a", "pkg/b"]
+    };
+    assert_eq!(project_dirs(&set, directory.path()), expected);
 }
 
 /// Every option but a literal `ignore` is a runtime setting this scan cannot know.

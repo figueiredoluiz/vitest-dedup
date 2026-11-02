@@ -31,8 +31,9 @@
 //!   verified imported from the `glob` package: the pattern is a string literal, and its
 //!   expansion is the same budgeted filesystem walk a literal string entry already takes. A
 //!   second argument is read only as `{ ignore: <literal or array of literals> }`, dropping the
-//!   matches glob 13 drops, each brace alternative as its own pattern; an absolute or `..`
-//!   ignore pattern, or any other option, refuses.
+//!   matches glob 13 drops, each brace alternative as its own pattern and without regard to
+//!   case where glob defaults to that; an ignore spelling glob reads differently (see
+//!   `ignore_spelling_is_read`), or any other option, refuses.
 //! - `export default mergeConfig(<imported base>, <literal>)`: explicit arrays concatenate
 //!   base first, scalar overrides win, and nullish overrides preserve the base. Defaults apply
 //!   after merging. Measured before these two: 575 of 575 files undetermined on one large
@@ -1959,8 +1960,14 @@ impl Budget {
 
 /// Compile a project glob using the same separator semantics for full and prefix matches.
 fn project_glob_matcher(pattern: &str) -> Option<GlobMatcher> {
+    glob_matcher(pattern, false)
+}
+
+/// `pattern` compiled with `*` stopping at `/`, ignoring case when `case_insensitive`.
+fn glob_matcher(pattern: &str, case_insensitive: bool) -> Option<GlobMatcher> {
     GlobBuilder::new(pattern)
         .literal_separator(true)
+        .case_insensitive(case_insensitive)
         .build()
         .ok()
         .map(|glob| glob.compile_matcher())
@@ -2076,6 +2083,12 @@ fn expand_project_path(root: &Path, pattern: &str, budget: &mut Budget) -> Expan
     expand_project_path_ignoring(root, pattern, &[], budget)
 }
 
+/// An `ignore` pattern's matcher. glob 13 defaults `nocase` to true on macOS and Windows, so the
+/// match there ignores case, as the config's `glob.sync` does on the same platform.
+fn ignore_glob_matcher(pattern: &str) -> Option<GlobMatcher> {
+    glob_matcher(pattern, cfg!(any(target_os = "macos", windows)))
+}
+
 /// One `glob.sync` `ignore` pattern, matched as glob 13 does against a result's relative path.
 struct IgnoreMatcher {
     path: GlobMatcher,
@@ -2092,11 +2105,11 @@ impl IgnoreMatcher {
             return None;
         }
         let directory = match pattern.strip_suffix("/**") {
-            Some(prefix) => Some(project_glob_matcher(prefix)?),
+            Some(prefix) => Some(ignore_glob_matcher(prefix)?),
             None => None,
         };
         Some(Self {
-            path: project_glob_matcher(pattern)?,
+            path: ignore_glob_matcher(pattern)?,
             directory,
         })
     }
@@ -3679,8 +3692,7 @@ fn glob_sync_ignore(
             return None;
         }
         // glob reads each brace alternative as its own pattern, so each keeps its own trailing
-        // `/**`. An absolute one is matched against a full path from glob's working directory,
-        // which this scan cannot know, so it refuses the list, as it does a `..` one.
+        // `/**`; an alternative outside the spellings the matcher reproduces refuses the list.
         for expanded in expand_extglob_optional_groups(pattern).ok()? {
             let alternatives = match brace_alternatives(&expanded) {
                 BraceAlternatives::None => vec![expanded],
@@ -3689,7 +3701,7 @@ fn glob_sync_ignore(
             };
             for alternative in alternatives {
                 let alternative = alternative.strip_prefix("./").unwrap_or(&alternative);
-                if leaves_the_tree_lexically(alternative) {
+                if !ignore_spelling_is_read(alternative) {
                     return None;
                 }
                 ignore.push(alternative.to_owned());
@@ -3697,6 +3709,20 @@ fn glob_sync_ignore(
         }
     }
     Some(ignore)
+}
+
+/// Whether one brace-free `ignore` alternative means to [`IgnoreMatcher`] what it means to glob
+/// 13.0.6: relative, `/`-separated segments that are neither empty (a leading, trailing or
+/// doubled `/`) nor `.` or `..`, with `**` only as a whole segment, and no brace, escape,
+/// extglob group or drive colon left, each of which glob reads its own way.
+fn ignore_spelling_is_read(alternative: &str) -> bool {
+    !alternative.contains(['{', '}', '\\', '(', ')', ':'])
+        && alternative.split('/').all(|segment| {
+            !segment.is_empty()
+                && segment != "."
+                && segment != ".."
+                && (segment == "**" || !segment.contains("**"))
+        })
 }
 
 /// The arguments of a `glob.sync('<literal>'[, { ignore }])` call whose callee starts at
