@@ -29,6 +29,8 @@ export const CASE_KEYS = new Set([
   'expectedTests',
   'expectedIncomplete',
   'expectedUnresolved',
+  'expectedIncompleteNext',
+  'expectedUnresolvedNext',
   'blindUnderCurrent',
   'expectedFindings',
   'expectedAbsent',

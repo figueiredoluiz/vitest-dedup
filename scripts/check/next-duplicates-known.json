@@ -743,6 +743,22 @@
     {
       "id": "miss|fixtures/duplicates|behavior-depth-truncation.test.ts:41|behavior-depth-truncation.test.ts:49|near-duplicate-test",
       "reason": "A branch leaves the trace incomplete until branch partitions are modeled, so the next engine refuses this pair. The default engine compares the flattened branch."
+    },
+    {
+      "id": "recall-incomplete|duplicate-test-tsconfig-paths-outside-root|all|false",
+      "reason": "The next engine does not fail resolution when a tsconfig extends a missing or outside-root file, so its run completes where the fixture demands a named resolution failure and refuses the pair. Held until the next engine reports the broken configuration instead of comparing under fallback settings."
+    },
+    {
+      "id": "recall-incomplete|framework-tsconfig-extends-missing|all|false",
+      "reason": "The next engine does not fail resolution when a tsconfig extends a missing or outside-root file, so its run completes where the fixture demands a named resolution failure and refuses the pair. Held until the next engine reports the broken configuration instead of comparing under fallback settings."
+    },
+    {
+      "id": "recall-incomplete|framework-tsconfig-extends-outside-root|all|false",
+      "reason": "The next engine does not fail resolution when a tsconfig extends a missing or outside-root file, so its run completes where the fixture demands a named resolution failure and refuses the pair. Held until the next engine reports the broken configuration instead of comparing under fallback settings."
+    },
+    {
+      "id": "recall-incomplete|missing-prerequisite-extends-absent|all|false",
+      "reason": "The next engine does not fail resolution when a tsconfig extends a missing or outside-root file, so its run completes where the fixture demands a named resolution failure and refuses the pair. Held until the next engine reports the broken configuration instead of comparing under fallback settings."
     }
   ]
 }
