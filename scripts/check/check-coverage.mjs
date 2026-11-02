@@ -482,10 +482,10 @@ const JS_NOT_MEASURED = {
   'scripts/check/check-agent-skills.mjs': 'gate entry point, run as a process by CI and never imported',
   'scripts/check/check-coverage.mjs': 'this file',
   'scripts/check/check-collection-oracle.mjs': 'gate entry point; needs a release binary and the pinned Vitest devDependency, and spawns both per directory',
+  'scripts/check/lib/collection-probe-runner.mjs': 'loaded by Vitest as its test runner inside a Vitest worker, never imported by a node --test suite; the run excludes it from coverage because a spawned worker can leak it into the report, and the collection oracle gate checks it against a self-check directory',
   'scripts/check/check-hooks-differential.mjs': 'gate entry point; needs a release binary and the pinned Vitest devDependency, and spawns both over the generated cases',
   'scripts/check/check-next-duplicates.mjs': 'gate entry point; needs a release binary, and spawns it under the next engine over the fixture directories',
   'scripts/check/check-duplicates-corpus.mjs': 'gate entry point; needs a release binary',
-  'scripts/check/lib/collection-probe-runner.mjs': 'loaded by Vitest as its test runner inside a Vitest worker, never imported by a node --test suite; the collection oracle gate checks it against a self-check directory',
   'scripts/check/check-duplication.mjs': 'gate entry point; needs jscpd',
   'scripts/check/check-fixture-isolation.mjs': 'gate entry point; needs a release binary',
   'scripts/check/check-recall.mjs': 'gate entry point; needs a release binary, and its assertions are over that binary\'s output rather than over in-process state',
@@ -746,6 +746,12 @@ function checkJs(failures) {
       // Only production sources carry floors; the suites themselves are measured by
       // `check-duplication.mjs`'s `js-tests` scope, not by this one.
       '--test-coverage-exclude=**/*.test.mjs',
+      // A spawned Vitest worker loads the collection probe's runner, and its coverage can land
+      // in this run's report on a CI runner even though no suite imports the file here
+      // (`lib/collection-oracle.mjs` strips the propagating variable). Excluding it keeps the
+      // report a function of THIS process's suites, so the JS_NOT_MEASURED entry below stays
+      // true on every host and every run.
+      '--test-coverage-exclude=**/collection-probe-runner.mjs',
       '--test-reporter=spec',
       `--test-reporter-destination=${testLogPath}`,
       '--test-reporter=lcov',
