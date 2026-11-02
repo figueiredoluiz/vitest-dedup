@@ -641,12 +641,9 @@ fn review_merge_cycles_and_empty_overrides() {
     assert!(matches!(fields.include, GlobPatterns::Unknown { .. }));
 }
 
-/// Verify glob budget exhaustion reports truncation.
-#[test]
-fn review_glob_budget_exhaustion_reports_truncation() {
-    let directory = tempfile::tempdir().unwrap();
-    let source =
-        "import { glob } from 'glob'\nexport default { test: { projects: glob.sync('./pkg/*') } }";
+/// Resolves the `test.projects` of the literal root config `source` at `root` with
+/// `entries_visited` of the walk budget already spent.
+fn resolve_with_spent_budget(root: &Path, source: &str, entries_visited: usize) -> ProjectSet {
     let masked = mask_non_code(source).unwrap();
     let original: Vec<char> = source.chars().collect();
     let ConfigObject::Found(open, close) = locate_config_object(&masked) else {
@@ -657,17 +654,28 @@ fn review_glob_budget_exhaustion_reports_truncation() {
         panic!("literal test")
     };
     let mut budget = Budget {
-        entries_visited: MAX_GLOB_WALK_ENTRIES,
+        entries_visited,
         ..Budget::default()
     };
-    let set = resolve_projects_array(
-        directory.path(),
-        &directory.path().join("vitest.config.ts"),
+    resolve_projects_array(
+        root,
+        &root.join("vitest.config.ts"),
         &masked,
         &original,
         test_open + 1..test_close,
         None,
         &mut budget,
+    )
+}
+
+/// Verify glob budget exhaustion reports truncation.
+#[test]
+fn review_glob_budget_exhaustion_reports_truncation() {
+    let directory = tempfile::tempdir().unwrap();
+    let set = resolve_with_spent_budget(
+        directory.path(),
+        "import { glob } from 'glob'\nexport default { test: { projects: glob.sync('./pkg/*') } }",
+        MAX_GLOB_WALK_ENTRIES,
     );
     assert!(set.has_unresolved_entries);
     assert!(set.truncated);

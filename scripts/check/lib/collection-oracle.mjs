@@ -18,6 +18,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'no
 import { tmpdir } from 'node:os'
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
+import { isDeepStrictEqual } from 'node:util'
 import { defaultBinary, parseJsonl, runAnalyzerJsonl } from './run-analyzer.mjs'
 
 const LIB = dirname(fileURLToPath(import.meta.url))
@@ -149,6 +150,39 @@ export function oracleEnvironment(environment, out) {
 }
 
 /**
+ * Fails when the probe config changed which files Vitest collects. Rewriting a string
+ * `test.projects` entry into an inline project drops what that config's own `projects` lists, so
+ * a config that mentions `projects` is also listed by Vitest unchanged and the two file sets must
+ * agree.
+ * @param {string} root - repository root.
+ * @param {string} dir - the directory being collected, for the message.
+ * @param {string} absoluteDir - the same directory, absolute.
+ * @param {string} work - scratch directory for the listing.
+ * @param {string[]} probed - the files the probe run listed.
+ * @throws {Error} when the plain listing fails or differs.
+ */
+function assertProbeKeepsProjects(root, dir, absoluteDir, work, probed) {
+  const own = ownConfig(absoluteDir)
+  if (own === null || !/\bprojects\b/.test(readFileSync(own, 'utf8'))) return
+  const listed = join(work, 'plain.json')
+  const result = spawnSync(
+    process.execPath,
+    [join(root, 'node_modules', 'vitest', 'vitest.mjs'), 'list', '--root', absoluteDir, `--json=${listed}`,
+      '--fsModuleCache=false', '--allowOnly', '--filesOnly'],
+    { cwd: absoluteDir, encoding: 'utf8', env: { ...process.env, CI: '1' }, maxBuffer: 64 << 20, timeout: 300_000 },
+  )
+  if (result.error) throw result.error
+  if (!existsSync(listed)) {
+    throw new Error(`plain vitest list failed in ${dir} (exit ${result.status ?? result.signal}):\n${(result.stderr ?? '').trim().slice(-2000)}`)
+  }
+  const plain = [...new Set(JSON.parse(readFileSync(listed, 'utf8')).map((t) => t.file))].sort()
+  const withProbe = [...new Set(probed)].sort()
+  if (!isDeepStrictEqual(plain, withProbe)) {
+    throw new Error(`the probe config changed the files Vitest collects in ${dir}:\n  plain: ${plain.join(', ')}\n  probed: ${withProbe.join(', ')}`)
+  }
+}
+
+/**
  * Collects `dir` with real Vitest through the probe runner.
  *
  * @param {string} root - checkout root; `node_modules/vitest` is resolved from it.
@@ -191,6 +225,7 @@ export function collectWithVitest(root, dir) {
           `${(result.stderr ?? '').trim()}\n${(result.stdout ?? '').trim()}`.slice(-4000),
       )
     }
+    assertProbeKeepsProjects(root, dir, absoluteDir, work, listedFiles)
     return vitestView(lines.map((line) => JSON.parse(line)), listedFiles, absoluteDir)
   } finally {
     rmSync(work, { recursive: true, force: true })

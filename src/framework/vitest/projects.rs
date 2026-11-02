@@ -2210,6 +2210,27 @@ fn expand_project_path_ignoring(
         .standard_filters(true)
         .follow_links(false)
         .require_git(false);
+    // A directory an `x/**` pattern ignores is not entered: glob drops it and everything under
+    // it, and walking it would only spend the entry budget. A pattern without `/**` drops a match,
+    // not its subtree, so it is checked per match below.
+    let pruned: Vec<GlobMatcher> = ignore
+        .iter()
+        .filter_map(|matcher| matcher.directory.clone())
+        .collect();
+    if !pruned.is_empty() {
+        let walk_root = root.to_path_buf();
+        builder.filter_entry(move |entry| {
+            if entry.depth() == 0 || !entry.file_type().is_some_and(|kind| kind.is_dir()) {
+                return true;
+            }
+            let relative = entry
+                .path()
+                .strip_prefix(&walk_root)
+                .unwrap_or(entry.path());
+            let relative = relative.to_string_lossy().replace('\\', "/");
+            !pruned.iter().any(|directory| directory.is_match(&relative))
+        });
+    }
     if pattern.contains("**") {
         builder.max_depth(Some(MAX_GLOB_WALK_DEPTH));
     } else {

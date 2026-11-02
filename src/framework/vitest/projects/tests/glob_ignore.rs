@@ -147,3 +147,36 @@ fn an_uncompilable_ignore_pattern_is_reported() {
     let set = resolve_projects(directory.path());
     assert_unresolved_with_diagnostic(&set, "`ignore` pattern cannot be compiled");
 }
+
+/// A directory `x/**` ignores is not walked, so it cannot spend the entry budget that the
+/// projects outside it need.
+#[test]
+fn an_ignored_directory_is_not_walked() {
+    let directory = two_projects("");
+    for n in 0..40 {
+        write(directory.path(), &format!("pkg/b/fixtures/f{n}.ts"), "");
+    }
+    let set = resolve_with_spent_budget(
+        directory.path(),
+        "import { glob } from 'glob'\nexport default { test: { projects: glob.sync('pkg/**/vitest.config.ts', { ignore: 'pkg/b/**' }) } }",
+        MAX_GLOB_WALK_ENTRIES - 20,
+    );
+    assert!(!set.has_unresolved_entries, "{:?}", set.diagnostics);
+    assert_eq!(project_dirs(&set, directory.path()), ["pkg/a"]);
+}
+
+/// A literal pattern is dropped like a match: glob 13.0.6 returns nothing for
+/// `glob.sync('pkg/b', { ignore: 'pkg/b/**' })`.
+#[test]
+fn a_literal_pattern_its_ignore_names_matches_nothing() {
+    let directory = two_projects("");
+    for (ignore, expected) in [("pkg/b/**", vec![]), ("pkg/a/**", vec!["pkg/b"])] {
+        write(
+            directory.path(),
+            "vitest.config.ts",
+            &format!("import {{ glob }} from 'glob'\nexport default {{ test: {{ projects: glob.sync('pkg/b', {{ ignore: '{ignore}' }}) }} }}"),
+        );
+        let set = resolve_projects(directory.path());
+        assert_eq!(project_dirs(&set, directory.path()), expected, "{ignore}");
+    }
+}

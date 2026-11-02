@@ -1,13 +1,13 @@
 // Unit tests for the collection oracle's comparison and its missing-module stubs.
 import assert from 'node:assert/strict'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
 
 import { missingModuleStubs, wholeModuleImports } from './collection-oracle-stubs.mjs'
-import { analyzerRecordsOf, analyzerView, compareDirectory, compareSites, configSource, exclusionView, oracleEnvironment, hookSite, matchKnown, minus, oracleBinary, oracleSetupError, ownConfig, siteView, vitestInstallError, vitestView } from './collection-oracle.mjs'
+import { analyzerRecordsOf, analyzerView, collectWithVitest, compareDirectory, compareSites, configSource, exclusionView, oracleEnvironment, hookSite, matchKnown, minus, oracleBinary, oracleSetupError, ownConfig, siteView, vitestInstallError, vitestView } from './collection-oracle.mjs'
 
 /** A file the probe collected cleanly, with `over` replacing any field. */
 const collected = (over = {}) => ({
@@ -510,4 +510,26 @@ test('a run that finds no test of its own keeps the records it printed; another 
 test('the Vitest child inherits the environment but not the coverage run', () => {
   const child = oracleEnvironment({ PATH: '/bin', NODE_V8_COVERAGE: '/tmp/coverage' }, '/tmp/out')
   assert.deepEqual(child, { PATH: '/bin', VITEST_DEDUP_ORACLE_OUT: '/tmp/out' })
+})
+
+test('a probe config that drops a nested project list fails instead of collecting less', () => {
+  const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'oracle-nested-projects-')))
+  try {
+    const write = (path, text) => {
+      mkdirSync(dirname(join(dir, path)), { recursive: true })
+      writeFileSync(join(dir, path), text)
+    }
+    write('vitest.config.ts', "export default { test: { projects: ['pkg/vitest.config.ts'] } }\n")
+    write('pkg/vitest.config.ts', "export default { test: { projects: ['inner'], include: ['top.test.ts'], globals: true } }\n")
+    write('pkg/inner/vitest.config.ts', "export default { test: { include: ['nested.test.ts'], globals: true } }\n")
+    write('pkg/top.test.ts', "test('top', () => {})\n")
+    write('pkg/inner/nested.test.ts', "test('nested', () => {})\n")
+    assert.throws(() => collectWithVitest(root, dir), /changed the files Vitest collects/)
+    // The same entry with no nested list is probed as before.
+    write('pkg/vitest.config.ts', "export default { test: { include: ['top.test.ts'], globals: true } }\n")
+    assert.deepEqual(collectWithVitest(root, dir).get('pkg/top.test.ts')?.tests, ['top'])
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
 })
