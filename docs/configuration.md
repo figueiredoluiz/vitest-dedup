@@ -95,7 +95,7 @@ named with a fix; see [Missing prerequisites](incomplete-runs.md#missing-prerequ
 
 `globals: true` is detected from the resolved config. A project list built with `glob.sync` from
 the `glob` package is read when its pattern is a string literal and its only option is a literal
-`ignore`. When the project list is built in a way no
+`ignore` of relative patterns; an absolute or `..` ignore pattern leaves the list unresolved. When the project list is built in a way no
 static reader can follow, such as a bare variable or `mergeConfig` with a dynamic import, the
 setting is reported as undetermined and the flag is needed:
 

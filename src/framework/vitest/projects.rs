@@ -31,7 +31,8 @@
 //!   verified imported from the `glob` package: the pattern is a string literal, and its
 //!   expansion is the same budgeted filesystem walk a literal string entry already takes. A
 //!   second argument is read only as `{ ignore: <literal or array of literals> }`, dropping the
-//!   matches glob 13 drops; any other option refuses.
+//!   matches glob 13 drops, each brace alternative as its own pattern; an absolute or `..`
+//!   ignore pattern, or any other option, refuses.
 //! - `export default mergeConfig(<imported base>, <literal>)`: explicit arrays concatenate
 //!   base first, scalar overrides win, and nullish overrides preserve the base. Defaults apply
 //!   after merging. Measured before these two: 575 of 575 files undetermined on one large
@@ -3677,7 +3678,23 @@ fn glob_sync_ignore(
         if pattern.starts_with('!') {
             return None;
         }
-        ignore.extend(expand_extglob_optional_groups(pattern).ok()?);
+        // glob reads each brace alternative as its own pattern, so each keeps its own trailing
+        // `/**`. An absolute one is matched against a full path from glob's working directory,
+        // which this scan cannot know, so it refuses the list, as it does a `..` one.
+        for expanded in expand_extglob_optional_groups(pattern).ok()? {
+            let alternatives = match brace_alternatives(&expanded) {
+                BraceAlternatives::None => vec![expanded],
+                BraceAlternatives::Listed(alternatives) => alternatives,
+                BraceAlternatives::TooMany => return None,
+            };
+            for alternative in alternatives {
+                let alternative = alternative.strip_prefix("./").unwrap_or(&alternative);
+                if leaves_the_tree_lexically(alternative) {
+                    return None;
+                }
+                ignore.push(alternative.to_owned());
+            }
+        }
     }
     Some(ignore)
 }

@@ -115,6 +115,62 @@ fn an_ignore_without_a_globstar_drops_a_directory_match_only() {
     assert_eq!(project_dirs(&set, directory.path()), ["pkg/a"]);
 }
 
+/// glob 13.0.6 reads each brace alternative as its own pattern, so each `/**` alternative drops
+/// the directory it names: `{pkg/b/**,pkg/c/**}` and `{./pkg/b/**,pkg/x}` both leave `pkg/a`.
+#[test]
+fn each_brace_alternative_drops_its_own_directory() {
+    let directory = two_projects("");
+    write(
+        directory.path(),
+        "pkg/c/vitest.config.ts",
+        "export default defineConfig({ test: { globals: true } });",
+    );
+    for (ignore, expected) in [
+        ("{pkg/b/**,pkg/c/**}", vec!["pkg/a"]),
+        ("{./pkg/b/**,pkg/x}", vec!["pkg/a", "pkg/c"]),
+        ("pkg/{b,c}/**", vec!["pkg/a"]),
+    ] {
+        write(
+            directory.path(),
+            "vitest.config.ts",
+            &format!("import {{ glob }} from 'glob'\nexport default {{ test: {{ projects: glob.sync('pkg/*', {{ ignore: '{ignore}' }}) }} }}"),
+        );
+        let set = resolve_projects(directory.path());
+        assert!(
+            !set.has_unresolved_entries,
+            "{ignore}: {:?}",
+            set.diagnostics
+        );
+        assert_eq!(project_dirs(&set, directory.path()), expected, "{ignore}");
+    }
+}
+
+/// glob matches an absolute `ignore` against the full path from its working directory, which
+/// this scan cannot know, so the list stays unresolved; a `..` pattern is refused alike.
+#[test]
+fn an_ignore_outside_the_relative_tree_stays_unresolved() {
+    let directory = two_projects("");
+    let absolute = directory
+        .path()
+        .join("pkg/b")
+        .to_string_lossy()
+        .replace('\\', "/");
+    for ignore in [
+        format!("{absolute}/**"),
+        "{pkg/x,/pkg/b/**}".to_owned(),
+        "../pkg/b/**".to_owned(),
+    ] {
+        write(
+            directory.path(),
+            "vitest.config.ts",
+            &format!("import {{ glob }} from 'glob'\nexport default {{ test: {{ projects: glob.sync('pkg/*', {{ ignore: '{ignore}' }}) }} }}"),
+        );
+        let set = resolve_projects(directory.path());
+        assert!(set.has_unresolved_entries, "{ignore}: {set:?}");
+        assert!(set.projects.is_empty(), "{ignore}");
+    }
+}
+
 /// Every option but a literal `ignore` is a runtime setting this scan cannot know.
 #[test]
 fn other_glob_sync_options_stay_unresolved() {
