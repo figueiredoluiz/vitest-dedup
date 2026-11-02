@@ -1092,6 +1092,45 @@
       ]
     },
     {
+      "name": "duplicate-test-name-forwarded-project-config",
+      "path": "duplicate-test-name-forwarded-project-config",
+      "rule": "duplicate-test-name",
+      "role": "variant",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-02",
+      "expectedTests": 4,
+      "expectedIncomplete": false,
+      "expectedUnresolved": 0,
+      "expectedFindings": [
+        {
+          "rule": "duplicate-test-name",
+          "severity": "warning",
+          "titles": [
+            "route > matches the path",
+            "route > matches the path"
+          ]
+        },
+        {
+          "rule": "duplicate-test-name",
+          "severity": "warning",
+          "titles": [
+            "title > formats the page title",
+            "title > formats the page title"
+          ]
+        }
+      ],
+      "expectedAbsent": [
+        {
+          "rule": "duplicate-test-name",
+          "titles": [
+            "legacy > keeps the old behavior",
+            "legacy > keeps the old behavior"
+          ]
+        }
+      ]
+    },
+    {
       "name": "duplicate-test-name-negative",
       "path": "duplicate-test-name-negative",
       "rule": "duplicate-test-name",

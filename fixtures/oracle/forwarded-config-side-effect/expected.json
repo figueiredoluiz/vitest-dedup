@@ -1,0 +1,17 @@
+{
+  "files": {
+    "packages/mutated/mutated.test.ts": {
+      "tasks": 1,
+      "wrapperSites": [],
+      "next": {
+        "reasons": [
+          "globals-undetermined"
+        ],
+        "testsExcluded": 0
+      }
+    }
+  },
+  "blindUnderCurrent": [
+    "packages/mutated/mutated.test.ts"
+  ]
+}

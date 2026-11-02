@@ -98,7 +98,9 @@ the `glob` package is read when its pattern is a string literal and its only opt
 `ignore` of plain relative ASCII patterns; an ignore pattern that is absolute, has a `.`, `..` or
 empty segment, a trailing `/`, two `**` segments in a row, a backslash, `?`, `[...]`, or a brace
 that is not a comma list leaves the list unresolved. On macOS and Windows an ignore pattern matches regardless of case, as glob's does
-there. When the project list is built in a way no
+there. A project config file that only forwards another one (`export { default } from './shared'`,
+or an import exported again as the default), with no other runtime imports, is read as that config,
+from the project's own directory. When the project list is built in a way no
 static reader can follow, such as a bare variable or `mergeConfig` with a dynamic import, the
 setting is reported as undetermined and the flag is needed:
 
