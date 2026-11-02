@@ -15,7 +15,7 @@ mod rows;
 mod suites;
 pub(crate) mod titles;
 
-pub use rows::{Modifiers, Row};
+pub use rows::{Modifiers, Row, TableRow};
 
 use crate::framework::{Dialect, HookTiming};
 use crate::inventory::Inventory;

@@ -58,8 +58,8 @@ fn by_title(source: &str) -> HashMap<String, TestCase> {
 const HEADER: &str =
     "import { test, describe, beforeEach, aroundEach, expect, vi } from 'vitest'\n";
 
-/// Runs an owned oracle source through the corpus and asserts counts before name findings.
-fn assert_owned_names(source: &str, path: &str, tests: usize, excluded: usize, expected: &[&str]) {
+/// Counts extracted and excluded cases from an owned source before any finding assertion.
+fn counted_corpus(source: &str, path: &str, tests: usize, excluded: usize) -> FileCorpus {
     let corpus = corpora(&[(path, source)], &[path]).remove(0);
     assert_eq!(corpus.tests.len(), tests);
     assert_eq!(
@@ -70,6 +70,12 @@ fn assert_owned_names(source: &str, path: &str, tests: usize, excluded: usize, e
             .count(),
         excluded
     );
+    corpus
+}
+
+/// Runs an owned oracle source through the corpus and asserts counts before name findings.
+fn assert_owned_names(source: &str, path: &str, tests: usize, excluded: usize, expected: &[&str]) {
+    let corpus = counted_corpus(source, path, tests, excluded);
     let outcome = owned_findings(path, corpus);
     let names: Vec<_> = outcome
         .findings
@@ -1068,39 +1074,45 @@ fn owned_rendering_matches_runtime_or_refuses() {
     );
 }
 
-/// The owned runtime source pins input equality, observability and rendering as final findings.
-#[test]
-fn owned_duplicate_rows_require_proven_inputs_and_keep_every_group() {
-    let source = include_str!("../../fixtures/oracle/duplicate-rows/cases.test.ts");
-    let corpus = corpora(&[("cases.test.ts", source)], &["cases.test.ts"]).remove(0);
-    assert_eq!(corpus.tests.len(), 75);
-    assert_eq!(
-        corpus
-            .tests
-            .iter()
-            .filter(|case| case.exclusion.is_some())
-            .count(),
-        2
-    );
-    assert_eq!(
-        corpus
-            .tests
-            .iter()
-            .filter(|case| case.row.is_some())
-            .count(),
-        75
-    );
-    let proven_rows = corpus
-        .tests
-        .iter()
-        .filter(|case| case.row_class.is_some())
-        .count();
+/// Checks that every collected case retains its row identity before comparing row findings.
+fn owned_row_corpus(source: &str, tests: usize, excluded: usize) -> FileCorpus {
+    let corpus = counted_corpus(source, "cases.test.ts", tests, excluded);
+    assert!(corpus.tests.iter().all(|case| case.row.is_some()));
+    corpus
+}
+
+/// Pins the exact duplicate-row groups and their common source locations.
+fn assert_owned_row_findings(corpus: FileCorpus, expected: &[(&str, usize)]) {
     let outcome = owned_findings("cases.test.ts", corpus);
     let rows: Vec<_> = outcome
         .findings
         .iter()
         .filter(|finding| finding.rule == crate::model::Rule::DuplicateEachRow)
         .collect();
+    assert_eq!(rows.len(), expected.len(), "{rows:#?}");
+    for (finding, &(title, count)) in rows.iter().zip(expected) {
+        assert_eq!(finding.locations.len(), count);
+        assert_eq!(finding.titles, vec![title; count]);
+        assert!(finding
+            .locations
+            .iter()
+            .all(|location| location == &finding.locations[0]));
+    }
+}
+
+/// The owned runtime source pins input equality, observability and rendering as final findings.
+#[test]
+fn owned_duplicate_rows_require_proven_inputs_and_keep_every_group() {
+    let source = include_str!("../../fixtures/oracle/duplicate-rows/cases.test.ts");
+    let corpus = owned_row_corpus(source, 75, 2);
+    assert_eq!(
+        corpus
+            .tests
+            .iter()
+            .filter(|case| case.row_class.is_some())
+            .count(),
+        51
+    );
     let expected = [
         ("scalar 1", 2),
         ("ignored 1", 2),
@@ -1118,16 +1130,54 @@ fn owned_duplicate_rows_require_proven_inputs_and_keep_every_group() {
         ("unicode é😀", 2),
         ("whole const 1", 2),
     ];
-    assert_eq!(rows.len(), expected.len(), "{rows:#?}");
-    assert_eq!(proven_rows, 51);
-    for (finding, (title, count)) in rows.iter().zip(expected) {
-        assert_eq!(finding.locations.len(), count);
-        assert_eq!(finding.titles, vec![title; count]);
-        assert!(finding
-            .locations
+    assert_owned_row_findings(corpus, &expected);
+}
+
+/// Erased wrappers and outer holes preserve the runtime's rows, names and input distinctions.
+#[test]
+fn owned_wrapped_sparse_tables_keep_rows_and_original_indexes() {
+    let source = include_str!("../../fixtures/oracle/wrapped-sparse-tables/cases.test.ts");
+    let corpus = owned_row_corpus(source, 40, 2);
+    let indexes = |line| {
+        corpus
+            .tests
             .iter()
-            .all(|location| location == &finding.locations[0]));
-    }
+            .filter(|case| case.span.start.line == line)
+            .map(|case| case.row.unwrap())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(indexes(14), [1, 3, 4]);
+    assert_eq!(indexes(15), [1, 3, 4]);
+    assert_eq!(indexes(19), [0, 2], "undefined is not an elision");
+    assert_eq!(indexes(25), [1, 3], "exclusions keep physical indexes too");
+    let titles: Vec<_> = corpus
+        .tests
+        .iter()
+        .filter(|case| matches!(case.span.start.line, 16 | 17))
+        .map(|case| case.name.as_ref().unwrap().join(" > "))
+        .collect();
+    assert_eq!(
+        titles,
+        [
+            "each index 1 position 2",
+            "each index 3 position 4",
+            "for index 1 position 2",
+            "for index 3 position 4"
+        ]
+    );
+    let expected = [
+        "plain 1",
+        "const 3",
+        "satisfies 5",
+        "asserted 7",
+        "nonnull 9",
+        "nested 11",
+        "whole 13",
+        "sparse scalar 15",
+        "sparse spread 17",
+        "sparse whole 19",
+    ];
+    assert_owned_row_findings(corpus, &expected.map(|title| (title, 2)));
 }
 
 /// Run rules over already-counted owned cases with the built-in severities.
