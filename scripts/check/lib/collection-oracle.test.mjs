@@ -7,7 +7,7 @@ import test from 'node:test'
 import { fileURLToPath } from 'node:url'
 
 import { missingModuleStubs, wholeModuleImports } from './collection-oracle-stubs.mjs'
-import { analyzerRecordsOf, analyzerView, compareDirectory, compareSites, configSource, exclusionView, hookSite, matchKnown, minus, oracleBinary, oracleSetupError, ownConfig, siteView, vitestInstallError, vitestView } from './collection-oracle.mjs'
+import { analyzerRecordsOf, analyzerView, compareDirectory, compareSites, configSource, exclusionView, oracleEnvironment, hookSite, matchKnown, minus, oracleBinary, oracleSetupError, ownConfig, siteView, vitestInstallError, vitestView } from './collection-oracle.mjs'
 
 /** A file the probe collected cleanly, with `over` replacing any field. */
 const collected = (over = {}) => ({
@@ -505,4 +505,9 @@ test('a run that finds no test of its own keeps the records it printed; another 
   const records = analyzerRecordsOf(process.execPath, analyzer('discovered 1 test file(s) but extracted no tests.'))
   assert.deepEqual(records, [{ type: 'site', kind: 'wrapper' }])
   assert.throws(() => analyzerRecordsOf(process.execPath, analyzer('could not read the project')), /exited 2/)
+})
+
+test('the Vitest child inherits the environment but not the coverage run', () => {
+  const child = oracleEnvironment({ PATH: '/bin', NODE_V8_COVERAGE: '/tmp/coverage' }, '/tmp/out')
+  assert.deepEqual(child, { PATH: '/bin', VITEST_DEDUP_ORACLE_OUT: '/tmp/out' })
 })

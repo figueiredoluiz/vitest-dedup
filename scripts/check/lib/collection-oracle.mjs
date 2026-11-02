@@ -118,6 +118,19 @@ export function vitestView(records, listedFiles, absoluteDir) {
 }
 
 /**
+ * The environment of the Vitest child. A coverage run exports `NODE_V8_COVERAGE`, and a worker that
+ * inherits it reports the probe runner only when it flushes before exiting, so the gate's exemption
+ * for that file would hold on some runs and fail on others.
+ * @param {NodeJS.ProcessEnv} environment The parent's environment.
+ * @param {string} out Where the runner appends what it collected.
+ * @returns {NodeJS.ProcessEnv} The child's.
+ */
+export function oracleEnvironment(environment, out) {
+  const { NODE_V8_COVERAGE: _coverage, ...inherited } = environment
+  return { ...inherited, VITEST_DEDUP_ORACLE_OUT: out }
+}
+
+/**
  * Collects `dir` with real Vitest through the probe runner.
  *
  * @param {string} root - checkout root; `node_modules/vitest` is resolved from it.
@@ -145,7 +158,7 @@ export function collectWithVitest(root, dir) {
       {
         cwd: absoluteDir,
         encoding: 'utf8',
-        env: { ...process.env, VITEST_DEDUP_ORACLE_OUT: out },
+        env: oracleEnvironment(process.env, out),
         maxBuffer: 256 << 20,
         timeout: 300_000,
       },
