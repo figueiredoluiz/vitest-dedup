@@ -8,7 +8,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 /// One declaration of a group, under the shape that grouped it.
-pub(super) type Declaration<'a> = (&'a Path, u32, u64);
+pub(super) type Declaration<'a> = (&'a Path, (&'a Path, u32), u64);
 
 /// The declarations of each group this rule reported.
 pub(super) type Reported<'a> = Vec<BTreeSet<Declaration<'a>>>;
@@ -16,7 +16,7 @@ pub(super) type Reported<'a> = Vec<BTreeSet<Declaration<'a>>>;
 /// The declaration `entry` stands for, when it has a shape.
 pub(super) fn declaration<'a>(entry: &Entry<'a>) -> Option<Declaration<'a>> {
     let key = entry.case.parameterization_key?;
-    Some((entry.path, entry.case.span.start_byte, key))
+    Some((entry.path, entry.declaration(), key))
 }
 
 /// Groups eligible shapes within one file using all rows to select distinct representatives.
@@ -68,7 +68,7 @@ fn representatives(group: &[usize], entries: &[Entry<'_>]) -> Vec<usize> {
     for &index in group {
         let case = entries[index].case;
         declarations
-            .entry(case.span.start_byte)
+            .entry(entries[index].declaration())
             .or_default()
             .entry(case.body)
             .or_insert(index);

@@ -937,13 +937,23 @@ impl MemoryRoof {
         retained: usize,
         resident: impl FnOnce() -> Option<u64>,
     ) -> bool {
+        let spine = corpus.capacity().saturating_mul(size_of::<TestCase>());
+        self.exceeded_with_heap(spine.saturating_add(retained), resident)
+    }
+
+    /// Checks a core's complete retained heap together with separately charged report sources.
+    /// A disabled roof never samples residency; missing RSS preserves the accounting ceiling.
+    #[must_use]
+    pub fn exceeded_with_heap(
+        &self,
+        retained: usize,
+        resident: impl FnOnce() -> Option<u64>,
+    ) -> bool {
         let Some(budget) = self.budget_bytes else {
             return false;
         };
-        let spine = corpus.capacity().saturating_mul(size_of::<TestCase>());
         let held = self
             .charged
-            .saturating_add(u64::try_from(spine).unwrap_or(u64::MAX))
             .saturating_add(u64::try_from(retained).unwrap_or(u64::MAX));
         held > budget || resident().is_some_and(|rss| rss > budget.saturating_add(budget / 2))
     }

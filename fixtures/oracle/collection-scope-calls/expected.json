@@ -21,9 +21,10 @@
       ],
       "next": {
         "reasons": [
-          "registered-elsewhere"
+          "registered-elsewhere",
+          "helper-effects-unproved"
         ],
-        "testsExcluded": 2
+        "testsExcluded": 3
       }
     },
     "control-named.test.ts": {
@@ -33,9 +34,10 @@
       ],
       "next": {
         "reasons": [
-          "registered-elsewhere"
+          "registered-elsewhere",
+          "helper-effects-unproved"
         ],
-        "testsExcluded": 2
+        "testsExcluded": 3
       }
     },
     "default-object.test.ts": {
@@ -59,9 +61,10 @@
       ],
       "next": {
         "reasons": [
-          "registered-elsewhere"
+          "registered-elsewhere",
+          "helper-effects-unproved"
         ],
-        "testsExcluded": 2
+        "testsExcluded": 3
       }
     },
     "hook-timeout.test.ts": {
@@ -133,9 +136,10 @@
       ],
       "next": {
         "reasons": [
-          "registered-elsewhere"
+          "registered-elsewhere",
+          "helper-effects-unproved"
         ],
-        "testsExcluded": 2
+        "testsExcluded": 3
       }
     },
     "sequence-callee.test.ts": {

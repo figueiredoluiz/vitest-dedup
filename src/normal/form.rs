@@ -250,12 +250,7 @@ fn tagged(tree: &Tree, literal: NodeId) -> bool {
 
 /// Whether a function body reads the function's own `this`, `arguments`, `super` or `new.target`.
 pub(super) fn binds_this(tree: &Tree, node: NodeId) -> bool {
-    any_inside(node, |node| match tree.kind(node) {
-        "ThisExpression" | "Super" | "MetaProperty" => Visit::Found,
-        "Identifier" if tree.text(node, "name") == Some("arguments") => Visit::Found,
-        "Identifier" | "FunctionExpression" | "FunctionDeclaration" | "ClassBody" => Visit::Skip,
-        _ => Visit::Into(children(tree, node)),
-    })
+    crate::lang::uses_receiver(tree, node)
 }
 
 /// JSX text as it renders: lines trimmed where they meet a line break, blank lines dropped.
@@ -296,7 +291,7 @@ fn value(tree: &Tree, node: NodeId, key: &str) -> Value {
 }
 
 /// The kind a literal's JSON value names, for the structural rendering.
-fn literal_kind(value: Value) -> &'static str {
+pub(super) fn literal_kind(value: Value) -> &'static str {
     match value {
         Value::Number(_) => "number",
         Value::String(_) => "string",

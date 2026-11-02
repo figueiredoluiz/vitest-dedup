@@ -7,9 +7,12 @@ use crate::model::{Position, Rule, Severity, Span};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
+mod origins;
+
 /// A case at `line` with the keys and flags given; rows of one table share `site`.
 fn case(line: u32, site: u32, key: u64, module_key: u64) -> TestCase {
     TestCase {
+        origin: None,
         span: Span {
             start: Position { line, column: 3 },
             end: Position { line, column: 40 },

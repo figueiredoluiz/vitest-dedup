@@ -25,6 +25,7 @@ export const CASE_KEYS = new Set([
   'rule',
   'role',
   'arguments',
+  'engine',
   'expectedTests',
   'expectedIncomplete',
   'expectedUnresolved',

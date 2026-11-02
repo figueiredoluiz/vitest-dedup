@@ -6,6 +6,7 @@
 
 mod hooks;
 mod memory;
+mod runners;
 mod suites;
 pub use hooks::{Hook, Hooks};
 
@@ -43,6 +44,10 @@ pub enum Exclusion {
     /// A wrapper call, a module load or a registration function read as a value registers it: the
     /// file does not spell the tests, nor how many there are, so one is counted per site.
     RegisteredElsewhere,
+    /// A runner's effects on its calling scope have no complete invocation proof.
+    UnprovedRunner,
+    /// Direct eval can observe or change bindings outside the static reference graph.
+    DynamicBindings,
 }
 
 impl Exclusion {
@@ -80,6 +85,14 @@ impl Exclusion {
                 "a wrapper call, a module load or a registration function read as a value \
                  registers tests this file does not spell",
             )),
+            Self::UnprovedRunner => Some((
+                ExclusionReason::HelperEffectsUnproved,
+                "a runner's invocation is unproved; its calling scope is excluded",
+            )),
+            Self::DynamicBindings => Some((
+                ExclusionReason::UnresolvedContext,
+                "direct eval can observe or change lexical bindings outside static analysis",
+            )),
             Self::EmptyBody | Self::NoCallback => None,
         }
     }
@@ -87,7 +100,18 @@ impl Exclusion {
 
 /// One test, one row of a test table, or a suite in the separate suite population.
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Origin {
+    /// The source module spelling the declaration, relative to the analysis root.
+    pub path: PathBuf,
+    /// Caller modules whose registrations own this declaration's executions.
+    pub registration_files: Vec<PathBuf>,
+}
+
+/// One test, one row of a test table, or a suite in the separate suite population.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TestCase {
+    /// A declaration outside the file that registers it; absent for ordinary inline tests.
+    pub origin: Option<Origin>,
     /// The registering call.
     pub span: Span,
     /// The title, when the source spells it.
@@ -136,6 +160,15 @@ pub struct TestCase {
     pub exclusion: Option<Exclusion>,
 }
 
+impl TestCase {
+    /// The declaration's source path, independently of which file registers this execution.
+    pub fn declaration_path<'a>(&'a self, registered_in: &'a Path) -> &'a Path {
+        self.origin
+            .as_ref()
+            .map_or(registered_in, |origin| origin.path.as_path())
+    }
+}
+
 /// A registration site, as the inventory reports it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SiteRecord {
@@ -155,6 +188,10 @@ pub struct SiteRecord {
 /// What the corpus holds for one file.
 #[derive(Clone, Debug, Default)]
 pub struct FileCorpus {
+    /// Module-wide uncertainty, retained even when no static test site was found.
+    pub context_refusals: Vec<Exclusion>,
+    /// Exact helper source snapshots used during expansion, once per relative source path.
+    pub helper_sources: Vec<(PathBuf, String)>,
     /// Hook declarations and distinct lifecycle chains, separate from executable tests.
     pub hooks: Hooks,
     /// Its tests, in source order, rows in table order.
@@ -163,6 +200,8 @@ pub struct FileCorpus {
     pub suites: Vec<TestCase>,
     /// Its registration sites and module loads.
     pub sites: Vec<SiteRecord>,
+    /// Table declarations for which normalization proved zero rows.
+    pub empty_tables: usize,
     /// Parse errors the parser recovered from.
     pub parse_errors: usize,
 }
@@ -253,10 +292,22 @@ pub fn file(
     run: &mut Run,
 ) -> Result<FileCorpus, Refusal> {
     let parsed = lang::parse(path, source)?;
-    let found = inventory::inventory(
+    read_parsed(path, source, setting, run, &parsed, None)
+}
+
+/// Analyze one ordinary file or one already proved registration invocation over its own tree.
+fn read_parsed(
+    path: &Path,
+    source: &str,
+    setting: Setting,
+    run: &mut Run,
+    parsed: &lang::Parsed,
+    frame: Option<runners::Frame>,
+) -> Result<FileCorpus, Refusal> {
+    let mut found = inventory::inventory(
         path,
         source,
-        &parsed,
+        parsed,
         inventory::Setting {
             dialect: setting.dialect,
             globals: setting.globals,
@@ -264,12 +315,29 @@ pub fn file(
         },
         &mut run.modules,
     );
+    // Instantiation selects registrations, not a different module's mutation facts. Keep
+    // every recorded test/hook body for order dependence and registration-time write checks.
+    let structure = Structure::of(parsed, &found);
+    if let Some(frame) = &frame {
+        found.sites.retain(|site| frame.sites.contains(&site.node));
+        found.loads.clear();
+        found.escapes.clear();
+    }
+    let expanded = if frame.is_none() {
+        runners::expand(path, source, parsed, &found, setting, run)
+    } else {
+        runners::Batch::default()
+    };
+    let admitted: std::collections::HashSet<_> = expanded
+        .calls
+        .iter()
+        .map(|expansion| expansion.call)
+        .collect();
     let tree = &parsed.tree;
     let lines = Lines::new(source);
-    let structure = Structure::of(&parsed, &found);
     let mut normalizer = Normalizer::new(
         path,
-        &parsed,
+        parsed,
         normal::Setting {
             dialect: setting.dialect,
             root: setting.root,
@@ -277,6 +345,9 @@ pub fn file(
         },
         &structure,
     );
+    if let Some(frame) = &frame {
+        normalizer = normalizer.for_registration(frame.function, frame.bindings.clone());
+    }
     // A statement that is a call registering a test, suite or benchmark is that registration, not
     // context; any other statement holding one (a loop, a sequence with setup) is context whole.
     let registration = |statement: NodeId| {
@@ -285,15 +356,16 @@ pub fn file(
                 .child(statement, "expression")
                 .is_some_and(|expression| {
                     let call = tree.inner(expression);
-                    found.sites.iter().any(|site| {
-                        site.node == call
-                            && matches!(
-                                site.kind,
-                                SiteKind::Registers(
-                                    Registers::Test | Registers::Suite | Registers::Bench
+                    admitted.contains(&call)
+                        || found.sites.iter().any(|site| {
+                            site.node == call
+                                && matches!(
+                                    site.kind,
+                                    SiteKind::Registers(
+                                        Registers::Test | Registers::Suite | Registers::Bench
+                                    )
                                 )
-                            )
-                    })
+                        })
                 })
     };
 
@@ -301,10 +373,11 @@ pub fn file(
     // body, every statement that neither declares nor registers a test, suite or benchmark.
     let mut ambient: HashMap<Option<NodeId>, Vec<NodeId>> = HashMap::new();
     for site in found.sites.iter().filter(|site| {
-        matches!(
-            site.kind,
-            SiteKind::Registers(Registers::Hook(_)) | SiteKind::Wrapper(_)
-        )
+        !admitted.contains(&site.node)
+            && matches!(
+                site.kind,
+                SiteKind::Registers(Registers::Hook(_)) | SiteKind::Wrapper(_)
+            )
     }) {
         let Some(suites) = normalizer.suites_around(site.node) else {
             continue;
@@ -373,7 +446,7 @@ pub fn file(
                 if table_site(site) {
                     None
                 } else {
-                    normal::titles::title(&parsed, site.node)
+                    runners::title(parsed, site.node, frame.as_ref())
                 },
             )
         })
@@ -406,6 +479,7 @@ pub fn file(
     };
     // A case as its site spells it, before anything keys it.
     let unkeyed_case = |span: Span, title: Option<String>, exclusion: Option<Exclusion>| TestCase {
+        origin: None,
         span,
         title,
         full_title: None,
@@ -428,12 +502,13 @@ pub fn file(
     let unkeyed = |site: &Site, exclusion: Option<Exclusion>| {
         unkeyed_case(
             at(site.span.start, site.span.end),
-            site.title.clone(),
+            runners::title(parsed, site.node, frame.as_ref()),
             exclusion,
         )
     };
 
     let mut tests = Vec::new();
+    let mut empty_tables = 0;
     for site in found
         .sites
         .iter()
@@ -453,6 +528,7 @@ pub fn file(
         let table_rows = modifiers
             .as_ref()
             .and_then(|modifiers| modifiers.rows.as_ref());
+        empty_tables += usize::from(table_rows.is_some_and(Vec::is_empty));
         let excluded = |exclusion| -> Vec<TestCase> {
             let case = |row| TestCase {
                 row,
@@ -465,6 +541,20 @@ pub fn file(
             }
         };
         let unread_callee = modifiers.is_none();
+        if found.direct_eval {
+            tests.extend(excluded(Exclusion::DynamicBindings));
+            continue;
+        }
+        let refused = expanded.refused.contains(&None)
+            || normalizer.suites_around(site.node).is_some_and(|scopes| {
+                scopes
+                    .iter()
+                    .any(|scope| expanded.refused.contains(&Some(*scope)))
+            });
+        if refused {
+            tests.extend(excluded(Exclusion::UnprovedRunner));
+            continue;
+        }
         let (Some(modifiers), Some(callback)) =
             (modifiers.as_ref(), normalizer.callback(site.node))
         else {
@@ -606,10 +696,10 @@ pub fn file(
             .iter()
             .map(|scope| suite_names.get(structure.suites.get(scope)?)?.clone())
             .collect();
-        let pattern = normal::titles::title(&parsed, site.node);
+        let pattern = runners::title(parsed, site.node, frame.as_ref());
         let row_prefix_known = suites.iter().all(|scope| {
             structure.suites.get(scope).is_some_and(|&call| {
-                normal::row_identity::suite_prefix_known(&parsed, call, setting.dialect)
+                normal::row_identity::suite_prefix_known(parsed, call, setting.dialect)
             })
         });
         // Each row's body, rendered flat and traced. An incomplete trace says nothing about the
@@ -626,13 +716,8 @@ pub fn file(
             normalizer.take_truncated();
             let normal_body = normalizer.substituted(body, bound.clone(), *every);
             truncated |= normalizer.take_truncated();
-            let (trace, callback_form) = crate::behavior::trace(
-                &mut normalizer,
-                &parsed,
-                traced_body,
-                bound.clone(),
-                *every,
-            );
+            let (trace, callback_form) =
+                crate::behavior::trace(&mut normalizer, parsed, traced_body, bound.clone(), *every);
             traced.push((normal_body, trace, callback_form));
         }
         if truncated {
@@ -650,7 +735,7 @@ pub fn file(
                         let title = if table_site(site) {
                             let row = modifiers.rows.as_ref()?.get(index)?;
                             let (arguments, fields) =
-                                normal::titles::row(&parsed, &row.value, modifiers.whole_rows);
+                                normal::titles::row(parsed, &row.value, modifiers.whole_rows);
                             (setting.dialect.render_title)(
                                 pattern,
                                 &arguments,
@@ -668,9 +753,9 @@ pub fn file(
                     return None;
                 }
                 let row = modifiers.rows.as_ref()?.get(index)?;
-                let identity = normal::row_identity::identity(&parsed, &row.value, function?)?;
+                let identity = normal::row_identity::identity(parsed, &row.value, function?)?;
                 let (arguments, fields) =
-                    normal::titles::row(&parsed, &row.value, modifiers.whole_rows);
+                    normal::titles::row(parsed, &row.value, modifiers.whole_rows);
                 let rendered = (setting.dialect.render_row_title)(
                     pattern.as_deref()?,
                     &arguments,
@@ -741,7 +826,9 @@ pub fn file(
     let elsewhere = found
         .sites
         .iter()
-        .filter(|site| site.kind == SiteKind::Wrapper(Reach::Tasks))
+        .filter(|site| {
+            site.kind == SiteKind::Wrapper(Reach::Tasks) && !admitted.contains(&site.node)
+        })
         .map(|site| site.position)
         .chain(found.loads.iter().copied())
         .chain(found.escapes.iter().map(|escape| escape.offset));
@@ -786,7 +873,7 @@ pub fn file(
         }
     }));
     let suites = suites::collect(
-        &parsed,
+        parsed,
         &found,
         &structure,
         &contexts,
@@ -794,9 +881,20 @@ pub fn file(
         &mut normalizer,
         (setting, source),
     );
+    let mut helper_sources = BTreeMap::new();
+    for expansion in expanded.calls {
+        tests.extend(expansion.tests);
+        helper_sources.extend(expansion.sources);
+    }
     Ok(FileCorpus {
+        context_refusals: if found.direct_eval {
+            vec![Exclusion::DynamicBindings]
+        } else {
+            Vec::new()
+        },
+        helper_sources: helper_sources.into_iter().collect(),
         hooks: hooks::collect(
-            &parsed,
+            parsed,
             &found,
             &structure,
             &tests,
@@ -807,9 +905,13 @@ pub fn file(
         suites,
         tests,
         sites,
+        empty_tables,
         parse_errors: parsed.parse_errors,
     })
 }
+
+/// The variable that selects the engine, and the value that selects this one.
+const ENGINE_VARIABLE: (&str, &str) = ("VITEST_DEDUP_ENGINE", "next");
 
 /// The next engine inside the shell's file loop: what it read, summed over the run.
 #[derive(Debug, Default)]
@@ -821,6 +923,8 @@ pub struct Engine {
     pub tests: usize,
     /// Tests left unresolved: excluded for a reason that has a report code.
     pub unresolved: usize,
+    /// Proven empty table declarations, independently of executable test counts.
+    pub empty_tables: usize,
     /// Registration sites, by the file's path relative to the root, when they are kept.
     sites: Vec<(PathBuf, SiteRecord)>,
     /// Each file's cases, by the file's path relative to the root: what the rules read once
@@ -834,6 +938,17 @@ pub struct Engine {
     retained: crate::memory::EngineBytes,
 }
 
+/// One file's shell-facing diagnostics and exact helper snapshots, before optional retention.
+#[derive(Debug)]
+pub struct FileRead {
+    /// The file's exclusion entry, if any part was not comparable.
+    pub excluded_file: Option<ExcludedFile>,
+    /// Parsing or extraction read only part of the file.
+    pub partial: bool,
+    /// Exact source used by imported declarations, for directives and optional HTML snippets.
+    pub helper_sources: Vec<(PathBuf, String)>,
+}
+
 /// Why a file's read did not finish.
 #[derive(Debug)]
 enum Failure {
@@ -842,9 +957,6 @@ enum Failure {
     /// It panicked and was recovered.
     Panicked,
 }
-
-/// The variable that selects the engine, and the value that selects this one.
-const ENGINE_VARIABLE: (&str, &str) = ("VITEST_DEDUP_ENGINE", "next");
 
 impl Engine {
     /// An engine whose imports and resolver metadata come from one explicit source view.
@@ -875,9 +987,24 @@ impl Engine {
         keep_sites: bool,
         further: Vec<(ExclusionReason, String)>,
     ) -> (Option<ExcludedFile>, bool) {
+        let read = self.read_with_sources(path, relative, source, setting, keep_sites, further);
+        (read.excluded_file, read.partial)
+    }
+
+    /// Read with exact helper snapshots for source directives and source-aware reporters.
+    /// Snapshots remain transient unless the shell explicitly retains them for a report.
+    pub fn read_with_sources(
+        &mut self,
+        path: &Path,
+        relative: &Path,
+        source: &str,
+        setting: Setting,
+        keep_sites: bool,
+        further: Vec<(ExclusionReason, String)>,
+    ) -> FileRead {
         // On a stack sized for the parser, as the current core runs: [`crate::lang::limits`].
         let run = &mut self.run;
-        let read = std::thread::scope(|scope| {
+        let mut read = std::thread::scope(|scope| {
             std::thread::Builder::new()
                 .name("vitest-dedup-corpus".to_owned())
                 .stack_size(crate::lang::limits::EXTRACTION_STACK_BYTES)
@@ -886,7 +1013,16 @@ impl Engine {
                 .join()
                 .map_err(|_| Failure::Panicked)
         });
-        self.record(relative, read, keep_sites, further)
+        let helper_sources = match &mut read {
+            Ok(Ok(corpus)) => std::mem::take(&mut corpus.helper_sources),
+            _ => Vec::new(),
+        };
+        let (excluded_file, partial) = self.record(relative, read, keep_sites, further);
+        FileRead {
+            excluded_file,
+            partial,
+            helper_sources,
+        }
     }
 
     /// Adds what reading the file at `relative` gave, or why it did not run, with the shell's
@@ -941,7 +1077,14 @@ impl Engine {
                 );
             }
         };
+        self.empty_tables += corpus.empty_tables;
         let mut reasons: Vec<(ExclusionReason, String)> = Vec::new();
+        let context_partial = !corpus.context_refusals.is_empty();
+        for refusal in &corpus.context_refusals {
+            if let Some((reason, detail)) = refusal.reason() {
+                reasons.push((reason, detail.to_owned()));
+            }
+        }
         if corpus.parse_errors > 0 {
             reasons.push((
                 ExclusionReason::ParseError,
@@ -1001,7 +1144,7 @@ impl Engine {
         }
         let entry =
             exclusions::counted_file(relative.to_path_buf(), reasons, unresolved, case_count);
-        (entry, corpus.parse_errors > 0)
+        (entry, corpus.parse_errors > 0 || context_partial)
     }
 
     /// Files every test of which is unresolved, the most tests first, then by path.

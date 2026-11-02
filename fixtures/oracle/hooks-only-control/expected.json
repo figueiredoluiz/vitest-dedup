@@ -2,8 +2,18 @@
   "files": {
     "control.test.ts": {
       "tasks": 3,
-      "wrapperSites": ["hook-wrapper@7", "hook-wrapper@8", "wrapper@9"],
-      "next": { "reasons": ["registered-elsewhere"], "testsExcluded": 1 }
+      "wrapperSites": [
+        "hook-wrapper@7",
+        "hook-wrapper@8",
+        "wrapper@9"
+      ],
+      "next": {
+        "reasons": [
+          "registered-elsewhere",
+          "helper-effects-unproved"
+        ],
+        "testsExcluded": 2
+      }
     }
   }
 }

@@ -8,9 +8,10 @@
       ],
       "next": {
         "reasons": [
-          "registered-elsewhere"
+          "registered-elsewhere",
+          "helper-effects-unproved"
         ],
-        "testsExcluded": 3
+        "testsExcluded": 4
       }
     },
     "async-return.test.ts": {
@@ -21,9 +22,10 @@
       ],
       "next": {
         "reasons": [
-          "registered-elsewhere"
+          "registered-elsewhere",
+          "helper-effects-unproved"
         ],
-        "testsExcluded": 2
+        "testsExcluded": 3
       }
     },
     "call-site.test.ts": {
@@ -35,9 +37,10 @@
       ],
       "next": {
         "reasons": [
-          "registered-elsewhere"
+          "registered-elsewhere",
+          "helper-effects-unproved"
         ],
-        "testsExcluded": 4
+        "testsExcluded": 5
       }
     },
     "conditional.test.ts": {
@@ -48,9 +51,10 @@
       ],
       "next": {
         "reasons": [
-          "registered-elsewhere"
+          "registered-elsewhere",
+          "helper-effects-unproved"
         ],
-        "testsExcluded": 2
+        "testsExcluded": 3
       }
     },
     "global.test.ts": {
@@ -61,9 +65,10 @@
       ],
       "next": {
         "reasons": [
-          "registered-elsewhere"
+          "registered-elsewhere",
+          "helper-effects-unproved"
         ],
-        "testsExcluded": 2
+        "testsExcluded": 3
       }
     },
     "method.test.ts": {
@@ -74,9 +79,10 @@
       ],
       "next": {
         "reasons": [
-          "registered-elsewhere"
+          "registered-elsewhere",
+          "helper-effects-unproved"
         ],
-        "testsExcluded": 2
+        "testsExcluded": 3
       }
     },
     "namespace.test.ts": {
@@ -87,9 +93,10 @@
       ],
       "next": {
         "reasons": [
-          "registered-elsewhere"
+          "registered-elsewhere",
+          "helper-effects-unproved"
         ],
-        "testsExcluded": 2
+        "testsExcluded": 3
       }
     },
     "parameter.test.ts": {
@@ -100,9 +107,10 @@
       ],
       "next": {
         "reasons": [
-          "registered-elsewhere"
+          "registered-elsewhere",
+          "helper-effects-unproved"
         ],
-        "testsExcluded": 4
+        "testsExcluded": 5
       }
     },
     "timeout.test.ts": {
@@ -113,9 +121,10 @@
       ],
       "next": {
         "reasons": [
-          "registered-elsewhere"
+          "registered-elsewhere",
+          "helper-effects-unproved"
         ],
-        "testsExcluded": 3
+        "testsExcluded": 4
       }
     }
   },

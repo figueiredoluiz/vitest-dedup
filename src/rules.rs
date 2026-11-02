@@ -10,7 +10,7 @@ use crate::corpus::TestCase;
 use crate::model::{Finding, Identity, Location, Rule, Severity};
 use crate::pairs::{group_and_order, group_outcome, GroupOutcome, PairBudget};
 use std::cmp::Ordering;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 mod hooks;
@@ -43,6 +43,16 @@ struct Entry<'a> {
     case: &'a TestCase,
 }
 
+impl<'a> Entry<'a> {
+    /// Source identity is independent of the caller that happens to register this execution.
+    fn declaration(self) -> (&'a Path, u32) {
+        (
+            self.case.declaration_path(self.path),
+            self.case.span.start_byte,
+        )
+    }
+}
+
 impl PartialEq for Entry<'_> {
     /// Derived from [`Entry::cmp`].
     fn eq(&self, other: &Self) -> bool {
@@ -62,10 +72,11 @@ impl PartialOrd for Entry<'_> {
 impl Ord for Entry<'_> {
     /// By file, then the case span, then the row: where the case is, never when it was read.
     fn cmp(&self, other: &Self) -> Ordering {
-        self.path
-            .cmp(other.path)
+        self.declaration()
+            .cmp(&other.declaration())
             .then_with(|| self.case.span.cmp(&other.case.span))
             .then_with(|| self.case.row.cmp(&other.case.row))
+            .then_with(|| self.path.cmp(other.path))
     }
 }
 
@@ -249,7 +260,12 @@ fn one_per_declaration(group: &[usize], entries: &[Entry<'_>]) -> Vec<usize> {
     group
         .iter()
         .copied()
-        .filter(|&index| seen.insert((entries[index].path, entries[index].case.span.start_byte)))
+        .filter(|&index| {
+            seen.insert((
+                entries[index].case.declaration_path(entries[index].path),
+                entries[index].case.span.start_byte,
+            ))
+        })
         .collect()
 }
 
@@ -267,26 +283,54 @@ fn one_per_body(group: &[usize], entries: &[Entry<'_>]) -> Vec<usize> {
 /// whether or not that rule is enabled.
 fn one_per_file(group: &[usize], entries: &[Entry<'_>]) -> Vec<usize> {
     let mut files = BTreeSet::new();
-    group
-        .iter()
-        .copied()
-        .filter(|&index| files.insert(entries[index].path))
-        .collect()
+    let mut declarations = BTreeSet::new();
+    let mut selected = Vec::new();
+    for &index in group {
+        let entry = entries[index];
+        if !files.contains(entry.path) && !declarations.contains(&entry.declaration()) {
+            files.insert(entry.path);
+            declarations.insert(entry.declaration());
+            selected.push(index);
+        }
+    }
+    if let [first] = selected.as_slice() {
+        let first = entries[*first];
+        let another_owner = group.iter().copied().find(|&index| {
+            entries[index].declaration() == first.declaration() && entries[index].path != first.path
+        });
+        let another_source = group.iter().copied().find(|&index| {
+            entries[index].declaration() != first.declaration() && entries[index].path == first.path
+        });
+        if let (Some(left), Some(right)) = (another_owner, another_source) {
+            selected = vec![left, right];
+            selected.sort_by(|&left, &right| entries[left].cmp(&entries[right]));
+        }
+    }
+    selected
 }
+
+/// One physical declaration claim, with row identity only for the row rule and caller scope
+/// for file-local rules. Cross-file claims aggregate their matching callers instead.
+type DeclarationClaim<'a> = (&'a Path, u32, Option<usize>, &'a Path);
 
 /// The declarations `members` stand for: two copied tables pair row by row, and every row pair is
 /// the same claim about the same calls, so one finding speaks for them all. Row findings instead
 /// retain row indices: each repeated case within the declaration is a separate claim.
-fn declarations<'a>(rule: Rule, members: &[Entry<'a>]) -> Vec<(&'a Path, u32, Option<usize>)> {
+fn declarations<'a>(rule: Rule, members: &[Entry<'a>]) -> Vec<DeclarationClaim<'a>> {
     members
         .iter()
         .map(|member| {
             (
-                member.path,
+                member.case.declaration_path(member.path),
                 member.case.span.start_byte,
                 (rule == Rule::DuplicateEachRow)
                     .then_some(member.case.row)
                     .flatten(),
+                if rule == Rule::CrossFileDuplicate {
+                    member.case.declaration_path(member.path)
+                } else {
+                    member.path
+                },
             )
         })
         .collect()
@@ -319,52 +363,131 @@ fn emit(
 
 /// [`emit`], for only the claims `keep` accepts.
 #[allow(clippy::too_many_arguments)]
-fn emit_where(
+fn emit_where<'a>(
     rule: Rule,
     severity: Severity,
-    entries: &[Entry<'_>],
+    entries: &[Entry<'a>],
     groups: Vec<Vec<usize>>,
     message: fn(&[Entry<'_>]) -> String,
     keep: impl Fn(&[Entry<'_>]) -> bool,
     budget: &mut PairBudget,
     findings: &mut Vec<Finding>,
 ) -> bool {
-    let mut claimed = BTreeSet::new();
-    for group in &groups {
-        match group_outcome(group) {
-            GroupOutcome::Spanning(pairs) => {
-                let pairs: Vec<[Entry; 2]> = pairs
-                    .into_iter()
-                    .map(|(left, right)| [entries[left], entries[right]])
-                    .filter(|members| keep(members))
-                    .filter(|members| {
-                        claimed.insert((declarations(rule, members), name_claim(rule, members)))
-                    })
-                    .collect();
-                if !budget.charge(pairs.len() as u64) {
-                    return false;
-                }
-                for members in pairs {
-                    findings.push(over(rule, severity, &members, message(&members)));
-                }
-            }
-            GroupOutcome::Cluster(members) => {
-                let members: Vec<Entry> = members.iter().map(|&index| entries[index]).collect();
-                if !keep(&members)
-                    || !claimed.insert((declarations(rule, &members), name_claim(rule, &members)))
-                {
-                    continue;
-                }
-                if !budget.charge((members.len() - 1) as u64) {
-                    return false;
-                }
-                let mut text = message(&members);
-                text.push_str(&crate::analysis::cluster_truncation_note(members.len()));
-                findings.push(over(rule, severity, &members, text));
+    // The index borrows paths; payloads are cloned only once when a finding is finalized.
+    let has_origins = entries.iter().any(|entry| entry.case.origin.is_some());
+    let mut callers: BTreeMap<_, BTreeSet<&Path>> = BTreeMap::new();
+    if has_origins && rule == Rule::CrossFileDuplicate {
+        for entry in entries
+            .iter()
+            .filter(|entry| entry.case.exclusion.is_none())
+        {
+            let owners = callers
+                .entry((entry.declaration(), entry.case.module_key))
+                .or_default();
+            owners.insert(entry.path);
+            if let Some(origin) = &entry.case.origin {
+                owners.extend(origin.registration_files.iter().map(PathBuf::as_path));
             }
         }
     }
-    true
+    let ownership = |members: &[Entry<'a>]| -> Vec<BTreeSet<&'a Path>> {
+        if !has_origins {
+            return Vec::new();
+        }
+        members
+            .iter()
+            .map(|member| {
+                if let Some(owners) = callers.get(&(member.declaration(), member.case.module_key)) {
+                    return owners.clone();
+                }
+                let mut owners = BTreeSet::from([member.path]);
+                if let Some(origin) = &member.case.origin {
+                    owners.extend(origin.registration_files.iter().map(PathBuf::as_path));
+                }
+                owners
+            })
+            .collect()
+    };
+    let mut claimed: BTreeMap<_, (usize, Vec<BTreeSet<&Path>>)> = BTreeMap::new();
+    let mut finished = true;
+    'groups: for group in &groups {
+        let mut seen = BTreeSet::new();
+        let group: Vec<_> = group
+            .iter()
+            .copied()
+            .filter(|&index| {
+                let entry = entries[index];
+                seen.insert((
+                    entry.declaration(),
+                    (rule == Rule::DuplicateEachRow)
+                        .then_some(entry.case.row)
+                        .flatten(),
+                ))
+            })
+            .collect();
+        if group.len() < 2 {
+            continue;
+        }
+        let (candidates, clustered) = match group_outcome(&group) {
+            GroupOutcome::Spanning(pairs) => (
+                pairs
+                    .into_iter()
+                    .map(|(left, right)| vec![entries[left], entries[right]])
+                    .collect::<Vec<_>>(),
+                false,
+            ),
+            GroupOutcome::Cluster(members) => (
+                vec![members.into_iter().map(|index| entries[index]).collect()],
+                true,
+            ),
+        };
+        let mut pending = Vec::new();
+        for members in candidates {
+            if !keep(&members) {
+                continue;
+            }
+            let key = (declarations(rule, &members), name_claim(rule, &members));
+            let owners = ownership(&members);
+            if let Some((_, known)) = claimed.get_mut(&key) {
+                for (known, more) in known.iter_mut().zip(owners) {
+                    known.extend(more);
+                }
+            } else {
+                pending.push((key, members, owners));
+            }
+        }
+        let cost = if clustered {
+            pending
+                .first()
+                .map_or(0, |(_, members, _)| members.len().saturating_sub(1) as u64)
+        } else {
+            pending.len() as u64
+        };
+        if !budget.charge(cost) {
+            finished = false;
+            break 'groups;
+        }
+        for (key, members, owners) in pending {
+            let mut text = message(&members);
+            if clustered {
+                text.push_str(&crate::analysis::cluster_truncation_note(members.len()));
+            }
+            let index = findings.len();
+            findings.push(over(rule, severity, &members, text));
+            claimed.insert(key, (index, owners));
+        }
+    }
+    for (_, (index, owners)) in claimed {
+        if !owners.is_empty() {
+            findings[index].set_registration_files(
+                owners
+                    .into_iter()
+                    .map(|paths| paths.into_iter().map(Path::to_path_buf).collect())
+                    .collect(),
+            );
+        }
+    }
+    finished
 }
 
 /// Assembles one finding over `members`, with one location, title and inert entry each.
@@ -376,11 +499,24 @@ fn over(rule: Rule, severity: Severity, members: &[Entry<'_>], message: String) 
         locations: members
             .iter()
             .map(|member| Location {
-                path: member.path.to_path_buf(),
+                path: member.case.declaration_path(member.path).to_path_buf(),
                 span: member.case.span,
             })
             .collect(),
-        registration_files: Vec::new(),
+        registration_files: if members.iter().any(|member| member.case.origin.is_some()) {
+            members
+                .iter()
+                .map(|member| {
+                    member
+                        .case
+                        .origin
+                        .as_ref()
+                        .map_or_else(Vec::new, |origin| origin.registration_files.clone())
+                })
+                .collect()
+        } else {
+            Vec::new()
+        },
         titles: members
             .iter()
             .map(|member| {

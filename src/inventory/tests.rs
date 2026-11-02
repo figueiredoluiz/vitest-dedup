@@ -45,7 +45,7 @@ fn sites(main: &str, files: &[(&str, &str)], globals: bool) -> Vec<String> {
             let provenance = match site.provenance {
                 Provenance::Direct => "",
                 Provenance::Global => " global",
-                Provenance::Wrapper => " via-wrapper",
+                Provenance::Wrapper | Provenance::Derived => " via-wrapper",
             };
             format!(
                 "{kind}@{line}:{column} {}{provenance}",
@@ -496,6 +496,43 @@ fn a_wrapper_registers_hooks_only_until_its_body_may_register_a_test() {
             calls.last().unwrap().split('@').next(),
             Some("wrapper"),
             "{body}"
+        );
+    }
+}
+
+/// Only an unused plain result can discard the return value of a proved hook registration.
+#[test]
+fn hook_initializer_results_cannot_supply_an_unknown_registration_value() {
+    let header = "import {beforeEach} from 'vitest';\n";
+    for declaration in [
+        "const stop = beforeEach(() => {})",
+        "let stop = beforeEach(() => {})",
+        "var stop = beforeEach(() => {})",
+    ] {
+        assert_eq!(
+            wrapper_calls(
+                &format!("{header}function setup(){{{declaration}}}\nsetup()"),
+                &[]
+            ),
+            ["hook-wrapper@3"],
+            "{declaration}"
+        );
+    }
+    for declaration in [
+        "const stop = beforeEach(() => {}); return stop",
+        "const stop = beforeEach(() => {}); stop()",
+        "const {stop} = beforeEach(() => {})",
+        "const stop = beforeEach(unknown)",
+        "const stop = unknown(); beforeEach(() => {})",
+        "using stop = beforeEach(() => {})",
+    ] {
+        assert_eq!(
+            wrapper_calls(
+                &format!("{header}function setup(){{{declaration}}}\nsetup()"),
+                &[]
+            ),
+            ["wrapper@3"],
+            "{declaration}"
         );
     }
 }

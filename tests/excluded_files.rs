@@ -841,23 +841,24 @@ test('kept', () => { expect(1).toBe(1); });
             unresolved("unprovable.test.ts", "incomplete-trace", &[], 0, 1),
             unresolved(
                 "wrapped.test.ts",
-                "registered-inside-function",
-                &["registered-elsewhere"],
-                2,
+                "registered-elsewhere",
+                &["helper-effects-unproved"],
+                3,
                 3,
             ),
         ],
     );
     assert_eq!(run.json["testsAnalyzed"], 15);
-    assert_eq!(run.json["unresolvedTests"], 6);
-    assert_eq!(run.json["incompleteCauses"]["unresolvedContexts"], 6);
-    // `named.test.ts` has every test unresolved; `assert_listed` ties each count to its entry.
-    // `unprovable.test.ts` holds a class the trace cannot read: reported, and it excludes nothing.
-    assert_eq!(run.json["blindFiles"], 1);
+    assert_eq!(run.json["unresolvedTests"], 7);
+    assert_eq!(run.json["incompleteCauses"]["unresolvedContexts"], 7);
+    // `named.test.ts` and `wrapped.test.ts` have every test unresolved; `assert_listed` ties each
+    // count to its entry. `unprovable.test.ts` holds a class the trace cannot read: reported, and
+    // it excludes nothing.
+    assert_eq!(run.json["blindFiles"], 2);
     // The one relationship the ported rules claim: three files spell the identical `kept` test,
-    // reported as the spanning set of pairs. Every excluded test above stays out of every group,
-    // and `wrapped.test.ts`'s `kept` keys apart (its wrapper call is module context), so no
-    // finding reaches it.
+    // reported as the spanning set of pairs. Every excluded test above stays out of every group;
+    // `wrapped.test.ts` is excluded whole, its unproved runner invocation withholding the scope,
+    // so no finding reaches it.
     let findings = run.json["findings"].as_array().unwrap();
     assert_eq!(findings.len(), 2, "{}", run.jsonl_text);
     let spelling: Vec<(String, Vec<String>)> = findings

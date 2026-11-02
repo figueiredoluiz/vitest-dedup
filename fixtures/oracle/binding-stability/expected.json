@@ -8,9 +8,10 @@
       ],
       "next": {
         "reasons": [
-          "registered-elsewhere"
+          "registered-elsewhere",
+          "helper-effects-unproved"
         ],
-        "testsExcluded": 2
+        "testsExcluded": 3
       }
     },
     "annotated-binding.test.ts": {
@@ -29,9 +30,10 @@
       ],
       "next": {
         "reasons": [
-          "registered-elsewhere"
+          "registered-elsewhere",
+          "helper-effects-unproved"
         ],
-        "testsExcluded": 2
+        "testsExcluded": 3
       }
     },
     "catch-redeclaration.test.ts": {
@@ -41,9 +43,10 @@
       ],
       "next": {
         "reasons": [
-          "registered-elsewhere"
+          "registered-elsewhere",
+          "helper-effects-unproved"
         ],
-        "testsExcluded": 3
+        "testsExcluded": 4
       }
     },
     "compound-assignment.test.ts": {
@@ -54,9 +57,10 @@
       ],
       "next": {
         "reasons": [
-          "registered-elsewhere"
+          "registered-elsewhere",
+          "helper-effects-unproved"
         ],
-        "testsExcluded": 2
+        "testsExcluded": 3
       }
     },
     "destructured-redeclaration.test.ts": {
@@ -67,9 +71,10 @@
       ],
       "next": {
         "reasons": [
-          "registered-elsewhere"
+          "registered-elsewhere",
+          "helper-effects-unproved"
         ],
-        "testsExcluded": 2
+        "testsExcluded": 3
       }
     },
     "destructuring-assignment.test.ts": {
@@ -80,9 +85,10 @@
       ],
       "next": {
         "reasons": [
-          "registered-elsewhere"
+          "registered-elsewhere",
+          "helper-effects-unproved"
         ],
-        "testsExcluded": 2
+        "testsExcluded": 3
       }
     },
     "direct-eval.test.ts": {
@@ -93,9 +99,10 @@
       ],
       "next": {
         "reasons": [
-          "registered-elsewhere"
+          "registered-elsewhere",
+          "helper-effects-unproved"
         ],
-        "testsExcluded": 3
+        "testsExcluded": 4
       }
     },
     "exported-hook-alias.test.ts": {
@@ -106,9 +113,10 @@
       ],
       "next": {
         "reasons": [
-          "registered-elsewhere"
+          "registered-elsewhere",
+          "helper-effects-unproved"
         ],
-        "testsExcluded": 2
+        "testsExcluded": 3
       }
     },
     "for-of-assignment.test.ts": {
@@ -119,9 +127,10 @@
       ],
       "next": {
         "reasons": [
-          "registered-elsewhere"
+          "registered-elsewhere",
+          "helper-effects-unproved"
         ],
-        "testsExcluded": 2
+        "testsExcluded": 3
       }
     },
     "live-export.test.ts": {
@@ -132,9 +141,10 @@
       ],
       "next": {
         "reasons": [
-          "registered-elsewhere"
+          "registered-elsewhere",
+          "helper-effects-unproved"
         ],
-        "testsExcluded": 2
+        "testsExcluded": 3
       }
     },
     "namespace-export-const.test.ts": {
@@ -144,9 +154,10 @@
       ],
       "next": {
         "reasons": [
-          "registered-elsewhere"
+          "registered-elsewhere",
+          "helper-effects-unproved"
         ],
-        "testsExcluded": 1
+        "testsExcluded": 2
       }
     },
     "namespace-export-declared.test.ts": {
@@ -170,9 +181,10 @@
       ],
       "next": {
         "reasons": [
-          "registered-elsewhere"
+          "registered-elsewhere",
+          "helper-effects-unproved"
         ],
-        "testsExcluded": 1
+        "testsExcluded": 2
       }
     },
     "namespace-export-shadow.test.ts": {
@@ -182,9 +194,10 @@
       ],
       "next": {
         "reasons": [
-          "registered-elsewhere"
+          "registered-elsewhere",
+          "helper-effects-unproved"
         ],
-        "testsExcluded": 1
+        "testsExcluded": 2
       }
     },
     "namespace-export-stars.test.ts": {
@@ -194,9 +207,10 @@
       ],
       "next": {
         "reasons": [
-          "registered-elsewhere"
+          "registered-elsewhere",
+          "helper-effects-unproved"
         ],
-        "testsExcluded": 1
+        "testsExcluded": 2
       }
     },
     "namespace-export-type.test.ts": {
@@ -226,9 +240,10 @@
       ],
       "next": {
         "reasons": [
-          "registered-elsewhere"
+          "registered-elsewhere",
+          "helper-effects-unproved"
         ],
-        "testsExcluded": 2
+        "testsExcluded": 3
       }
     },
     "parameter-property.test.ts": {
@@ -252,9 +267,10 @@
       ],
       "next": {
         "reasons": [
-          "registered-elsewhere"
+          "registered-elsewhere",
+          "helper-effects-unproved"
         ],
-        "testsExcluded": 5
+        "testsExcluded": 6
       }
     },
     "reassigned-alias.test.ts": {
@@ -265,9 +281,10 @@
       ],
       "next": {
         "reasons": [
-          "registered-elsewhere"
+          "registered-elsewhere",
+          "helper-effects-unproved"
         ],
-        "testsExcluded": 4
+        "testsExcluded": 5
       }
     },
     "reassigned-export-barrel.test.ts": {
@@ -278,9 +295,10 @@
       ],
       "next": {
         "reasons": [
-          "registered-elsewhere"
+          "registered-elsewhere",
+          "helper-effects-unproved"
         ],
-        "testsExcluded": 2
+        "testsExcluded": 3
       }
     },
     "reassigned-export.test.ts": {
@@ -291,9 +309,10 @@
       ],
       "next": {
         "reasons": [
-          "registered-elsewhere"
+          "registered-elsewhere",
+          "helper-effects-unproved"
         ],
-        "testsExcluded": 2
+        "testsExcluded": 3
       }
     },
     "reassigned-helper.test.ts": {
@@ -304,9 +323,10 @@
       ],
       "next": {
         "reasons": [
-          "registered-elsewhere"
+          "registered-elsewhere",
+          "helper-effects-unproved"
         ],
-        "testsExcluded": 2
+        "testsExcluded": 3
       }
     },
     "reassigned-hook.test.ts": {
@@ -317,9 +337,10 @@
       ],
       "next": {
         "reasons": [
-          "registered-elsewhere"
+          "registered-elsewhere",
+          "helper-effects-unproved"
         ],
-        "testsExcluded": 2
+        "testsExcluded": 3
       }
     },
     "reassigned-local.test.ts": {
@@ -330,9 +351,10 @@
       ],
       "next": {
         "reasons": [
-          "registered-elsewhere"
+          "registered-elsewhere",
+          "helper-effects-unproved"
         ],
-        "testsExcluded": 4
+        "testsExcluded": 5
       }
     },
     "reassigned-namespace.test.ts": {
@@ -343,9 +365,10 @@
       ],
       "next": {
         "reasons": [
-          "registered-elsewhere"
+          "registered-elsewhere",
+          "helper-effects-unproved"
         ],
-        "testsExcluded": 2
+        "testsExcluded": 3
       }
     },
     "rewritten-namespace-call.test.ts": {
@@ -356,9 +379,10 @@
       ],
       "next": {
         "reasons": [
-          "registered-elsewhere"
+          "registered-elsewhere",
+          "helper-effects-unproved"
         ],
-        "testsExcluded": 7
+        "testsExcluded": 8
       }
     },
     "rewritten-namespace-export.test.ts": {
@@ -368,9 +392,10 @@
       ],
       "next": {
         "reasons": [
-          "registered-elsewhere"
+          "registered-elsewhere",
+          "helper-effects-unproved"
         ],
-        "testsExcluded": 2
+        "testsExcluded": 3
       }
     },
     "var-redeclaration.test.ts": {
@@ -381,9 +406,10 @@
       ],
       "next": {
         "reasons": [
-          "registered-elsewhere"
+          "registered-elsewhere",
+          "helper-effects-unproved"
         ],
-        "testsExcluded": 2
+        "testsExcluded": 3
       }
     }
   },

@@ -19,6 +19,20 @@ enum Origin {
     Namespace,
     /// A function whose call may register, and what.
     Wrapper(Reach),
+    /// An imported framework-derived registration value, not an arbitrary callable body.
+    Derived(Registers),
+}
+
+impl Origin {
+    /// The existing wrapper reach, retaining a separate origin for framework-derived values.
+    fn reach(self) -> Option<Reach> {
+        match self {
+            Self::Wrapper(reach) => Some(reach),
+            Self::Derived(Registers::Hook(_)) => Some(Reach::Hook),
+            Self::Derived(_) => Some(Reach::Tasks),
+            _ => None,
+        }
+    }
 }
 
 /// One step of a callee chain, from the root outwards.
@@ -112,6 +126,8 @@ pub(super) fn analyse(
         })
         .collect();
     let inventory = Inventory {
+        direct_eval: module.evaluates,
+        setup_access: super::setup_access(parsed, setting),
         sites,
         loads: module.loads,
         escapes,
@@ -163,6 +179,7 @@ impl<'s> Module<'s> {
                 Name::Reference(Some(symbol)) => self.origins.get(&symbol).map(|origin| {
                     let provenance = match origin {
                         Origin::Wrapper(_) => Provenance::Wrapper,
+                        Origin::Derived(_) => Provenance::Derived,
                         _ => Provenance::Direct,
                     };
                     (*origin, provenance)
@@ -205,7 +222,8 @@ impl<'s> Module<'s> {
                         (Some(Origin::Api(left)), Some(Origin::Api(right))) if left == right => {
                             left
                         }
-                        (Some(Origin::Wrapper(_)), _) | (_, Some(Origin::Wrapper(_))) => {
+                        (Some(Origin::Wrapper(_) | Origin::Derived(_)), _)
+                        | (_, Some(Origin::Wrapper(_) | Origin::Derived(_))) => {
                             steps.reverse();
                             return Some((
                                 Origin::Wrapper(Reach::Tasks),
@@ -306,7 +324,10 @@ impl<'s> Module<'s> {
     /// `test.extend({...})`, `v.describe`), or the namespace.
     fn value_origin(&self, node: NodeId) -> Option<Origin> {
         let (origin, _, steps) = self.chain(node)?;
-        if let Origin::Wrapper(reach) = origin {
+        if let Some(reach) = origin.reach() {
+            if matches!(origin, Origin::Derived(_)) && steps.is_empty() {
+                return Some(origin);
+            }
             // An alias of the wrapper keeps its reach; anything derived from it may register tests.
             let reach = if steps.is_empty() {
                 reach
@@ -329,7 +350,7 @@ impl<'s> Module<'s> {
                 Step::Call => "()".to_owned(),
             })
             .collect();
-        if let Origin::Wrapper(reach) = origin {
+        if let Some(reach) = origin.reach() {
             // A wrapper, or a value derived from one: calling it may register. Only the call of
             // the wrapper itself is known to reach what its body does; a member or a call of its
             // result is any value.
@@ -337,6 +358,11 @@ impl<'s> Module<'s> {
                 reach
             } else {
                 Reach::Tasks
+            };
+            let provenance = if matches!(origin, Origin::Derived(_)) && !steps.is_empty() {
+                Provenance::Wrapper
+            } else {
+                provenance
             };
             return Some((SiteKind::Wrapper(reach), chain, provenance));
         }
@@ -418,6 +444,9 @@ impl<'s> Module<'s> {
                         Some(&Export::Wrapper(reach)) => {
                             self.origins.insert(symbol, Origin::Wrapper(reach));
                         }
+                        Some(&Export::Derived(registers)) => {
+                            self.origins.insert(symbol, Origin::Derived(registers));
+                        }
                         None => {}
                     },
                 }
@@ -455,7 +484,7 @@ impl<'s> Module<'s> {
                     // A destructured binding holds a member of the wrapper, which may register
                     // tests whatever the wrapper registers when called.
                     "ObjectPattern" | "ArrayPattern"
-                        if matches!(origin, Some(Origin::Wrapper(_))) =>
+                        if matches!(origin, Some(Origin::Wrapper(_) | Origin::Derived(_))) =>
                     {
                         for symbol in bound_symbols(tree, &self.parsed.scopes, id) {
                             self.alias(symbol, Origin::Wrapper(Reach::Tasks));
@@ -734,11 +763,23 @@ impl<'s> Module<'s> {
                         .into_iter()
                         .all(|declarator| {
                             declarator.is_some_and(|declarator| {
-                                tree.child(declarator, "id")
-                                    .is_some_and(|id| tree.kind(id) == "Identifier")
-                                    && tree
-                                        .child(declarator, "init")
-                                        .is_none_or(|value| self.runs_nothing(value))
+                                let Some(id) = tree
+                                    .child(declarator, "id")
+                                    .filter(|&id| tree.kind(id) == "Identifier")
+                                else {
+                                    return false;
+                                };
+                                tree.child(declarator, "init").is_none_or(|value| {
+                                    self.runs_nothing(value)
+                                        || (self.hook_call(value)
+                                            && self.declares(id).is_some_and(|symbol| {
+                                                self.parsed
+                                                    .scopes
+                                                    .symbol(symbol)
+                                                    .references
+                                                    .is_empty()
+                                            }))
+                                })
                             })
                         })
             }
@@ -1134,8 +1175,9 @@ impl<'s> Module<'s> {
             let export = match self.wrappers.get(&symbol) {
                 Some(&reach) => Export::Wrapper(reach),
                 None => match self.origins.get(&symbol)? {
-                    Origin::Api(Registers::Hook(_)) => Export::Wrapper(Reach::Hook),
-                    Origin::Api(_) => Export::Wrapper(Reach::Tasks),
+                    Origin::Api(registers) | Origin::Derived(registers) => {
+                        Export::Derived(*registers)
+                    }
                     Origin::Wrapper(reach) => Export::Wrapper(*reach),
                     Origin::Namespace => Export::Namespace,
                 },

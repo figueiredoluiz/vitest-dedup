@@ -79,6 +79,8 @@ pub struct HookBody {
 /// What registration-time structure the normal form of a module depends on.
 #[derive(Clone, Debug, Default)]
 pub struct Structure {
+    /// The inventory cannot license readonly substitutions in the presence of direct eval.
+    pub direct_eval: bool,
     /// Suite callbacks, by the registering call that receives each.
     pub suites: HashMap<NodeId, NodeId>,
     /// Callbacks that run under the context: test, bench and hook bodies.
@@ -99,6 +101,7 @@ impl Structure {
         use crate::framework::Registers;
         use crate::inventory::SiteKind;
         let mut structure = Structure {
+            direct_eval: inventory.direct_eval,
             registration_values: inventory.registration_values.clone(),
             ..Structure::default()
         };
@@ -380,6 +383,32 @@ enum Written {
     Function,
 }
 
+/// One caller value under the exact and literal-shape rendering policies.
+#[derive(Clone, Debug)]
+pub struct InvocationValue {
+    /// The exact normal form of the value supplied by the caller.
+    pub form: String,
+    /// The same value under the literal-shape policy, computed before crossing module scopes.
+    pub shape: String,
+}
+
+impl InvocationValue {
+    /// Bind a proved primitive runtime value using the literal writer's exact two policies.
+    /// Objects and arrays need reference identity, which primitive substitution cannot establish.
+    pub fn scalar(value: &serde_json::Value) -> Option<Self> {
+        if value.is_object()
+            || value.is_array()
+            || value.as_str().is_some_and(|text| text.contains('\u{fffd}'))
+        {
+            return None;
+        }
+        Some(Self {
+            form: format!("L{value}"),
+            shape: format!("L<{}>", form::literal_kind(value.clone())),
+        })
+    }
+}
+
 /// Normalizes the nodes of one module.
 pub struct Normalizer<'s> {
     path: &'s Path,
@@ -387,6 +416,10 @@ pub struct Normalizer<'s> {
     scopes: &'s Scopes,
     setting: Setting<'s>,
     structure: &'s Structure,
+    /// One proved invocation boundary; ordinary nested functions remain unknown registration.
+    registration_root: Option<NodeId>,
+    /// The caller's owned values for this invocation's plain positional bindings.
+    registration_bindings: HashMap<SymbolId, InvocationValue>,
     externals: HashMap<SymbolId, String>,
     /// The one literal assigned by every recorded write to a hook's lexical cell, if proven.
     hook_writes: HashMap<SymbolId, Option<String>>,
@@ -419,6 +452,8 @@ impl<'s> Normalizer<'s> {
             scopes: &parsed.scopes,
             setting,
             structure,
+            registration_root: None,
+            registration_bindings: HashMap::new(),
             externals: HashMap::new(),
             hook_writes: HashMap::new(),
             hook_eval: None,
@@ -428,6 +463,18 @@ impl<'s> Normalizer<'s> {
             nesting: 0,
             truncated: false,
         }
+    }
+
+    /// Normalize an admitted registration invocation without treating other functions as suites.
+    /// Bindings name values in this parsed module; callers must establish the invocation proof.
+    pub fn for_registration(
+        mut self,
+        function: NodeId,
+        bindings: HashMap<SymbolId, InvocationValue>,
+    ) -> Self {
+        self.registration_root = Some(function);
+        self.registration_bindings = bindings;
+        self
     }
 
     /// The normal form of `node`.
@@ -616,6 +663,9 @@ impl<'s> Normalizer<'s> {
         let tree = self.tree;
         let mut chain = Vec::new();
         for ancestor in tree.ancestors(node) {
+            if Some(ancestor) == self.registration_root {
+                break;
+            }
             if !tree.is_function(ancestor) {
                 continue;
             }
@@ -651,7 +701,13 @@ impl<'s> Normalizer<'s> {
         let mut current = node;
         for ancestor in tree.ancestors(node) {
             let top = match scope {
-                None => tree.kind(ancestor) == "Program",
+                None => {
+                    tree.kind(ancestor) == "Program"
+                        || Some(ancestor) == self.registration_root
+                        || (tree.kind(ancestor) == "BlockStatement"
+                            && tree.parent(ancestor) == self.registration_root
+                            && self.registration_root.is_some())
+                }
                 Some(scope) => {
                     ancestor == scope
                         || (tree.kind(ancestor) == "BlockStatement"

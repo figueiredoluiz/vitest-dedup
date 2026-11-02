@@ -23,7 +23,7 @@ pub(super) fn run(
         }
         Some((
             entry.path,
-            case.span.start_byte,
+            entry.declaration(),
             case.row_class?,
             case.name.as_ref()?,
             case.key,

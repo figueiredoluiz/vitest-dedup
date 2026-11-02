@@ -9,9 +9,10 @@
       ],
       "next": {
         "reasons": [
-          "registered-elsewhere"
+          "registered-elsewhere",
+          "helper-effects-unproved"
         ],
-        "testsExcluded": 2
+        "testsExcluded": 3
       }
     },
     "result-call.test.ts": {
@@ -23,9 +24,10 @@
       ],
       "next": {
         "reasons": [
-          "registered-elsewhere"
+          "registered-elsewhere",
+          "helper-effects-unproved"
         ],
-        "testsExcluded": 1
+        "testsExcluded": 2
       }
     },
     "escape-callee.test.ts": {
@@ -35,9 +37,10 @@
       ],
       "next": {
         "reasons": [
-          "registered-elsewhere"
+          "registered-elsewhere",
+          "helper-effects-unproved"
         ],
-        "testsExcluded": 1
+        "testsExcluded": 2
       }
     },
     "closed.test.ts": {
