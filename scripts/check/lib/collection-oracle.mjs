@@ -57,7 +57,7 @@ export function ownConfig(absoluteDir) {
  * root's settings, and a project left without the runner is caught by the completeness check in
  * `collectWithVitest`.
  */
-export function configSource(absoluteDir, cacheDir) {
+export function configSource(absoluteDir, cacheDir, refused) {
   const stubs = `import { missingModuleStubs } from ${JSON.stringify(pathToFileURL(STUBS).href)}\n`
   // No cache survives a run: a stub transformed while a module was missing must not be reused once
   // the module exists (`fsModuleCache`), and nothing is written into a shared `node_modules`.
@@ -69,14 +69,56 @@ export function configSource(absoluteDir, cacheDir) {
     const test = { root: absoluteDir, dir: absoluteDir, include: [TEST_FILES], exclude: ['**/node_modules/**', '**/target/**'] }
     return `${stubs}const probe = ${probe}\nexport default { ...probe, test: { ...probe.test, ...${JSON.stringify(test)} } }\n`
   }
-  const vitestConfig = pathToFileURL(join(dirname(PROBE_RUNNER), '..', '..', '..', 'node_modules', 'vitest', 'dist', 'config.js')).href
-  return `${stubs}import { mergeConfig } from ${JSON.stringify(vitestConfig)}
+  const modules = join(dirname(PROBE_RUNNER), '..', '..', '..', 'node_modules')
+  const vitestConfig = pathToFileURL(join(modules, 'vitest', 'dist', 'config.js')).href
+  const vite = pathToFileURL(join(modules, 'vite', 'dist', 'node', 'index.js')).href
+  // A string entry naming a config file, or a directory holding one, becomes an inline project
+  // extending that file, rooted where Vitest roots a file project: the file's own `test.root` or
+  // `root`, resolved from its directory, else the directory. A glob or a missing path stays a
+  // string, and its files are reported unprobed. The rewrite is refused where an inline project
+  // would collect differently: a file declaring its own `projects` (dropped with their settings),
+  // one with `plugins` (which can add projects the loaded config does not show), a root
+  // `test.project` filter (an inline project loses its inferred name), and a file two entries
+  // name (Vitest collects it once). A refused entry is left as it is and named in `refused`, which
+  // `collectWithVitest` turns into an error.
+  return `${stubs}import { appendFileSync, existsSync, statSync } from 'node:fs'
+import { dirname, join, resolve } from 'node:path'
+import { mergeConfig } from ${JSON.stringify(vitestConfig)}
+import { loadConfigFromFile } from ${JSON.stringify(vite)}
 import own from ${JSON.stringify(pathToFileURL(own).href)}
 const probe = ${probe}
 const base = await (typeof own === 'function' ? own({ command: 'serve', mode: 'test' }) : own)
 const withProbe = (config) => mergeConfig(config, probe)
 const merged = withProbe(base)
-const projects = base.test?.projects?.map((project) => (project && typeof project === 'object' && !('then' in project) ? withProbe(project) : project))
+const configFiles = ${JSON.stringify(CONFIG_FILES)}
+const refused = ${JSON.stringify(refused ?? null)}
+const seen = new Set()
+const refuse = (entry, why) => {
+  if (refused) appendFileSync(refused, why + '\\n')
+  return entry
+}
+const projectFile = (entry) => {
+  const path = resolve(${JSON.stringify(absoluteDir)}, entry)
+  if (!existsSync(path)) return null
+  if (statSync(path).isFile()) return path
+  const name = configFiles.find((file) => existsSync(join(path, file)))
+  return name ? join(path, name) : null
+}
+const project = async (entry) => {
+  if (entry && typeof entry === 'object' && !('then' in entry)) return withProbe(entry)
+  const file = typeof entry === 'string' ? projectFile(entry) : null
+  if (!file) return entry
+  // Vitest runs a project naming the declaring config as that config's own project.
+  if (file === ${JSON.stringify(own)}) return withProbe({})
+  if (seen.has(file)) return refuse(entry, \`\${file}: named by more than one project entry\`)
+  seen.add(file)
+  if (base.test?.project) return refuse(entry, \`\${file}: the root config filters projects by name\`)
+  const config = (await loadConfigFromFile({ command: 'serve', mode: 'test' }, file, undefined, 'silent'))?.config ?? {}
+  if (config.test?.projects) return refuse(entry, \`\${file}: declares its own projects\`)
+  if ([config.plugins].flat(Infinity).some(Boolean)) return refuse(entry, \`\${file}: has plugins\`)
+  return withProbe({ extends: file, root: resolve(dirname(file), config.test?.root ?? config.root ?? '.') })
+}
+const projects = base.test?.projects && await Promise.all(base.test.projects.map(project))
 export default projects ? { ...merged, test: { ...merged.test, projects } } : merged
 `
 }
@@ -139,7 +181,8 @@ export function oracleEnvironment(environment, out) {
  *   (titles), `hooks` (`kind@path:line` sites), `suiteHookCount`, `registrationCount`,
  *   `unlocatedRegistrations`, `stubReads`, `collectErrors`, and `unprobed` for a file Vitest
  *   listed that the probe runner never saw.
- * @throws {Error} when Vitest exits non-zero having collected nothing.
+ * @throws {Error} when Vitest exits non-zero having collected nothing, or a project config
+ *   cannot be probed as Vitest collects it.
  */
 export function collectWithVitest(root, dir) {
   const work = mkdtempSync(join(tmpdir(), 'vitest-dedup-oracle-'))
@@ -148,7 +191,8 @@ export function collectWithVitest(root, dir) {
     const listed = join(work, 'listed.json')
     const config = join(work, 'vitest.config.mjs')
     const absoluteDir = resolve(root, dir)
-    writeFileSync(config, configSource(absoluteDir, join(work, 'cache')))
+    const refused = join(work, 'refused')
+    writeFileSync(config, configSource(absoluteDir, join(work, 'cache'), refused))
     writeFileSync(out, '')
     const result = spawnSync(
       process.execPath,
@@ -164,6 +208,9 @@ export function collectWithVitest(root, dir) {
       },
     )
     if (result.error) throw result.error
+    if (existsSync(refused)) {
+      throw new Error(`the probe cannot reach a project config in ${dir}:\n  ${readFileSync(refused, 'utf8').trim().split('\n').join('\n  ')}`)
+    }
     const lines = readFileSync(out, 'utf8').split('\n').filter((line) => line.trim() !== '')
     const listedFiles = existsSync(listed) ? JSON.parse(readFileSync(listed, 'utf8')).map((t) => t.file) : []
     // Collecting nothing is a result (a config whose projects hold no test file); failing to is not.

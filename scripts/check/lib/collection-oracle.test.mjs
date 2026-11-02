@@ -1,13 +1,13 @@
 // Unit tests for the collection oracle's comparison and its missing-module stubs.
 import assert from 'node:assert/strict'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
 
 import { missingModuleStubs, wholeModuleImports } from './collection-oracle-stubs.mjs'
-import { analyzerRecordsOf, analyzerView, compareDirectory, compareSites, configSource, exclusionView, oracleEnvironment, hookSite, matchKnown, minus, oracleBinary, oracleSetupError, ownConfig, siteView, vitestInstallError, vitestView } from './collection-oracle.mjs'
+import { analyzerRecordsOf, analyzerView, collectWithVitest, compareDirectory, compareSites, configSource, exclusionView, oracleEnvironment, hookSite, matchKnown, minus, oracleBinary, oracleSetupError, ownConfig, siteView, vitestInstallError, vitestView } from './collection-oracle.mjs'
 
 /** A file the probe collected cleanly, with `over` replacing any field. */
 const collected = (over = {}) => ({
@@ -247,7 +247,7 @@ test('a directory without a config gets the default include; one with a config k
     const wrapped = configSource(dir)
     assert.match(wrapped, /mergeConfig/)
     assert.match(wrapped, /vitest\.config\.ts/)
-    assert.match(wrapped, /base\.test\?\.projects\?\.map/)
+    assert.match(wrapped, /base\.test\.projects\.map\(project\)/)
     assert.doesNotMatch(wrapped, /"include"/)
   } finally {
     rmSync(dir, { recursive: true, force: true })
@@ -510,4 +510,99 @@ test('a run that finds no test of its own keeps the records it printed; another 
 test('the Vitest child inherits the environment but not the coverage run', () => {
   const child = oracleEnvironment({ PATH: '/bin', NODE_V8_COVERAGE: '/tmp/coverage' }, '/tmp/out')
   assert.deepEqual(child, { PATH: '/bin', VITEST_DEDUP_ORACLE_OUT: '/tmp/out' })
+})
+
+/** Runs `body(dir, write)` in a fresh real-path temporary directory, removed afterwards. */
+function inScratchProject(prefix, body) {
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), prefix)))
+  const write = (path, text) => {
+    mkdirSync(dirname(join(dir, path)), { recursive: true })
+    writeFileSync(join(dir, path), text)
+  }
+  try {
+    body(dir, write)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+}
+
+const CHECKOUT = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
+
+/** A project config under `pkg/` whose own `projects` list holds `pkg/inner`. */
+function writeNestedProjects(write) {
+  write('pkg/vitest.config.ts', "export default { test: { projects: ['inner'], include: ['top.test.ts'], globals: true } }\n")
+  write('pkg/inner/vitest.config.ts', "export default { test: { include: ['nested.test.ts'], globals: true } }\n")
+  write('pkg/top.test.ts', "test('top', () => {})\n")
+  write('pkg/inner/nested.test.ts', "test('nested', () => {})\n")
+}
+
+test('a probe config that drops a nested project list fails instead of collecting less', () => {
+  inScratchProject('oracle-nested-projects-', (dir, write) => {
+    write('vitest.config.ts', "export default { test: { projects: ['pkg/vitest.config.ts'] } }\n")
+    writeNestedProjects(write)
+    assert.throws(() => collectWithVitest(CHECKOUT, dir), /declares its own projects/)
+    // The same entry with no nested list is probed as before.
+    write('pkg/vitest.config.ts', "export default { test: { include: ['top.test.ts'], globals: true } }\n")
+    assert.deepEqual(collectWithVitest(CHECKOUT, dir).get('pkg/top.test.ts')?.tests, ['top'])
+  })
+})
+
+test('a nested project that changes only how a shared file runs is refused too', () => {
+  inScratchProject('oracle-nested-env-', (dir, write) => {
+    write('vitest.config.ts', "export default { test: { projects: ['pkg/vitest.config.ts'] } }\n")
+    write('pkg/vitest.config.ts', "export default { test: { projects: ['inner'], include: ['inner/shared.test.ts'], globals: true } }\n")
+    write('pkg/inner/vitest.config.ts', "export default { test: { include: ['shared.test.ts'], globals: true, env: { TITLE: 'nested' } } }\n")
+    write('pkg/inner/shared.test.ts', "test(process.env.TITLE || 'outer', () => {})\n")
+    assert.throws(() => collectWithVitest(CHECKOUT, dir), /declares its own projects/)
+  })
+})
+
+test('a project the rewrite would collect differently is refused, not probed', () => {
+  const cases = [
+    ["export default { test: { projects: ['pkg'] } }\n", "export default { plugins: [{ name: 'adds-projects' }], test: { globals: true } }\n", /has plugins/],
+    ["export default { test: { projects: ['pkg'], project: ['pkg'] } }\n", 'export default { test: { globals: true } }\n', /filters projects by name/],
+    ["export default { test: { projects: ['pkg', 'pkg/vitest.config.ts'] } }\n", 'export default { test: { globals: true } }\n', /more than one project entry/],
+  ]
+  for (const [rootConfig, projectConfig, refusal] of cases) {
+    inScratchProject('oracle-refused-', (dir, write) => {
+      write('vitest.config.ts', rootConfig)
+      write('pkg/vitest.config.ts', projectConfig)
+      write('pkg/a.test.ts', "test('a', () => {})\n")
+      assert.throws(() => collectWithVitest(CHECKOUT, dir), refusal)
+    })
+  }
+})
+
+test('a project naming the declaring config runs as the root project, probed', () => {
+  inScratchProject('oracle-self-project-', (dir, write) => {
+    write('vitest.config.ts', "export default { test: { globals: true, include: ['*.test.ts'], projects: ['vitest.config.ts', 'pkg'] } }\n")
+    write('pkg/vitest.config.ts', 'export default { test: { globals: true } }\n')
+    write('r.test.ts', "test('root', () => {})\n")
+    write('pkg/p.test.ts', "test('pkg', () => {})\n")
+    const files = collectWithVitest(CHECKOUT, dir)
+    assert.deepEqual(files.get('r.test.ts')?.tests, ['root'])
+    assert.deepEqual(files.get('pkg/p.test.ts')?.tests, ['pkg'])
+  })
+})
+
+test('a nested project list is caught when the config only re-exports the one declaring it', () => {
+  inScratchProject('oracle-reexported-projects-', (dir, write) => {
+    write('vitest.config.ts', "export { default } from './base.config'\n")
+    write('base.config.ts', "export default { test: { projects: ['pkg/vitest.config.ts'] } }\n")
+    writeNestedProjects(write)
+    assert.throws(() => collectWithVitest(CHECKOUT, dir), /declares its own projects/)
+  })
+})
+
+test('a project config keeps the root it sets for itself', () => {
+  inScratchProject('oracle-project-root-', (dir, write) => {
+    write('vitest.config.ts', "export default { test: { projects: ['pkg/vitest.config.ts', 'other/vitest.config.ts'] } }\n")
+    write('pkg/vitest.config.ts', "export default { root: 'src', test: { include: ['a.test.ts'], globals: true } }\n")
+    write('pkg/src/a.test.ts', "test('a', () => {})\n")
+    write('other/vitest.config.ts', "export default { test: { root: 'spec', include: ['b.test.ts'], globals: true } }\n")
+    write('other/spec/b.test.ts', "test('b', () => {})\n")
+    const files = collectWithVitest(CHECKOUT, dir)
+    assert.deepEqual(files.get('pkg/src/a.test.ts')?.tests, ['a'])
+    assert.deepEqual(files.get('other/spec/b.test.ts')?.tests, ['b'])
+  })
 })

@@ -29,7 +29,11 @@
 //!
 //! - `test.projects: glob.sync('<literal>')` (directly, or through one `const` hop), with `glob`
 //!   verified imported from the `glob` package: the pattern is a string literal, and its
-//!   expansion is the same budgeted filesystem walk a literal string entry already takes.
+//!   expansion is the same budgeted filesystem walk a literal string entry already takes. A
+//!   second argument is read only as `{ ignore: <literal or array of literals> }`, dropping the
+//!   matches glob 13 drops, each brace alternative as its own pattern and without regard to
+//!   case where glob defaults to that; an ignore spelling glob reads differently (see
+//!   `ignore_spelling_is_read`), or any other option, refuses.
 //! - `export default mergeConfig(<imported base>, <literal>)`: explicit arrays concatenate
 //!   base first, scalar overrides win, and nullish overrides preserve the base. Defaults apply
 //!   after merging. Measured before these two: 575 of 575 files undetermined on one large
@@ -1956,8 +1960,14 @@ impl Budget {
 
 /// Compile a project glob using the same separator semantics for full and prefix matches.
 fn project_glob_matcher(pattern: &str) -> Option<GlobMatcher> {
+    glob_matcher(pattern, false)
+}
+
+/// `pattern` compiled with `*` stopping at `/`, ignoring case when `case_insensitive`.
+fn glob_matcher(pattern: &str, case_insensitive: bool) -> Option<GlobMatcher> {
     GlobBuilder::new(pattern)
         .literal_separator(true)
+        .case_insensitive(case_insensitive)
         .build()
         .ok()
         .map(|glob| glob.compile_matcher())
@@ -2070,6 +2080,57 @@ struct ExpandedProjectPaths {
 /// Every path is confined to `root` after canonicalization: a `..` segment, an absolute path or a
 /// symlink that leaves the tree is counted in [`ExpandedProjectPaths::outside`] and never read.
 fn expand_project_path(root: &Path, pattern: &str, budget: &mut Budget) -> ExpandedProjectPaths {
+    expand_project_path_ignoring(root, pattern, &[], budget)
+}
+
+/// An `ignore` pattern's matcher. glob 13 defaults `nocase` to true on macOS and Windows, so the
+/// match there ignores case, as the config's `glob.sync` does on the same platform.
+fn ignore_glob_matcher(pattern: &str) -> Option<GlobMatcher> {
+    glob_matcher(pattern, cfg!(any(target_os = "macos", windows)))
+}
+
+/// One `glob.sync` `ignore` pattern, matched as glob 13 does against a result's relative path.
+struct IgnoreMatcher {
+    path: GlobMatcher,
+    /// For a pattern ending in `/**`, its prefix: glob also drops the directory itself.
+    directory: Option<GlobMatcher>,
+}
+
+impl IgnoreMatcher {
+    /// Compile `pattern`, charging the shared compilation budget; `None` when it does not compile
+    /// or the budget refuses it.
+    fn compile(pattern: &str, budget: &mut Budget) -> Option<Self> {
+        if pattern.len() > MAX_PROJECT_GLOB_BYTES || !budget.charge_compilation(pattern.len()) {
+            budget.compilation_refused = true;
+            return None;
+        }
+        let directory = match pattern.strip_suffix("/**") {
+            Some(prefix) => Some(ignore_glob_matcher(prefix)?),
+            None => None,
+        };
+        Some(Self {
+            path: ignore_glob_matcher(pattern)?,
+            directory,
+        })
+    }
+
+    /// Whether glob drops a result at `relative`.
+    fn ignores(&self, relative: &str) -> bool {
+        self.path.is_match(relative)
+            || self
+                .directory
+                .as_ref()
+                .is_some_and(|directory| directory.is_match(relative))
+    }
+}
+
+/// [`expand_project_path`] with matches an `ignore` pattern names dropped, as `glob.sync` drops them.
+fn expand_project_path_ignoring(
+    root: &Path,
+    pattern: &str,
+    ignore: &[IgnoreMatcher],
+    budget: &mut Budget,
+) -> ExpandedProjectPaths {
     let mut expanded = ExpandedProjectPaths {
         paths: Vec::new(),
         outside: 0,
@@ -2090,7 +2151,7 @@ fn expand_project_path(root: &Path, pattern: &str, budget: &mut Budget) -> Expan
         BraceAlternatives::Listed(all) if all.iter().any(|one| leaves_the_tree_lexically(one)) => {
             let mut paths = BTreeSet::new();
             for alternative in all {
-                let part = expand_project_path(root, &alternative, budget);
+                let part = expand_project_path_ignoring(root, &alternative, ignore, budget);
                 expanded.outside += part.outside;
                 paths.extend(part.paths);
             }
@@ -2107,6 +2168,9 @@ fn expand_project_path(root: &Path, pattern: &str, budget: &mut Budget) -> Expan
     }
 
     if !looks_like_glob(pattern) {
+        if ignore.iter().any(|matcher| matcher.ignores(pattern)) {
+            return expanded;
+        }
         let candidate = root.join(pattern);
         if matches!(confine(root, &candidate), Confinement::Outside) {
             expanded.outside += 1;
@@ -2160,6 +2224,27 @@ fn expand_project_path(root: &Path, pattern: &str, budget: &mut Budget) -> Expan
         .standard_filters(true)
         .follow_links(false)
         .require_git(false);
+    // A directory an `x/**` pattern ignores is not entered: glob drops it and everything under
+    // it, and walking it would only spend the entry budget. A pattern without `/**` drops a match,
+    // not its subtree, so it is checked per match below.
+    let pruned: Vec<GlobMatcher> = ignore
+        .iter()
+        .filter_map(|matcher| matcher.directory.clone())
+        .collect();
+    if !pruned.is_empty() {
+        let walk_root = root.to_path_buf();
+        builder.filter_entry(move |entry| {
+            if entry.depth() == 0 || !entry.file_type().is_some_and(|kind| kind.is_dir()) {
+                return true;
+            }
+            let relative = entry
+                .path()
+                .strip_prefix(&walk_root)
+                .unwrap_or(entry.path());
+            let relative = relative.to_string_lossy().replace('\\', "/");
+            !pruned.iter().any(|directory| directory.is_match(&relative))
+        });
+    }
     if pattern.contains("**") {
         builder.max_depth(Some(MAX_GLOB_WALK_DEPTH));
     } else {
@@ -2194,6 +2279,10 @@ fn expand_project_path(root: &Path, pattern: &str, budget: &mut Budget) -> Expan
                     expanded.outside += 1;
                 }
             }
+            continue;
+        }
+        // glob never returns an ignored match, so it is neither a project nor an outside read.
+        if ignore.iter().any(|matcher| matcher.ignores(&relative)) {
             continue;
         }
         let config = match entry.file_type() {
@@ -3505,14 +3594,23 @@ fn resolve_project_entry(
     *has_unresolved = true;
 }
 
-/// Reads the `glob.sync('<literal>')` project-list shape at `value_start`, or `None`.
+/// A `glob.sync` project list read from literals: the pattern and its `ignore` option.
+#[derive(Debug, PartialEq, Eq)]
+struct GlobSyncCall {
+    pattern: String,
+    /// `ignore` patterns with any leading `./` removed and optional extglob groups expanded.
+    ignore: Vec<String>,
+}
+
+/// Reads the `glob.sync('<literal>'[, { ignore }])` project-list shape at `value_start`, or `None`.
 ///
 /// Accepts the value written directly as the call (`test: { projects: glob.sync('...') }`) or
 /// through ONE const-binding hop (`const entries = glob.sync('...'); test: { projects: entries }`)
 /// -- the two spellings measured on real corpora. The identifier must be `glob`, verified
 /// imported from the `glob` package (the same discipline `is_vitest_config_import` applies to
 /// Vitest's own exports), and the argument must be a single quoted string literal: a variable
-/// pattern is a runtime value this scan cannot know, and it refuses exactly as before.
+/// pattern is a runtime value this scan cannot know, and it refuses exactly as before. The one
+/// option read is a literal `ignore` ([`glob_sync_ignore`]); any other refuses.
 ///
 /// Returns the literal pattern text, for [`expand_project_path`] -- the same budgeted walk a
 /// literal string entry takes, which is what makes this reading rather than executing.
@@ -3520,11 +3618,11 @@ fn read_glob_sync_literal(
     masked: &[char],
     original: &[char],
     value: Range<usize>,
-) -> Option<String> {
+) -> Option<GlobSyncCall> {
     let value_start = value.start;
     let direct = glob_sync_argument(masked, original, value_start, value.clone());
-    let pattern = match direct {
-        Some(pattern) => pattern,
+    let call = match direct {
+        Some(call) => call,
         None => {
             // One hop: the value must be a bare identifier, resolved to a `const NAME = ...`
             // initializer earlier in the file. Top-level only -- a binding inside a function
@@ -3537,16 +3635,109 @@ fn read_glob_sync_literal(
     if !is_imported_from_package(masked, original, "glob", &["glob"]) {
         return None;
     }
-    Some(pattern)
+    Some(call)
 }
 
-/// The argument of a `glob.sync('<literal>')` call whose callee starts at `start`, or `None`.
+/// The `ignore` patterns of a `glob.sync` options argument occupying `range`, or `None`.
+///
+/// The object must hold exactly one property, an unquoted `ignore` key whose value is a plain
+/// quoted string or an array literal of them. Any other key, a spread, or a non-literal value is
+/// a runtime setting this scan cannot know. A `!` pattern and an extglob group that cannot be
+/// expanded are refused rather than given a meaning glob may not share.
+fn glob_sync_ignore(
+    masked: &[char],
+    original: &[char],
+    range: Range<usize>,
+) -> Option<Vec<String>> {
+    let open = skip_trivia(original, range.start, range.end);
+    if masked.get(open) != Some(&'{') {
+        return None;
+    }
+    let close = find_matching_delim(masked, open, '{', '}')?;
+    if close >= range.end || skip_trivia(original, close + 1, range.end) != range.end {
+        return None;
+    }
+    let properties = split_top_level(original, masked, open + 1..close);
+    let [property] = properties.as_slice() else {
+        return None;
+    };
+    let key_start = skip_trivia(original, property.start, property.end);
+    let key_end = key_start + "ignore".len();
+    if original.get(key_start..key_end)? != ['i', 'g', 'n', 'o', 'r', 'e']
+        || original.get(key_end).is_some_and(|ch| is_ident_char(*ch))
+    {
+        return None;
+    }
+    let colon = skip_trivia(original, key_end, property.end);
+    if masked.get(colon) != Some(&':') {
+        return None;
+    }
+    let value_start = skip_trivia(original, colon + 1, property.end);
+    let literals = if masked.get(value_start) == Some(&'[') {
+        let end = find_matching_delim(masked, value_start, '[', ']')?;
+        if end >= property.end || skip_trivia(original, end + 1, property.end) != property.end {
+            return None;
+        }
+        split_top_level(original, masked, value_start + 1..end)
+            .into_iter()
+            .map(|element| read_string_literal(original, element))
+            .collect::<Option<Vec<_>>>()?
+    } else {
+        vec![read_string_literal(original, value_start..property.end)?]
+    };
+    let mut ignore = Vec::with_capacity(literals.len());
+    for literal in literals {
+        let pattern = literal.strip_prefix("./").unwrap_or(&literal);
+        if pattern.starts_with('!') {
+            return None;
+        }
+        // glob reads each brace alternative as its own pattern, so each keeps its own trailing
+        // `/**`; an alternative outside the spellings the matcher reproduces refuses the list.
+        for expanded in expand_extglob_optional_groups(pattern).ok()? {
+            let alternatives = match brace_alternatives(&expanded) {
+                BraceAlternatives::None => vec![expanded],
+                BraceAlternatives::Listed(alternatives) => alternatives,
+                BraceAlternatives::TooMany => return None,
+            };
+            for alternative in alternatives {
+                let alternative = alternative.strip_prefix("./").unwrap_or(&alternative);
+                if !ignore_spelling_is_read(alternative) {
+                    return None;
+                }
+                ignore.push(alternative.to_owned());
+            }
+        }
+    }
+    Some(ignore)
+}
+
+/// Whether one brace-free `ignore` alternative means to [`IgnoreMatcher`] what it means to glob
+/// 13.0.6: ASCII, relative, `/`-separated segments that are neither empty (a leading, trailing or
+/// doubled `/`) nor `.` or `..`, with `**` only as a whole segment and never twice in a row, and
+/// no brace, escape, negation, extglob group, drive colon or character pattern (`?`, `[...]`)
+/// left. glob reads each of those its own way, and matches `?` and case per character where the
+/// matcher works per byte.
+fn ignore_spelling_is_read(alternative: &str) -> bool {
+    let segments: Vec<&str> = alternative.split('/').collect();
+    alternative.is_ascii()
+        && !alternative.contains(['{', '}', '\\', '(', ')', ':', '?', '[', ']', '!'])
+        && segments.iter().all(|segment| {
+            !segment.is_empty()
+                && *segment != "."
+                && *segment != ".."
+                && (*segment == "**" || !segment.contains("**"))
+        })
+        && !segments.windows(2).any(|pair| pair == ["**", "**"])
+}
+
+/// The arguments of a `glob.sync('<literal>'[, { ignore }])` call whose callee starts at
+/// `start`, or `None`.
 fn glob_sync_argument(
     masked: &[char],
     original: &[char],
     start: usize,
     limit: Range<usize>,
-) -> Option<String> {
+) -> Option<GlobSyncCall> {
     let text: String = masked[start..limit.end.min(masked.len())].iter().collect();
     let trimmed = text.trim_start();
     let callee_offset = start + (text.len() - trimmed.len());
@@ -3567,11 +3758,23 @@ fn glob_sync_argument(
     // `limit.end` includes the `)` itself -- the probe-measured reason a first version of this
     // returned None on exactly this shape.
     let close_paren = find_matching_delim(masked, open_paren, '(', ')')?;
-    // The single argument must be a quoted string literal followed (after trivia) by `)`.
+    // The call must be the whole value: nothing but trivia after its `)`.
     if close_paren >= limit.end || skip_trivia(original, close_paren + 1, limit.end) != limit.end {
         return None;
     }
-    read_string_literal(original, open_paren + 1..close_paren)
+    let arguments = split_top_level(original, masked, open_paren + 1..close_paren);
+    let (pattern, ignore) = match arguments.as_slice() {
+        [pattern] => (pattern, Vec::new()),
+        [pattern, options] => (
+            pattern,
+            glob_sync_ignore(masked, original, options.clone())?,
+        ),
+        _ => return None,
+    };
+    Some(GlobSyncCall {
+        pattern: read_string_literal(original, pattern.clone())?,
+        ignore,
+    })
 }
 
 /// A bare identifier occupying `range`, if nothing but trivia follows it on that line of input.
@@ -3667,12 +3870,28 @@ fn resolve_projects_array(
         // same budgeted filesystem walk a literal string entry already takes. Anything else --
         // a variable pattern, a different callee, an unverified `glob`, more than one binding
         // hop -- keeps today's refusal.
-        if let Some(pattern) = read_glob_sync_literal(
+        if let Some(GlobSyncCall { pattern, ignore }) = read_glob_sync_literal(
             masked,
             original,
             value_extent(masked, value_start, test_body.end),
         ) {
-            let expanded = expand_project_path(root, &pattern, budget);
+            let ignore: Option<Vec<IgnoreMatcher>> = ignore
+                .iter()
+                .map(|one| IgnoreMatcher::compile(one, budget))
+                .collect();
+            // `ignore_spelling_is_read` admits only spellings the matcher compiles, so a pattern
+            // that yields no matcher was refused by the compilation budget.
+            let Some(ignore) = ignore.filter(|_| !budget.compilation_refused) else {
+                debug_assert!(budget.compilation_refused);
+                diagnostics.push(
+                    "project glob compilation budget exhausted; project map is incomplete"
+                        .to_owned(),
+                );
+                let mut set = unresolved_set(root, diagnostics, true);
+                set.truncated = true;
+                return set;
+            };
+            let expanded = expand_project_path_ignoring(root, &pattern, &ignore, budget);
             if budget.compilation_refused {
                 diagnostics.push(
                     "project glob compilation budget exhausted; project map is incomplete"
