@@ -335,6 +335,8 @@ const RUST_MODULES = {
   // Trace-only dataflow normalizations: raised from its first floor (89.70%) in the same pass —
   // pattern forms, effect families and the pruning guards.
   'src/behavior/dataflow.rs': 94,
+  // Whole-pattern accounting and substitution eligibility: measured at 100% (30/30 lines).
+  'src/behavior/bindings.rs': 100,
   // Test-only fixture harness: measured at 100.00% (35/35 lines).
   'src/testing.rs': 100,
 }

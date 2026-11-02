@@ -15,8 +15,8 @@
 //!   being a plain identifier resolving to a symbol outside the body (never a body-local, whose
 //!   number depends on the traversal order this substitution feeds), a plain non-computed key
 //!   with no default, and no effectful statement between the declaration and the last read.
-//!   Multiple reads are allowed here: duplicating a property *read* has no evaluation-count
-//!   hazard.
+//!   The whole pattern must be one property read exactly once: a getter can make unused siblings
+//!   and repeated reads observable even without an intervening statement.
 //! - **Destructured binding names**: every local the body declares through an object-destructuring
 //!   pattern renders with a `:prop:` suffix carrying the whole property path, `:`-joined. A suffix
 //!   can only tell two events apart, never make them equal, so it carries none of the
@@ -313,10 +313,8 @@ fn reads_declared_in(tree: &Tree, scopes: &Scopes, within: NodeId, gap: &[NodeId
         })
 }
 
-/// Registers destructuring candidates for one `const { … } = o` declarator: the name tag for
-/// every plain-identifier property, and the member-access rewrite for those that also qualify.
-/// Only the last read's statement is checked for an intervening effect: a statement's effect,
-/// once present before some read, is present before every later one too.
+/// Rewrites one whole single-property pattern at its sole read, only when moving that property
+/// access crosses no effect. Other patterns retain their implicit evaluation at the declaration.
 fn try_register_members(
     scan: &Scan,
     decl_index: usize,
@@ -326,37 +324,26 @@ fn try_register_members(
 ) {
     let tree = scan.tree;
     let scopes = scan.scopes;
+    let Some((value, name)) = super::bindings::single_property(tree, pattern) else {
+        return;
+    };
     let can_rewrite_object = tree.kind(init) == "Identifier"
         && scopes
             .symbol_at(tree.span(init).start)
             .is_some_and(|symbol| !scan.root.contains(scopes.symbol(symbol).span));
-    for property in tree.list(pattern, "properties").into_iter().flatten() {
-        let Some(name) = plain_property_key(tree, property) else {
-            continue;
-        };
-        // A nested pattern or a default is not supported: the value must be the binding itself.
-        let Some(value) = tree.child(property, "value") else {
-            continue;
-        };
-        if tree.kind(value) != "Identifier" {
-            continue;
-        }
+    if can_rewrite_object {
         let Some(symbol) = scopes.symbol_at(tree.span(value).start) else {
-            continue;
+            return;
         };
-        if !can_rewrite_object {
-            continue;
-        }
         let Some(reads) = read_statement_indices(tree, scopes, scan.statements, symbol) else {
-            continue;
+            return;
         };
-        // Never read: nothing to substitute. Read at or before the declaration: that read runs
-        // first, or throws, so moving the object's read to it would change what it does.
-        if reads.is_empty() || reads.iter().any(|(index, _)| *index <= decl_index) {
-            continue;
+        // A getter can observe repeated access. A read at or before the declaration runs first,
+        // or throws, so moving the object's read to it would also change what it does.
+        if reads.len() != 1 || reads.iter().any(|(index, _)| *index <= decl_index) {
+            return;
         }
-        // The rewrite moves the object's read from the declaration to every use: for each read,
-        // nothing effectful may stand between the declaration and it, nor before it inside its
+        // Nothing effectful may stand between the declaration and the sole read, nor inside its
         // own statement — the rewrite would evaluate the object later than it runs today.
         if reads.iter().any(|(index, read_span)| {
             scan.statements[decl_index + 1..*index]
@@ -364,7 +351,7 @@ fn try_register_members(
                 .any(|statement| statement_has_effect(tree, *statement, 0))
                 || an_effect_precedes(tree, scan.statements[*index], *read_span)
         }) {
-            continue;
+            return;
         }
         dataflow.member.insert(symbol, (init, name.to_owned()));
     }
@@ -506,8 +493,12 @@ pub(super) fn statement_has_effect(tree: &Tree, statement: NodeId, depth: u32) -
             .into_iter()
             .flatten()
             .any(|declarator| {
-                tree.child(declarator, "init")
-                    .is_some_and(|init| expression_has_effect(tree, init, depth + 1))
+                tree.child(declarator, "init").is_some_and(|init| {
+                    expression_has_effect(tree, init, depth + 1)
+                        || tree
+                            .child(declarator, "id")
+                            .is_some_and(|target| super::bindings::evaluates(tree, target))
+                })
             }),
         "ExpressionStatement" => tree
             .child(statement, "expression")

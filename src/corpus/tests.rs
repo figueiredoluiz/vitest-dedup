@@ -1247,6 +1247,7 @@ fn row_names_refuse_derived_suite_prefixes() {
 
 mod suites;
 
+mod bindings;
 mod hooks;
 mod parameters;
 

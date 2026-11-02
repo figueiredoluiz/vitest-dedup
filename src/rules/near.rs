@@ -26,7 +26,7 @@ pub(super) fn run(
         let case = entry.case;
         let compared = case.exclusion.is_none()
             && case.trace_complete
-            && case.trace.len() >= MIN_BEHAVIOR_EVENTS_FOR_NEAR_DUPLICATE;
+            && case.ordinary_events >= MIN_BEHAVIOR_EVENTS_FOR_NEAR_DUPLICATE;
         compared.then(|| {
             let mut events = case.trace.clone();
             events.sort_unstable();

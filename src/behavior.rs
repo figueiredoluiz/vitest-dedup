@@ -1,7 +1,9 @@
 //! Behavior: a test callback's body turned into its ordered behavior trace.
 //!
 //! The trace is the ordered list of events the two similarity rules compare — one event per
-//! recognized behavior step, in source order, from a closed grammar. Rules make two exact-match
+//! recognized behavior step plus opaque binding evaluation, in source order, from a closed grammar.
+//! Binding bookkeeping participates in comparison but cannot establish rule eligibility.
+//! Rules make two exact-match
 //! decisions over it: equal sorted multiset (`near-duplicate-test`) and strict ordered
 //! subsequence (`subsumed-test`). Both are equality gates, never similarity scores: any single
 //! differing event decides, and a `distinct` verdict is a comparison result, never conflated
@@ -22,6 +24,7 @@
 //! comparisons remain eligible independently. Atomic shapes retain their full expression tree;
 //! these refusals apply where an expression walk would otherwise omit behavior.
 
+mod bindings;
 pub(crate) mod dataflow;
 
 #[cfg(test)]
@@ -72,6 +75,8 @@ const MAX_ASSERTION_CHAIN: usize = 16;
 pub struct Trace {
     /// The events, in source order.
     pub events: Vec<u128>,
+    /// Behavior steps excluding opaque binding bookkeeping, used for rule eligibility.
+    pub ordinary_events: usize,
     /// Whether the walk finished. A rule keyed on the trace must skip an unfinished one and say
     /// so, because silence about a body it could not read proves nothing. The flat rules do not
     /// read it.
@@ -101,7 +106,7 @@ pub fn trace<'s>(
     substitutions: HashMap<SymbolId, String>,
     bound_parameters: bool,
 ) -> (Trace, CallbackForm) {
-    let (events, complete, form) = trace_text(
+    let (events, ordinary_events, complete, form) = trace_text(
         normalizer,
         parsed,
         function,
@@ -111,6 +116,7 @@ pub fn trace<'s>(
     (
         Trace {
             events: events.iter().map(|event| sha256_128(event)).collect(),
+            ordinary_events,
             complete,
         },
         form,
@@ -124,7 +130,7 @@ pub(crate) fn trace_text<'s>(
     function: NodeId,
     substitutions: HashMap<SymbolId, String>,
     bound_parameters: bool,
-) -> (Vec<String>, bool, CallbackForm) {
+) -> (Vec<String>, usize, bool, CallbackForm) {
     let form = normalizer.callback_form(function);
     let dataflow = dataflow::analyze(parsed, function);
     let mut walk = normalizer.body_walk(function, substitutions, bound_parameters);
@@ -197,16 +203,20 @@ pub(crate) fn trace_text<'s>(
         dataflow,
         root,
         events: Vec::new(),
+        ordinary_events: 0,
         complete: provable,
     };
+    if !bound_parameters {
+        walker.parameter_patterns(function, false);
+    }
     walker.run(function);
     let complete = walker.complete && !walker.walk.class_budget_spent;
-    (walker.events, complete, form)
+    (walker.events, walker.ordinary_events, complete, form)
 }
 
 /// Tags every read of a retained name with what bound it, since its reads name only the local and
-/// most sources emit no event. The tag spends no number and records no event, so numbering and a
-/// body of bindings alone stay as they were. A source with its own event stays out of the tag,
+/// most sources emit no event. The tag spends no number and records no event; separate binding
+/// accounting preserves implicit evaluation. A source with its own event stays out of the tag,
 /// which would make one difference every read's, and so does data: two tests differing only there
 /// want one table. A plain name bound from either leaves nothing to tag. Source order, so a source reading an earlier local carries its tag.
 fn tag_retained_sources<'s>(
@@ -332,6 +342,7 @@ struct Walker<'n, 's> {
     /// name shadowing from the API.
     root: Span,
     events: Vec<String>,
+    ordinary_events: usize,
     /// Whether every walk finished inside [`MAX_TRACE_DEPTH`], and every class the trace renders
     /// was provable. A walk that sets this to `false` has produced a trace with a hole.
     complete: bool,
@@ -355,11 +366,49 @@ impl<'s> Walker<'_, 's> {
 
     /// Appends an event, prefixing it when its execution is deferred.
     fn push(&mut self, deferred: bool, event: String) {
+        self.ordinary_events += 1;
+        self.push_event(deferred, event);
+    }
+
+    /// Adds an event without changing the count of ordinary behavior steps.
+    fn push_event(&mut self, deferred: bool, event: String) {
         self.events.push(if deferred {
             format!("deferred-{event}")
         } else {
             event
         });
+    }
+
+    /// Retains implicit binding evaluation without spending local numbers or the class budget.
+    fn binding_pattern(&mut self, target: NodeId, source: Option<NodeId>, deferred: bool) {
+        if !matches!(
+            bindings::accounting(self.parsed, target, &self.dataflow),
+            bindings::Accounting::Opaque
+        ) {
+            return;
+        }
+        let mut event = format!(
+            "binding:{}",
+            self.normalizer.detached_shape(target, &mut self.walk)
+        );
+        if let Some(source) = source.filter(|source| !names_itself(self.tree(), *source)) {
+            event.push_str(" source=");
+            event.push_str(&self.normalizer.detached_shape(source, &mut self.walk));
+        }
+        if event.contains(UNSCOPED_PRIVATE) {
+            self.complete = false;
+        }
+        self.push_event(deferred, event);
+    }
+
+    /// Accounts for parameter patterns when their inputs have not already been bound as rows.
+    fn parameter_patterns(&mut self, function: NodeId, deferred: bool) {
+        if self.tree().child(function, "body").is_none() {
+            return;
+        }
+        for parameter in self.tree().list(function, "params").into_iter().flatten() {
+            self.binding_pattern(parameter, None, deferred);
+        }
     }
 
     /// Renders a node's normal form in the shared walk: the shape an event carries.
@@ -441,6 +490,9 @@ impl<'s> Walker<'_, 's> {
                     }
                     if let Some(init) = tree.child(declarator, "init") {
                         self.walk_expr(init, deferred, depth + 1);
+                        if let Some(target) = tree.child(declarator, "id") {
+                            self.binding_pattern(target, Some(init), deferred);
+                        }
                     }
                 }
             }
@@ -481,6 +533,16 @@ impl<'s> Walker<'_, 's> {
                 self.push(deferred, protocol.to_owned());
                 if let Some(right) = tree.child(statement, "right") {
                     self.walk_expr(right, deferred, depth + 1);
+                    if let Some(left) = tree.child(statement, "left") {
+                        let target = tree
+                            .list(left, "declarations")
+                            .first()
+                            .copied()
+                            .flatten()
+                            .and_then(|declarator| tree.child(declarator, "id"))
+                            .unwrap_or(left);
+                        self.binding_pattern(target, Some(right), deferred);
+                    }
                 }
                 if let Some(body) = tree.child(statement, "body") {
                     self.walk_part(body, deferred, depth + 1);
@@ -580,6 +642,7 @@ impl<'s> Walker<'_, 's> {
                 }
             }
             "FunctionDeclaration" => {
+                self.parameter_patterns(statement, true);
                 // A nested declaration is retained as deferred behavior: this body may never run
                 // it, or run it many times, so its events are not the test's own.
                 if let Some(body) = tree.child(statement, "body") {
@@ -632,6 +695,9 @@ impl<'s> Walker<'_, 's> {
         for declarator in declarators {
             if let Some(init) = tree.child(declarator, "init") {
                 self.walk_expr(init, deferred, depth);
+                if let Some(target) = tree.child(declarator, "id") {
+                    self.binding_pattern(target, Some(init), deferred);
+                }
             }
         }
     }
@@ -866,6 +932,7 @@ impl<'s> Walker<'_, 's> {
 
     /// Walks a nested callable's body as deferred behavior.
     fn deferred_body(&mut self, function: NodeId, depth: u32) {
+        self.parameter_patterns(function, true);
         let tree = self.tree();
         let Some(body) = tree.child(function, "body") else {
             return;

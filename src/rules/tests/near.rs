@@ -7,6 +7,7 @@ fn near(line: u32, body: u64, trace: &[u128]) -> TestCase {
     TestCase {
         body,
         trace: trace.to_vec(),
+        ordinary_events: trace.len(),
         similarity_key: 7,
         ..case(
             line,
@@ -71,6 +72,19 @@ fn equal_events_in_one_order_name_the_normalization() {
 fn one_differing_event_is_distinct() {
     assert!(claims(vec![near(1, 1, &[10, 20]), near(2, 2, &[10, 30])]).is_empty());
     assert!(claims(vec![near(1, 1, &[10, 10, 20]), near(2, 2, &[10, 20, 20])]).is_empty());
+}
+
+/// Binding bookkeeping participates in equality but cannot reach the behavior minimum.
+#[test]
+fn binding_events_do_not_raise_near_eligibility() {
+    let mut left = near(1, 1, &[10, 20]);
+    let mut right = near(2, 2, &[20, 10]);
+    left.ordinary_events = 1;
+    right.ordinary_events = 1;
+    assert!(claims(vec![left.clone(), right.clone()]).is_empty());
+    left.ordinary_events = 2;
+    right.ordinary_events = 2;
+    assert_eq!(claims(vec![left, right]), [[1, 2]]);
 }
 
 /// A pair must agree on everything around its events, in one file.

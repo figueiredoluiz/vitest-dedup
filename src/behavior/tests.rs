@@ -184,7 +184,7 @@ fn events(
                 // The trace walks the function itself, not the argument as written: a
                 // parenthesized or type-wrapped callback would otherwise read as a body with no
                 // statements in it.
-                let (events, complete, form) = trace_text(
+                let (events, _, complete, form) = trace_text(
                     normalizer,
                     parsed,
                     callback.function.unwrap_or(callback.argument),
@@ -1299,6 +1299,7 @@ fn trace_accessors_answer() {
     let (events, complete, _) = &evts["two"];
     let trace = Trace {
         events: events.iter().map(|event| sha256_128(event)).collect(),
+        ordinary_events: events.len(),
         complete: *complete,
     };
     assert_eq!(trace.len(), 2, "the trace counts every event");
@@ -1948,8 +1949,7 @@ fn a_binding_keeps_its_target_and_not_its_spelling() {
     ));
 }
 
-/// A tag takes no number and records no event, so the locals after a retained one keep theirs and
-/// a body of bindings alone stays empty.
+/// Tags and binding bookkeeping take no number from subsequent ordinary events.
 #[test]
 fn a_tag_leaves_numbering_and_events_alone() {
     let events = events(
@@ -1968,8 +1968,11 @@ fn a_tag_leaves_numbering_and_events_alone() {
     );
     assert_eq!(of(&events, "small"), &of(&events, "large")[..3]);
     assert_eq!(of(&events, "small"), &of(&events, "reading")[..3]);
-    assert!(of(&events, "bare").is_empty());
-    assert!(of(&events, "nested").is_empty());
+    assert_eq!(of(&events, "bare").len(), 2);
+    assert!(of(&events, "bare")
+        .iter()
+        .all(|event| event.starts_with("binding:")));
+    assert!(of(&events, "nested")[0].starts_with("deferred-binding:"));
 }
 
 /// A tag tells reads apart and never joins them: two equal sources keep their own numbers.
@@ -1981,8 +1984,7 @@ fn a_tag_never_joins_two_locals() {
     ));
 }
 
-/// A substitution already renders the source at the read, and an unread sibling adds nothing, so
-/// the body stays its written-out form.
+/// A complete substitution represents the whole binding; an unread sibling needs accounting.
 #[test]
 fn a_substituted_binding_carries_no_tag() {
     let events = events(
@@ -1997,8 +1999,53 @@ fn a_substituted_binding_carries_no_tag() {
         &[],
     );
     assert_eq!(of(&events, "member"), of(&events, "written member"));
-    assert_eq!(of(&events, "partly"), of(&events, "written member"));
+    assert_ne!(of(&events, "partly"), of(&events, "written member"));
+    assert!(of(&events, "partly")[0].starts_with("binding:"));
     assert_eq!(of(&events, "alias"), of(&events, "written alias"));
+}
+
+/// Every declaration route retains unused pattern effects, including deferred and loop heads.
+#[test]
+fn binding_accounting_covers_declaration_routes() {
+    for (left, right) in [
+        ("const {a} = o;", "const {a, b} = o;"),
+        ("const [a] = o;", "const [, a] = o;"),
+        ("const {a = one()} = o;", "const {a = two()} = o;"),
+        ("const {a, ...rest} = o;", "const {b, ...rest} = o;"),
+        ("const {[one()]: a} = o;", "const {[two()]: a} = o;"),
+        ("const z = 0, {a} = o;", "const z = 0, {a, b} = o;"),
+        (
+            "for (const {a} = o; running;) {}",
+            "for (const {a, b} = o; running;) {}",
+        ),
+        ("for (const {a} of os) {}", "for (const {a, b} of os) {}"),
+        ("for ({a} of os) {}", "for ({a, b} of os) {}"),
+        ("({a} = o);", "({a, b} = o);"),
+        (
+            "function f({a}) { use(1); }",
+            "function f({a, b}) { use(1); }",
+        ),
+        (
+            "const f = ({a}) => use(1);",
+            "const f = ({a, b}) => use(1);",
+        ),
+    ] {
+        assert!(
+            !traces_alike(
+                &format!("{left} use(1); use(2);"),
+                &format!("{right} use(1); use(2);")
+            ),
+            "{left} / {right}"
+        );
+    }
+    assert!(traces_alike(
+        "declare function f({a}: T): void; use(1); use(2);",
+        "use(1); use(2);"
+    ));
+    assert!(traces_alike(
+        "const {a: x} = o; use(x); use(x);",
+        "const {a: y} = o; use(y); use(y);"
+    ));
 }
 
 /// A literal difference is parameterization's claim, and a source with its own event names itself
@@ -2078,9 +2125,9 @@ fn a_default_read_is_not_tagged() {
         "test('t', () => { const c = make(); const { a = c } = first; use(c); use(a); });",
         &[],
     );
-    let use_of_c = &of(&events, "t")[1];
+    let use_of_c = &of(&events, "t")[2];
     assert!(!use_of_c.contains('<'), "{use_of_c}");
-    assert!(of(&events, "t")[2].contains('<'));
+    assert!(of(&events, "t")[3].contains('<'));
 }
 
 /// A source reading a local class spends none of the budget the events share, so an alias cannot
