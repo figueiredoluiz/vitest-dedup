@@ -260,9 +260,9 @@ fn the_next_engine_refuses_a_malformed_baseline() {
     }
 }
 
-/// A mode that needs a base revision stays refused.
+/// Reference mode reports its Git prerequisite rather than an obsolete engine refusal.
 #[test]
-fn the_next_engine_still_refuses_a_base_revision() {
+fn the_next_engine_requires_git_for_a_base_revision() {
     let directory = tempfile::tempdir().unwrap();
     std::fs::write(directory.path().join("a.test.ts"), source(&["one"])).unwrap();
     let (exit, _, stderr) = analyze(
@@ -271,5 +271,5 @@ fn the_next_engine_still_refuses_a_base_revision() {
         &["--baseline-from-ref", "HEAD"],
     );
     assert_eq!(exit, 2, "{stderr}");
-    assert!(stderr.contains("historical helper resolution"), "{stderr}");
+    assert!(stderr.contains("requires a Git repository"), "{stderr}");
 }

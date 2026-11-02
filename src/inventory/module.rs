@@ -368,7 +368,9 @@ impl<'s> Module<'s> {
             let wrapper_exports = if api {
                 None
             } else {
-                crate::lang::resolve(self.path, source, self.setting.root)
+                modules
+                    .sources
+                    .resolve(self.path, source, self.setting.root)
                     .map(|file| modules.exports(&file, self.setting, depth + 1))
             };
             if wrapper_exports
@@ -1163,7 +1165,10 @@ impl<'s> Module<'s> {
                             }
                             continue;
                         }
-                        let Some(file) = crate::lang::resolve(self.path, source, self.setting.root)
+                        let Some(file) =
+                            modules
+                                .sources
+                                .resolve(self.path, source, self.setting.root)
                         else {
                             continue;
                         };
@@ -1259,7 +1264,9 @@ impl<'s> Module<'s> {
                             add(registration.name.to_owned(), export);
                         }
                     } else if let Some(file) =
-                        crate::lang::resolve(self.path, source, self.setting.root)
+                        modules
+                            .sources
+                            .resolve(self.path, source, self.setting.root)
                     {
                         for (name, export) in modules.exports(&file, self.setting, depth + 1) {
                             if name != "default" {

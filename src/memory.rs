@@ -259,7 +259,7 @@ pub struct EngineBytes {
     pub sites: usize,
     /// Blind-file paths and their container.
     pub blind: usize,
-    /// Inventory module-export cache and active-path set.
+    /// Inventory module-export cache, active paths and the shared historical source catalog.
     pub modules: usize,
     /// Normal-form export-identity cache.
     pub exports: usize,

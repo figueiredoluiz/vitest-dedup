@@ -396,10 +396,16 @@ fn severity_and_inert_flags_do_not_affect_baseline_identity() {
 
 /// Create a Git command with inherited repository environment removed for isolated fixture
 /// operations.
-fn fixture_git() -> Command {
+pub(super) fn fixture_git() -> Command {
     let mut command = Command::new("git");
-    for variable in INHERITED_GIT_VARIABLES {
-        command.env_remove(variable);
+    for (variable, _) in std::env::vars_os() {
+        if variable
+            .to_string_lossy()
+            .to_ascii_uppercase()
+            .starts_with("GIT_")
+        {
+            command.env_remove(variable);
+        }
     }
     command
 }
@@ -693,7 +699,7 @@ fn a_failing_git_listing_is_an_error_naming_the_listing_and_quoting_git() {
 // -- the base-revision read ----------------------------------------------------------------
 
 /// A committed repository holding exactly `files`, parents created as needed.
-fn repository_with(files: &[(&str, &[u8])]) -> tempfile::TempDir {
+pub(crate) fn repository_with(files: &[(&str, &[u8])]) -> tempfile::TempDir {
     let directory = tempfile::tempdir().unwrap();
     for (name, bytes) in files {
         let path = directory.path().join(name);

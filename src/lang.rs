@@ -11,11 +11,13 @@ pub(crate) mod js_text;
 pub(crate) mod limits;
 mod resolve;
 mod scopes;
+mod sources;
 mod syntax;
 mod tree;
 
 pub use resolve::{resolve, resolve_file};
 pub use scopes::{Declaration, Imported, Name, Reference, Scopes, Symbol, SymbolId};
+pub use sources::{SourceKind, SourceTree, Sources};
 pub use syntax::{bound_symbols, export_name, member_name, property_name};
 pub use tree::{Field, NodeId, Span, Tree};
 

@@ -241,6 +241,8 @@ const RUST_MODULES = {
   'src/package_json.rs': 94,
   'src/prerequisites.rs': 99,
   'src/modes.rs': 97,
+  // Initial Git catalog measurement: 89.67% (269/300 lines); defensive plumbing failures count.
+  'src/modes/revision.rs': 89,
   // `src/reporters.rs` is the module root: the `Reporter` trait, the dispatch table, and the shared
   // test-support constructors. It was in the coverage report with no floor here, which this gate
   // refuses by design -- an unlisted module is retention nobody budgeted, the same argument
@@ -290,6 +292,8 @@ const RUST_MODULES = {
   'src/lang/build.rs': 97,
   'src/lang/limits.rs': 96,
   'src/lang/resolve.rs': 96,
+  // Committed filesystem adapter: every instrumented line must remain covered.
+  'src/lang/sources.rs': 100,
   'src/lang/scopes.rs': 96,
   'src/lang/syntax.rs': 93,
   'src/lang/tree.rs': 97,

@@ -1407,3 +1407,67 @@ fn subsumption_config() -> crate::config::Config {
 }
 
 mod memory;
+
+/// Panic recovery clears cached answers while preserving committed authority and charging it once.
+#[test]
+fn historical_source_authority_survives_cache_recovery() {
+    use crate::lang::{SourceTree, Sources};
+    use crate::memory::HeapBytes;
+    let dir =
+        crate::modes::tests::repository_with(&[("helper.ts", b"export function run(){return 1}")]);
+    let root = dir.path().canonicalize().unwrap();
+    let view = std::sync::Arc::new(crate::modes::RevisionFiles::load(&root, "HEAD", None).unwrap());
+    let mut engine = Engine::with_sources(Sources::committed(view.clone()));
+    assert_eq!(engine.memory_fields().modules, view.retained_bytes());
+    let setting = Setting {
+        dialect: &DIALECT,
+        globals: false,
+        root: &root,
+    };
+    let source="import {test,expect} from 'vitest'; import {run} from './helper'; test('a',()=>expect(run()).toBe(1));";
+    let path = root.join("run.test.ts");
+    engine.read(
+        &path,
+        "run.test.ts".as_ref(),
+        source,
+        setting,
+        false,
+        Vec::new(),
+    );
+    assert_eq!(engine.tests, 1);
+    let first = engine.files[0].1[0].key;
+    assert!(engine.files[0].1[0].exclusion.is_none());
+    assert_eq!(
+        engine.memory_fields().modules,
+        engine.run.modules.heap_bytes() + view.retained_bytes()
+    );
+    std::fs::write(root.join("helper.ts"), "export function run(){return 2}").unwrap();
+    engine.record(
+        "panic.test.ts".as_ref(),
+        Err(Failure::Panicked),
+        false,
+        Vec::new(),
+    );
+    engine.read(
+        &path,
+        "run.test.ts".as_ref(),
+        source,
+        setting,
+        false,
+        Vec::new(),
+    );
+    assert_eq!(engine.tests, 2);
+    assert_eq!(engine.files[1].1[0].key, first);
+    view.ensure_readable().unwrap();
+    let mut live = Engine::default();
+    live.read(
+        &path,
+        "run.test.ts".as_ref(),
+        source,
+        setting,
+        false,
+        Vec::new(),
+    );
+    assert_eq!(live.tests, 1);
+    assert_ne!(live.files[0].1[0].key, first);
+}

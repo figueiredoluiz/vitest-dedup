@@ -145,7 +145,11 @@ impl Engine {
             blind,
             retained,
         } = self;
-        let Run { modules, exports } = run;
+        let Run {
+            modules,
+            exports,
+            sources,
+        } = run;
         EngineBytes {
             cases: retained.cases.saturating_add(
                 files
@@ -172,7 +176,7 @@ impl Engine {
             blind: retained
                 .blind
                 .saturating_add(blind.capacity().saturating_mul(size_of::<BlindFile>())),
-            modules: modules.heap_bytes(),
+            modules: modules.heap_bytes().saturating_add(sources.heap_bytes()),
             exports: exports.heap_bytes(),
             scalars: tests.heap_bytes().saturating_add(unresolved.heap_bytes()),
         }

@@ -237,9 +237,18 @@ Helper source bytes also serve inline suppressions and HTML snippets.
 
 ## Baselines
 
-`--baseline-from-ref` currently refuses imported runners: historical helper blobs are unavailable,
-so using present-day bodies would produce a false baseline. The base analysis is reported as
-partial. File baselines from complete current analyses retain imported source and caller identity
-normally.
+The default engine's `--baseline-from-ref` refuses imported runners: historical helper blobs are
+unavailable to that engine, so using present-day bodies would produce a false baseline. Its base
+analysis is reported as partial. File baselines from complete current analyses retain imported
+source and caller identity normally.
+
+The experimental next engine resolves project imports against committed source and resolver
+configuration. It retains its own import-classification boundaries: this does not add support for
+additional runner wrappers. It never substitutes current helpers for historical dependencies.
+Historical symlinks and actual source/configuration access failures refuse the baseline. A
+missing package-based tsconfig extension or unresolved linkage to a committed project package makes
+the historical pass incomplete with no allowance. Private `#`-mapped tsconfig extensions remain
+errors; see
+[revision baselines](baselines.md#baseline-from-a-revision).
 
 Back to the [documentation index](README.md).

@@ -162,7 +162,18 @@ nothing to compare.
 
 Baselines under the next engine carry `vitestDedupFingerprint/v2`: the same derivation, but the engines pair
 and title tests differently, so each refuses the other's file rather than half matching it.
-`--baseline-from-ref` remains unavailable under the next engine pending historical helper resolution.
+`--baseline-from-ref` also uses v2 under the next engine. Historical source files, project helpers,
+re-exports, and resolver tsconfig/package metadata come from one pinned Git commit. Missing files
+never fall back to the working tree. Historical symlinks and actual dependency/configuration read
+failures are operational errors. An absent package-based tsconfig extension instead marks the
+historical pass incomplete and withholds all of its allowance: unknown aliases cannot prove
+historical equivalence. Missing workspace linkage to a committed project package is treated as
+the same uncertainty. Project names are cached from at most 8 MiB of committed metadata; their
+retained names and table capacity are included in the historical memory budget. Resolver caches
+remain transient per lookup. `#`-mapped tsconfig extensions remain unsupported errors. The owned source index counts toward the base pass's memory
+budget; an index that exceeds the cap is refused before analysis. Current include/exclude globs and
+resolved globals still configure both passes; historical Vitest configuration is not executed.
+See [revision baselines](baselines.md#baseline-from-a-revision) for shared admission limits.
 
 The experimental `subsumed-test` rule is opt-in. It compares complete same-file traces under
 the same context and callback form for strict ordered subsequences, preserving repeated events.

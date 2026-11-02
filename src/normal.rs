@@ -35,7 +35,18 @@ pub fn digest(text: &str) -> u64 {
 /// Identities of what project modules export, shared by every file of one run.
 #[derive(Debug, Default)]
 pub struct Exports {
+    sources: crate::lang::Sources,
     known: RefCell<crate::memory::RetainedMap<(PathBuf, String), Option<String>>>,
+}
+
+impl Exports {
+    /// One private identity cache belongs to one source authority for its whole lifetime.
+    pub(crate) fn with_sources(sources: crate::lang::Sources) -> Self {
+        Self {
+            sources,
+            ..Self::default()
+        }
+    }
 }
 
 /// What a normalization reads besides the module.
@@ -847,7 +858,8 @@ impl crate::memory::HeapBytes for CallbackForm {
 impl crate::memory::HeapBytes for Exports {
     /// Retained export identities include owned paths, exported names and cached text.
     fn heap_bytes(&self) -> usize {
-        let Self { known } = self;
+        // The owning Run charges the shared catalog, not each cache alias.
+        let Self { known, sources: _ } = self;
         crate::memory::HeapBytes::heap_bytes(&*known.borrow())
     }
 }
