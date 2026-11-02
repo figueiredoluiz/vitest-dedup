@@ -165,7 +165,7 @@ fn parameterization_uses_proven_rows_once_per_declaration() {
         .filter(|f| f.rule == Rule::ParameterizationCandidate)
         .collect();
     assert_eq!(candidates.len(), 1, "{outcome:#?}");
-    assert_eq!(candidates[0].titles, ["row %i", "manual"]);
+    assert_eq!(candidates[0].titles, ["row 0", "manual"]);
 }
 
 /// The runtime and recall sources retain their declaration outcomes under each row ordering.
@@ -311,7 +311,7 @@ fn parameterization_owned_contract() {
         candidates,
         vec![
             vec!["zero boundary", "one boundary"],
-            vec!["row %i", "manual row"]
+            vec!["row 0", "manual row"]
         ],
         "{outcome:#?}"
     );

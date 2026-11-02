@@ -22,7 +22,11 @@ pub(crate) fn title(parsed: &Parsed, call: NodeId) -> Option<String> {
 
 /// Literal printf arguments and named fields. Array rows supply positional title arguments even
 /// when the callback receives the row whole. Unknown cells remain distinct from missing ones.
-pub(crate) fn row(parsed: &Parsed, row: &Row) -> (Vec<Option<Value>>, Option<Map<String, Value>>) {
+pub(crate) fn row(
+    parsed: &Parsed,
+    row: &Row,
+    whole_rows: bool,
+) -> (Vec<Option<Value>>, Option<Map<String, Value>>) {
     let mut budget = 256;
     match row {
         Row::Spread(cells) => (
@@ -45,6 +49,10 @@ pub(crate) fn row(parsed: &Parsed, row: &Row) -> (Vec<Option<Value>>, Option<Map
                 );
             }
             let whole = value(parsed, node, 0, &mut budget);
+            // A whole-row table titles a null row with no items, not with `null`.
+            if whole_rows && whole == Some(Value::Null) {
+                return (Vec::new(), None);
+            }
             let fields = whole.as_ref().and_then(Value::as_object).cloned();
             (vec![whole], fields)
         }

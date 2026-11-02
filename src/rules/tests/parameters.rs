@@ -113,7 +113,9 @@ fn parameterization_declaration_order_preserves_claims_and_budget() {
                         let site = position as u32 + 1;
                         let mut entry = case(site, site * 100, body, body);
                         entry.body = body;
-                        entry.full_title = Some(format!("declaration {declaration}"));
+                        let title = format!("declaration {declaration}");
+                        entry.full_title = Some(title.clone());
+                        entry.name = Some(vec![title]);
                         entry.row = Some(row);
                         entry.parameterization_key = Some(10);
                         cases.push(entry);
@@ -152,6 +154,7 @@ fn parameterization_equal_tables_keep_the_first_location() {
                 let site = position as u32 + 1;
                 let mut entry = case(site, site * 100, body, body);
                 entry.full_title = Some(title.to_owned());
+                entry.name = Some(vec![title.to_owned()]);
                 entry.body = body;
                 entry.row = Some(row);
                 entry.parameterization_key = Some(10);
@@ -222,6 +225,7 @@ fn parameterization_orders_spanning_pairs_and_keeps_metadata() {
     let mut cases = candidates(3);
     cases[0].inert = true;
     cases[0].full_title = None;
+    cases[0].name = None;
     let cfg = config(Severity::Error);
     let expected = run_with_budget(&[file("a.test.ts", cases.clone())], &cfg, 2);
     assert!(!expected.budget_exhausted);

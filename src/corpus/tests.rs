@@ -1046,6 +1046,28 @@ fn owned_name_formats_match_runtime_without_widening_unknowns() {
     );
 }
 
+/// A title Vitest renders differently from a literal never collides with it; `verify-titles` pins
+/// every collision here to the runtime's own titles.
+#[test]
+fn owned_rendering_matches_runtime_or_refuses() {
+    assert_owned_names(
+        include_str!("../../fixtures/oracle/name-collisions/rendering.test.ts"),
+        "rendering.test.ts",
+        34,
+        0,
+        &[
+            "position y",
+            "scalar first q",
+            "index x",
+            "next position y",
+            "truncated 1",
+            "missing undefined",
+            "each null null",
+            "each number 0",
+        ],
+    );
+}
+
 /// The owned runtime source pins input equality, observability and rendering as final findings.
 #[test]
 fn owned_duplicate_rows_require_proven_inputs_and_keep_every_group() {

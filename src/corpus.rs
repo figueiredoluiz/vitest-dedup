@@ -628,7 +628,8 @@ pub fn file(
                     .and_then(|(mut segments, pattern)| {
                         let title = if table_site(site) {
                             let row = modifiers.rows.as_ref()?.get(index)?;
-                            let (arguments, fields) = normal::titles::row(&parsed, row);
+                            let (arguments, fields) =
+                                normal::titles::row(&parsed, row, modifiers.whole_rows);
                             (setting.dialect.render_title)(
                                 pattern,
                                 &arguments,
@@ -647,7 +648,7 @@ pub fn file(
                 }
                 let row = modifiers.rows.as_ref()?.get(index)?;
                 let identity = normal::row_identity::identity(&parsed, row, function?)?;
-                let (arguments, fields) = normal::titles::row(&parsed, row);
+                let (arguments, fields) = normal::titles::row(&parsed, row, modifiers.whole_rows);
                 let rendered = (setting.dialect.render_row_title)(
                     pattern.as_deref()?,
                     &arguments,

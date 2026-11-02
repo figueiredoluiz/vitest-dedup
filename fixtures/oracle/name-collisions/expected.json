@@ -1,10 +1,167 @@
 {
   "files": {
     "formats.test.ts": { "tasks": 32, "wrapperSites": [], "next": {} },
+    "rendering.test.ts": { "tasks": 34, "wrapperSites": [], "next": {} },
     "cases.test.ts": {
       "tasks": 20,
       "wrapperSites": [],
       "next": {}
     }
-  }
+  },
+  "knownTitles": [
+    {
+      "path": "rendering.test.ts",
+      "kind": "extra-test",
+      "item": "index $0",
+      "reason": "The default engine's renderer differs from Vitest here; the next engine matches or refuses.",
+      "waitsOn": "the next engine becoming the default"
+    },
+    {
+      "path": "rendering.test.ts",
+      "kind": "extra-test",
+      "item": "late index $0",
+      "reason": "The default engine's renderer differs from Vitest here; the next engine matches or refuses.",
+      "waitsOn": "the next engine becoming the default"
+    },
+    {
+      "path": "rendering.test.ts",
+      "kind": "extra-test",
+      "item": "late position $1",
+      "reason": "The default engine's renderer differs from Vitest here; the next engine matches or refuses.",
+      "waitsOn": "the next engine becoming the default"
+    },
+    {
+      "path": "rendering.test.ts",
+      "kind": "extra-test",
+      "item": "missing null",
+      "reason": "The default engine's renderer differs from Vitest here; the next engine matches or refuses.",
+      "waitsOn": "the next engine becoming the default"
+    },
+    {
+      "path": "rendering.test.ts",
+      "kind": "extra-test",
+      "item": "next position $1",
+      "reason": "The default engine's renderer differs from Vitest here; the next engine matches or refuses.",
+      "waitsOn": "the next engine becoming the default"
+    },
+    {
+      "path": "rendering.test.ts",
+      "kind": "extra-test",
+      "item": "null json null",
+      "reason": "The default engine's renderer differs from Vitest here; the next engine matches or refuses.",
+      "waitsOn": "the next engine becoming the default"
+    },
+    {
+      "path": "rendering.test.ts",
+      "kind": "extra-test",
+      "item": "null number 0",
+      "reason": "The default engine's renderer differs from Vitest here; the next engine matches or refuses.",
+      "waitsOn": "the next engine becoming the default"
+    },
+    {
+      "path": "rendering.test.ts",
+      "kind": "extra-test",
+      "item": "null object null",
+      "reason": "The default engine's renderer differs from Vitest here; the next engine matches or refuses.",
+      "waitsOn": "the next engine becoming the default"
+    },
+    {
+      "path": "rendering.test.ts",
+      "kind": "extra-test",
+      "item": "null string null",
+      "reason": "The default engine's renderer differs from Vitest here; the next engine matches or refuses.",
+      "waitsOn": "the next engine becoming the default"
+    },
+    {
+      "path": "rendering.test.ts",
+      "kind": "extra-test",
+      "item": "object first q",
+      "reason": "The default engine's renderer differs from Vitest here; the next engine matches or refuses.",
+      "waitsOn": "the next engine becoming the default"
+    },
+    {
+      "path": "rendering.test.ts",
+      "kind": "extra-test",
+      "item": "padded y",
+      "reason": "The default engine's renderer differs from Vitest here; the next engine matches or refuses.",
+      "waitsOn": "the next engine becoming the default"
+    },
+    {
+      "path": "rendering.test.ts",
+      "kind": "missing-test",
+      "item": "index x",
+      "reason": "The default engine's renderer differs from Vitest here; the next engine matches or refuses.",
+      "waitsOn": "the next engine becoming the default"
+    },
+    {
+      "path": "rendering.test.ts",
+      "kind": "missing-test",
+      "item": "late index x",
+      "reason": "The default engine's renderer differs from Vitest here; the next engine matches or refuses.",
+      "waitsOn": "the next engine becoming the default"
+    },
+    {
+      "path": "rendering.test.ts",
+      "kind": "missing-test",
+      "item": "late position y",
+      "reason": "The default engine's renderer differs from Vitest here; the next engine matches or refuses.",
+      "waitsOn": "the next engine becoming the default"
+    },
+    {
+      "path": "rendering.test.ts",
+      "kind": "missing-test",
+      "item": "missing undefined",
+      "reason": "The default engine's renderer differs from Vitest here; the next engine matches or refuses.",
+      "waitsOn": "the next engine becoming the default"
+    },
+    {
+      "path": "rendering.test.ts",
+      "kind": "missing-test",
+      "item": "next position y",
+      "reason": "The default engine's renderer differs from Vitest here; the next engine matches or refuses.",
+      "waitsOn": "the next engine becoming the default"
+    },
+    {
+      "path": "rendering.test.ts",
+      "kind": "missing-test",
+      "item": "null json undefined",
+      "reason": "The default engine's renderer differs from Vitest here; the next engine matches or refuses.",
+      "waitsOn": "the next engine becoming the default"
+    },
+    {
+      "path": "rendering.test.ts",
+      "kind": "missing-test",
+      "item": "null number NaN",
+      "reason": "The default engine's renderer differs from Vitest here; the next engine matches or refuses.",
+      "waitsOn": "the next engine becoming the default"
+    },
+    {
+      "path": "rendering.test.ts",
+      "kind": "missing-test",
+      "item": "null object undefined",
+      "reason": "The default engine's renderer differs from Vitest here; the next engine matches or refuses.",
+      "waitsOn": "the next engine becoming the default"
+    },
+    {
+      "path": "rendering.test.ts",
+      "kind": "missing-test",
+      "item": "null string undefined",
+      "reason": "The default engine's renderer differs from Vitest here; the next engine matches or refuses.",
+      "waitsOn": "the next engine becoming the default"
+    },
+    {
+      "path": "rendering.test.ts",
+      "kind": "missing-test",
+      "item": "object first p",
+      "reason": "The default engine's renderer differs from Vitest here; the next engine matches or refuses.",
+      "waitsOn": "the next engine becoming the default"
+    },
+    {
+      "path": "rendering.test.ts",
+      "kind": "missing-test",
+      "item": "padded undefined",
+      "reason": "The default engine's renderer differs from Vitest here; the next engine matches or refuses.",
+      "waitsOn": "the next engine becoming the default"
+    }
+  ]
 }

@@ -253,14 +253,6 @@
       "reason": "The default engine abstains on this file; the next engine compares identical text in an identical context, as decided."
     },
     {
-      "id": "recall-miss|function-title-handlers-equivalent|duplicate-test|alpha,beta",
-      "reason": "The next engine renders no dynamic title and locates a participant at its call, so the finding differs in shape, not in claim."
-    },
-    {
-      "id": "recall-extra|function-title-handlers-equivalent|duplicate-test|run.test.ts:2,run.test.ts:3",
-      "reason": "The next engine renders no dynamic title and locates a participant at its call, so the finding differs in shape, not in claim."
-    },
-    {
       "id": "recall-extra|function-title-unresolved|duplicate-test|run.test.ts:5,run.test.ts:6",
       "reason": "The next engine renders no dynamic title and locates a participant at its call, so the finding differs in shape, not in claim."
     },
@@ -681,22 +673,6 @@
       "reason": "Valid literal-shape candidate: the next normalizer equates x and computed literal x method keys, and only the discarded numeric marker differs. The default structural syntax separates these property spellings."
     },
     {
-      "id": "recall-miss|function-title-handlers-conflicting|parameterization-candidate|alpha,beta",
-      "reason": "The parameterization pair is present at the same source locations, but next reports dynamic-title fallbacks instead of alpha/beta for function-valued titles. This is the same held title-display parity difference as duplicate-test in this case, not a missing structural comparison."
-    },
-    {
-      "id": "recall-extra|function-title-handlers-conflicting|parameterization-candidate|run.test.ts:2,run.test.ts:3",
-      "reason": "The parameterization pair is present at the same source locations, but next reports dynamic-title fallbacks instead of alpha/beta for function-valued titles. This is the same held title-display parity difference as duplicate-test in this case, not a missing structural comparison."
-    },
-    {
-      "id": "recall-miss|function-title-options|parameterization-candidate|alpha,beta",
-      "reason": "The parameterization pair is present at the same source locations, but next reports dynamic-title fallbacks instead of alpha/beta for function-valued titles. This is the same held title-display parity difference as duplicate-test in this case, not a missing structural comparison."
-    },
-    {
-      "id": "recall-extra|function-title-options|parameterization-candidate|run.test.ts:2,run.test.ts:3",
-      "reason": "The parameterization pair is present at the same source locations, but next reports dynamic-title fallbacks instead of alpha/beta for function-valued titles. This is the same held title-display parity difference as duplicate-test in this case, not a missing structural comparison."
-    },
-    {
       "id": "recall-miss|duplicate-test-lone-surrogate-values|parameterization-candidate|keeps the first high surrogate,keeps the second high surrogate",
       "reason": "NC65: the owned tree uses replacement-character display encoding for lone surrogates, which can collide with literal replacement-character text in property names. NC14 conservatively refuses this text in callback/dependency shapes. This loses the valid string-value consolidation here until code-unit identity is lossless; the duplicate-test positive remains required."
     },
@@ -803,14 +779,6 @@
     {
       "id": "miss|fixtures/duplicates|behavior-depth-truncation.test.ts:41|behavior-depth-truncation.test.ts:49|near-duplicate-test",
       "reason": "A branch leaves the trace incomplete until branch partitions are modeled, so the next engine refuses this pair. The default engine compares the flattened branch."
-    },
-    {
-      "id": "recall-miss|near-duplicate-test-each-rows|near-duplicate-test|seeds 3 users then configures,configures then seeds three users",
-      "reason": "The pair is present at the same locations, but next reports the unrendered `%i` title of a table row. This is the held title-display parity difference, not a missing comparison."
-    },
-    {
-      "id": "recall-extra|near-duplicate-test-each-rows|near-duplicate-test|seeding.test.ts:19,seeding.test.ts:25",
-      "reason": "The pair is present at the same locations, but next reports the unrendered `%i` title of a table row. This is the held title-display parity difference, not a missing comparison."
     }
   ]
 }

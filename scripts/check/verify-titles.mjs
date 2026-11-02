@@ -28,6 +28,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { spawnSync } from 'node:child_process'
+import { collectWithVitest } from './lib/collection-oracle.mjs'
 import { defaultBinary, runAnalyzerJsonl } from './lib/run-analyzer.mjs'
 
 const FIXTURE = 'scripts/vitest-harness/title-values.test.ts'
@@ -206,3 +207,21 @@ if (helperTests.length !== 6 || helperTests.some((record) => record.registration
   throw new Error('Imported declaration source/caller identity or comparison eligibility was lost')
 }
 console.log(`ok: 7 imported-runner registrations byte-match real Vitest ${installed} on ${process.version}`)
+
+// The next engine reports no per-test record, so its renderer answers through collisions: every
+// title it calls repeated in the owned file must be one Vitest really collected twice.
+const RENDERING_DIR = 'fixtures/oracle/name-collisions'
+const RENDERING_COLLISIONS = 8
+const collected = countTitles(collectWithVitest(resolve('.'), RENDERING_DIR).get('rendering.test.ts')?.tests ?? [])
+const collisions = runAnalyzerJsonl(binary, [RENDERING_DIR], { VITEST_DEDUP_ENGINE: 'next' }).records
+  .filter((record) => record.type === 'finding' && record.rule === 'duplicate-test-name'
+    && record.locations.every(({ path }) => path === 'rendering.test.ts'))
+  .map((record) => record.titles[0])
+const invented = collisions.filter((title) => (collected.get(title) ?? 0) < 2)
+if (collisions.length !== RENDERING_COLLISIONS || invented.length > 0) {
+  throw new Error(
+    `The next engine reported ${collisions.length} collision(s), expected ${RENDERING_COLLISIONS}; ` +
+      `Vitest did not repeat: ${JSON.stringify(invented)}`,
+  )
+}
+console.log(`ok: ${collisions.length} next-engine collisions are repeated by real Vitest ${installed}`)
