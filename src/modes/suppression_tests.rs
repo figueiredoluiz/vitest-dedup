@@ -27,6 +27,7 @@ fn finding(path: &str, line: u32) -> Finding {
         titles: vec!["t".to_string()],
         inert: vec![false],
         baselined: false,
+        covers: None,
     }
 }
 

@@ -907,15 +907,16 @@ pub fn finish_findings(
     // Baselined findings are skipped: they are recorded, accepted debt, and a gate they still
     // failed would make `--baseline` decorative. They remain in `findings` and in every report --
     // excluded from the gate, never from the output.
+    // A suite finding counts at the severity and locations of the children it covers.
     let had_error_finding = findings
         .iter()
-        .any(|finding| finding.severity == Severity::Error && !finding.baselined);
+        .any(|finding| finding.gate_severity() == Severity::Error && !finding.baselined);
     // Captured here, beside `had_error_finding`, for the same reason: this is the threshold's
     // numerator, and truncation below would shrink it.
     let error_finding_locations = findings
         .iter()
-        .filter(|finding| finding.severity == Severity::Error && !finding.baselined)
-        .flat_map(|finding| finding.locations.iter().cloned())
+        .filter(|finding| !finding.baselined)
+        .flat_map(|finding| finding.gate_locations(Severity::Error).cloned())
         .collect::<BTreeSet<_>>()
         .len();
     if findings.len() > MAX_FINDINGS {
@@ -1831,6 +1832,7 @@ fn emit_redundant_hook(
             // Hooks are not tests; neither side of this pair can be `.skip`/`.todo`.
             inert: vec![false, false],
             baselined: false,
+            covers: None,
         };
         let callers: Vec<PathBuf> = callers.into_iter().collect();
         finding.set_registration_files(vec![callers.clone(), callers]);
@@ -2155,6 +2157,7 @@ fn finding_over(rule: Rule, severity: Severity, members: &[&TestCase], message: 
         titles: members.iter().map(|test| test.full_title()).collect(),
         inert: members.iter().map(|test| test.is_inert()).collect(),
         baselined: false,
+        covers: None,
     };
     if members.iter().any(|test| test.registration_file.is_some()) {
         finding.set_registration_files(

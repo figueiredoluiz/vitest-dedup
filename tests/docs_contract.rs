@@ -1000,6 +1000,7 @@ fn sample_analysis_result() -> AnalysisResult {
             titles: vec!["suite > a".to_owned(), "suite > b".to_owned()],
             inert: vec![false, false],
             baselined: false,
+            covers: None,
         }],
         tests_analyzed: 4,
         files_analyzed: 2,

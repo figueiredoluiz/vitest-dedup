@@ -15,3 +15,8 @@ describe('option true', { skip: true }, () => { test('child', () => { expect(1).
 describe('option true', { skip: true }, () => { test('child', () => { expect(1).toBe(1) }) })
 describe('option false', { skip: false }, () => { test('child', () => { expect(1).toBe(1) }) })
 describe('option false', { skip: false }, () => { test('child', () => { expect(1).toBe(1) }) })
+const flag = Number('0') > 1
+describe.skipIf(flag)('skip unknown', () => { test('child', () => { expect(1).toBe(1) }) })
+describe.skipIf(flag)('skip unknown', () => { test('child', () => { expect(1).toBe(1) }) })
+describe.skip('explicit skip', () => { test('child', () => { expect(1).toBe(1) }) })
+describe.skip('explicit skip', () => { test('child', () => { expect(1).toBe(1) }) })

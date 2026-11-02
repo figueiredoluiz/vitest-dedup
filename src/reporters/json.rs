@@ -104,13 +104,19 @@
 //! duplication filters on it, and a consumer that wants the repository's full picture — including
 //! the debt already signed off — still gets it without a second run.
 //!
+//! `covers`, present only on a `duplicate-suite` finding that replaced child findings, holds their
+//! highest severity and their locations at it. The exit code and the threshold count the finding at
+//! that severity and those locations, so copying a whole block never gates more leniently than the
+//! same tests written out.
+//!
 //! `modes` reports what `--baseline` and `--changed-since` did to the run as a whole
 //! ([`crate::model::ModeSummary`]). `withheldUnchanged` in particular cannot be recovered from
 //! `findings`: it counts findings this report does *not* contain, and it is why `incomplete` may
 //! be true on a changed-files run that otherwise looks clean.
 
 use super::shared::{
-    report_registration_files, report_safe, JsonExcludedFile, JsonLocation, SummaryCounters,
+    report_registration_files, report_safe, JsonCovers, JsonExcludedFile, JsonLocation,
+    SummaryCounters,
 };
 use super::Reporter;
 use crate::model::{AnalysisResult, Finding, Rule, Severity, Verdict};
@@ -212,6 +218,9 @@ struct JsonFinding {
     /// Whether a `--baseline` file accounts for this finding, and it therefore does not affect
     /// the exit code. See the module doc for why it is flagged rather than omitted.
     baselined: bool,
+    /// On a suite finding, the child findings it replaced as the exit code and gate count them.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    covers: Option<JsonCovers>,
     /// A location-independent identity for this finding. See
     /// [`crate::model::Finding::fingerprint`].
     fingerprint: String,
@@ -235,6 +244,7 @@ impl From<&Finding> for JsonFinding {
                 .collect(),
             inert: finding.inert.clone(),
             baselined: finding.baselined,
+            covers: JsonCovers::of(finding),
             fingerprint: finding.fingerprint(),
         }
     }
@@ -553,5 +563,16 @@ mod tests {
         let first = render_value(&result)["findings"][0]["fingerprint"].clone();
         let second = render_value(&result)["findings"][0]["fingerprint"].clone();
         assert_eq!(first, second);
+    }
+
+    /// `covers` appears only on a finding that carries it, with its severity and locations.
+    #[test]
+    fn covers_is_reported_only_when_set() {
+        let value = render_value(&crate::reporters::test_support::covering_suite());
+        assert_eq!(value["findings"][0]["covers"]["severity"], "error");
+        assert_eq!(value["findings"][0]["covers"]["locations"][1]["line"], 21);
+        assert!(render_value(&sample_result())["findings"][0]
+            .get("covers")
+            .is_none());
     }
 }

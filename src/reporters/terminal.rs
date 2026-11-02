@@ -185,9 +185,22 @@ impl TerminalReporter {
                         writeln!(writer)?;
                     }
                     // Accepted debt remains visible with its original severity.
+                    // A suite finding standing for stricter child findings gates as they would.
+                    let gates = finding
+                        .covers
+                        .as_ref()
+                        .filter(|covers| covers.severity > finding.severity)
+                        .map(|covers| {
+                            format!(
+                                " [gates as {}: {} test(s)]",
+                                severity_label(covers.severity),
+                                covers.locations.len()
+                            )
+                        })
+                        .unwrap_or_default();
                     writeln!(
                         writer,
-                        "  {}{} {}",
+                        "  {}{}{} {}",
                         self.colorize(
                             format!("[{}]", severity_label(finding.severity)),
                             match finding.severity {
@@ -201,6 +214,7 @@ impl TerminalReporter {
                         } else {
                             ""
                         },
+                        gates,
                         terminal_safe(&finding.message)
                     )?;
                     for (index, (location, title)) in
@@ -546,6 +560,18 @@ mod tests {
             String::from_utf8(from_default).expect("utf-8"),
             render(&result)
         );
+    }
+
+    /// A suite finding gating as stricter children says so beside its own severity.
+    #[test]
+    fn a_covering_suite_shows_how_it_gates() {
+        let output = render(&crate::reporters::test_support::covering_suite());
+        assert!(
+            output.contains("[warning] [gates as error: 2 test(s)]"),
+            "{output}"
+        );
+        let plain = rendered_result(vec![finding_with_title(Rule::DuplicateTest, "a.ts", "t")]);
+        assert!(!render(&plain).contains("gates as"));
     }
 
     /// Render an analysis result to UTF-8 terminal text for output assertions.

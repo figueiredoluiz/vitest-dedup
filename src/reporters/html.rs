@@ -321,14 +321,29 @@ fn render_card(finding: &Finding, sources: &BTreeMap<PathBuf, String>) -> String
     } else {
         ""
     };
+    // A suite finding standing for stricter child findings gates as they would, and says so.
+    let gates_badge = finding
+        .covers
+        .as_ref()
+        .filter(|covers| covers.severity > finding.severity)
+        .map(|covers| {
+            let label = severity_label(covers.severity);
+            format!(
+                r#"<span class="severity-badge {label}">GATES AS {}: {} TEST(S)</span>"#,
+                label.to_uppercase(),
+                covers.locations.len()
+            )
+        })
+        .unwrap_or_default();
     format!(
-        r#"<article class="finding" data-rule="{}" data-severity="{}" data-baselined="{}"><div class="finding-head"><span class="severity-badge {}">{}</span>{}</div><p class="message">{}</p><ul class="locations">{}</ul></article>"#,
+        r#"<article class="finding" data-rule="{}" data-severity="{}" data-baselined="{}"><div class="finding-head"><span class="severity-badge {}">{}</span>{}{}</div><p class="message">{}</p><ul class="locations">{}</ul></article>"#,
         html_escape(finding.rule.id()),
         severity,
         finding.baselined,
         severity,
         severity.to_uppercase(),
         baselined_badge,
+        gates_badge,
         html_escape(&finding.message),
         locations,
     )
@@ -486,6 +501,15 @@ mod tests {
             .as_str()
             .unwrap()
             .to_owned()
+    }
+
+    /// A suite finding gating as stricter children says so beside its own severity.
+    #[test]
+    fn a_covering_suite_shows_how_it_gates() {
+        let output = render_str(&crate::reporters::test_support::covering_suite());
+        assert!(output.contains("GATES AS ERROR: 2 TEST(S)"), "{output}");
+        let plain = rendered_result(vec![finding_with_title(Rule::DuplicateTest, "a.ts", "t")]);
+        assert!(!render_str(&plain).contains("GATES AS"));
     }
 
     /// Render an analysis result to UTF-8 HTML text, panicking on reporter or decoding errors.

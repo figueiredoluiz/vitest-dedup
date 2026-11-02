@@ -210,7 +210,7 @@ fn run_all(
 
     budget_exhausted |= !subsumed::run(files, config, &mut budget, &mut findings);
 
-    twins.suppress(&mut findings);
+    twins.suppress(&mut findings, suppressions);
     let (hook_scan_exhausted, hook_pairs_exhausted) =
         hooks::run(hooks, config, max_hook_scans, &mut budget, &mut findings);
     budget_exhausted |= hook_pairs_exhausted;
@@ -398,6 +398,7 @@ fn over(rule: Rule, severity: Severity, members: &[Entry<'_>], message: String) 
             .collect(),
         inert: members.iter().map(|member| member.case.inert).collect(),
         baselined: false,
+        covers: None,
         identity: Identity::default(),
     }
 }

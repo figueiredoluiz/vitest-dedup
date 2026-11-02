@@ -109,6 +109,9 @@
 //! because SARIF reads an absent `suppressions` as "suppression state unknown", which this
 //! reporter never is.
 //!
+//! `properties.covers`, only on a `duplicate-suite` result that replaced child findings, holds
+//! their highest severity and locations; the exit code and threshold count the result that way.
+//!
 //! # Output safety and determinism
 //!
 //! Every interpolated string -- `message.text`, a location's `message.text`, and
@@ -126,7 +129,7 @@
 //! from `AnalysisResult::findings` already being sorted before any reporter sees it, not from
 //! anything specific to this file.
 
-use super::shared::{report_registration_files, report_safe, report_safe_path};
+use super::shared::{report_registration_files, report_safe, report_safe_path, JsonCovers};
 use super::Reporter;
 use crate::model::{AnalysisResult, Finding, Location, Rule, Severity, Verdict};
 use anyhow::{Context, Result};
@@ -292,6 +295,9 @@ fn sarif_result(finding: &Finding) -> Value {
     if !finding.registration_files.is_empty() {
         result["properties"]["registrationFiles"] = json!(report_registration_files(finding));
     }
+    if let Some(covers) = JsonCovers::of(finding) {
+        result["properties"]["covers"] = json!(covers);
+    }
     result
 }
 
@@ -371,6 +377,22 @@ mod tests {
     /// Build a cross-file finding fixture for SARIF rule, result and location assertions.
     fn sample_result() -> AnalysisResult {
         cross_file_result("identical bodies under an equivalent context")
+    }
+
+    /// `properties.covers` appears only on a result that carries it.
+    #[test]
+    fn covers_is_reported_only_when_set() {
+        let value = render_value(&crate::reporters::test_support::covering_suite());
+        let properties = &value["runs"][0]["results"][0]["properties"];
+        assert_eq!(properties["covers"]["severity"], "error");
+        assert_eq!(
+            properties["covers"]["locations"].as_array().unwrap().len(),
+            2
+        );
+        let plain = render_value(&sample_result());
+        assert!(plain["runs"][0]["results"][0]["properties"]
+            .get("covers")
+            .is_none());
     }
 
     /// Serialize through the SARIF reporter and parse the document, panicking if either step

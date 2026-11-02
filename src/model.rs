@@ -1049,13 +1049,46 @@ pub struct Finding {
     /// `#[serde(default)]` so a JSON report written before baselines existed still deserializes.
     #[serde(default)]
     pub baselined: bool,
+    /// The child findings a suite finding replaced, as the quality gate still counts them.
+    /// Absent on every other finding. Not part of the fingerprint.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub covers: Option<Covers>,
     /// Which engine's identity [`Finding::fingerprint`] renders. Not a report field: the
     /// fingerprint's own label carries it.
     #[serde(skip)]
     pub identity: Identity,
 }
 
+/// What reporting a copied block once removed: the highest severity among the child findings it
+/// replaced, and their locations at that severity. Copying a whole block must not pass a gate
+/// that the same tests fail written out.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct Covers {
+    /// The highest severity among the replaced findings.
+    pub severity: Severity,
+    /// The tests the replaced findings at that severity named.
+    pub locations: Vec<Location>,
+}
+
 impl Finding {
+    /// The severity the exit code and quality gate read: its own, or what it covers if higher.
+    pub fn gate_severity(&self) -> Severity {
+        self.covers
+            .as_ref()
+            .map_or(self.severity, |covers| covers.severity.max(self.severity))
+    }
+
+    /// The tests the quality gate counts for this finding at `severity`. A finding that carries
+    /// tests counts only those, at the carried severity or its own when higher: its own locations
+    /// are blocks, not tests.
+    pub fn gate_locations(&self, severity: Severity) -> impl Iterator<Item = &Location> {
+        let locations = match &self.covers {
+            Some(covers) => (self.gate_severity() == severity).then_some(&covers.locations),
+            None => (self.severity == severity).then_some(&self.locations),
+        };
+        locations.into_iter().flatten()
+    }
+
     /// Calling files represented by participant `index`, with the legacy source-file fallback.
     pub fn registration_files_for(&self, index: usize) -> impl Iterator<Item = &std::path::Path> {
         let files = self.registration_files.get(index);
@@ -2648,6 +2681,7 @@ mod tests {
                 .collect(),
             inert: participants.iter().map(|_| false).collect(),
             baselined: false,
+            covers: None,
         }
     }
 
