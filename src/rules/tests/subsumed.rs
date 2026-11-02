@@ -7,6 +7,7 @@ fn sample(line: u32, events: &[u128]) -> TestCase {
     TestCase {
         body: u64::from(line),
         trace: events.to_vec(),
+        ordinary_events: events.len(),
         ..case(line, line * 100, u64::from(line), u64::from(line))
     }
 }
@@ -36,6 +37,21 @@ fn directions_and_one_event_positive() {
         assert_eq!(findings[0].severity, Severity::Warning);
         assert!(findings[0].message.contains("1 behavior events"));
     }
+}
+
+/// Bookkeeping alone cannot establish non-emptiness or strict behavior growth in either order.
+#[test]
+fn binding_events_do_not_establish_strict_subsumption() {
+    let small = sample(1, &[10]);
+    let mut large = sample(2, &[10, 20]);
+    large.ordinary_events = 1;
+    assert!(claims(vec![small.clone(), large.clone()]).is_empty());
+    assert!(claims(vec![large.clone(), small.clone()]).is_empty());
+    large.ordinary_events = 2;
+    assert_eq!(claims(vec![small.clone(), large.clone()]).len(), 1);
+    let mut empty = small;
+    empty.ordinary_events = 0;
+    assert!(claims(vec![empty, large]).is_empty());
 }
 
 /// A larger declaration earlier in the file exercises the reverse-direction branch.

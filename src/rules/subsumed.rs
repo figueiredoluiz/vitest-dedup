@@ -21,7 +21,7 @@ pub(super) fn run(
     }
     let (entries, groups) = keyed(files, |entry| {
         let case = entry.case;
-        (case.exclusion.is_none() && case.trace_complete && !case.trace.is_empty())
+        (case.exclusion.is_none() && case.trace_complete && case.ordinary_events != 0)
             .then_some((entry.path, case.subsumption_key?))
     });
     let mut claimed = BTreeSet::new();
@@ -36,9 +36,13 @@ pub(super) fn run(
                 if a.case.span.start_byte == b.case.span.start_byte || a.case.body == b.case.body {
                     continue;
                 }
-                let members = if strict_subsequence(&a.case.trace, &b.case.trace) {
+                let members = if a.case.ordinary_events < b.case.ordinary_events
+                    && strict_subsequence(&a.case.trace, &b.case.trace)
+                {
                     [a, b]
-                } else if strict_subsequence(&b.case.trace, &a.case.trace) {
+                } else if b.case.ordinary_events < a.case.ordinary_events
+                    && strict_subsequence(&b.case.trace, &a.case.trace)
+                {
                     [b, a]
                 } else {
                     continue;
@@ -54,7 +58,7 @@ pub(super) fn run(
                     "one test's {} behavior events are a strict ordered subset of the other's {}; the \
                      smaller test may add no coverage, but only review can confirm the larger test's \
                      extra observations make it worthless",
-                    members[0].case.trace.len(), members[1].case.trace.len()
+                    members[0].case.ordinary_events, members[1].case.ordinary_events
                 );
                 findings.push(over(Rule::SubsumedTest, severity, &members, message));
             }

@@ -30,6 +30,12 @@ Each finding carries a verdict naming its remedy, because the remedies differ.
 `cross-file-duplicate` reports at Warning rather than Error because duplication across unit and
 integration layers is sometimes deliberate.
 
+With the experimental next engine, behavior comparisons retain destructuring evaluation,
+including unused properties and iterator steps. A single-property binding can still match
+a direct member read when its sole use safely accounts for the whole pattern. Destructuring
+alone does not make a body eligible for a behavior finding, and an extra binding alone does
+not establish strict subsumption. These comparisons remain review prompts.
+
 ## Local classes and constructors
 
 Tests that construct local classes are compared by what the classes do rather than by what they

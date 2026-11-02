@@ -26,6 +26,7 @@ fn case(line: u32, site: u32, key: u64, module_key: u64) -> TestCase {
         body: 0,
         parameterization_key: None,
         trace: Vec::new(),
+        ordinary_events: 0,
         trace_complete: true,
         similarity_key: 0,
         subsumption_key: Some(0),

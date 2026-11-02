@@ -114,6 +114,8 @@ pub struct TestCase {
     pub parameterization_key: Option<u64>,
     /// The body's behavior trace, one 128-bit digest per event in source order.
     pub trace: Vec<u128>,
+    /// Ordinary behavior steps; opaque binding accounting cannot make a rule eligible.
+    pub ordinary_events: usize,
     /// Whether the trace read the body to the end. A rule keyed on the trace must skip a case
     /// where it did not, and say so: a trace with a hole is no evidence either way. Rules keyed on
     /// the flat form do not read it.
@@ -415,6 +417,7 @@ pub fn file(
         body: 0,
         parameterization_key: None,
         trace: Vec::new(),
+        ordinary_events: 0,
         trace_complete: false,
         similarity_key: 0,
         subsumption_key: None,
@@ -691,20 +694,22 @@ pub fn file(
             let form = callback_form.token();
             let parameterization_key = (trace.complete
                 && !parameterization_uncertain
-                && !trace.events.is_empty())
-            .then(|| {
-                let bound = modifiers
-                    .rows
-                    .as_ref()
-                    .and_then(|rows| rows.get(index))
-                    .and_then(|row| normalizer.bind_row_shape(parameters.as_deref()?, &row.value))
-                    .map(|(bound, _)| bound)
-                    .unwrap_or_default();
-                let shape = normalizer.shape(body, bound, *every);
-                digest(&format!(
-                    "{chain}{fails}\u{1}{options}\u{1}{unbound}\u{1}{shape}\u{1}{context}"
-                ))
-            });
+                && trace.ordinary_events != 0)
+                .then(|| {
+                    let bound = modifiers
+                        .rows
+                        .as_ref()
+                        .and_then(|rows| rows.get(index))
+                        .and_then(|row| {
+                            normalizer.bind_row_shape(parameters.as_deref()?, &row.value)
+                        })
+                        .map(|(bound, _)| bound)
+                        .unwrap_or_default();
+                    let shape = normalizer.shape(body, bound, *every);
+                    digest(&format!(
+                        "{chain}{fails}\u{1}{options}\u{1}{unbound}\u{1}{shape}\u{1}{context}"
+                    ))
+                });
             tests.push(TestCase {
                 row: modifiers.rows.as_ref().map(|rows| rows[index].index),
                 row_class,
@@ -713,6 +718,7 @@ pub fn file(
                 body: digest(&normal_body),
                 parameterization_key,
                 trace: trace.events,
+                ordinary_events: trace.ordinary_events,
                 trace_complete: trace.complete,
                 similarity_key: digest(&format!(
                     "{chain}{fails}\u{1}{options}\u{1}{unbound}\u{1}{context}\u{1}{form}"

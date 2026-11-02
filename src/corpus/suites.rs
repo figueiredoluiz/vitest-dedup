@@ -132,6 +132,7 @@ pub(super) fn collect(
             body: 0,
             parameterization_key: None,
             trace: Vec::new(),
+            ordinary_events: 0,
             trace_complete: false,
             similarity_key: 0,
             subsumption_key: None,
