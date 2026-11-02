@@ -52,7 +52,10 @@
       "expectedAbsent": [
         {
           "rule": "cross-file-duplicate",
-          "titles": ["normalizes the label", "normalizes the label"]
+          "titles": [
+            "normalizes the label",
+            "normalizes the label"
+          ]
         }
       ]
     },
@@ -779,7 +782,8 @@
           ]
         }
       ],
-      "expectedAbsent": []
+      "expectedAbsent": [],
+      "expectedIncompleteNext": true
     },
     {
       "name": "duplicate-test-concurrency-modifiers",
@@ -832,7 +836,8 @@
       ],
       "blindUnderCurrent": [
         "session.test.ts"
-      ]
+      ],
+      "expectedIncompleteNext": false
     },
     {
       "name": "duplicate-test-in-source",
@@ -1073,7 +1078,8 @@
       ],
       "blindUnderCurrent": [
         "tenants.test.ts"
-      ]
+      ],
+      "expectedIncompleteNext": false
     },
     {
       "name": "duplicate-test-name-function-title",
@@ -2497,7 +2503,8 @@
       ],
       "blindUnderCurrent": [
         "pkg/loops.spec.ts"
-      ]
+      ],
+      "expectedIncompleteNext": false
     },
     {
       "name": "mixed-name-and-cross-file",
@@ -4466,7 +4473,9 @@
       ],
       "blindUnderCurrent": [
         "users.test.ts"
-      ]
+      ],
+      "expectedIncompleteNext": false,
+      "expectedUnresolvedNext": 0
     },
     {
       "name": "framework-package-parenthesised-registration",
@@ -4488,7 +4497,9 @@
             "lists users: second check"
           ]
         }
-      ]
+      ],
+      "expectedIncompleteNext": false,
+      "expectedUnresolvedNext": 0
     },
     {
       "name": "framework-package-local-test-function",
@@ -4579,7 +4590,9 @@
             "lists users: second check"
           ]
         }
-      ]
+      ],
+      "expectedIncompleteNext": false,
+      "expectedUnresolvedNext": 0
     },
     {
       "name": "framework-package-global-property-call-control",
@@ -4898,7 +4911,9 @@
       ],
       "blindUnderCurrent": [
         "unknown.test.ts"
-      ]
+      ],
+      "expectedIncompleteNext": false,
+      "expectedUnresolvedNext": 0
     },
     {
       "name": "framework-auto-import-ungenerated-control",
@@ -4923,7 +4938,9 @@
       ],
       "blindUnderCurrent": [
         "known.test.ts"
-      ]
+      ],
+      "expectedIncompleteNext": false,
+      "expectedUnresolvedNext": 0
     },
     {
       "name": "framework-nested-repository-ignore-control",
@@ -5025,7 +5042,8 @@
       ],
       "blindUnderCurrent": [
         "slugs.test.ts"
-      ]
+      ],
+      "expectedUnresolvedNext": 2
     },
     {
       "name": "framework-runner-default-reassigned-negative",
@@ -5050,7 +5068,8 @@
       ],
       "blindUnderCurrent": [
         "slugs.test.ts"
-      ]
+      ],
+      "expectedUnresolvedNext": 2
     },
     {
       "name": "framework-runner-ambient-module-augmentation",
@@ -5122,7 +5141,8 @@
       "blindUnderCurrent": [
         "observe.test.ts",
         "slugs.test.ts"
-      ]
+      ],
+      "expectedUnresolvedNext": 6
     },
     {
       "name": "framework-runner-module-values",
@@ -5145,7 +5165,9 @@
           ]
         }
       ],
-      "expectedAbsent": []
+      "expectedAbsent": [],
+      "expectedIncompleteNext": true,
+      "expectedUnresolvedNext": 2
     },
     {
       "name": "framework-runner-fake-timers-negative",
@@ -5171,7 +5193,8 @@
       "blindUnderCurrent": [
         "observe.test.ts",
         "slugs.test.ts"
-      ]
+      ],
+      "expectedUnresolvedNext": 4
     },
     {
       "name": "framework-runner-getter-value-negative",
@@ -5196,7 +5219,8 @@
       ],
       "blindUnderCurrent": [
         "slugs.test.ts"
-      ]
+      ],
+      "expectedUnresolvedNext": 3
     },
     {
       "name": "framework-runner-plain-import-control",
@@ -5219,7 +5243,9 @@
           ]
         }
       ],
-      "expectedAbsent": []
+      "expectedAbsent": [],
+      "expectedIncompleteNext": true,
+      "expectedUnresolvedNext": 2
     },
     {
       "name": "framework-runner-import-time-mock-negative",
@@ -5244,7 +5270,8 @@
       ],
       "blindUnderCurrent": [
         "slugs.test.ts"
-      ]
+      ],
+      "expectedUnresolvedNext": 2
     },
     {
       "name": "framework-runner-default-imported-negative",
@@ -5269,7 +5296,8 @@
       ],
       "blindUnderCurrent": [
         "slugs.test.ts"
-      ]
+      ],
+      "expectedUnresolvedNext": 2
     },
     {
       "name": "framework-nuxt-mock-redeclared-binding",
@@ -5294,7 +5322,8 @@
       ],
       "blindUnderCurrent": [
         "run.test.ts"
-      ]
+      ],
+      "expectedUnresolvedNext": 1
     },
     {
       "name": "framework-nuxt-mock-accumulating-hook",
@@ -5319,7 +5348,9 @@
       ],
       "blindUnderCurrent": [
         "count.test.ts"
-      ]
+      ],
+      "expectedIncompleteNext": false,
+      "expectedUnresolvedNext": 0
     },
     {
       "name": "local-helper-overloaded",
@@ -5342,7 +5373,9 @@
           ]
         }
       ],
-      "expectedAbsent": []
+      "expectedAbsent": [],
+      "expectedIncompleteNext": true,
+      "expectedUnresolvedNext": 3
     },
     {
       "name": "local-helper-overloaded-reassigned",
@@ -5367,7 +5400,8 @@
       ],
       "blindUnderCurrent": [
         "run.test.ts"
-      ]
+      ],
+      "expectedUnresolvedNext": 5
     },
     {
       "name": "local-helper-reassigned",
@@ -5392,7 +5426,8 @@
       ],
       "blindUnderCurrent": [
         "run.test.ts"
-      ]
+      ],
+      "expectedUnresolvedNext": 5
     },
     {
       "name": "local-helper-member-write",
@@ -5415,7 +5450,9 @@
           ]
         }
       ],
-      "expectedAbsent": []
+      "expectedAbsent": [],
+      "expectedIncompleteNext": true,
+      "expectedUnresolvedNext": 4
     },
     {
       "name": "local-helper-argument-hook",
@@ -5437,7 +5474,9 @@
             "plain > reads"
           ]
         }
-      ]
+      ],
+      "expectedIncompleteNext": false,
+      "expectedUnresolvedNext": 0
     },
     {
       "name": "local-helper-default-hook",
@@ -5459,7 +5498,8 @@
             "plain > reads"
           ]
         }
-      ]
+      ],
+      "expectedUnresolvedNext": 2
     },
     {
       "name": "local-helper-getter-argument",
@@ -5481,7 +5521,9 @@
             "plain > reads"
           ]
         }
-      ]
+      ],
+      "expectedIncompleteNext": false,
+      "expectedUnresolvedNext": 0
     },
     {
       "name": "local-helper-return-hook",
@@ -5503,7 +5545,9 @@
             "plain > reads"
           ]
         }
-      ]
+      ],
+      "expectedIncompleteNext": true,
+      "expectedUnresolvedNext": 2
     },
     {
       "name": "local-helper-async-await",
@@ -5525,7 +5569,8 @@
             "plain > reads"
           ]
         }
-      ]
+      ],
+      "expectedUnresolvedNext": 2
     },
     {
       "name": "local-helper-return-test",
@@ -5548,7 +5593,9 @@
           ]
         }
       ],
-      "expectedAbsent": []
+      "expectedAbsent": [],
+      "expectedIncompleteNext": true,
+      "expectedUnresolvedNext": 3
     },
     {
       "name": "local-helper-return-describe",
@@ -5571,7 +5618,9 @@
           ]
         }
       ],
-      "expectedAbsent": []
+      "expectedAbsent": [],
+      "expectedIncompleteNext": true,
+      "expectedUnresolvedNext": 3
     },
     {
       "name": "local-helper-generator",
@@ -5596,7 +5645,8 @@
       ],
       "blindUnderCurrent": [
         "run.test.ts"
-      ]
+      ],
+      "expectedUnresolvedNext": 3
     },
     {
       "name": "local-helper-computed-arguments",
@@ -5619,7 +5669,9 @@
           ]
         }
       ],
-      "expectedAbsent": []
+      "expectedAbsent": [],
+      "expectedIncompleteNext": true,
+      "expectedUnresolvedNext": 3
     },
     {
       "name": "local-helper-destructured-getter",
@@ -5641,7 +5693,9 @@
             "plain > reads"
           ]
         }
-      ]
+      ],
+      "expectedIncompleteNext": false,
+      "expectedUnresolvedNext": 0
     },
     {
       "name": "local-helper-unused-default",
@@ -5664,7 +5718,9 @@
           ]
         }
       ],
-      "expectedAbsent": []
+      "expectedAbsent": [],
+      "expectedIncompleteNext": true,
+      "expectedUnresolvedNext": 3
     },
     {
       "name": "local-helper-return-tail",
@@ -5702,7 +5758,9 @@
             "visible"
           ]
         }
-      ]
+      ],
+      "expectedIncompleteNext": true,
+      "expectedUnresolvedNext": 3
     },
     {
       "name": "describe-return-tail",
@@ -5765,7 +5823,8 @@
       ],
       "blindUnderCurrent": [
         "run.test.ts"
-      ]
+      ],
+      "expectedUnresolvedNext": 3
     },
     {
       "name": "local-helper-noniterable-destructure",
@@ -5790,7 +5849,8 @@
       ],
       "blindUnderCurrent": [
         "run.test.ts"
-      ]
+      ],
+      "expectedUnresolvedNext": 3
     },
     {
       "name": "describe-finally-break",
@@ -5874,7 +5934,9 @@
             "visible"
           ]
         }
-      ]
+      ],
+      "expectedIncompleteNext": true,
+      "expectedUnresolvedNext": 4
     },
     {
       "name": "local-helper-shadowed-undefined",
@@ -5897,7 +5959,9 @@
           ]
         }
       ],
-      "expectedAbsent": []
+      "expectedAbsent": [],
+      "expectedIncompleteNext": true,
+      "expectedUnresolvedNext": 2
     },
     {
       "name": "local-helper-parameter-default-call",
@@ -5919,7 +5983,8 @@
             "b > t"
           ]
         }
-      ]
+      ],
+      "expectedUnresolvedNext": 2
     },
     {
       "name": "local-helper-nested-default-getter",
@@ -5941,7 +6006,8 @@
             "b > t"
           ]
         }
-      ]
+      ],
+      "expectedUnresolvedNext": 2
     },
     {
       "name": "local-helper-forwarded-parameter",
@@ -5963,7 +6029,8 @@
             "plain > reads"
           ]
         }
-      ]
+      ],
+      "expectedUnresolvedNext": 3
     },
     {
       "name": "local-helper-const-arrow",
@@ -5986,7 +6053,9 @@
           ]
         }
       ],
-      "expectedAbsent": []
+      "expectedAbsent": [],
+      "expectedIncompleteNext": true,
+      "expectedUnresolvedNext": 3
     },
     {
       "name": "local-helper-const-describe-scope",
@@ -6009,7 +6078,8 @@
           ]
         }
       ],
-      "expectedAbsent": []
+      "expectedAbsent": [],
+      "expectedUnresolvedNext": 3
     },
     {
       "name": "local-helper-parameter-callee",
@@ -6080,7 +6150,9 @@
           ]
         }
       ],
-      "expectedAbsent": []
+      "expectedAbsent": [],
+      "expectedIncompleteNext": true,
+      "expectedUnresolvedNext": 3
     },
     {
       "name": "local-helper-const-tdz",
@@ -6105,7 +6177,8 @@
       ],
       "blindUnderCurrent": [
         "run.test.ts"
-      ]
+      ],
+      "expectedUnresolvedNext": 4
     },
     {
       "name": "local-helper-const-switch-case",
@@ -6130,7 +6203,8 @@
       ],
       "blindUnderCurrent": [
         "run.test.ts"
-      ]
+      ],
+      "expectedUnresolvedNext": 3
     },
     {
       "name": "local-helper-const-argument-hook",
@@ -6152,7 +6226,9 @@
             "plain > reads"
           ]
         }
-      ]
+      ],
+      "expectedIncompleteNext": false,
+      "expectedUnresolvedNext": 0
     },
     {
       "name": "local-helper-const-default-hook",
@@ -6174,7 +6250,8 @@
             "plain > reads"
           ]
         }
-      ]
+      ],
+      "expectedUnresolvedNext": 2
     },
     {
       "name": "local-helper-const-generator",
@@ -6199,7 +6276,8 @@
       ],
       "blindUnderCurrent": [
         "run.test.ts"
-      ]
+      ],
+      "expectedUnresolvedNext": 3
     },
     {
       "name": "local-helper-const-return-hook",
@@ -6221,7 +6299,9 @@
             "plain > reads"
           ]
         }
-      ]
+      ],
+      "expectedIncompleteNext": true,
+      "expectedUnresolvedNext": 2
     },
     {
       "name": "local-helper-const-async-await",
@@ -6246,7 +6326,8 @@
       ],
       "blindUnderCurrent": [
         "run.test.ts"
-      ]
+      ],
+      "expectedUnresolvedNext": 3
     },
     {
       "name": "local-helper-const-computed-key",
@@ -6268,7 +6349,9 @@
             "plain > reads"
           ]
         }
-      ]
+      ],
+      "expectedIncompleteNext": false,
+      "expectedUnresolvedNext": 0
     },
     {
       "name": "local-helper-const-switch-cross-case",
@@ -6293,7 +6376,8 @@
       ],
       "blindUnderCurrent": [
         "run.test.ts"
-      ]
+      ],
+      "expectedUnresolvedNext": 4
     },
     {
       "name": "local-helper-const-later-call",
@@ -6316,7 +6400,9 @@
           ]
         }
       ],
-      "expectedAbsent": []
+      "expectedAbsent": [],
+      "expectedIncompleteNext": true,
+      "expectedUnresolvedNext": 4
     },
     {
       "name": "duplicate-each-row-global-constants",
@@ -6588,7 +6674,9 @@
             "deleted fast"
           ]
         }
-      ]
+      ],
+      "expectedIncompleteNext": false,
+      "expectedUnresolvedNext": 0
     },
     {
       "name": "guarded-hook-differing",
@@ -6613,7 +6701,9 @@
       ],
       "blindUnderCurrent": [
         "run.test.ts"
-      ]
+      ],
+      "expectedIncompleteNext": false,
+      "expectedUnresolvedNext": 0
     },
     {
       "name": "guarded-hook-identical",
@@ -6638,7 +6728,9 @@
       ],
       "blindUnderCurrent": [
         "run.test.ts"
-      ]
+      ],
+      "expectedIncompleteNext": false,
+      "expectedUnresolvedNext": 0
     },
     {
       "name": "unguarded-hook-retention",
@@ -6686,7 +6778,9 @@
       ],
       "blindUnderCurrent": [
         "run.test.ts"
-      ]
+      ],
+      "expectedIncompleteNext": false,
+      "expectedUnresolvedNext": 0
     },
     {
       "name": "helper-return-hook-retention",
@@ -6757,7 +6851,9 @@
       ],
       "blindUnderCurrent": [
         "run.test.ts"
-      ]
+      ],
+      "expectedIncompleteNext": false,
+      "expectedUnresolvedNext": 0
     },
     {
       "name": "nested-hook-before-exit-retention",
@@ -6805,7 +6901,9 @@
       ],
       "blindUnderCurrent": [
         "run.test.ts"
-      ]
+      ],
+      "expectedIncompleteNext": false,
+      "expectedUnresolvedNext": 0
     },
     {
       "name": "labeled-break-hook-retention",
@@ -6853,7 +6951,9 @@
       ],
       "blindUnderCurrent": [
         "run.test.ts"
-      ]
+      ],
+      "expectedIncompleteNext": false,
+      "expectedUnresolvedNext": 0
     },
     {
       "name": "guarded-return-before-break",
@@ -6878,7 +6978,9 @@
       ],
       "blindUnderCurrent": [
         "run.test.ts"
-      ]
+      ],
+      "expectedIncompleteNext": false,
+      "expectedUnresolvedNext": 0
     },
     {
       "name": "labeled-return-before-break",
@@ -6903,7 +7005,9 @@
       ],
       "blindUnderCurrent": [
         "run.test.ts"
-      ]
+      ],
+      "expectedIncompleteNext": false,
+      "expectedUnresolvedNext": 0
     },
     {
       "name": "local-break-hook-retention",
@@ -6951,7 +7055,9 @@
       ],
       "blindUnderCurrent": [
         "run.test.ts"
-      ]
+      ],
+      "expectedIncompleteNext": false,
+      "expectedUnresolvedNext": 0
     },
     {
       "name": "braceless-hook-retention",
@@ -7045,7 +7151,9 @@
       ],
       "blindUnderCurrent": [
         "run.test.ts"
-      ]
+      ],
+      "expectedIncompleteNext": false,
+      "expectedUnresolvedNext": 0
     },
     {
       "name": "helper-plain-return-retention",
@@ -7091,7 +7199,9 @@
           "severity": "error"
         }
       ],
-      "expectedAbsent": []
+      "expectedAbsent": [],
+      "expectedIncompleteNext": true,
+      "expectedUnresolvedNext": 4
     },
     {
       "name": "concise-suite-guarded-hook-uncertainty",
@@ -7116,7 +7226,8 @@
       ],
       "blindUnderCurrent": [
         "run.test.ts"
-      ]
+      ],
+      "expectedUnresolvedNext": 4
     },
     {
       "name": "mock-spy-options-positive",
@@ -7186,7 +7297,9 @@
       ],
       "blindUnderCurrent": [
         "unknown.test.ts"
-      ]
+      ],
+      "expectedIncompleteNext": false,
+      "expectedUnresolvedNext": 0
     },
     {
       "name": "framework-auto-import-flat-table",
@@ -7234,7 +7347,9 @@
       ],
       "blindUnderCurrent": [
         "clock.test.ts"
-      ]
+      ],
+      "expectedIncompleteNext": false,
+      "expectedUnresolvedNext": 0
     },
     {
       "name": "framework-package-manifest-regular",
@@ -7282,7 +7397,9 @@
       ],
       "blindUnderCurrent": [
         "metadata.test.ts"
-      ]
+      ],
+      "expectedIncompleteNext": false,
+      "expectedUnresolvedNext": 0
     },
     {
       "name": "function-title-handlers-conflicting",
@@ -7511,7 +7628,9 @@
       ],
       "blindUnderCurrent": [
         "run.test.ts"
-      ]
+      ],
+      "expectedIncompleteNext": false,
+      "expectedUnresolvedNext": 0
     },
     {
       "name": "helper-initializer-hook",
@@ -7578,7 +7697,8 @@
             "plain > reads"
           ]
         }
-      ]
+      ],
+      "expectedUnresolvedNext": 2
     },
     {
       "name": "helper-ignored-sequence-hook",
@@ -7600,7 +7720,8 @@
             "plain > reads"
           ]
         }
-      ]
+      ],
+      "expectedUnresolvedNext": 2
     },
     {
       "name": "helper-ignored-logical-hook",
@@ -7622,7 +7743,8 @@
             "plain > reads"
           ]
         }
-      ]
+      ],
+      "expectedUnresolvedNext": 2
     },
     {
       "name": "helper-ignored-conditional-hook",
@@ -7644,7 +7766,8 @@
             "plain > reads"
           ]
         }
-      ]
+      ],
+      "expectedUnresolvedNext": 2
     },
     {
       "name": "helper-inert-registration-callback",
@@ -7690,7 +7813,9 @@
           ]
         }
       ],
-      "expectedAbsent": []
+      "expectedAbsent": [],
+      "expectedIncompleteNext": true,
+      "expectedUnresolvedNext": 3
     },
     {
       "name": "helper-initializer-factories",
@@ -7713,7 +7838,9 @@
           "severity": "error"
         }
       ],
-      "expectedAbsent": []
+      "expectedAbsent": [],
+      "expectedIncompleteNext": true,
+      "expectedUnresolvedNext": 3
     },
     {
       "name": "helper-in-source-bindings",
@@ -7736,7 +7863,9 @@
           "severity": "error"
         }
       ],
-      "expectedAbsent": []
+      "expectedAbsent": [],
+      "expectedIncompleteNext": true,
+      "expectedUnresolvedNext": 3
     },
     {
       "name": "helper-initializer-factory-argument-hook",
@@ -7758,7 +7887,8 @@
             "plain > reads"
           ]
         }
-      ]
+      ],
+      "expectedUnresolvedNext": 2
     },
     {
       "name": "vitest-api-named",
@@ -7822,7 +7952,9 @@
       "blindUnderCurrent": [
         "alias.test.ts",
         "renamed-vi.test.ts"
-      ]
+      ],
+      "expectedIncompleteNext": false,
+      "expectedUnresolvedNext": 0
     },
     {
       "name": "vitest-api-namespace-dynamic",
@@ -7847,7 +7979,9 @@
       ],
       "blindUnderCurrent": [
         "alias.test.ts"
-      ]
+      ],
+      "expectedIncompleteNext": false,
+      "expectedUnresolvedNext": 0
     },
     {
       "name": "vitest-api-vitest-environment",
@@ -7993,7 +8127,9 @@
       ],
       "blindUnderCurrent": [
         "run.test.ts"
-      ]
+      ],
+      "expectedIncompleteNext": false,
+      "expectedUnresolvedNext": 0
     },
     {
       "name": "callback-parameter-registers",
@@ -8119,7 +8255,8 @@
       ],
       "blindUnderCurrent": [
         "run.test.ts"
-      ]
+      ],
+      "expectedIncompleteNext": false
     },
     {
       "name": "duplicate-suite-after-return",
@@ -8319,7 +8456,9 @@
       "expectedAbsent": [],
       "blindUnderCurrent": [
         "run.test.ts"
-      ]
+      ],
+      "expectedIncompleteNext": false,
+      "expectedUnresolvedNext": 0
     },
     {
       "name": "redundant-hook-lexical-overwrite",

@@ -183,6 +183,18 @@ function validateManifest(manifest, failures) {
           `gate claimed it`,
       )
     }
+    if (testCase.expectedIncompleteNext !== undefined && typeof testCase.expectedIncompleteNext !== 'boolean') {
+      failures.push(
+        `FAIL ${where}: \`expectedIncompleteNext\` must be a boolean -- the next engine's ` +
+          `completeness for the case, asserted by the next-engine recall judge`,
+      )
+    }
+    if (
+      testCase.expectedUnresolvedNext !== undefined &&
+      (!Number.isInteger(testCase.expectedUnresolvedNext) || testCase.expectedUnresolvedNext < 0)
+    ) {
+      failures.push(`FAIL ${where}: \`expectedUnresolvedNext\` must be a non-negative integer`)
+    }
     if (!Number.isInteger(testCase.expectedTests) || testCase.expectedTests < 1) {
       failures.push(
         `FAIL ${where}: \`expectedTests\` must be a positive integer -- a case extracting zero ` +

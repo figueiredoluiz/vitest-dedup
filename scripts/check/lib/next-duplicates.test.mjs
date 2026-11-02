@@ -294,19 +294,36 @@ test('a case that analyzed another number of tests is a delta carrying the count
   assert.deepEqual(judgeRecall({ name: 'c', expectedTests: 2 }, []).failures.map((f) => f.id), ['recall-tests|c|all|undefined'])
 })
 
-test('a next-engine case declares its completeness and unresolved counts beside the findings', () => {
+test('every case declares its completeness and unresolved counts beside the findings', () => {
   const whole = { ...summary(2), incomplete: false, unresolvedTests: 0 }
-  const next = { engine: 'next' }
-  const complete = judgeRecall({ name: 'c', expectedTests: 2, expectedIncomplete: false, expectedUnresolved: 0, ...next }, [whole])
-  assert.deepEqual(complete.failures, [])
-  const flipped = judgeRecall({ name: 'c', expectedTests: 2, expectedIncomplete: false, expectedUnresolved: 0, ...next }, [{ ...whole, incomplete: true }])
+  // Shared fields hold both engines to the same facts.
+  const shared = { name: 'c', expectedTests: 2, expectedIncomplete: false, expectedUnresolved: 0 }
+  assert.deepEqual(judgeRecall(shared, [whole]).failures, [])
+  const flipped = judgeRecall(shared, [{ ...whole, incomplete: true }])
   assert.deepEqual(flipped.failures.map((f) => f.id), ['recall-incomplete|c|all|true'])
-  const unresolved = judgeRecall({ name: 'c', expectedTests: 2, expectedIncomplete: false, expectedUnresolved: 0, ...next }, [{ ...whole, unresolvedTests: 1 }])
+  const unresolved = judgeRecall(shared, [{ ...whole, unresolvedTests: 1 }])
   assert.deepEqual(unresolved.failures.map((f) => f.id), ['recall-unresolved|c|all|1'])
   // A case that does not declare `expectedUnresolved` asserts nothing about it.
-  assert.deepEqual(judgeRecall({ name: 'c', expectedTests: 2, expectedIncomplete: false, ...next }, [whole]).failures, [])
-  // A shared-corpus case keeps its default-engine facts: the default recall gate judges them.
-  assert.deepEqual(judgeRecall({ name: 'c', expectedTests: 2, expectedIncomplete: false, expectedUnresolved: 0 }, [{ ...whole, incomplete: true }]).failures, [])
+  assert.deepEqual(judgeRecall({ name: 'c', expectedTests: 2, expectedIncomplete: false }, [whole]).failures, [])
+  // The next engine's differing facts override the shared ones, whichever engine marker the
+  // case carries.
+  const divergent = { ...whole, incomplete: true, unresolvedTests: 2 }
+  assert.deepEqual(
+    judgeRecall({ ...shared, expectedIncompleteNext: true, expectedUnresolvedNext: 2 }, [divergent]).failures,
+    [],
+  )
+  assert.deepEqual(
+    judgeRecall({ ...shared, engine: 'next', expectedIncompleteNext: true, expectedUnresolvedNext: 2 }, [divergent])
+      .failures,
+    [],
+  )
+  // A Next field without its fallback still asserts: the shared value is not silently used.
+  assert.deepEqual(
+    judgeRecall({ name: 'c', expectedTests: 2, expectedIncomplete: false, expectedUnresolvedNext: 2 }, [whole])
+      .failures
+      .map((f) => f.id),
+    ['recall-unresolved|c|all|0'],
+  )
 })
 
 test('a recall expectation is met by rule and locations, whatever title the next engine renders', () => {
