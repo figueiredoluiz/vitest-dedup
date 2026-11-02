@@ -39,6 +39,11 @@
 //!   after merging. Measured before these two: 575 of 575 files undetermined on one large
 //!   React monorepo (both shapes stack there), 3 of 199 on another; after: 0 and 0.
 //!
+//! A project file that only forwards another config (`export { default } from './x'`, or an
+//! import exported again as the default) is read as `mergeConfig(x, {})`. Only erased `import
+//! type` declarations may accompany the forward; any other runtime import refuses it. A root
+//! config that forwards is still refused.
+//!
 //! # Fail closed
 //!
 //! A project whose `globals` or discovery globs cannot be determined resolves that field to
@@ -2501,6 +2506,40 @@ fn imported_config_binding(clause: &str, local_name: &str) -> Option<Option<Stri
     None
 }
 
+/// The specifier and selected export of the `import` declaration that binds `name`, or `None`.
+fn imported_config_source(
+    masked: &[char],
+    original: &[char],
+    name: &str,
+) -> Option<(String, Option<String>, usize)> {
+    top_level_keyword_positions(masked, "import")
+        .into_iter()
+        .find_map(|start| {
+            let tail = start + "import".len();
+            let from = tail
+                + top_level_keyword_positions(&masked[tail..], "from")
+                    .first()
+                    .copied()?;
+            let clause: String = masked[tail..from].iter().collect();
+            let named_export = imported_config_binding(&clause, name)?;
+            Some((
+                import_specifier(masked, original, from + "from".len())?,
+                named_export,
+                start,
+            ))
+        })
+}
+
+/// Whether the import at `start` is erased by TypeScript before the config runs.
+fn type_only_import(original: &[char], start: usize) -> bool {
+    let type_start = skip_trivia(original, start + "import".len(), original.len());
+    let token: Vec<char> = "type".chars().collect();
+    original[type_start..].starts_with(&token)
+        && !original
+            .get(type_start + token.len())
+            .is_some_and(|ch| is_ident_char(*ch))
+}
+
 /// Resolve the imported base of a verified mergeConfig export, retaining any selected named
 /// export.
 ///
@@ -2519,27 +2558,34 @@ fn merge_config_base_path(
     let close_paren = find_matching_delim(masked, open_paren, '(', ')')?;
     let arguments = split_top_level(original, masked, open_paren + 1..close_paren);
     let name = read_bare_identifier(original, arguments.first()?.clone())?;
-    let (literal, named_export) = top_level_keyword_positions(masked, "import")
-        .into_iter()
-        .find_map(|start| {
-            let tail = start + "import".len();
-            let from = tail
-                + top_level_keyword_positions(&masked[tail..], "from")
-                    .first()
-                    .copied()?;
-            let clause: String = masked[tail..from].iter().collect();
-            let named_export = imported_config_binding(&clause, &name)?;
-            Some((
-                import_specifier(masked, original, from + "from".len())?,
-                named_export,
-            ))
-        })?;
+    let (literal, named_export, _) = imported_config_source(masked, original, &name)?;
+    resolve_config_import(
+        root,
+        config_path,
+        &literal,
+        named_export,
+        "mergeConfig base",
+    )
+}
+
+/// The file a relative config import `literal` in `config_path` names, trying the extensions a
+/// bundler would, with the export it selects.
+///
+/// With a `root`, a file that resolves outside it is refused as `Some(Err(reason))`, never read;
+/// `role` names the import in that reason. `None` means no relative file could be found.
+fn resolve_config_import(
+    root: Option<&Path>,
+    config_path: &Path,
+    literal: &str,
+    named_export: Option<String>,
+    role: &str,
+) -> Option<Result<ImportedConfigBase, String>> {
     if !literal.starts_with('.') {
         return None;
     }
     let base_dir = config_path.parent()?;
     let mut candidates = vec![
-        literal.clone(),
+        literal.to_owned(),
         format!("{literal}.ts"),
         format!("{literal}.mts"),
         format!("{literal}.cts"),
@@ -2547,14 +2593,14 @@ fn merge_config_base_path(
         format!("{literal}.mjs"),
         format!("{literal}.cjs"),
     ];
-    let source_extension = match Path::new(&literal).extension().and_then(|ext| ext.to_str()) {
+    let source_extension = match Path::new(literal).extension().and_then(|ext| ext.to_str()) {
         Some("js") => Some("ts"),
         Some("mjs") => Some("mts"),
         Some("cjs") => Some("cts"),
         _ => None,
     };
     if let Some(extension) = source_extension {
-        let mut source_path = PathBuf::from(&literal);
+        let mut source_path = PathBuf::from(literal);
         source_path.set_extension(extension);
         candidates.push(source_path.to_string_lossy().into_owned());
     }
@@ -2565,8 +2611,7 @@ fn merge_config_base_path(
                 root.filter(|root| matches!(confine(root, &path), Confinement::Outside))
             {
                 return Some(Err(format!(
-                    "{}'s mergeConfig base `{literal}` resolves outside the analysis root and \
-                     was not read",
+                    "{}'s {role} `{literal}` resolves outside the analysis root and was not read",
                     display_path(config_path, root)
                 )));
             }
@@ -2575,19 +2620,115 @@ fn merge_config_base_path(
     }
     // No candidate exists, but a base spelled outside the tree is refused all the same, as an
     // `extends` is: nothing was read, and the base's contributions are unknown.
-    if let Some(root) = root.filter(|root| {
-        matches!(
-            confine(root, &base_dir.join(&literal)),
-            Confinement::Outside
-        )
-    }) {
+    if let Some(root) =
+        root.filter(|root| matches!(confine(root, &base_dir.join(literal)), Confinement::Outside))
+    {
         return Some(Err(format!(
-            "{}'s mergeConfig base `{literal}` resolves outside the analysis root and was not \
-             read",
+            "{}'s {role} `{literal}` resolves outside the analysis root and was not read",
             display_path(config_path, root)
         )));
     }
     None
+}
+
+/// The config a project file only forwards, as the import it names, or `None` for any other file.
+///
+/// Three spellings: `export { default } from './x'`, `export { name as default } from './x'`, and
+/// `import c from './x'` (or a named import) then `export default c`. Vitest loads such a file as
+/// the module it forwards, so it is read as `mergeConfig(target, {})`. Only erased `import type`
+/// declarations may sit beside the forward (plus F3's own import): a runtime import can mutate the
+/// forwarded module before Vitest consumes it. Once strings and comments are masked, a call, an
+/// assignment, a member access or an update needs one of the refused characters, so nothing else
+/// can change the config between its import and its export.
+fn forwarded_config(
+    root: Option<&Path>,
+    masked: &[char],
+    original: &[char],
+    config_path: &Path,
+) -> Option<Result<ImportedConfigBase, String>> {
+    if masked
+        .iter()
+        .any(|ch| matches!(ch, '(' | '=' | '[' | '.' | '+' | '-' | '`'))
+    {
+        return None;
+    }
+    let [export] = top_level_keyword_positions(masked, "export")[..] else {
+        return None;
+    };
+    let after = skip_trivia(original, export + "export".len(), original.len());
+    let (literal, named_export, end, forwarded_import) = if masked.get(after) == Some(&'{') {
+        let close = find_matching_delim(masked, after, '{', '}')?;
+        let clause: String = masked[after + 1..close].iter().collect();
+        let tokens: Vec<_> = clause.split_whitespace().collect();
+        let named_export = match tokens.as_slice() {
+            ["default"] => None,
+            [name, "as", "default"] if *name != "default" => Some((*name).to_owned()),
+            _ => return None,
+        };
+        let from = skip_trivia(original, close + 1, original.len());
+        if !masked[from..].starts_with(&['f', 'r', 'o', 'm']) {
+            return None;
+        }
+        let specifier = skip_trivia(original, from + "from".len(), original.len());
+        let end = masked[specifier..]
+            .iter()
+            .position(|ch| matches!(ch, ';' | '\n'))
+            .map_or(original.len(), |offset| specifier + offset);
+        (
+            read_string_literal(original, specifier..end)?,
+            named_export,
+            end,
+            None,
+        )
+    } else {
+        let value = find_export_default_value_start(masked)?;
+        let start = skip_trivia(original, value, original.len());
+        let mut name_end = start;
+        while name_end < original.len() && is_ident_char(original[name_end]) {
+            name_end += 1;
+        }
+        let name: String = original[start..name_end].iter().collect();
+        // The binding is named twice, by its import and by the forward, and nowhere else.
+        let token: Vec<char> = name.chars().collect();
+        let uses = (0..masked.len())
+            .filter(|at| {
+                masked[*at..].starts_with(&token)
+                    && (*at == 0 || !is_ident_char(masked[at - 1]))
+                    && !masked
+                        .get(at + token.len())
+                        .is_some_and(|ch| is_ident_char(*ch))
+            })
+            .count();
+        if name.is_empty() || uses != 2 {
+            return None;
+        }
+        let (literal, named_export, import_start) =
+            imported_config_source(masked, original, &name)?;
+        (literal, named_export, name_end, Some(import_start))
+    };
+    if top_level_keyword_positions(masked, "import")
+        .into_iter()
+        .any(|start| Some(start) != forwarded_import && !type_only_import(original, start))
+    {
+        return None;
+    }
+    // Nothing but an optional `;` after the forward.
+    let rest = skip_trivia(original, end, original.len());
+    let rest = if original.get(rest) == Some(&';') {
+        skip_trivia(original, rest + 1, original.len())
+    } else {
+        rest
+    };
+    if rest != original.len() {
+        return None;
+    }
+    resolve_config_import(
+        root,
+        config_path,
+        &literal,
+        named_export,
+        "forwarded config",
+    )
 }
 
 const MAX_MERGE_CONFIG_DEPTH: usize = 32;
@@ -2922,6 +3063,21 @@ fn resolve_config_test_scope_inner(
         )
     })?;
     let original: Vec<char> = source.chars().collect();
+    if export.is_none() {
+        if let Some(forward) = forwarded_config(root, &masked, &original, path) {
+            // `mergeConfig(target, {})`: an override with no `test` object.
+            let target = forward?;
+            let base_scope = resolve_config_test_scope_bounded(
+                root,
+                &target.path,
+                target.named_export.as_deref(),
+                active,
+            )?;
+            return Ok(
+                base_scope.map(|base| format!("merge(base:{}:{base},override:0:)", base.len()))
+            );
+        }
+    }
     let (config_object, is_merge, merge_base) = if let Some(name) = export {
         (
             named_config_literal(&masked, &original, name)
@@ -2994,6 +3150,48 @@ fn resolve_config_test_scope_inner(
     )))
 }
 
+/// The fields of a project file that forwards `forward`, read as `mergeConfig(target, {})`.
+fn forwarded_standalone_config(
+    root: Option<&Path>,
+    path: &Path,
+    forward: Result<ImportedConfigBase, String>,
+    active: &mut Vec<PathBuf>,
+    refused: &mut bool,
+) -> Option<StandaloneConfigFields> {
+    let mut fields = RawTestFields::empty();
+    match forward {
+        Ok(target) => {
+            let base = resolve_standalone_config_bounded(
+                root,
+                &target.path,
+                target.named_export.as_deref(),
+                active,
+                refused,
+            )?;
+            merge_config_arrays(&mut fields, base.specified, false);
+            let effective =
+                resolve_effective(&fields, &ExtendsMode::Inherit, Some(&base.effective), path);
+            Some(StandaloneConfigFields {
+                name: base.name,
+                effective,
+                specified: fields,
+                refusal: base.refusal,
+            })
+        }
+        Err(reason) => {
+            merge_config_arrays(&mut fields, RawTestFields::empty(), true);
+            let mode = ExtendsMode::Unresolvable(reason.clone());
+            let effective = resolve_effective(&fields, &mode, None, path);
+            Some(StandaloneConfigFields {
+                name: None,
+                effective,
+                specified: fields,
+                refusal: Some(reason),
+            })
+        }
+    }
+}
+
 /// Resolve config fields with canonical-path cycle/depth guards, marking the refusal flag when
 /// either guard is reached.
 fn resolve_standalone_config_bounded(
@@ -3029,6 +3227,11 @@ fn resolve_standalone_config_inner(
     let source = read_bounded(path).ok()?;
     let masked = mask_non_code(&source)?;
     let original: Vec<char> = source.chars().collect();
+    if export.is_none() {
+        if let Some(forward) = forwarded_config(root, &masked, &original, path) {
+            return forwarded_standalone_config(root, path, forward, active, refused);
+        }
+    }
     let (config_object, is_merge, merge_base) = if let Some(name) = export {
         (named_config_literal(&masked, &original, name)?, false, None)
     } else {

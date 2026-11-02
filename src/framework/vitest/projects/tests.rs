@@ -4370,5 +4370,6 @@ fn an_unresolved_entry_is_recorded_on_the_set() {
     }
 }
 
+mod forwarded_config;
 mod glob_budget;
 mod glob_ignore;

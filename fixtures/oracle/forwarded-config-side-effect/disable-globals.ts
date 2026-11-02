@@ -1,0 +1,1 @@
+process.env.VITEST_DEDUP_FORWARDED_GLOBALS = 'off'
