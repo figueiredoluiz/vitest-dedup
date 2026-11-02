@@ -273,6 +273,7 @@ impl Modules {
             return HashMap::new();
         }
         let cuts = self.deep_cuts;
+        let confined_before = crate::lang::confinement_refusals();
         let exports = self
             .sources
             .read(path)
@@ -282,7 +283,11 @@ impl Modules {
             })
             .unwrap_or_default();
         self.active.remove(path);
-        if self.deep_cuts == cuts {
+        // A module whose analysis saw a confinement refusal is not cached, as with a cut: the
+        // next file re-reads it and records its own confinement instead of inheriting silence.
+        // A module whose analysis saw a confinement refusal is not cached, as with a cut: the
+        // next file re-reads it and records its own confinement instead of inheriting silence.
+        if self.deep_cuts == cuts && crate::lang::confinement_refusals() == confined_before {
             self.cache.insert(key, exports.clone());
         }
         exports

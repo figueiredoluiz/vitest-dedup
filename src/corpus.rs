@@ -1004,20 +1004,33 @@ impl Engine {
     ) -> FileRead {
         // On a stack sized for the parser, as the current core runs: [`crate::lang::limits`].
         let run = &mut self.run;
+        let confined = std::sync::atomic::AtomicBool::new(false);
+        let confined_flag = &confined;
         let mut read = std::thread::scope(|scope| {
             std::thread::Builder::new()
                 .name("vitest-dedup-corpus".to_owned())
                 .stack_size(crate::lang::limits::EXTRACTION_STACK_BYTES)
-                .spawn_scoped(scope, move || file(path, source, setting, run))
+                .spawn_scoped(scope, move || {
+                    // A tsconfig-confined resolution leaves the root through the project's own
+                    // configuration; the read is partial exactly as the current core's is.
+                    let corpus = file(path, source, setting, run);
+                    confined_flag.store(
+                        crate::lang::take_confinement_refusal(),
+                        std::sync::atomic::Ordering::Relaxed,
+                    );
+                    corpus
+                })
                 .map_err(|error| Failure::Start(error.to_string()))?
                 .join()
                 .map_err(|_| Failure::Panicked)
         });
+        let confined = confined.load(std::sync::atomic::Ordering::Relaxed);
         let helper_sources = match &mut read {
             Ok(Ok(corpus)) => std::mem::take(&mut corpus.helper_sources),
             _ => Vec::new(),
         };
-        let (excluded_file, partial) = self.record(relative, read, keep_sites, further);
+        let (excluded_file, partial) = self.record(relative, read, keep_sites, further, confined);
+        let partial = partial || confined;
         FileRead {
             excluded_file,
             partial,
@@ -1034,6 +1047,7 @@ impl Engine {
         read: Result<Result<FileCorpus, Refusal>, Failure>,
         keep_sites: bool,
         further: Vec<(ExclusionReason, String)>,
+        confined: bool,
     ) -> (Option<ExcludedFile>, bool) {
         let unparsed = |reason, detail: String| {
             let mut reasons = vec![(reason, detail)];
@@ -1099,6 +1113,15 @@ impl Engine {
             }
         }
         reasons.extend(further);
+        // Named so a comparable file read under a configuration that reaches past the root is
+        // visible, not an unattributed partial count.
+        if confined {
+            reasons.push((
+                ExclusionReason::ImportOutsideRoot,
+                "an import resolved outside the analysis root through the tsconfig and was not read"
+                    .to_owned(),
+            ));
+        }
         // Last, so it never outranks a cause that excludes a test, and not counted: only the rules
         // that read a trace leave the case out.
         if corpus

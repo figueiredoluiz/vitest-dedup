@@ -15,7 +15,10 @@ mod sources;
 mod syntax;
 mod tree;
 
-pub use resolve::{resolve, resolve_file};
+pub use resolve::{
+    classify_tsconfig_gap, confinement_refusals, resolve, resolve_file, take_confinement_refusal,
+    take_tsconfig_gaps, TsconfigGap,
+};
 pub use scopes::{Declaration, Imported, Name, Reference, Scopes, Symbol, SymbolId};
 pub use sources::{SourceKind, SourceTree, Sources};
 pub use syntax::{bound_symbols, export_name, member_name, property_name, uses_receiver};

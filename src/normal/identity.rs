@@ -447,12 +447,17 @@ fn exported(file: &Path, name: &str, setting: Setting) -> Option<String> {
     if let Some(known) = setting.exports.known.borrow().get(&key) {
         return known.clone();
     }
+    let confined_before = crate::lang::confinement_refusals();
     let found = export_of(file, name, setting);
-    setting
-        .exports
-        .known
-        .borrow_mut()
-        .insert(key, found.clone());
+    // An identity computed through a confined resolution is not cached: the next file re-walks
+    // the chain and records its own confinement instead of inheriting silence.
+    if crate::lang::confinement_refusals() == confined_before {
+        setting
+            .exports
+            .known
+            .borrow_mut()
+            .insert(key, found.clone());
+    }
     found
 }
 

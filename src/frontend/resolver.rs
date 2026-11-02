@@ -244,16 +244,10 @@ fn is_package_specifier(specifier: &str) -> bool {
 /// Records why a resolution failed when the cause is an absent prerequisite.
 fn record_failure(importing_file: &Path, specifier: &str, error: &oxc_resolver::ResolveError) {
     use oxc_resolver::ResolveError;
-    let gap = match error {
-        ResolveError::TsconfigNotFound(target) => Some(TsconfigGap::Absent(target.clone())),
-        ResolveError::TsconfigLoadFailed { path, .. } if !path.exists() => {
-            Some(TsconfigGap::Absent(path.clone()))
-        }
-        ResolveError::TsconfigLoadFailed { path, .. } => {
-            Some(TsconfigGap::Unreadable(path.clone()))
-        }
-        _ => None,
-    };
+    let gap = crate::lang::classify_tsconfig_gap(error).map(|gap| match gap {
+        crate::lang::TsconfigGap::Absent(path) => TsconfigGap::Absent(path),
+        crate::lang::TsconfigGap::Unreadable(path) => TsconfigGap::Unreadable(path),
+    });
     let mut gaps = GAPS
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);

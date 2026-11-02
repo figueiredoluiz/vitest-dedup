@@ -533,6 +533,11 @@ fn run_with_engine(
                 let incomplete = result.incomplete();
                 (result.findings, incomplete)
             };
+            // A base read through the next engine records tsconfig gaps of its own. The base
+            // keeps its existing partial-baseline behavior, so its gaps are drained and dropped
+            // here — dropped, so they cannot masquerade as the current run's missing
+            // prerequisites at the main pass's drain below.
+            let _ = vitest_dedup::lang::take_tsconfig_gaps();
             // A base run that could not see the whole tree (oversized, non-UTF-8, or skipped
             // files) produces a PARTIAL baseline: it accepts less than the base really had, so
             // the gate reports findings as new that the base would have accepted. The safe
@@ -938,10 +943,22 @@ fn run_with_engine(
 
     drop(seen_helper_sources);
 
-    causes.missing_prerequisites = vitest_dedup::prerequisites::assess(
-        &config.root,
-        &vitest_dedup::frontend::take_resolution_gaps(),
-    );
+    // The next engine records its tsconfig gaps beside the current core's, so a broken project
+    // configuration degrades a next-engine run exactly as it degrades a default-engine one.
+    let mut resolution_gaps = vitest_dedup::frontend::take_resolution_gaps();
+    for (gap, count) in vitest_dedup::lang::take_tsconfig_gaps() {
+        let gap = match gap {
+            vitest_dedup::lang::TsconfigGap::Absent(path) => {
+                vitest_dedup::frontend::TsconfigGap::Absent(path)
+            }
+            vitest_dedup::lang::TsconfigGap::Unreadable(path) => {
+                vitest_dedup::frontend::TsconfigGap::Unreadable(path)
+            }
+        };
+        *resolution_gaps.tsconfig.entry(gap).or_insert(0) += count;
+    }
+    causes.missing_prerequisites =
+        vitest_dedup::prerequisites::assess(&config.root, &resolution_gaps);
 
     causes.package_worker_failures = frontend::take_package_worker_failures();
 
