@@ -503,7 +503,6 @@ mod tests {
             .to_owned()
     }
 
-    /// Render an analysis result to UTF-8 HTML text, panicking on reporter or decoding errors.
     /// A suite finding gating as stricter children says so beside its own severity.
     #[test]
     fn a_covering_suite_shows_how_it_gates() {
@@ -513,6 +512,7 @@ mod tests {
         assert!(!render_str(&plain).contains("GATES AS"));
     }
 
+    /// Render an analysis result to UTF-8 HTML text, panicking on reporter or decoding errors.
     fn render_str(result: &AnalysisResult) -> String {
         let mut buffer = Vec::new();
         HtmlReporter::new()

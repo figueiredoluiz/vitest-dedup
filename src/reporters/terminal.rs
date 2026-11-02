@@ -562,7 +562,6 @@ mod tests {
         );
     }
 
-    /// Render an analysis result to UTF-8 terminal text for output assertions.
     /// A suite finding gating as stricter children says so beside its own severity.
     #[test]
     fn a_covering_suite_shows_how_it_gates() {
@@ -575,6 +574,7 @@ mod tests {
         assert!(!render(&plain).contains("gates as"));
     }
 
+    /// Render an analysis result to UTF-8 terminal text for output assertions.
     fn render(result: &AnalysisResult) -> String {
         let mut buffer = Vec::new();
         TerminalReporter::new()

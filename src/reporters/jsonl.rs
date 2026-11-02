@@ -1047,9 +1047,6 @@ mod tests {
         cross_file_result("2 tests have identical bodies under an equivalent context")
     }
 
-    /// Renders `result` and returns every line parsed independently as a [`Value`], asserting
-    /// along the way that each line is standalone, valid JSON — the property the whole format
-    /// exists to guarantee.
     /// `covers` appears only on a record that carries it, with its severity and locations.
     #[test]
     fn covers_is_reported_only_when_set() {
@@ -1059,6 +1056,9 @@ mod tests {
         assert!(render_lines(&sample_result())[0].get("covers").is_none());
     }
 
+    /// Renders `result` and returns every line parsed independently as a [`Value`], asserting
+    /// along the way that each line is standalone, valid JSON — the property the whole format
+    /// exists to guarantee.
     fn render_lines(result: &AnalysisResult) -> Vec<Value> {
         let mut buffer = Vec::new();
         JsonlReporter::new()

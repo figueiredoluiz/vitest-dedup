@@ -165,6 +165,46 @@ fn an_error_suite_counts_only_the_tests_it_covers() {
     assert_eq!(gate(result.findings, false), (true, 2));
 }
 
+/// Nested copies count each test once: the outer suite carries what the inner suite carries
+/// instead of adding its own blocks as tests.
+#[test]
+fn nested_copies_count_each_test_once() {
+    let outer = |line, start, end| {
+        let mut outer = suite(line, start, end);
+        outer.key = 91;
+        outer.name = Some(vec!["outer".into()]);
+        outer
+    };
+    let files = vec![file(
+        "a.test.ts",
+        vec![case(4, 30, 1, 1), case(10, 230, 1, 1)],
+    )];
+    let suites = vec![file(
+        "a.test.ts",
+        vec![
+            outer(2, 10, 200),
+            suite(3, 20, 100),
+            outer(8, 210, 400),
+            suite(9, 220, 300),
+        ],
+    )];
+    let error = config_with(&[(Rule::DuplicateSuite, Severity::Error)]);
+    let result = run_with_suites(&files, &suites, &error, &[]);
+    assert_eq!(result.findings.len(), 2, "{:?}", result.findings);
+    for finding in &result.findings {
+        let carried: Vec<u32> = finding
+            .covers
+            .as_ref()
+            .unwrap()
+            .locations
+            .iter()
+            .map(|l| l.span.start.line)
+            .collect();
+        assert_eq!(carried, [4, 10], "{finding:?}");
+    }
+    assert_eq!(gate(result.findings, false), (true, 2));
+}
+
 /// Each suite finding carries only the child tests inside the copies it names.
 #[test]
 fn a_suite_finding_carries_only_its_own_copies() {

@@ -379,8 +379,6 @@ mod tests {
         cross_file_result("identical bodies under an equivalent context")
     }
 
-    /// Serialize through the SARIF reporter and parse the document, panicking if either step
-    /// fails.
     /// `properties.covers` appears only on a result that carries it.
     #[test]
     fn covers_is_reported_only_when_set() {
@@ -397,6 +395,8 @@ mod tests {
             .is_none());
     }
 
+    /// Serialize through the SARIF reporter and parse the document, panicking if either step
+    /// fails.
     fn render_value(result: &AnalysisResult) -> Value {
         let mut buffer = Vec::new();
         SarifReporter::new()

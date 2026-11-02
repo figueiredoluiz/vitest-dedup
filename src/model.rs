@@ -1078,16 +1078,15 @@ impl Finding {
             .map_or(self.severity, |covers| covers.severity.max(self.severity))
     }
 
-    /// The tests the quality gate counts for this finding at `severity`. A suite finding that
-    /// carries children at it counts their tests, never its own blocks as tests too.
+    /// The tests the quality gate counts for this finding at `severity`. A finding that carries
+    /// tests counts only those, at the carried severity or its own when higher: its own locations
+    /// are blocks, not tests.
     pub fn gate_locations(&self, severity: Severity) -> impl Iterator<Item = &Location> {
-        let covered = self
-            .covers
-            .as_ref()
-            .filter(|covers| covers.severity == severity)
-            .map(|covers| &covers.locations);
-        let own = (covered.is_none() && self.severity == severity).then_some(&self.locations);
-        own.into_iter().chain(covered).flatten()
+        let locations = match &self.covers {
+            Some(covers) => (self.gate_severity() == severity).then_some(&covers.locations),
+            None => (self.severity == severity).then_some(&self.locations),
+        };
+        locations.into_iter().flatten()
     }
 
     /// Calling files represented by participant `index`, with the legacy source-file fallback.

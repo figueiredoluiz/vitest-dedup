@@ -113,6 +113,39 @@ impl Twins {
                 );
             }
         }
+        // An outer copy also stands for the tests a suite finding nested in its copies carries, so
+        // nested copies count each test once rather than adding the outer blocks as tests.
+        let mut by_file: BTreeMap<&std::path::Path, Vec<usize>> = BTreeMap::new();
+        for (index, finding) in findings.iter().enumerate() {
+            if finding.rule == Rule::DuplicateSuite {
+                if let Some(first) = finding.locations.first() {
+                    by_file.entry(&first.path).or_default().push(index);
+                }
+            }
+        }
+        let mut nested = Vec::new();
+        for suites in by_file.values() {
+            for &outer in suites {
+                for &inner in suites {
+                    let Some(covers) = &findings[inner].covers else {
+                        continue;
+                    };
+                    let inside = findings[inner].locations.iter().all(|location| {
+                        findings[outer].locations.iter().any(|copy| {
+                            copy.path == location.path
+                                && copy.span.start_byte < location.span.start_byte
+                                && location.span.end_byte <= copy.span.end_byte
+                        })
+                    });
+                    if inside {
+                        nested.push((outer, covers.clone()));
+                    }
+                }
+            }
+        }
+        for (outer, covers) in nested {
+            carry(&mut findings[outer], covers.severity, covers.locations);
+        }
         let removed: BTreeSet<usize> = represented.iter().map(|(child, _)| *child).collect();
         let mut index = 0;
         findings.retain(|_| {
