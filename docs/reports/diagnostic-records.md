@@ -33,6 +33,49 @@ those three to see which one disagrees.
 Hook records carry `kind`, `alpha`, `structural`, `behavior`, and `trivial`. `redundant-hook` only
 compares hooks of matching `kind`.
 
+### Owned-core records
+
+With the experimental `VITEST_DEDUP_ENGINE=next` selection, test and hook records use
+`schemaVersion: "0.2"` and `engine: "owned"`. Other record kinds keep their existing versions.
+The legacy five fingerprint fields are not synthesized from combined owned comparison keys.
+Consumers must dispatch on the record's version and engine rather than compare hashes across
+engines or runs built with different toolchains.
+
+Owned test records carry declaration coordinates, an optional `registrationFile`, a rendered title
+when known, a zero-based `row` when applicable, `comparable`, `exclusion`, `traceComplete` and
+`ordinaryEvents`. `comparisonKeys` contains the actual owned keys:
+
+| Key | Comparison evidence |
+| --- | --- |
+| `duplicate` | Same-file exact grouping, including body, context, modifiers and unresolved row inputs. |
+| `crossFile` | Exact grouping with module context. |
+| `parameterization` | Supported literal-shaped consolidation under exact context. |
+| `similarity`, `eventSet` | Near-duplicate context and sorted behavior-event multiset. |
+| `subsumption` | Context admitted for directional trace comparison. |
+| `name` | Proven full title segments. |
+| `rowClass` | Proven row identity used with name and exact body/context keys. |
+
+Keys without proof are `null`. Excluded tests still receive a record, preserving known suite
+prefixes and supported test-row title rendering, but carry no body-comparison proof. Rule eligibility also depends on the recorded trace facts, registration/declaration identity,
+and rule-specific requirements. Equal keys alone do not promise a finding: grouping, lifecycle
+barriers, suppressions, budgets and other rule conditions can still prevent one.
+
+`views` contains independent owned `body`, `shape`, `trace`, `context` and `modifiers` digests for
+checking a fixture's isolation claim. The context view includes both inherited/local context and
+module-load effects. An unavailable view is `null`; a refused test may have no
+views at all. These are diagnostic dimensions, not an alternative rule-eligibility oracle.
+
+Owned hook records enumerate known hook declarations, including a single hook that cannot form a
+redundancy pair. They carry `kind`, body/shape/trace `views` when available, and
+`comparisonKeys.effects`. The effect key is `null` unless the owned hook planner retained a proof
+in a comparison chain. A body digest does not establish such a proof.
+
+Hooks precede tests; both precede findings. Registration `site` records remain available alongside
+them for the collection oracle. Sites count declarations rather than expanded tests, so their
+population can differ from `testsAnalyzed`. With the flag off, none of these optional records are
+emitted. Optional retained evidence is charged to the existing memory budget; hitting that budget remains
+a visible refusal. The old engine's `0.1` record contract is unchanged.
+
 ## `--debug-memory`
 
 Adds one run-level `memory` record: the bytes retained after extraction, split by the field holding

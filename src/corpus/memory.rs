@@ -27,6 +27,7 @@ impl HeapBytes for TestCase {
     fn heap_bytes(&self) -> usize {
         let Self {
             origin,
+            views,
             span,
             title,
             full_title,
@@ -48,6 +49,9 @@ impl HeapBytes for TestCase {
         } = self;
         [
             origin.heap_bytes(),
+            views
+                .as_ref()
+                .map_or(0, |_| size_of::<super::records::Views>()),
             span.heap_bytes(),
             title.heap_bytes(),
             full_title.heap_bytes(),
@@ -160,6 +164,7 @@ impl Engine {
             empty_tables,
             containers,
             sites,
+            diagnostic_hooks,
             files,
             suites,
             blind,
@@ -170,6 +175,7 @@ impl Engine {
             modules,
             exports,
             sources,
+            diagnostics,
         } = run;
         EngineBytes {
             cases: retained.cases.saturating_add(
@@ -184,11 +190,17 @@ impl Engine {
                         .capacity()
                         .saturating_mul(size_of::<(std::path::PathBuf, Vec<TestCase>)>()),
                 ),
-            hooks: retained.hooks.saturating_add(
-                hooks
-                    .capacity()
-                    .saturating_mul(size_of::<(std::path::PathBuf, Hooks)>()),
-            ),
+            hooks: retained
+                .hooks
+                .saturating_add(
+                    hooks
+                        .capacity()
+                        .saturating_mul(size_of::<(std::path::PathBuf, Hooks)>()),
+                )
+                .saturating_add(diagnostic_hooks.capacity().saturating_mul(size_of::<(
+                    std::path::PathBuf,
+                    super::records::DiagnosticHook,
+                )>())),
             sites: retained.sites.saturating_add(
                 sites
                     .capacity()
@@ -208,7 +220,8 @@ impl Engine {
                 .heap_bytes()
                 .saturating_add(unresolved.heap_bytes())
                 .saturating_add(empty_tables.heap_bytes())
-                .saturating_add(containers.heap_bytes()),
+                .saturating_add(containers.heap_bytes())
+                .saturating_add(diagnostics.heap_bytes()),
         }
     }
 
@@ -243,6 +256,19 @@ impl Engine {
     /// Hook chains remain owned by the engine while the rules read them.
     pub fn hooks(&self) -> &[(std::path::PathBuf, Hooks)] {
         &self.hooks
+    }
+
+    /// Transfer optional diagnostic hook ownership without cloning its retained payload.
+    pub fn take_diagnostic_hooks(
+        &mut self,
+    ) -> Vec<(std::path::PathBuf, super::records::DiagnosticHook)> {
+        let hooks = std::mem::take(&mut self.diagnostic_hooks);
+        use crate::memory::HeapBytes;
+        self.retained.hooks = self
+            .retained
+            .hooks
+            .saturating_sub(hooks.iter().map(HeapBytes::heap_bytes).sum::<usize>());
+        hooks
     }
 
     /// Reporting takes the saved sites only after analysis has finished.

@@ -3,6 +3,7 @@ use crate::framework::vitest::DIALECT;
 use crate::model::ExclusionReason;
 use std::collections::HashMap;
 use std::fs;
+use std::path::Path;
 
 mod runners;
 
@@ -1671,4 +1672,111 @@ fn a_confined_module_is_re_analyzed_per_file_so_every_importer_records_the_refus
             "{entry:?}"
         );
     }
+}
+
+/// Diagnostic row views reflect actual owned bodies and leave findings and populations intact.
+#[test]
+fn optional_record_views_preserve_rows_and_charge_their_owned_storage() {
+    use crate::memory::HeapBytes;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("rows.test.ts");
+    let source = "import { test, expect } from 'vitest'; test.each([1, 1, 2])('row', value => expect(value).toBeGreaterThan(0));";
+    let setting = Setting {
+        dialect: crate::framework::current().dialect(),
+        globals: false,
+        root: dir.path(),
+    };
+    let mut ordinary = Engine::default();
+    let mut instrumented = Engine::default();
+    ordinary.read(
+        &path,
+        Path::new("rows.test.ts"),
+        source,
+        setting,
+        false,
+        vec![],
+    );
+    instrumented.read(
+        &path,
+        Path::new("rows.test.ts"),
+        source,
+        setting,
+        true,
+        vec![],
+    );
+    assert_eq!(ordinary.tests, 3);
+    assert_eq!(instrumented.tests, 3);
+    assert!(instrumented.heap_bytes() > ordinary.heap_bytes());
+    let plain = ordinary.take_files();
+    let files = instrumented.take_files();
+    assert_eq!(files[0].1.len(), 3);
+    let rows = &files[0].1;
+    let a = rows[0].views.as_ref().unwrap();
+    let b = rows[1].views.as_ref().unwrap();
+    let c = rows[2].views.as_ref().unwrap();
+    assert_eq!(a.body, b.body);
+    assert_ne!(a.body, c.body);
+    assert_eq!(a.shape, c.shape);
+    assert!(a.shape.is_some());
+    assert!(plain[0].1.iter().all(|case| case.views.is_none()));
+    let config =
+        crate::config::Config::load(dir.path(), crate::config::ConfigOverrides::default()).unwrap();
+    let off =
+        crate::rules::run_with_hooks(&plain, ordinary.suites(), ordinary.hooks(), &config, &[]);
+    let on = crate::rules::run_with_hooks(
+        &files,
+        instrumented.suites(),
+        instrumented.hooks(),
+        &config,
+        &[],
+    );
+    assert!(on
+        .findings
+        .iter()
+        .any(|finding| finding.rule == crate::model::Rule::DuplicateEachRow));
+    assert_eq!(
+        serde_json::to_value(off.findings).unwrap(),
+        serde_json::to_value(on.findings).unwrap()
+    );
+}
+
+/// Known idempotent hook proofs reach records; an unread callback still carries no invented view.
+#[test]
+fn optional_hook_records_read_proved_chains_and_withhold_unread_callbacks() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("hooks.test.ts");
+    let setting = Setting {
+        dialect: crate::framework::current().dialect(),
+        globals: false,
+        root: dir.path(),
+    };
+    let mut engine = Engine::default();
+    let source = "import { beforeEach, describe, test, expect } from 'vitest'; let cell = 1; beforeEach(() => { cell = 0; }); describe('nested', () => { beforeEach(() => { cell = 0; }); test('reads', () => expect(cell).toBe(0)); });";
+    engine.read(
+        &path,
+        Path::new("hooks.test.ts"),
+        source,
+        setting,
+        true,
+        vec![],
+    );
+    assert_eq!(engine.tests, 1);
+    let hooks = engine.take_diagnostic_hooks();
+    assert_eq!(hooks.len(), 2);
+    assert!(hooks.iter().all(|(_, hook)| hook.effect_key.is_some()));
+    assert_eq!(hooks[0].1.effect_key, hooks[1].1.effect_key);
+    let mut unknown = Engine::default();
+    unknown.read(
+        &path,
+        Path::new("hooks.test.ts"),
+        "import { beforeEach, test } from 'vitest'; beforeEach(missing); test('empty', () => {});",
+        setting,
+        true,
+        vec![],
+    );
+    assert_eq!(unknown.tests, 1);
+    let hooks = unknown.take_diagnostic_hooks();
+    assert_eq!(hooks.len(), 1);
+    assert!(hooks[0].1.views.is_none());
+    assert!(hooks[0].1.effect_key.is_none());
 }
