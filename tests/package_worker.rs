@@ -62,6 +62,13 @@ fn completed(report: &str, unresolved: u32) -> bool {
         && report.contains(&format!("\"unresolvedTests\":{unresolved}"))
 }
 
+/// Whether this run uses the engine that owns the package worker. The next engine leaves an
+/// installed package's registrations out of scope, so these refusals are the default engine's
+/// alone, and they are deleted with it.
+fn worker_engine() -> bool {
+    vitest_dedup::corpus::Engine::selected().is_none()
+}
+
 /// Whether the report holds the duplicate-test finding for the pair.
 fn reports_the_pair(report: &str) -> bool {
     report.contains("\"duplicate-test\"") && report.contains("\"type\":\"finding\"")
@@ -81,6 +88,9 @@ fn a_large_flat_bundle_is_admitted_as_setup() {
 /// The same bundle that registers a test is refused whatever its size.
 #[test]
 fn a_large_bundle_that_registers_a_test_is_refused() {
+    if !worker_engine() {
+        return;
+    }
     let entry = format!(
         "{}exports.install = () => describe('a', () => {{}})\n",
         "x();\n".repeat(40_000)
@@ -96,6 +106,9 @@ fn a_large_bundle_that_registers_a_test_is_refused() {
 /// normally, reports the pair as not compared, and its exit code is a code, not a signal.
 #[test]
 fn a_script_that_overflows_the_parser_refuses_its_package_only() {
+    if !worker_engine() {
+        return;
+    }
     let depth = 2_000_000;
     let entry = format!(
         "exports.install = () => {}{}0{}\n",
@@ -115,6 +128,9 @@ fn a_script_that_overflows_the_parser_refuses_its_package_only() {
 /// every reporter carries the failure count, while cache hits and later runs do not inflate it.
 #[test]
 fn owned_package_worker_failures_reach_reports_and_exit_gates() {
+    if !worker_engine() {
+        return;
+    }
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("fixtures/recall/framework-package-large-flat-bundle");
     let directory = tempfile::tempdir().unwrap();
