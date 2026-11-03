@@ -51,7 +51,13 @@ fn all_engine_populations_are_charged() {
     });
     corpus.hooks.chains.push(vec![0]);
     let mut run = Engine::default();
-    let (excluded, partial) = run.record(Path::new("a.test.ts"), Ok(Ok(corpus)), true, Vec::new());
+    let (excluded, partial) = run.record(
+        Path::new("a.test.ts"),
+        Ok(Ok(corpus)),
+        true,
+        Vec::new(),
+        false,
+    );
     assert!(excluded.is_none());
     assert!(!partial);
     run.files.reserve(32);
@@ -142,7 +148,13 @@ fn blind_file_storage_is_independent_of_optional_sites() {
     let corpus = corpora(&[("a.test.ts", source)], &["a.test.ts"]).remove(0);
     assert_eq!(corpus.tests.len(), 1);
     let mut run = Engine::default();
-    run.record(Path::new("a.test.ts"), Ok(Ok(corpus)), false, Vec::new());
+    run.record(
+        Path::new("a.test.ts"),
+        Ok(Ok(corpus)),
+        false,
+        Vec::new(),
+        false,
+    );
     assert_eq!(run.tests, 1);
     assert_eq!(run.unresolved, 1);
     let fields = run.memory_fields();

@@ -880,6 +880,7 @@ fn a_recovered_panic_drops_the_run_caches() {
         Err(Failure::Start("refused".to_owned())),
         false,
         Vec::new(),
+        false,
     );
     let entry = entry.unwrap();
     assert_eq!(entry.reason, ExclusionReason::ExtractionFailed);
@@ -891,6 +892,7 @@ fn a_recovered_panic_drops_the_run_caches() {
         Err(Failure::Panicked),
         false,
         Vec::new(),
+        false,
     );
     assert_eq!(entry.unwrap().reason, ExclusionReason::ExtractionFailed);
     assert!(partial);
@@ -1500,6 +1502,7 @@ fn historical_source_authority_survives_cache_recovery() {
         Err(Failure::Panicked),
         false,
         Vec::new(),
+        false,
     );
     engine.read(
         &path,
@@ -1542,5 +1545,59 @@ fn empty_table_counts_require_proven_zero_rows() {
         let result = corpora(&[("a.test.ts", &source)], &["a.test.ts"]).remove(0);
         assert_eq!(result.tests.len(), cases, "{declaration}");
         assert_eq!(result.empty_tables, empty, "{declaration}");
+    }
+}
+
+/// A confinement refusal travels with the module that traverses it: the module's analysis is
+/// not cached, so every importer re-derives the refusal and marks its own read partial instead
+/// of inheriting silence from a cache hit.
+#[test]
+fn a_confined_module_is_re_analyzed_per_file_so_every_importer_records_the_refusal() {
+    let project = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    std::fs::write(
+        project.path().join("tsconfig.json"),
+        format!(
+            "{{ \"compilerOptions\": {{ \"paths\": {{ \"~/*\": [\"../{}/*\"] }} }} }}",
+            outside.path().file_name().unwrap().to_str().unwrap()
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        outside.path().join("helper.ts"),
+        "export const check = (v: string) => v;\n",
+    )
+    .unwrap();
+    let module = "import { check } from '~/helper';\nexport const use = (v: string) => check(v);\n";
+    let importer = "import { test, expect } from 'vitest';\nimport { use } from './m';\ntest('importer', () => { expect(use('x')).toBe('x'); });\n";
+    std::fs::write(project.path().join("m.ts"), module).unwrap();
+    std::fs::write(project.path().join("a.test.ts"), importer).unwrap();
+    std::fs::write(project.path().join("b.test.ts"), importer).unwrap();
+
+    let mut engine = Engine::default();
+    for name in ["a.test.ts", "b.test.ts"] {
+        let source = std::fs::read_to_string(project.path().join(name)).unwrap();
+        let (entry, partial) = engine.read(
+            &project.path().join(name),
+            std::path::Path::new(name),
+            &source,
+            Setting {
+                dialect: &DIALECT,
+                globals: false,
+                root: project.path(),
+            },
+            false,
+            Vec::new(),
+        );
+        let entry = entry.expect(name);
+        assert!(
+            partial,
+            "{name}: the confined import must mark the read partial"
+        );
+        assert_eq!(entry.reason, ExclusionReason::ImportOutsideRoot, "{name}");
+        assert!(
+            entry.detail.contains("outside the analysis root"),
+            "{entry:?}"
+        );
     }
 }
