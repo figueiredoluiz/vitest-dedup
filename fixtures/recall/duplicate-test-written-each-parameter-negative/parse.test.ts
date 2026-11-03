@@ -1,12 +1,11 @@
 // RECALL negative -- duplicate-test over `.each` rows whose callback writes its parameter.
 //
 // Both callbacks reassign the parameter before reading it, so the row's cell no longer describes
-// what the reads observe. Substituting the cell into those reads rendered `expect(6).toBe(6)` for
-// both rows and merged them at Error severity, while Vitest evaluates the writes (5.0.3: the
+// what the reads observe. Substituting the cell into those reads would render `expect(6).toBe(6)`
+// for both rows and merge them at Error severity, while Vitest evaluates the writes (5.0.5: the
 // first fails `expected 5 to be 6`, the second `expected 6 to be 5` -- recorded on
-// node v26.0.0, darwin-arm64). Row substitution is therefore declined for a written parameter,
-// all-or-nothing, the same refusal helper inlining makes -- see `resolve_row_substitution` and
-// the module doc's "Parameter writes" guard in `src/frontend/fingerprint.rs`.
+// node v24.21.0, darwin-arm64). Row substitution is therefore declined for a written parameter,
+// all-or-nothing, by both engines -- see `src/normal/rows.rs` and `resolve_row_substitution`.
 //
 // With the substitution declined, the rows stay unsubstituted and genuinely differ (the
 // parameter read sits in the assertion's subject in one and its expected value in the other), so
