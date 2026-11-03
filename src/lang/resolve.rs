@@ -39,10 +39,22 @@ pub fn resolve(from: &Path, specifier: &str, root: &Path) -> Option<PathBuf> {
 /// file), resolved as [`resolve`] does; `None` for a package, a file under `node_modules` or one
 /// outside `root`.
 pub fn resolve_file(from: &Path, specifier: &str, root: &Path) -> Option<PathBuf> {
-    static RESOLVER: LazyLock<Resolver> = LazyLock::new(|| Resolver::new(options()));
-    let resolved = RESOLVER.resolve_file(from, specifier);
+    // Package manifests are read through the bounded reader: a FIFO, a device or an oversized
+    // `package.json` is refused, never opened and waited on.
+    static RESOLVER: LazyLock<super::manifest_fs::ManifestResolver> = LazyLock::new(|| {
+        super::manifest_fs::ManifestResolver::new(options(), record_manifest_refusal)
+    });
+    // The resolver keeps one refusal slot per lookup: a lookup and the drain of its slot run under
+    // one lock, so threads resolving at once cannot take each other's refusal.
+    static LOOKUP: Mutex<()> = Mutex::new(());
+    let resolved = {
+        let _lookup = LOOKUP
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        RESOLVER.resolve_file(from, specifier)
+    };
     if let Err(error) = &resolved {
-        record_tsconfig_gap(error);
+        record_gap(from, specifier, error);
     }
     let file = resolved.ok()?.into_path_buf();
     let canonicalize = |path: &Path| std::fs::canonicalize(path);
@@ -57,10 +69,91 @@ pub fn resolve_file(from: &Path, specifier: &str, root: &Path) -> Option<PathBuf
 }
 
 thread_local! {
+    /// Set on the analyzing thread when a resolution needed a package manifest the bounded reader
+    /// refused: what the file imports from that package is unknown.
+    static MANIFEST_REFUSED: Cell<usize> = const { Cell::new(0) };
+
     /// Incremented on the analyzing thread when a resolution leaves the analysis root through
     /// the tsconfig: the file's context depends on configuration the run must not silently
     /// ignore. A count, because one file's read walks several modules and each refusal counts.
     static CONFINEMENT_REFUSED: Cell<usize> = const { Cell::new(0) };
+}
+
+/// Package-style imports that were not found, per directory of the importing file: what the
+/// missing-prerequisite report counts against each project's install. Process-wide, as
+/// [`TSCONFIG_GAPS`] is.
+static PACKAGE_GAPS: Mutex<BTreeMap<PathBuf, usize>> = Mutex::new(BTreeMap::new());
+
+/// The imports a gap was recorded for, by importing module and specifier: several readers resolve
+/// one import, and the report counts imports, as the current core's per-import cache does.
+static RECORDED: Mutex<std::collections::BTreeSet<(PathBuf, String)>> =
+    Mutex::new(std::collections::BTreeSet::new());
+
+/// Records why `specifier`, imported by the module at `from`, did not resolve, once per import.
+fn record_gap(from: &Path, specifier: &str, error: &oxc_resolver::ResolveError) {
+    let gap = classify_tsconfig_gap(error);
+    let package = gap.is_none()
+        && matches!(error, oxc_resolver::ResolveError::NotFound(_))
+        && super::packages::is_package_specifier(specifier);
+    if gap.is_none() && !package {
+        return;
+    }
+    let first = RECORDED
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .insert((from.to_path_buf(), specifier.to_owned()));
+    if !first {
+        return;
+    }
+    if let Some(gap) = gap {
+        *TSCONFIG_GAPS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .entry(gap)
+            .or_insert(0) += 1;
+    } else {
+        let directory = from.parent().unwrap_or(from).to_path_buf();
+        *PACKAGE_GAPS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .entry(directory)
+            .or_insert(0) += 1;
+    }
+}
+
+/// Takes and clears the package imports not found since the last call, per importing directory.
+pub fn take_package_gaps() -> BTreeMap<PathBuf, usize> {
+    forget_recorded();
+    std::mem::take(
+        &mut *PACKAGE_GAPS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner),
+    )
+}
+
+/// Clears which imports were recorded, so the next run counts its own.
+fn forget_recorded() {
+    RECORDED
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clear();
+}
+
+/// Records a refused package manifest on the analyzing thread.
+fn record_manifest_refusal(_path: &Path) {
+    MANIFEST_REFUSED.with(|refused| refused.set(refused.get() + 1));
+}
+
+/// Takes whether the calling thread needed a package manifest the bounded reader refused since the
+/// last take. The corpus drains it per file, as the current core drains its manifest refusals.
+pub fn take_manifest_refusal() -> bool {
+    MANIFEST_REFUSED.with(|refused| refused.replace(0)) > 0
+}
+
+/// How many manifest refusals the calling thread has recorded since the last take. The module
+/// caches compare before and after an analysis to see whether it needed one.
+pub fn manifest_refusals() -> usize {
+    MANIFEST_REFUSED.with(Cell::get)
 }
 
 /// Records a confinement refusal on the analyzing thread.
@@ -116,6 +209,7 @@ static TSCONFIG_GAPS: Mutex<BTreeMap<TsconfigGap, usize>> = Mutex::new(BTreeMap:
 
 /// Takes and clears the tsconfig gaps recorded since the last call.
 pub fn take_tsconfig_gaps() -> BTreeMap<TsconfigGap, usize> {
+    forget_recorded();
     std::mem::take(
         &mut *TSCONFIG_GAPS
             .lock()
@@ -138,17 +232,6 @@ pub fn classify_tsconfig_gap(error: &oxc_resolver::ResolveError) -> Option<Tscon
         }
         _ => None,
     }
-}
-
-fn record_tsconfig_gap(error: &oxc_resolver::ResolveError) {
-    let Some(gap) = classify_tsconfig_gap(error) else {
-        return;
-    };
-    *TSCONFIG_GAPS
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .entry(gap)
-        .or_insert(0) += 1;
 }
 
 /// Packages and paths outside the analysis root stay opaque in either source view.

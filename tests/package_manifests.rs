@@ -23,12 +23,16 @@ fn project() -> tempfile::TempDir {
     directory
 }
 
+/// The engines a manifest outcome must hold under: the default, then the next engine.
+const ENGINES: [&[(&str, &str)]; 2] = [&[], &[("VITEST_DEDUP_ENGINE", "next")]];
+
 /// Runs both machine reporters with a deadline so a FIFO regression cannot hang the test suite.
-fn analyze(root: &Path) -> (i32, Value, Value) {
+fn analyze(root: &Path, engine: &[(&str, &str)]) -> (i32, Value, Value) {
     let output = tempfile::tempdir().unwrap();
     let prefix = output.path().join("result");
     let result = Command::cargo_bin("vitest-dedup")
         .unwrap()
+        .envs(engine.iter().copied())
         .arg(root)
         .args([
             "--reporters",
@@ -59,9 +63,25 @@ fn analyze(root: &Path) -> (i32, Value, Value) {
     )
 }
 
-/// Asserts extraction, comparison eligibility and retained findings in both report surfaces.
+/// Asserts extraction, comparison eligibility and retained findings in both report surfaces,
+/// under each engine; returns the last engine's report.
 fn outcome(root: &Path, tests: u64, unresolved: u64, findings: usize) -> Value {
-    let (code, json, summary) = analyze(root);
+    let mut last = Value::Null;
+    for engine in ENGINES {
+        last = outcome_under(root, tests, unresolved, findings, engine);
+    }
+    last
+}
+
+/// [`outcome`] under one engine.
+fn outcome_under(
+    root: &Path,
+    tests: u64,
+    unresolved: u64,
+    findings: usize,
+    engine: &[(&str, &str)],
+) -> Value {
+    let (code, json, summary) = analyze(root, engine);
     assert_eq!(json["testsAnalyzed"], tests);
     assert_eq!(summary["unresolvedTests"], unresolved, "{summary}");
     assert_eq!(
@@ -183,15 +203,18 @@ fn fifo_and_device_manifests_do_not_block_either_reader_path() {
         .status()
         .unwrap()
         .success());
-    let output = Command::cargo_bin("vitest-dedup")
-        .unwrap()
-        .arg(root)
-        .args(["--globals", "--no-metrics"])
-        .timeout(Duration::from_secs(10))
-        .output()
-        .unwrap();
-    assert!(
-        output.status.code().is_some(),
-        "prerequisite reader timed out"
-    );
+    for engine in ENGINES {
+        let output = Command::cargo_bin("vitest-dedup")
+            .unwrap()
+            .envs(engine.iter().copied())
+            .arg(root)
+            .args(["--globals", "--no-metrics"])
+            .timeout(Duration::from_secs(10))
+            .output()
+            .unwrap();
+        assert!(
+            output.status.code().is_some(),
+            "prerequisite reader timed out: {engine:?}"
+        );
+    }
 }

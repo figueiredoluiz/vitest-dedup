@@ -17,7 +17,9 @@ impl HeapBytes for Exclusion {
             | Self::Benchmark
             | Self::RegisteredElsewhere
             | Self::UnprovedRunner
-            | Self::DynamicBindings => 0,
+            | Self::DynamicBindings
+            | Self::UnreadableImport
+            | Self::UnreadableManifest => 0,
         }
     }
 }

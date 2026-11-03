@@ -221,10 +221,6 @@
       "reason": "The default engine abstains on this file; the next engine compares identical text in an identical context, as decided."
     },
     {
-      "id": "recall-absent|framework-package-manifest-oversized|duplicate-test|metadata.test.ts:7,metadata.test.ts:8",
-      "reason": "The default engine abstains on this file; the next engine compares identical text in an identical context, as decided."
-    },
-    {
       "id": "recall-extra|function-title-unresolved|duplicate-test|run.test.ts:5,run.test.ts:6",
       "reason": "The next engine renders no dynamic title and locates a participant at its call, so the finding differs in shape, not in claim."
     },

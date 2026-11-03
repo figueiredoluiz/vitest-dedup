@@ -81,9 +81,15 @@ struct Run {
 
 /// Runs the analyzer over `root` with the terminal and JSON reporters and collects the outcome.
 fn run(root: &Path, extra: &[&str]) -> Run {
+    run_with(root, extra, &[])
+}
+
+/// [`run`] with `environment` set.
+fn run_with(root: &Path, extra: &[&str], environment: &[(&str, &str)]) -> Run {
     let stem = root.join("out/report");
     let output = assert_cmd::Command::cargo_bin("vitest-dedup")
         .unwrap()
+        .envs(environment.iter().copied())
         .current_dir(root)
         .arg(root)
         .args(["--reporters", "terminal,json", "--output"])
@@ -149,7 +155,11 @@ fn absent_extends_target_is_named_with_its_generator() {
     assert_eq!(entries[0]["kind"], "tsconfig-extends");
     assert_eq!(entries[0]["path"], ".nuxt/tsconfig.json");
     assert_eq!(entries[0]["fix"], "nuxt prepare");
-    assert_eq!(entries[0]["unresolvedImports"], 3);
+    // Every import under the missing tsconfig fails; the next engine never resolves the framework's
+    // own module, so it counts the two helper imports and not `vitest`.
+    let next = std::env::var_os("VITEST_DEDUP_ENGINE").is_some_and(|engine| engine == "next");
+    let unresolved = if next { 2 } else { 3 };
+    assert_eq!(entries[0]["unresolvedImports"], unresolved);
     assert!(
         report
             .stdout
@@ -158,11 +168,11 @@ fn absent_extends_target_is_named_with_its_generator() {
         report.stdout
     );
     assert!(
-        report.stdout.contains(
+        report.stdout.contains(&format!(
             "`.nuxt/tsconfig.json` is missing: a tsconfig extends it for path aliases and \
              compiler options, and without it no import under that tsconfig resolves \
-             (3 import(s) stayed unresolved). Run `nuxt prepare`."
-        ),
+             ({unresolved} import(s) stayed unresolved). Run `nuxt prepare`."
+        )),
         "{}",
         report.stdout
     );
@@ -353,6 +363,46 @@ fn missing_node_modules_names_the_install_command_the_lockfile_implies() {
             report.stdout
         );
     }
+}
+
+/// The next engine reports a missing install with the command its lockfile implies, counting the
+/// package import once however many of its readers resolve it.
+#[test]
+fn the_next_engine_names_a_missing_install() {
+    let directory = package_project(Some("pnpm-lock.yaml"), None);
+    let report = run_with(directory.path(), &[], &[("VITEST_DEDUP_ENGINE", "next")]);
+    let entries = prerequisites(&report);
+    assert_eq!(entries.len(), 1, "{entries:?}");
+    assert_eq!(entries[0]["kind"], "node-modules");
+    assert_eq!(entries[0]["fix"], "pnpm install");
+    assert_eq!(entries[0]["unresolvedImports"], 1);
+    assert_eq!(report.json["incomplete"], true);
+}
+
+/// The next engine counts each import under a missing tsconfig target once.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "tsconfig discovery from a canonical importer does not work on Windows yet"
+)]
+fn the_next_engine_counts_each_import_under_a_missing_tsconfig_once() {
+    let directory = project();
+    let root = directory.path();
+    write(
+        root,
+        "tsconfig.json",
+        r#"{ "extends": "./.nuxt/tsconfig.json" }"#,
+    );
+    write(
+        root,
+        "package.json",
+        r#"{ "devDependencies": { "nuxt": "3.0.0" } }"#,
+    );
+    let report = run_with(root, &[], &[("VITEST_DEDUP_ENGINE", "next")]);
+    let entries = prerequisites(&report);
+    assert_eq!(entries.len(), 1, "{entries:?}");
+    assert_eq!(entries[0]["kind"], "tsconfig-extends");
+    assert_eq!(entries[0]["unresolvedImports"], 2);
 }
 
 /// Without a lockfile no package manager is named.

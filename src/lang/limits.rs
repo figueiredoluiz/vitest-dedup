@@ -7,6 +7,13 @@
 /// The independent raw syntax budget below is essential: this stack is finite, not crash recovery.
 pub(crate) const EXTRACTION_STACK_BYTES: usize = 128 * 1024 * 1024;
 
+/// The stack the next engine parses on. Besides oxc's own recursion, building the owned tree
+/// serializes the AST to ESTree JSON, deserializes it, converts it and drops it, each recursing with
+/// the source's nesting: on a debug build the current core's [`EXTRACTION_STACK_BYTES`] overflows
+/// from about 33,000 raw syntax units, under [`MAX_RAW_SYNTAX_UNITS`]. Sized so the budget stays a third of the shallowest
+/// overflow, as it is for the current core; a reservation, touched only as deep as a source nests.
+pub(crate) const PARSE_STACK_BYTES: usize = 512 * 1024 * 1024;
+
 /// Maximum lexical bracket depth, retaining the existing tighter limit on ordinary source.
 /// This scan is an admission heuristic, not a safety bound: regex/JSX can confuse its masking.
 pub(crate) const MAX_NESTING_DEPTH: usize = 256;

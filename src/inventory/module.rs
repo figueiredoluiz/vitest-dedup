@@ -62,6 +62,12 @@ struct Module<'s> {
     /// Globals the module writes through the global object, `None` for a key only known when it
     /// runs, which may be any of them.
     rewritten_globals: HashSet<Option<String>>,
+    /// Set while one scan runs: origins and wrappers cannot change until it ends, so neither can a
+    /// callee chain's answer.
+    scanning: std::cell::Cell<bool>,
+    /// During a scan, nodes from which a callee chain reaches no registration root. A chain through
+    /// one of them reaches none either, so a chain of `n` calls is walked once, not `n` times.
+    dead_chains: std::cell::RefCell<HashSet<NodeId>>,
 }
 
 /// The inventory of a module, and the export names whose value registers when called with what
@@ -87,6 +93,8 @@ pub(super) fn analyse(
         redeclared: HashSet::new(),
         evaluates: false,
         rewritten_globals: HashSet::new(),
+        scanning: std::cell::Cell::new(false),
+        dead_chains: std::cell::RefCell::default(),
     };
     module.redeclared = module.redeclarations();
     module.evaluates = module.has_direct_eval();
@@ -202,11 +210,33 @@ impl<'s> Module<'s> {
     }
 
     /// A callee chain's root origin and the steps applied to it.
-    fn chain(&self, mut node: NodeId) -> Option<(Origin, Provenance, Vec<Step<'s>>)> {
+    fn chain(&self, node: NodeId) -> Option<(Origin, Provenance, Vec<Step<'s>>)> {
+        if !self.scanning.get() {
+            return self.walk(node, &mut Vec::new());
+        }
+        let mut visited = Vec::new();
+        let found = self.walk(node, &mut visited);
+        if found.is_none() {
+            self.dead_chains.borrow_mut().extend(visited);
+        }
+        found
+    }
+
+    /// [`Self::chain`]'s walk, recording each node it passes in `visited`; a node already known to
+    /// reach no root ends it.
+    fn walk(
+        &self,
+        mut node: NodeId,
+        visited: &mut Vec<NodeId>,
+    ) -> Option<(Origin, Provenance, Vec<Step<'s>>)> {
         let tree = self.tree;
         let mut steps = Vec::new();
         loop {
             node = tree.inner(node);
+            if self.dead_chains.borrow().contains(&node) {
+                return None;
+            }
+            visited.push(node);
             if let Some((origin, provenance)) = self.root_origin(node) {
                 steps.reverse();
                 return Some((origin, provenance, steps));
@@ -934,8 +964,18 @@ impl<'s> Module<'s> {
         (tree.kind(id) == "Identifier").then(|| self.declares(id))?
     }
 
-    /// Every call or tagged template of the module whose callee registers, as it stands now.
+    /// Every call or tagged template of the module whose callee registers, as it stands now. Chains
+    /// found to reach no root are remembered for the scan alone.
     fn scan(&self) -> Vec<Found> {
+        self.dead_chains.borrow_mut().clear();
+        self.scanning.set(true);
+        let found = self.scan_calls();
+        self.scanning.set(false);
+        found
+    }
+
+    /// [`Self::scan`]'s walk over the calls.
+    fn scan_calls(&self) -> Vec<Found> {
         let tree = self.tree;
         tree.nodes()
             .filter_map(|node| {

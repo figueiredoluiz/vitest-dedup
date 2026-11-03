@@ -409,3 +409,45 @@ fn parsed_property(source: &str) -> Option<String> {
     let property = tree.nodes().find(|&node| tree.kind(node) == "Property")?;
     super::property_name(tree, property).map(str::to_owned)
 }
+
+/// A refused manifest is charged to the thread whose lookup needed it, however many threads
+/// resolve at once: a healthy import never reads as refused, and a refused one always does.
+#[test]
+fn concurrent_lookups_keep_their_own_manifest_refusals() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    for (name, manifest) in [
+        ("healthy", r#"{"name":"healthy"}"#.to_owned()),
+        (
+            "refused",
+            format!(r#"{{"name":"refused"}}{}"#, " ".repeat(1024 * 1024)),
+        ),
+    ] {
+        let package = root.join("node_modules").join(name);
+        fs::create_dir_all(&package).unwrap();
+        fs::write(package.join("index.js"), "export const value = 1;").unwrap();
+        fs::write(package.join("package.json"), manifest).unwrap();
+    }
+    let importer = root.join("a.test.ts");
+    fs::write(&importer, "").unwrap();
+    std::thread::scope(|scope| {
+        for thread in 0..8 {
+            let (importer, root) = (&importer, &root);
+            scope.spawn(move || {
+                let package = if thread % 2 == 0 {
+                    "healthy"
+                } else {
+                    "refused"
+                };
+                for _ in 0..50 {
+                    let _ = resolve_file(importer, package, root);
+                    assert_eq!(
+                        super::take_manifest_refusal(),
+                        package == "refused",
+                        "{package}"
+                    );
+                }
+            });
+        }
+    });
+}

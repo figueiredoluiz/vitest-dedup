@@ -60,9 +60,9 @@
 //! [`Resolved::Unresolved`], never opened, and recorded for [`take_refusals`] so the file's
 //! extraction says so.
 
-mod manifest_fs;
-
-use manifest_fs::ManifestResolver as Resolver;
+use crate::lang::manifest_fs::ManifestResolver as Resolver;
+pub(super) use crate::lang::packages::is_node_builtin;
+use crate::lang::packages::is_package_specifier;
 use oxc_resolver::{ResolveOptions, TsconfigDiscovery};
 use oxc_span::VALID_EXTENSIONS;
 use std::cell::RefCell;
@@ -118,129 +118,6 @@ pub fn take_resolution_gaps() -> ResolutionGaps {
 }
 
 /// Node core module specifiers that are imported without the `node:` prefix and are never installed:
-/// `module.builtinModules` of Node 26 without its prefixed entries, plus the `_stream_*` names that
-/// earlier versions still list. Matched exactly, subpaths included, so `fs/promises` is a builtin
-/// and `fs/not-real` is a package lookup.
-const NODE_BUILTINS: &[&str] = &[
-    "_http_agent",
-    "_http_client",
-    "_http_common",
-    "_http_incoming",
-    "_http_outgoing",
-    "_http_server",
-    "_tls_common",
-    "_stream_duplex",
-    "_stream_passthrough",
-    "_stream_readable",
-    "_stream_transform",
-    "_stream_wrap",
-    "_stream_writable",
-    "_tls_wrap",
-    "assert",
-    "assert/strict",
-    "async_hooks",
-    "buffer",
-    "child_process",
-    "cluster",
-    "console",
-    "constants",
-    "crypto",
-    "dgram",
-    "diagnostics_channel",
-    "dns",
-    "dns/promises",
-    "domain",
-    "events",
-    "fs",
-    "fs/promises",
-    "http",
-    "http2",
-    "https",
-    "inspector",
-    "inspector/promises",
-    "module",
-    "net",
-    "os",
-    "path",
-    "path/posix",
-    "path/win32",
-    "perf_hooks",
-    "process",
-    "punycode",
-    "querystring",
-    "readline",
-    "readline/promises",
-    "repl",
-    "stream",
-    "stream/consumers",
-    "stream/promises",
-    "stream/web",
-    "string_decoder",
-    "sys",
-    "timers",
-    "timers/promises",
-    "tls",
-    "trace_events",
-    "tty",
-    "url",
-    "util",
-    "util/types",
-    "v8",
-    "vm",
-    "wasi",
-    "worker_threads",
-    "zlib",
-];
-
-/// Whether `specifier` is spelled like a request for an installed package rather than as something
-/// that is plainly not one: a relative, absolute or `#`-internal path, a `~`, `~~`, `@@` or `@/` alias, a URI
-/// scheme or drive path (a colon in the first segment, `npm:` and `jsr:` included), a backslash
-/// path, a package name with whitespace, or a scope with no name. Only the package part is judged: a
-/// subpath or a `?query` suffix may contain anything, and legacy names are accepted, because
-/// refusing a real package would hide a missing install. An alias written like a package
-/// (`@app/missing`) cannot be told apart by its spelling.
-fn has_package_syntax(specifier: &str) -> bool {
-    let head = specifier.split(['?', '#']).next().unwrap_or_default();
-    if head.is_empty()
-        || head.starts_with(['.', '/'])
-        || ["~", "~~", "@@"].contains(&head)
-        || ["~/", "~~/", "@@/"]
-            .iter()
-            .any(|alias| head.starts_with(alias))
-        || head.contains('\\')
-    {
-        return false;
-    }
-    let mut parts = head.split('/');
-    let first = parts.next().unwrap_or_default();
-    let plain = |segment: &str| !segment.contains(':') && !segment.contains(char::is_whitespace);
-    match first.strip_prefix('@') {
-        Some(scope) => {
-            let name = parts.next().unwrap_or_default();
-            !scope.is_empty() && !name.is_empty() && plain(scope) && plain(name)
-        }
-        None => plain(first),
-    }
-}
-
-/// Whether `specifier` is a Node core module (prefixed, or one of the unprefixed names).
-pub(super) fn is_node_builtin(specifier: &str) -> bool {
-    specifier.starts_with("node:") || NODE_BUILTINS.contains(&specifier)
-}
-
-/// Whether `specifier` names an installable package the analyzer does not resolve by name.
-///
-/// Node's prefix-only modules (`node:sqlite`, `node:sea`, `node:test`) are not in the builtin list:
-/// without the prefix those names are ordinary packages, and `test` is a real one.
-fn is_package_specifier(specifier: &str) -> bool {
-    has_package_syntax(specifier)
-        && !(specifier.starts_with("node:")
-            || NODE_BUILTINS.contains(&specifier)
-            || specifier == "vitest"
-            || specifier.starts_with("vitest/")
-            || specifier.starts_with("@vitest/"))
-}
-
 /// Records why a resolution failed when the cause is an absent prerequisite.
 fn record_failure(importing_file: &Path, specifier: &str, error: &oxc_resolver::ResolveError) {
     use oxc_resolver::ResolveError;
@@ -318,25 +195,28 @@ pub(super) fn quietly<T>(body: impl FnOnce() -> T) -> T {
 /// `module`/`main` entry fields and the given tsconfig handling. Other options retain their
 /// resolver defaults.
 fn build_resolver(tsconfig: Option<TsconfigDiscovery>) -> Resolver {
-    Resolver::new(ResolveOptions {
-        // The base `oxc_resolver` defaults only try `.js`/`.json`/`.node` -- correct for plain
-        // Node resolution, wrong for a TypeScript test corpus, where `./helpers` routinely names
-        // `helpers.ts`. `oxc_span::VALID_EXTENSIONS` is the same list this codebase's own parser
-        // uses to decide what it can parse at all (`oxc_span = "=0.149.0"` is already a
-        // dependency), so the extensions this resolver will try are guaranteed to match the
-        // extensions the rest of this crate considers source files.
-        extensions: VALID_EXTENSIONS
-            .iter()
-            .map(|ext| format!(".{ext}"))
-            .collect(),
-        // Matches the condition names `oxc_linter`'s own import resolver uses for the same
-        // Node/TS-source-resolution problem, favoring a package's ESM/bundler entry point over a
-        // CJS one when a package exports map offers both.
-        condition_names: vec!["module".into(), "import".into()],
-        main_fields: vec!["module".into(), "main".into()],
-        tsconfig,
-        ..ResolveOptions::default()
-    })
+    Resolver::new(
+        ResolveOptions {
+            // The base `oxc_resolver` defaults only try `.js`/`.json`/`.node` -- correct for plain
+            // Node resolution, wrong for a TypeScript test corpus, where `./helpers` routinely names
+            // `helpers.ts`. `oxc_span::VALID_EXTENSIONS` is the same list this codebase's own parser
+            // uses to decide what it can parse at all (`oxc_span = "=0.149.0"` is already a
+            // dependency), so the extensions this resolver will try are guaranteed to match the
+            // extensions the rest of this crate considers source files.
+            extensions: VALID_EXTENSIONS
+                .iter()
+                .map(|ext| format!(".{ext}"))
+                .collect(),
+            // Matches the condition names `oxc_linter`'s own import resolver uses for the same
+            // Node/TS-source-resolution problem, favoring a package's ESM/bundler entry point over a
+            // CJS one when a package exports map offers both.
+            condition_names: vec!["module".into(), "import".into()],
+            main_fields: vec!["module".into(), "main".into()],
+            tsconfig,
+            ..ResolveOptions::default()
+        },
+        record_manifest_refusal,
+    )
 }
 
 /// The outcome of resolving one specifier as written in one importing file.

@@ -8,15 +8,17 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-/// Resolver plus the first refused manifest from its current lookup.
-pub(super) struct ManifestResolver {
+/// Resolver plus the first refused manifest from its current lookup, and what to do with one.
+pub(crate) struct ManifestResolver {
     resolver: ResolverGeneric<ManifestFileSystem>,
     refused: Arc<Mutex<Option<PathBuf>>>,
+    on_refusal: fn(&Path),
 }
 
 impl ManifestResolver {
-    /// Keeps ordinary resolver options and filesystem behavior, bounding only package manifests.
-    pub(super) fn new(options: ResolveOptions) -> Self {
+    /// Keeps ordinary resolver options and filesystem behavior, bounding only package manifests;
+    /// `on_refusal` records a required manifest the bounded reader refused.
+    pub(crate) fn new(options: ResolveOptions, on_refusal: fn(&Path)) -> Self {
         let refused = Arc::new(Mutex::new(None));
         let fs = ManifestFileSystem {
             inner: FileSystemOs::new(),
@@ -25,11 +27,12 @@ impl ManifestResolver {
         Self {
             resolver: ResolverGeneric::new_with_file_system(fs, options),
             refused,
+            on_refusal,
         }
     }
 
     /// Rejects the whole lookup if upstream tried to fall back past refused package metadata.
-    pub(super) fn resolve_file(
+    pub(crate) fn resolve_file(
         &self,
         file: &Path,
         specifier: &str,
@@ -44,7 +47,7 @@ impl ManifestResolver {
             // Upstream treats read errors as missing metadata and caches ancestor/index fallback.
             // These resolvers are thread-local, so clearing cannot race another lookup.
             self.resolver.clear_cache();
-            super::record_manifest_refusal(&path);
+            (self.on_refusal)(&path);
             return Err(ResolveError::InvalidPackageConfig(path));
         }
         result

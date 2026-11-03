@@ -744,20 +744,109 @@ fn refused_package_metadata_is_reported_without_tainting_independent_files() {
         format!("{{\"name\":\"owned\"}}{}", " ".repeat(1024 * 1024)),
     );
     write(root, "dependent.test.ts", "import { test, expect } from 'vitest';\nimport { value } from 'owned';\ntest('first', () => expect(value).toBe(1));\ntest('second', () => expect(value).toBe(1));\n");
-    let result = run(root, &[]);
-    assert_eq!(result.json["testsAnalyzed"], 3);
-    assert_eq!(result.json["unresolvedTests"], 2);
-    assert!(result.json["findings"].as_array().unwrap().is_empty());
-    assert_listed(
-        &result,
-        &[Expect {
-            path: "dependent.test.ts",
-            reason: "package-manifest-unreadable",
-            others: &[],
-            excluded: 2,
-            total: 2,
-        }],
+    // Both engines refuse the oversized manifest and leave only the dependent file's tests out.
+    for environment in [&[][..], &[("VITEST_DEDUP_ENGINE", "next")][..]] {
+        let result = run_with(root, &[], environment);
+        assert_eq!(result.json["testsAnalyzed"], 3, "{environment:?}");
+        assert_eq!(result.json["unresolvedTests"], 2, "{environment:?}");
+        assert!(result.json["findings"].as_array().unwrap().is_empty());
+        assert_listed(
+            &result,
+            &[Expect {
+                path: "dependent.test.ts",
+                reason: "package-manifest-unreadable",
+                others: &[],
+                excluded: 2,
+                total: 2,
+            }],
+        );
+    }
+}
+
+/// A refused manifest a shared helper needs reaches every file that imports the helper, and a file
+/// with no test to leave out is still incomplete.
+#[test]
+fn a_refused_manifest_behind_a_shared_helper_reaches_every_importer() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    write(root, "clean.test.ts", CLEAN);
+    write(
+        root,
+        "node_modules/owned/index.js",
+        "export const value = 1;",
     );
+    write(
+        root,
+        "node_modules/owned/package.json",
+        format!("{{\"name\":\"owned\"}}{}", " ".repeat(1024 * 1024)),
+    );
+    write(root, "helper.ts", "import { value } from 'owned';\nexport const read = () => value;\nexport const unused = 1;\n");
+    let pair = "import { test, expect } from 'vitest';\nimport { read } from './helper';\ntest('first', () => expect(read()).toBe(1));\ntest('second', () => expect(read()).toBe(1));\n";
+    write(root, "a.test.ts", pair);
+    write(root, "b.test.ts", pair);
+    let result = run_with(root, &[], &[("VITEST_DEDUP_ENGINE", "next")]);
+    assert_eq!(result.json["testsAnalyzed"], 5);
+    assert_eq!(
+        result.json["unresolvedTests"], 4,
+        "{:#}",
+        result.json["excludedFiles"]
+    );
+    assert!(result.json["findings"].as_array().unwrap().is_empty());
+    let listed: Vec<_> = result.json["excludedFiles"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|entry| {
+            (
+                entry["path"].as_str().unwrap().to_owned(),
+                entry["reason"].clone(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        listed,
+        [
+            (
+                "a.test.ts".to_owned(),
+                serde_json::json!("package-manifest-unreadable")
+            ),
+            (
+                "b.test.ts".to_owned(),
+                serde_json::json!("package-manifest-unreadable")
+            ),
+        ]
+    );
+    // A file whose only import is the helper, with no test of its own, still reads in part.
+    let lone = tempfile::tempdir().unwrap();
+    write(lone.path(), "clean.test.ts", CLEAN);
+    write(
+        lone.path(),
+        "node_modules/owned/index.js",
+        "export const value = 1;",
+    );
+    write(
+        lone.path(),
+        "node_modules/owned/package.json",
+        format!("{{\"name\":\"owned\"}}{}", " ".repeat(1024 * 1024)),
+    );
+    write(
+        lone.path(),
+        "helper.ts",
+        "import { value } from 'owned';\nexport const unused = value;\n",
+    );
+    write(
+        lone.path(),
+        "only.test.ts",
+        "import { unused } from './helper';\n",
+    );
+    let result = run_with(lone.path(), &[], &[("VITEST_DEDUP_ENGINE", "next")]);
+    assert_eq!(result.json["incomplete"], true, "{:#}", result.json);
+    assert!(result.json["excludedFiles"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|entry| entry["path"] == "only.test.ts"
+            && entry["reason"] == "package-manifest-unreadable"));
 }
 
 /// The next engine's reasons for a test it leaves unresolved, one file each, beside a clean file
