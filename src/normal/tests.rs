@@ -521,6 +521,41 @@ fn literal_table_rows_bind_into_the_callback() {
     })
 }
 
+/// A row cell stops describing a parameter after the callback writes that binding.
+#[test]
+fn written_row_parameters_are_never_substituted() {
+    let main = "test.each([[6]])('simple', (x) => { x = 5; expect(x).toBe(6) })\n\
+                test.each([[6]])('compound', (x) => { x += 1; expect(x).toBe(6) })\n\
+                test.each([[6]])('update', (x) => { x++; expect(x).toBe(6) })\n\
+                test.each([[6]])('destructure', (x) => { [x] = [5]; expect(x).toBe(6) })\n\
+                test.each([[6]])('loop', (x) => { for (x of [5]) {} expect(x).toBe(6) })\n\
+                test.each([[6]])('nested', (x) => { const write = () => { x = 5 }; write(); expect(x).toBe(6) })\n\
+                test.for([{ x: 6 }])('object', ({ x }) => { x = 5; expect(x).toBe(6) })\n\
+                test.each([[6]])('missing', (x, y) => { y = 5; expect(x).toBe(6) })\n\
+                test.each([[6]])('shadow', (x) => { { let x = 0; x = 1; expect(x).toBe(1) } expect(x).toBe(6) })\n\
+                test('shadow spelled', () => { { let x = 0; x = 1; expect(x).toBe(1) } expect(6).toBe(6) })\n\
+                test.for([6])('whole extra', (x, y) => { y = 5; expect(x).toBe(6) })";
+    with_normalizer(main, &[], true, |normalizer, tree, found| {
+        let keyed: Vec<_> = found
+            .sites
+            .iter()
+            .map(|site| site_forms(normalizer, tree, site.node))
+            .collect();
+        assert!(
+            keyed[..8].iter().all(|forms| forms == &[None]),
+            "{keyed:#?}"
+        );
+        assert_eq!(
+            keyed[8][0], keyed[9][0],
+            "a write to a shadow must not refuse the row parameter"
+        );
+        assert!(
+            keyed[10][0].is_some(),
+            "a whole row does not propose a substitution for the extra parameter"
+        );
+    })
+}
+
 /// `for` passes each row whole; outer elisions are skipped while spreads remain unreadable.
 #[test]
 fn whole_rows_are_never_spread_and_outer_holes_are_skipped() {

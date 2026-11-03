@@ -168,6 +168,35 @@ fn parameterization_uses_proven_rows_once_per_declaration() {
     assert_eq!(candidates[0].titles, ["row 0", "manual"]);
 }
 
+/// A written table parameter is not the row cell; unwritten rows still match written-out tests.
+#[test]
+fn written_table_parameters_do_not_create_duplicate_or_parameterization_findings() {
+    let source = include_str!(
+        "../../../fixtures/recall/duplicate-test-written-each-parameter-negative/parse.test.ts"
+    );
+    let corpus = eligible(source, 2);
+    let findings = owned_findings("parse.test.ts", corpus).findings;
+    assert!(
+        findings.iter().all(|finding| !matches!(
+            finding.rule,
+            Rule::DuplicateTest | Rule::ParameterizationCandidate
+        )),
+        "{findings:#?}"
+    );
+
+    let retained = format!(
+        "{HEADER}test.each([[6]])('row', x => expect(x).toBe(6)); \
+         test('manual', () => expect(6).toBe(6));"
+    );
+    let findings = owned_findings("control.test.ts", eligible(&retained, 2)).findings;
+    let duplicates: Vec<_> = findings
+        .iter()
+        .filter(|finding| finding.rule == Rule::DuplicateTest)
+        .collect();
+    assert_eq!(duplicates.len(), 1, "{findings:#?}");
+    assert_eq!(duplicates[0].titles, ["row", "manual"]);
+}
+
 /// The runtime and recall sources retain their declaration outcomes under each row ordering.
 #[test]
 fn parameterization_owned_row_order() {

@@ -351,7 +351,7 @@ impl Normalizer<'_> {
                     if tree.kind(parameter) != "Identifier" {
                         return None;
                     }
-                    let symbol = self.scopes.symbol_at(tree.span(parameter).start)?;
+                    let symbol = self.unwritten_parameter(parameter)?;
                     let value = match cells.get(index) {
                         Some(&cell) => self.cell(symbol, cell, structural)?,
                         None => undefined(),
@@ -362,7 +362,7 @@ impl Normalizer<'_> {
             Row::Whole(value, properties) => match parameters.first().copied() {
                 None => {}
                 Some(parameter) if tree.kind(parameter) == "Identifier" => {
-                    let symbol = self.scopes.symbol_at(tree.span(parameter).start)?;
+                    let symbol = self.unwritten_parameter(parameter)?;
                     let cell = self.cell(symbol, *value, structural)?;
                     bound.insert(symbol, cell);
                 }
@@ -378,7 +378,7 @@ impl Normalizer<'_> {
                             return None;
                         }
                         let key = property_name(tree, property)?.to_owned();
-                        let symbol = self.scopes.symbol_at(tree.span(binding).start)?;
+                        let symbol = self.unwritten_parameter(binding)?;
                         let value = match properties.iter().rev().find(|(name, _)| *name == key) {
                             Some((_, cell)) => self.cell(symbol, *cell, structural)?,
                             // A key the object lacks is read from `Object.prototype`.
@@ -393,6 +393,17 @@ impl Normalizer<'_> {
         }
         let every = matches!(row, Row::Spread(_)) || parameters.len() <= 1;
         Some((bound, every))
+    }
+
+    /// The parameter's symbol when its invocation value remains stable for every read.
+    fn unwritten_parameter(&self, parameter: NodeId) -> Option<SymbolId> {
+        let symbol = self.scopes.symbol_at(self.tree.span(parameter).start)?;
+        self.scopes
+            .symbol(symbol)
+            .references
+            .iter()
+            .all(|reference| !reference.write)
+            .then_some(symbol)
     }
 
     /// A cell's normal form to write in for `symbol`: a cell that creates or allocates an object

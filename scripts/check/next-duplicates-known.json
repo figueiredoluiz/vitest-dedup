@@ -77,10 +77,6 @@
       "reason": "False positive: calls of two different imported helpers key alike."
     },
     {
-      "id": "recall-absent|duplicate-test-written-each-parameter-negative|duplicate-test|parse.test.ts:18,parse.test.ts:23",
-      "reason": "False positive: a row parameter that is reassigned is still substituted by its row."
-    },
-    {
       "id": "recall-absent|framework-package-mock-call-uninstalled|duplicate-test|users.test.ts:14,users.test.ts:19",
       "reason": "The default engine abstains on this file; the next engine compares identical text in an identical context, as decided."
     },
