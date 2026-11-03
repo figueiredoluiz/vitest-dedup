@@ -38,6 +38,37 @@
       ]
     },
     {
+      "name": "empty-suite-table-retention",
+      "path": "empty-suite-table-retention",
+      "rule": "duplicate-test",
+      "role": "positive",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-03",
+      "expectedTests": 2,
+      "expectedIncomplete": false,
+      "expectedUnresolved": 0,
+      "expectedFindings": [
+        {
+          "rule": "duplicate-test",
+          "severity": "error",
+          "titles": [
+            "kept first",
+            "kept second"
+          ]
+        }
+      ],
+      "expectedAbsent": [
+        {
+          "rule": "duplicate-test",
+          "locations": [
+            "main.test.ts:12",
+            "main.test.ts:19"
+          ]
+        }
+      ]
+    },
+    {
       "name": "runner-shared-declaration-retention",
       "path": "runner-shared-declaration-retention",
       "rule": "cross-file-duplicate",

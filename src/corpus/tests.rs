@@ -1554,6 +1554,71 @@ fn empty_table_counts_require_proven_zero_rows() {
     }
 }
 
+/// Nothing declared inside a suite table proved to have no rows registers, at any depth; a table
+/// with rows, or one whose rows are unread, keeps its tests (counts as Vitest 5.0.5 collects them).
+#[test]
+fn a_suite_table_with_no_rows_registers_nothing_inside_it() {
+    let control = "test('control', () => { expect(1).toBe(1); });";
+    for (body, cases, containers) in [
+        ("describe.each([])('s %s', () => { test('t', () => { expect(1).toBe(1); }); });", 1, 0),
+        ("describe.for([])('s %s', () => { test('t', () => { expect(1).toBe(1); }); });", 1, 0),
+        (
+            "describe('outer', () => { describe.each([])('inner %s', () => { \
+             test('t', () => { expect(1).toBe(1); }); }); });",
+            1,
+            1,
+        ),
+        (
+            "describe.each([])('outer %s', () => { describe('inner', () => { \
+             test('deep', () => { expect(1).toBe(1); }); }); });",
+            1,
+            0,
+        ),
+        (
+            "describe.each(unknownRows)('s %s', () => { test('t', () => { expect(1).toBe(1); }); });",
+            2,
+            1,
+        ),
+        ("describe.each([])('s %s', () => { bench('b', () => {}); });", 1, 0),
+    ] {
+        let source =
+            format!("import {{bench, describe, test, expect}} from 'vitest'; {body}\n{control}");
+        let result = corpora(&[("a.test.ts", &source)], &["a.test.ts"]).remove(0);
+        assert_eq!(result.tests.len(), cases, "{body}");
+        assert_eq!(result.containers, containers, "{body}");
+    }
+}
+
+/// A wrapper called inside a suite table with no rows is never called, so it leaves no
+/// `registered-elsewhere` placeholder; with a row, the placeholder stays.
+#[test]
+fn a_wrapper_inside_an_empty_suite_table_leaves_no_placeholder() {
+    let runner = "import { test, expect } from 'vitest';\n\
+        export function run() { test('first', () => { expect(1).toBe(1); }); }\n";
+    for (rows, cases) in [("[]", 1), ("[1]", 2)] {
+        let source = format!(
+            "import {{describe, test, expect}} from 'vitest'; import {{ run }} from './runner';\n\
+             describe.each({rows})('s %s', () => {{ run(); }});\n\
+             test('control', () => {{ expect(2).toBe(2); }});"
+        );
+        let result = corpora(
+            &[("a.test.ts", &source), ("runner.ts", runner)],
+            &["a.test.ts"],
+        )
+        .remove(0);
+        assert_eq!(result.tests.len(), cases, "{rows}");
+        assert_eq!(
+            result
+                .tests
+                .iter()
+                .filter(|case| case.exclusion == Some(Exclusion::RegisteredElsewhere))
+                .count(),
+            cases - 1,
+            "{rows}"
+        );
+    }
+}
+
 /// A confinement refusal travels with the module that traverses it: the module's analysis is
 /// not cached, so every importer re-derives the refusal and marks its own read partial instead
 /// of inheriting silence from a cache hit.

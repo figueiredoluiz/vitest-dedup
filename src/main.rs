@@ -1665,6 +1665,14 @@ mod tests {
         )]);
         assert!(suites.contains("statically empty"), "{suites}");
         assert!(!suites.contains("only suite containers"), "{suites}");
+        // A test inside that table never registers, so the file is still only an empty table.
+        let (code, nested) = run_next(&[(
+            "empty.test.ts",
+            "import { describe, test, expect } from 'vitest';\n\
+             describe.each([])('s %s', () => { test('t', () => { expect(1).toBe(1); }); });\n",
+        )]);
+        assert_eq!(code, Some(ExitCode::OperationalError.code()), "{nested}");
+        assert!(nested.contains("statically empty"), "{nested}");
     }
 
     /// One ordinary file with nothing extracted keeps the `globals` advice: the empty table does not
