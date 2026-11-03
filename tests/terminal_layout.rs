@@ -2,6 +2,10 @@
 use assert_cmd::Command;
 use serde_json::Value;
 
+#[path = "support/engine.rs"]
+mod engine;
+use engine::selected_version;
+
 /// A minimal owned input shared by layout and stream-policy regressions.
 fn duplicate_project() -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
@@ -118,7 +122,7 @@ fn policy_report(dir: &std::path::Path, flags: &[&str]) -> (std::process::Output
 fn policy_footer_matches_threshold_new_limit_and_baseline() {
     let dir = duplicate_project();
     let baseline = dir.path().join("baseline.json");
-    vitest_dedup::modes::write_baseline(&baseline, &[]).unwrap();
+    vitest_dedup::modes::write_baseline_as(&baseline, &[], selected_version()).unwrap();
     let path = baseline.to_str().unwrap();
     for (flags, exit, threshold, policy) in [
         (vec!["--threshold", "99"], 1, "99.00% — FAIL", "FAIL"),

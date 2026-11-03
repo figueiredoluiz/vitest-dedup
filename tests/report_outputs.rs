@@ -3,6 +3,12 @@
 #[cfg(unix)]
 use vitest_dedup::modes;
 
+#[cfg(unix)]
+#[path = "support/engine.rs"]
+mod engine;
+#[cfg(unix)]
+use engine::selected_version;
+
 const DUPLICATE_PAIR: &str = r#"
     import { test, expect } from 'vitest';
 
@@ -113,7 +119,12 @@ fn file_outputs_replace_symlinks_without_following_them() {
                     assert_eq!(report["testsAnalyzed"], 2);
                     assert_eq!(report["findings"].as_array().unwrap().len(), 1);
                 }
-                "baseline" => assert_eq!(modes::load_baseline(&path).unwrap().total(), 1),
+                "baseline" => assert_eq!(
+                    modes::load_baseline_as(&path, selected_version())
+                        .unwrap()
+                        .total(),
+                    1
+                ),
                 "sarif" => {
                     let report: serde_json::Value = serde_json::from_str(&body).unwrap();
                     assert_eq!(report["runs"][0]["results"].as_array().unwrap().len(), 1);
