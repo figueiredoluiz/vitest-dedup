@@ -566,3 +566,47 @@ fn an_unproved_suite_call_does_not_clear_its_children_or_taint_the_root() {
     assert_eq!(findings.len(), 1, "{findings:?}");
     assert_eq!(findings[0].titles, ["root first", "root second"]);
 }
+
+/// Module metadata does not depend on the invocation, so a runner callback reading
+/// `import.meta` is expanded and compared; a callback reading the invocation's own
+/// `arguments` stays refused.
+#[test]
+fn an_import_meta_callback_is_compared_while_arguments_stay_refused() {
+    let runner = include_str!("../../../fixtures/recall/runner-import-meta/runner.ts");
+    let caller = include_str!("../../../fixtures/recall/runner-import-meta/meta.test.ts");
+    let corpus = corpora(
+        &[("runner.ts", runner), ("meta.test.ts", caller)],
+        &["meta.test.ts"],
+    )
+    .remove(0);
+    assert_eq!(corpus.tests.len(), 2);
+    assert!(corpus.tests.iter().all(|case| case.exclusion.is_none()));
+    let findings = findings(corpus);
+    assert_eq!(findings.len(), 2, "{findings:?}");
+    assert_eq!(findings[0].rule, Rule::DuplicateTest);
+    assert_eq!(
+        findings[0].titles,
+        ["page reads module metadata", "page reads module metadata"]
+    );
+    assert_eq!(findings[1].rule, Rule::DuplicateTestName);
+
+    let receiver_runner =
+        include_str!("../../../fixtures/recall/runner-arguments-receiver/runner.ts");
+    let receiver_caller =
+        include_str!("../../../fixtures/recall/runner-arguments-receiver/caller.test.ts");
+    let corpus = corpora(
+        &[
+            ("runner.ts", receiver_runner),
+            ("caller.test.ts", receiver_caller),
+        ],
+        &["caller.test.ts"],
+    )
+    .remove(0);
+    assert_eq!(corpus.tests.len(), 1);
+    // The refusal surfaces as the wrapper reach: what the callback sees depends on the call.
+    assert_eq!(
+        corpus.tests[0].exclusion,
+        Some(Exclusion::RegisteredElsewhere)
+    );
+    assert!(findings_in(corpus, "caller.test.ts").is_empty());
+}
