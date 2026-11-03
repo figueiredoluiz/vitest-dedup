@@ -1528,23 +1528,29 @@ fn historical_source_authority_survives_cache_recovery() {
     assert_ne!(live.files[0].1[0].key, first);
 }
 
-/// Empty-table diagnostics use the normalizer's recorded row result, never a syntax guess.
+/// Empty-table diagnostics use the normalizer's recorded row result, never a syntax guess; a suite
+/// table proved empty is an empty table, and only another suite declaration is a container.
 #[test]
 fn empty_table_counts_require_proven_zero_rows() {
-    for (declaration, empty, cases) in [
-        ("test.each([])('empty', n => expect(n).toBe(1));", 1, 0),
-        ("test.for([])('empty', n => expect(n).toBe(1));", 1, 0),
-        ("test.each([1, 2])('row', n => expect(n).toBe(1));", 0, 2),
+    for (declaration, empty, cases, containers) in [
+        ("test.each([])('empty', n => expect(n).toBe(1));", 1, 0, 0),
+        ("test.for([])('empty', n => expect(n).toBe(1));", 1, 0, 0),
+        ("test.each([1, 2])('row', n => expect(n).toBe(1));", 0, 2, 0),
         (
             "test.each(unknownRows)('unknown', n => expect(n).toBe(1));",
             0,
             1,
+            0,
         ),
+        ("describe.each([])('empty %s', () => {});", 1, 0, 0),
+        ("describe.each([1])('row %s', () => {});", 0, 0, 1),
+        ("describe('plain', () => {});", 0, 0, 1),
     ] {
-        let source = format!("import {{test, expect}} from 'vitest'; {declaration}");
+        let source = format!("import {{describe, test, expect}} from 'vitest'; {declaration}");
         let result = corpora(&[("a.test.ts", &source)], &["a.test.ts"]).remove(0);
         assert_eq!(result.tests.len(), cases, "{declaration}");
         assert_eq!(result.empty_tables, empty, "{declaration}");
+        assert_eq!(result.containers, containers, "{declaration}");
     }
 }
 

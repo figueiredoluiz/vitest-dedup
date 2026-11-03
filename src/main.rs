@@ -5,9 +5,9 @@
 //! the same pipeline is reachable by embedders.
 
 use anyhow::{Context, Result};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::{IsTerminal, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode as ProcessExitCode;
 use std::time::Instant;
 use vitest_dedup::cli::{ExitCode, ParsedArgs, ReporterKind};
@@ -240,6 +240,36 @@ fn write_roof_diagnostic(
     Ok(())
 }
 
+/// Reads each helper source the engine used once: its inline suppressions apply, and the text is
+/// kept for the HTML report when `retain` is given the map and its running size.
+fn take_helper_sources(
+    sources: impl IntoIterator<Item = (PathBuf, String)>,
+    root: &Path,
+    seen: &mut BTreeSet<PathBuf>,
+    suppressions: &mut Vec<modes::InlineSuppression>,
+    mut retain: Option<(&mut BTreeMap<PathBuf, String>, &mut usize)>,
+) {
+    for (path, source) in sources {
+        if !seen.insert(path.clone()) {
+            continue;
+        }
+        // The next engine names its helpers root-relative already; resolving one against the
+        // working directory would join it to a different file of the same relative name.
+        let relative = if path.is_absolute() {
+            relativize_test_path(&path, root)
+        } else {
+            path.clone()
+        };
+        suppressions.extend(modes::scan_inline_suppressions(&source, relative.clone()));
+        if let Some((kept, text)) = retain.as_mut() {
+            let length = source.len();
+            if kept.insert(relative, source).is_none() {
+                **text += length;
+            }
+        }
+    }
+}
+
 /// Parse arguments and run discovery, extraction, analysis and reporting with native RSS samples.
 fn run() -> Result<ExitCode> {
     run_with_rss(ParsedArgs::parse()?, rss::current_bytes)
@@ -429,6 +459,7 @@ fn run_with_engine(
                 ))
             });
             let mut base_suppressions = Vec::new();
+            let mut base_helper_sources = BTreeSet::new();
             // One base file is held at a time; the roof stops the read, not only the extraction.
             let unread = modes::revision_sources(
                 &config.root,
@@ -447,7 +478,7 @@ fn run_with_engine(
                             &source.content,
                             source.relative.clone(),
                         ));
-                        let (_, partial) = engine.read(
+                        let read = engine.read_with_sources(
                             &path,
                             &source.relative,
                             &source.content,
@@ -458,6 +489,16 @@ fn run_with_engine(
                             },
                             false,
                             Vec::new(),
+                        );
+                        let partial = read.partial;
+                        // The committed helper text, so a directive the base revision carried
+                        // suppresses the finding it suppressed there.
+                        take_helper_sources(
+                            read.helper_sources,
+                            &config.root,
+                            &mut base_helper_sources,
+                            &mut base_suppressions,
+                            None,
                         );
                         files.ensure_readable()?;
                         base_causes.files_partially_read += usize::from(partial);
@@ -849,7 +890,7 @@ fn run_with_engine(
                 root: &config.root,
             };
             let relative = relativize_test_path(&file.path, &config.root);
-            let (entry, partial) = engine.read(
+            let read = engine.read_with_sources(
                 &file.path,
                 &relative,
                 &source,
@@ -860,6 +901,24 @@ fn run_with_engine(
                     .into_iter()
                     .collect(),
             );
+            let (entry, partial) = (read.excluded_file, read.partial);
+            take_helper_sources(
+                read.helper_sources,
+                &config.root,
+                &mut seen_helper_sources,
+                &mut inline_suppressions,
+                retain_sources.then_some((&mut retained_sources, &mut retained_text)),
+            );
+            // A file read only in part is named beside its primary cause, as the current core's
+            // extraction diagnostics are; the reports carry every reason.
+            if let (true, Some(entry)) = (partial, &entry) {
+                diagnostics.push(Sanitized::new(&format!(
+                    "{}: {}",
+                    display_relative(&file.path, &config.root),
+                    entry.detail
+                )));
+                diagnostic_files.insert(file.path.clone());
+            }
             excluded.extend(entry);
             causes.files_partially_read += usize::from(partial);
             // Source kept for the HTML report is held whichever engine read the file.
@@ -870,22 +929,13 @@ fn run_with_engine(
         if extraction.incomplete {
             causes.files_partially_read += 1;
         }
-        for (path, helper_source) in std::mem::take(&mut extraction.helper_sources) {
-            if !seen_helper_sources.insert(path.clone()) {
-                continue;
-            }
-            let relative = relativize_test_path(&path, &config.root);
-            inline_suppressions.extend(modes::scan_inline_suppressions(
-                &helper_source,
-                relative.clone(),
-            ));
-            if retain_sources {
-                let length = helper_source.len();
-                if retained_sources.insert(relative, helper_source).is_none() {
-                    retained_text += length;
-                }
-            }
-        }
+        take_helper_sources(
+            std::mem::take(&mut extraction.helper_sources),
+            &config.root,
+            &mut seen_helper_sources,
+            &mut inline_suppressions,
+            retain_sources.then_some((&mut retained_sources, &mut retained_text)),
+        );
         if extraction.proven_empty {
             proven_empty_files.insert(file.path.clone());
         }
@@ -1009,6 +1059,14 @@ fn run_with_engine(
             // accounted for this way: one ordinary file mixed in still means the usual `globals`
             // explanation applies to at least that file, and must not be suppressed by another
             // file's unrelated, fully-explained emptiness.
+            if let Some(engine) = &next_engine {
+                proven_empty_files.extend(
+                    engine
+                        .proven_empty_files()
+                        .iter()
+                        .map(|relative| config.root.join(relative)),
+                );
+            }
             if proven_empty_files.len() == files_read {
                 writeln!(
                     stderr,
@@ -1021,7 +1079,10 @@ fn run_with_engine(
                     discovered.files.len(),
                 )?;
                 diagnostics::write_empty_files(&mut stderr, &proven_empty_files, &config.root)?;
-            } else if !tests.is_empty() {
+            } else if next_engine
+                .as_ref()
+                .map_or(!tests.is_empty(), |engine| engine.containers > 0)
+            {
                 writeln!(
                     stderr,
                     "\nvitest-dedup: discovered {} test file(s) but extracted only suite \
@@ -1563,6 +1624,129 @@ mod tests {
         }
     }
 
+    /// Runs the next engine over `files` and returns the exit code and stderr.
+    fn run_next(files: &[(&str, &str)]) -> (Option<i32>, String) {
+        let directory = tempfile::tempdir().unwrap();
+        for (name, contents) in files {
+            let path = directory.path().join(name);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, contents).unwrap();
+        }
+        let output = assert_cmd::Command::cargo_bin("vitest-dedup")
+            .unwrap()
+            .arg(directory.path())
+            .args(["--reporters", "json", "--no-metrics", "--output"])
+            .arg(directory.path().join("report"))
+            .env("VITEST_DEDUP_ENGINE", "next")
+            .output()
+            .unwrap();
+        (
+            output.status.code(),
+            String::from_utf8_lossy(&output.stderr).into_owned(),
+        )
+    }
+
+    const EMPTY_TABLE: &str = "import { test, expect } from 'vitest';\n\
+        test.each([])('never %s', (v) => { expect(v).toBe(1); });\n";
+
+    /// A run whose every file holds only statically empty tables says so, and does not send the
+    /// reader to `--globals`.
+    #[test]
+    fn the_next_engine_names_statically_empty_tables_when_nothing_was_compared() {
+        let (code, stderr) = run_next(&[("empty.test.ts", EMPTY_TABLE)]);
+        assert_eq!(code, Some(ExitCode::OperationalError.code()), "{stderr}");
+        assert!(stderr.contains("statically empty"), "{stderr}");
+        assert!(stderr.contains("empty.test.ts"), "{stderr}");
+        assert!(!stderr.contains("--globals"), "{stderr}");
+        // A suite table proved empty is an empty table, not a suite container.
+        let (_, suites) = run_next(&[(
+            "empty.test.ts",
+            "import { describe } from 'vitest';\ndescribe.each([])('s %s', () => {});\n",
+        )]);
+        assert!(suites.contains("statically empty"), "{suites}");
+        assert!(!suites.contains("only suite containers"), "{suites}");
+    }
+
+    /// One ordinary file with nothing extracted keeps the `globals` advice: the empty table does not
+    /// explain it. The same holds when the empty table's file also failed to parse.
+    #[test]
+    fn the_next_engine_keeps_the_globals_advice_unless_every_file_is_proven_empty() {
+        let (_, mixed) = run_next(&[
+            ("empty.test.ts", EMPTY_TABLE),
+            ("plain.test.ts", "import { test } from 'vitest';\nfoo();\n"),
+        ]);
+        assert!(
+            mixed.contains("--globals") && !mixed.contains("statically empty"),
+            "{mixed}"
+        );
+        let (_, broken) = run_next(&[(
+            "bad.test.ts",
+            "import { test, expect } from 'vitest';\n\
+             test.each([])('x %s', (v) => { expect(v).toBe(1); });\nconst = ;\n",
+        )]);
+        assert!(
+            broken.contains("--globals") && !broken.contains("statically empty"),
+            "{broken}"
+        );
+        // A suite whose children are not read (an ambient `it` without `globals`) is a declaration
+        // the table does not explain: the run is a suite-only one.
+        let (_, ambient) = run_next(&[(
+            "ambient.test.ts",
+            "import { test, describe } from 'vitest';\n\
+             test.each([])('never %s', () => {});\n\
+             describe('d', () => { it('x', () => { expect(1).toBe(1); }); });\n",
+        )]);
+        assert!(
+            ambient.contains("only suite containers") && !ambient.contains("statically empty"),
+            "{ambient}"
+        );
+        // A direct `eval` is a refusal of its own, so the empty table is not all the file holds.
+        let (_, refused) = run_next(&[(
+            "eval.test.ts",
+            "import { test, expect } from 'vitest';\n\
+             test.each([])('x %s', (v) => { expect(v).toBe(1); });\neval('1');\n",
+        )]);
+        assert!(
+            refused.contains("--globals") && !refused.contains("statically empty"),
+            "{refused}"
+        );
+    }
+
+    /// A file that only registers suites is a retained container, not a test that runs; a suite
+    /// with a test inside gives no zero-work message at all.
+    #[test]
+    fn the_next_engine_tells_a_suite_only_run_from_an_empty_one() {
+        let (code, stderr) = run_next(&[(
+            "suite.test.ts",
+            "import { describe } from 'vitest';\ndescribe('container', () => {});\n",
+        )]);
+        assert_eq!(code, Some(ExitCode::OperationalError.code()), "{stderr}");
+        assert!(stderr.contains("only suite containers"), "{stderr}");
+        let (code, stderr) = run_next(&[(
+            "suite.test.ts",
+            "import { describe, test, expect } from 'vitest';\n\
+             describe('s', () => { test('t', () => { expect(1).toBe(1); }); });\n",
+        )]);
+        assert_eq!(code, Some(ExitCode::Success.code()), "{stderr}");
+        assert!(!stderr.contains("extracted"), "{stderr}");
+    }
+
+    /// A file read only in part is listed under the diagnostics beside its root-relative path; a
+    /// clean file is not.
+    #[test]
+    fn the_next_engine_lists_a_partly_read_file_among_the_diagnostics() {
+        let (_, stderr) = run_next(&[
+            ("src/broken.test.ts", "test(: broken {\n"),
+            (
+                "src/clean.test.ts",
+                "import { test, expect } from 'vitest';\ntest('c', () => { expect(1).toBe(1); });\n",
+            ),
+        ]);
+        assert!(stderr.contains("could not be fully analyzed"), "{stderr}");
+        assert!(stderr.contains("src/broken.test.ts: "), "{stderr}");
+        assert!(!stderr.contains("src/clean.test.ts"), "{stderr}");
+    }
+
     /// The next-engine rule preserves its consolidation verdict through the CLI and JSONL.
     #[test]
     fn next_parameterization_reports_cases_to_keep() {
@@ -1925,16 +2109,26 @@ mod tests {
         // `vi.doMock` is not hoisted, so it taints every test in the file (extract.rs F4): both
         // tests here get an unresolved context, which makes the whole file blind.
         let directory = tempfile::tempdir().unwrap();
-        std::fs::write(
-            directory.path().join("blind.test.ts"),
+        //
+        // The next engine does not taint a file for `vi.doMock`; its tests are left out when a
+        // wrapper call registers what the file does not spell, which a self-calling helper does.
+        let blind = if next_engine() {
+            std::fs::write(
+                directory.path().join("rec.ts"),
+                "import { test, expect } from 'vitest';\n\
+                 export function run() { run(); test('x', () => { expect(1).toBe(1); }); }\n",
+            )
+            .unwrap();
+            "import { run } from './rec';\nrun();\n"
+        } else {
             r#"
                 import { test, expect, vi } from 'vitest';
                 vi.doMock('./service', () => ({ run: () => 1 }));
                 test('a', () => { expect(1).toBe(1); });
                 test('b', () => { expect(2).toBe(2); });
-            "#,
-        )
-        .unwrap();
+            "#
+        };
+        std::fs::write(directory.path().join("blind.test.ts"), blind).unwrap();
         std::fs::write(
             directory.path().join("seen.test.ts"),
             r#"
@@ -4637,6 +4831,12 @@ mod tests {
         String::from_utf8_lossy(&output.stderr).into_owned()
     }
 
+    /// Whether this run of the suite selects the next engine, so a fixture or an expectation that
+    /// only one engine can reach follows it.
+    fn next_engine() -> bool {
+        vitest_dedup::corpus::Engine::selected().is_some()
+    }
+
     /// Writes the one file whose analysis carries a diagnostic: a fatal parse error.
     fn write_broken_parse_file(root: &std::path::Path) {
         std::fs::create_dir_all(root.join("src")).unwrap();
@@ -4759,8 +4959,15 @@ mod tests {
             ],
         );
 
-        assert_eq!(code, Some(ExitCode::QualityGateFailed.code()), "{stderr}");
         let report = read_json_report(&prefix);
+        if next_engine() {
+            // The next engine compares suites that hold cases, so two copies with no test inside
+            // are no finding and the run is the operational failure a zero-test run is.
+            assert_eq!(code, Some(ExitCode::OperationalError.code()), "{stderr}");
+            assert_eq!(report["findings"], serde_json::json!([]), "{report:#?}");
+            return;
+        }
+        assert_eq!(code, Some(ExitCode::QualityGateFailed.code()), "{stderr}");
         assert_eq!(report["testsAnalyzed"], serde_json::json!(0));
         assert_eq!(
             report["incompleteCauses"]["nothingRead"],
@@ -4930,14 +5137,25 @@ mod tests {
         // producing diagnostics -- a config this scan learns to read, a shape that stops being
         // degraded -- would leave the assertion above true over almost no lines and still green.
         // These are the four shapes the fixture exists to reach.
+        // The two causes the engines word differently: a parse failure's detail, and the helper
+        // chain past the depth limit (the next engine excludes its tests as `registered-elsewhere`
+        // instead of printing a diagnostic).
+        let (parse_failure, deep_helper) = if next_engine() {
+            ("could not be parsed", "registered-elsewhere")
+        } else {
+            (
+                "fatal parse error",
+                "a called helper's body was not analyzed",
+            )
+        };
         for expected in [
             "the Vitest project map is incomplete",
             "could not be fully analyzed",
             "had EVERY test excluded",
-            "fatal parse error",
+            parse_failure,
             "exceeds the",
             "includeSource",
-            "a called helper's body was not analyzed",
+            deep_helper,
         ] {
             assert!(
                 stderr.contains(expected),

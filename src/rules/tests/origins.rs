@@ -97,3 +97,50 @@ fn origins_do_not_erase_conflicting_module_keys() {
     )
     .is_empty());
 }
+
+/// One row of a runner's table, registered by `owner`.
+fn imported_row(owner: &str, row: usize) -> TestCase {
+    let mut case = imported("runner.ts", owner, 5);
+    case.row = Some(row);
+    case.row_class = Some(0);
+    case
+}
+
+/// A one-row table reached by two calls in one file is one row twice, not two equal rows; two equal
+/// rows reached by the same two calls stay one row finding.
+#[test]
+fn a_table_row_reached_by_two_calls_is_not_its_own_duplicate() {
+    let once = vec![imported_row("a.test.ts", 0), imported_row("a.test.ts", 0)];
+    assert!(once.iter().all(|case| case.exclusion.is_none()));
+    assert!(claims(vec![file("a.test.ts", once)], Rule::DuplicateEachRow).is_empty());
+    let twice = vec![
+        imported_row("a.test.ts", 0),
+        imported_row("a.test.ts", 1),
+        imported_row("a.test.ts", 0),
+        imported_row("a.test.ts", 1),
+    ];
+    let findings = claims(vec![file("a.test.ts", twice)], Rule::DuplicateEachRow);
+    assert_eq!(findings.len(), 1, "{findings:?}");
+    assert_eq!(findings[0].locations.len(), 2, "{findings:?}");
+}
+
+/// Two local tables whose rows pair up row by row make one claim per declaration pair; with an
+/// imported case elsewhere in the run, the second row pair merges its callers into that claim.
+#[test]
+fn row_pairs_of_two_tables_are_one_claim_beside_imported_cases() {
+    let row = |site: u32, row: usize, key: u64| {
+        let mut case = case(site, site, key, 1);
+        case.row = Some(row);
+        case
+    };
+    let files = vec![
+        file(
+            "a.test.ts",
+            vec![row(10, 0, 1), row(10, 1, 2), row(20, 0, 1), row(20, 1, 2)],
+        ),
+        file("b.test.ts", vec![imported("runner.ts", "b.test.ts", 30)]),
+    ];
+    let findings = claims(files, Rule::DuplicateTest);
+    assert_eq!(findings.len(), 1, "{findings:?}");
+    assert_eq!(findings[0].locations.len(), 2, "{findings:?}");
+}

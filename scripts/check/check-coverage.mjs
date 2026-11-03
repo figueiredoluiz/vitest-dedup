@@ -299,6 +299,8 @@ const RUST_MODULES = {
   'src/lang/tree.rs': 97,
   'src/inventory.rs': 96,
   'src/inventory/module.rs': 95,
+  // Runner invocation proofs: first measured at 89.52% (487/544 lines).
+  'src/inventory/runners.rs': 89.5,
   'src/normal.rs': 96,
   'src/normal/form.rs': 90,
   'src/normal/identity.rs': 90,
@@ -316,6 +318,8 @@ const RUST_MODULES = {
   'src/corpus/suites.rs': 93,
   // Hook-chain collection: measured at 99.47% (189/190 lines).
   'src/corpus/hooks.rs': 99.4,
+  // First-party runner expansion: first measured at 94.18% (372/395 lines).
+  'src/corpus/runners.rs': 94.1,
   'src/rules.rs': 100,
   'src/rules/names.rs': 100,
   'src/rules/rows.rs': 100,

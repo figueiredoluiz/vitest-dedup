@@ -213,6 +213,34 @@ fn assert_listed(run: &Run, expected: &[Expect]) {
     assert_eq!(run.json["blindFiles"], every);
 }
 
+/// Whether this run of the suite selects the next engine.
+fn next_engine() -> bool {
+    std::env::var_os("VITEST_DEDUP_ENGINE").is_some_and(|engine| engine == "next")
+}
+
+/// The entry for a file that a nested runner keeps from being compared. The default engine names
+/// the refusal and counts no test; the next engine leaves the one test the runner registers out
+/// as `registered-elsewhere`.
+fn nested_runner(path: &'static str, default: (&'static str, &'static [&'static str])) -> Expect {
+    if next_engine() {
+        Expect {
+            path,
+            reason: "registered-elsewhere",
+            others: &[],
+            excluded: 1,
+            total: 1,
+        }
+    } else {
+        Expect {
+            path,
+            reason: default.0,
+            others: default.1,
+            excluded: 0,
+            total: 0,
+        }
+    }
+}
+
 /// A scenario: files to write, flags, and the expected listing.
 fn scenario(files: &[(&str, &str)], flags: &[&str], expected: &[Expect]) {
     let directory = tempfile::tempdir().unwrap();
@@ -402,13 +430,7 @@ fn a_second_distinct_helper_refusal_is_kept_beside_the_first() {
             ),
         ],
         &[],
-        &[Expect {
-            path: "two.test.ts",
-            reason: "unsupported-expression",
-            others: &["helper-export-unreadable"],
-            excluded: 0,
-            total: 0,
-        }],
+        &[nested_runner("two.test.ts", ("unsupported-expression", &["helper-export-unreadable"]))],
     );
 }
 
@@ -424,17 +446,11 @@ fn a_nested_runner_refusal_keeps_its_own_code() {
         "import { run } from './helpers/rec';\nrun();\n",
     );
     let run = run(directory.path(), &[]);
-    assert_listed(
-        &run,
-        &[Expect {
-            path: "rec.test.ts",
-            reason: "helper-limit",
-            others: &[],
-            excluded: 0,
-            total: 0,
-        }],
-    );
+    assert_listed(&run, &[nested_runner("rec.test.ts", ("helper-limit", &[]))]);
     // The outer sentence carries the nested cause, not only the fact that extraction failed.
+    if next_engine() {
+        return;
+    }
     let detail = run.json["excludedFiles"][0]["detail"].as_str().unwrap();
     assert!(
         detail.contains("could not be fully extracted:") && detail.contains("calls itself"),
@@ -454,13 +470,7 @@ fn a_nested_runner_keeps_every_distinct_refusal_it_hit() {
             ("wrap.test.ts", "import { run } from './helpers/wrap';\nrun();\n"),
         ],
         &[],
-        &[Expect {
-            path: "wrap.test.ts",
-            reason: "unsupported-expression",
-            others: &["helper-effects-unproved"],
-            excluded: 0,
-            total: 0,
-        }],
+        &[nested_runner("wrap.test.ts", ("unsupported-expression", &["helper-effects-unproved"]))],
     );
 }
 

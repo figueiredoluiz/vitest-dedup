@@ -158,10 +158,12 @@ impl Engine {
             tests,
             unresolved,
             empty_tables,
+            containers,
             sites,
             files,
             suites,
             blind,
+            proven_empty,
             retained,
         } = self;
         let Run {
@@ -194,13 +196,19 @@ impl Engine {
             ),
             blind: retained
                 .blind
-                .saturating_add(blind.capacity().saturating_mul(size_of::<BlindFile>())),
+                .saturating_add(blind.capacity().saturating_mul(size_of::<BlindFile>()))
+                .saturating_add(
+                    proven_empty
+                        .capacity()
+                        .saturating_mul(size_of::<std::path::PathBuf>()),
+                ),
             modules: modules.heap_bytes().saturating_add(sources.heap_bytes()),
             exports: exports.heap_bytes(),
             scalars: tests
                 .heap_bytes()
                 .saturating_add(unresolved.heap_bytes())
-                .saturating_add(empty_tables.heap_bytes()),
+                .saturating_add(empty_tables.heap_bytes())
+                .saturating_add(containers.heap_bytes()),
         }
     }
 
