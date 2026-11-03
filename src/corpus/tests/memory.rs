@@ -57,6 +57,7 @@ fn all_engine_populations_are_charged() {
         true,
         Vec::new(),
         false,
+        None,
     );
     assert!(excluded.is_none());
     assert!(!partial);
@@ -154,6 +155,7 @@ fn blind_file_storage_is_independent_of_optional_sites() {
         false,
         Vec::new(),
         false,
+        None,
     );
     assert_eq!(run.tests, 1);
     assert_eq!(run.unresolved, 1);

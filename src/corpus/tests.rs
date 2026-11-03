@@ -882,6 +882,7 @@ fn a_recovered_panic_drops_the_run_caches() {
         false,
         Vec::new(),
         false,
+        None,
     );
     let entry = entry.unwrap();
     assert_eq!(entry.reason, ExclusionReason::ExtractionFailed);
@@ -894,6 +895,7 @@ fn a_recovered_panic_drops_the_run_caches() {
         false,
         Vec::new(),
         false,
+        None,
     );
     assert_eq!(entry.unwrap().reason, ExclusionReason::ExtractionFailed);
     assert!(partial);
@@ -1504,6 +1506,7 @@ fn historical_source_authority_survives_cache_recovery() {
         false,
         Vec::new(),
         false,
+        None,
     );
     engine.read(
         &path,
@@ -1616,6 +1619,37 @@ fn a_wrapper_inside_an_empty_suite_table_leaves_no_placeholder() {
                 .count(),
             cases - 1,
             "{rows}"
+        );
+    }
+}
+
+/// A module no reader can parse, behind a helper two files import, marks both files' reads
+/// partial: the helper is read again for each, not answered from its cache.
+#[test]
+fn an_unparsed_module_behind_a_shared_helper_reaches_every_importer() {
+    let deep = format!(
+        "export const x = {}1{};",
+        "(".repeat(40_000),
+        ")".repeat(40_000)
+    );
+    let helper = "import { x } from './deep';\nexport function register() { return x; }\n";
+    let caller = "import { register } from './helper';\nregister();\n";
+    let result = corpora(
+        &[
+            ("a.test.ts", caller),
+            ("b.test.ts", caller),
+            ("helper.ts", helper),
+            ("deep.ts", &deep),
+        ],
+        &["a.test.ts", "b.test.ts"],
+    );
+    for corpus in &result {
+        assert!(
+            corpus
+                .context_refusals
+                .contains(&Exclusion::UnreadableImport),
+            "{:?}",
+            corpus.context_refusals
         );
     }
 }

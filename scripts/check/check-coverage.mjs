@@ -219,7 +219,9 @@ const RUST_MODULES = {
   // Imported table constants: measured at 94.57% (87/92 instrumented lines).
   'src/frontend/registry/imported_constants.rs': 94,
   'src/frontend/resolver.rs': 100,
-  'src/frontend/resolver/manifest_fs.rs': 99,
+  'src/lang/manifest_fs.rs': 99,
+  // Installable-package classification, shared by both resolvers: first measured at 100% (51/51).
+  'src/lang/packages.rs': 100,
   'src/main.rs': 97,
   // Native memory readers: measured 41/44 instrumented lines (93.18%) on macOS.
   'src/rss.rs': 93,

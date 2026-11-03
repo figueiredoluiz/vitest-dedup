@@ -9,6 +9,8 @@
 mod build;
 pub(crate) mod js_text;
 pub(crate) mod limits;
+pub(crate) mod manifest_fs;
+pub(crate) mod packages;
 mod resolve;
 mod scopes;
 mod sources;
@@ -16,8 +18,9 @@ mod syntax;
 mod tree;
 
 pub use resolve::{
-    classify_tsconfig_gap, confinement_refusals, resolve, resolve_file, take_confinement_refusal,
-    take_tsconfig_gaps, TsconfigGap,
+    classify_tsconfig_gap, confinement_refusals, manifest_refusals, resolve, resolve_file,
+    take_confinement_refusal, take_manifest_refusal, take_package_gaps, take_tsconfig_gaps,
+    TsconfigGap,
 };
 pub use scopes::{Declaration, Imported, Name, Reference, Scopes, Symbol, SymbolId};
 pub use sources::{SourceKind, SourceTree, Sources};
@@ -50,12 +53,12 @@ pub enum Refusal {
 
 /// Parses `source`, read from `path`, whose extension decides the language.
 pub fn parse(path: &Path, source: &str) -> Result<Parsed, Refusal> {
-    // Parsing, serialization and tree building recurse with the source's nesting; the preflight's
-    // budget is sized for the stack the current core extracts on, so they run on one as large.
+    // Parsing, serialization and tree building recurse with the source's nesting, deeper than the
+    // current core's extraction: see [`limits::PARSE_STACK_BYTES`].
     std::thread::scope(|scope| {
         std::thread::Builder::new()
             .name("vitest-dedup-parse".to_owned())
-            .stack_size(limits::EXTRACTION_STACK_BYTES)
+            .stack_size(limits::PARSE_STACK_BYTES)
             .spawn_scoped(scope, || build::parse(path, source))
             .map_err(|_| Refusal::Fatal)?
             .join()

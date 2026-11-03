@@ -49,6 +49,12 @@ pub enum Exclusion {
     UnprovedRunner,
     /// Direct eval can observe or change bindings outside the static reference graph.
     DynamicBindings,
+    /// A module the file imports could not be parsed, so what it exports, and registers, is
+    /// unknown.
+    UnreadableImport,
+    /// A package manifest the file's imports need could not be read, so what they import is
+    /// unknown.
+    UnreadableManifest,
 }
 
 impl Exclusion {
@@ -93,6 +99,16 @@ impl Exclusion {
             Self::DynamicBindings => Some((
                 ExclusionReason::UnresolvedContext,
                 "direct eval can observe or change lexical bindings outside static analysis",
+            )),
+            Self::UnreadableManifest => Some((
+                ExclusionReason::PackageManifestUnreadable,
+                "a package manifest the file's imports need could not be read as a UTF-8 regular \
+                 file of at most 1 MiB, so what they import is unknown",
+            )),
+            Self::UnreadableImport => Some((
+                ExclusionReason::HelperExportUnreadable,
+                "a helper module the file imports could not be parsed, so what it exports and \
+                 registers is unknown",
             )),
             Self::EmptyBody | Self::NoCallback => None,
         }
@@ -339,6 +355,9 @@ fn read_parsed(
         },
         &mut run.modules,
     );
+    // The inventory resolved every import the file makes: a package manifest one of them needed
+    // and the bounded reader refused leaves every test of the file unresolved.
+    let manifest_refused = frame.is_none() && lang::take_manifest_refusal();
     // Instantiation selects registrations, not a different module's mutation facts. Keep
     // every recorded test/hook body for order dependence and registration-time write checks.
     let structure = Structure::of(parsed, &found);
@@ -620,6 +639,10 @@ fn read_parsed(
             }
         };
         let unread_callee = modifiers.is_none();
+        if manifest_refused {
+            tests.extend(excluded(Exclusion::UnreadableManifest));
+            continue;
+        }
         if found.direct_eval {
             tests.extend(excluded(Exclusion::DynamicBindings));
             continue;
@@ -1010,11 +1033,19 @@ fn read_parsed(
     };
     Ok(FileCorpus {
         diagnostic_hooks,
-        context_refusals: if found.direct_eval {
-            vec![Exclusion::DynamicBindings]
-        } else {
-            Vec::new()
-        },
+        context_refusals: [
+            found.direct_eval.then_some(Exclusion::DynamicBindings),
+            // Taken once per file, after every module its reading followed.
+            (frame.is_none() && inventory::take_unread_imports())
+                .then_some(Exclusion::UnreadableImport),
+            // A refused manifest leaves the read partial, whether the inventory or a later
+            // resolution needed it, and whether or not the file has a test to leave out.
+            (frame.is_none() && (lang::take_manifest_refusal() || manifest_refused))
+                .then_some(Exclusion::UnreadableManifest),
+        ]
+        .into_iter()
+        .flatten()
+        .collect(),
         helper_sources: helper_sources.into_iter().collect(),
         hooks,
         suites,
@@ -1151,7 +1182,12 @@ impl Engine {
             Ok(Ok(corpus)) => std::mem::take(&mut corpus.helper_sources),
             _ => Vec::new(),
         };
-        let (excluded_file, partial) = self.record(relative, read, keep_sites, further, confined);
+        // A budget refusal is named by the bound it hit, as the current core names it.
+        let limit = matches!(read, Ok(Err(Refusal::SourceLimit)))
+            .then(|| crate::lang::limits::parse_refusal(source))
+            .flatten();
+        let (excluded_file, partial) =
+            self.record(relative, read, keep_sites, further, confined, limit);
         let partial = partial || confined;
         FileRead {
             excluded_file,
@@ -1170,6 +1206,7 @@ impl Engine {
         keep_sites: bool,
         further: Vec<(ExclusionReason, String)>,
         confined: bool,
+        limit: Option<String>,
     ) -> (Option<ExcludedFile>, bool) {
         let unparsed = |reason, detail: String| {
             let mut reasons = vec![(reason, detail)];
@@ -1190,10 +1227,10 @@ impl Engine {
                         ExclusionReason::ParseError,
                         "the file could not be parsed".to_owned(),
                     ),
-                    Refusal::SourceLimit => unparsed(
-                        ExclusionReason::SourceLimit,
-                        "the file is larger or nests deeper than the parser is given".to_owned(),
-                    ),
+                    // The parser refuses only what `parse_refusal` names, so the text is there.
+                    Refusal::SourceLimit => {
+                        unparsed(ExclusionReason::SourceLimit, limit.unwrap_or_default())
+                    }
                 };
             }
             // Nothing ran, so the caches are as the previous file left them.

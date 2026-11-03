@@ -274,24 +274,48 @@ impl Modules {
         }
         let cuts = self.deep_cuts;
         let confined_before = crate::lang::confinement_refusals();
+        let refused_before = crate::lang::manifest_refusals();
+        let unread_before = UNREAD_IMPORTS.with(std::cell::Cell::get);
+        let mut unparsed = false;
         let exports = self
             .sources
             .read(path)
-            .and_then(|source| {
-                let parsed = crate::lang::parse(path, &source).ok()?;
-                Some(module::analyse(path, &source, &parsed, setting, self, depth).1)
+            .and_then(|source| match crate::lang::parse(path, &source) {
+                Ok(parsed) => Some(module::analyse(path, &source, &parsed, setting, self, depth).1),
+                Err(_) => {
+                    unparsed = true;
+                    None
+                }
             })
             .unwrap_or_default();
         self.active.remove(path);
-        // A module whose analysis saw a confinement refusal is not cached, as with a cut: the
-        // next file re-reads it and records its own confinement instead of inheriting silence.
-        // A module whose analysis saw a confinement refusal is not cached, as with a cut: the
-        // next file re-reads it and records its own confinement instead of inheriting silence.
-        if self.deep_cuts == cuts && crate::lang::confinement_refusals() == confined_before {
+        // Each importer records the refusal itself, so the module is read again, not cached.
+        if unparsed {
+            UNREAD_IMPORTS.with(|count| count.set(count.get() + 1));
+            return exports;
+        }
+        // A module whose analysis saw a confinement refusal, a refused package manifest or a module
+        // it could not parse is not cached, as with a cut: the next file re-reads it and records
+        // its own refusal instead of inheriting silence.
+        if self.deep_cuts == cuts
+            && crate::lang::confinement_refusals() == confined_before
+            && crate::lang::manifest_refusals() == refused_before
+            && UNREAD_IMPORTS.with(std::cell::Cell::get) == unread_before
+        {
             self.cache.insert(key, exports.clone());
         }
         exports
     }
+}
+
+thread_local! {
+    /// Modules a reading followed and could not parse, on the analyzing thread.
+    static UNREAD_IMPORTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Takes whether the calling thread followed a module it could not parse since the last take.
+pub(crate) fn take_unread_imports() -> bool {
+    UNREAD_IMPORTS.with(|count| count.replace(0)) > 0
 }
 
 /// The registration sites of the module at `path`, following project imports through `modules`.

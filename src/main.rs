@@ -575,11 +575,12 @@ fn run_with_engine(
                 let incomplete = result.incomplete();
                 (result.findings, incomplete)
             };
-            // A base read through the next engine records tsconfig gaps of its own. The base
+            // A base read through the next engine records tsconfig and package gaps of its own. The base
             // keeps its existing partial-baseline behavior, so its gaps are drained and dropped
             // here — dropped, so they cannot masquerade as the current run's missing
             // prerequisites at the main pass's drain below.
             let _ = vitest_dedup::lang::take_tsconfig_gaps();
+            let _ = vitest_dedup::lang::take_package_gaps();
             // A base run that could not see the whole tree (oversized, non-UTF-8, or skipped
             // files) produces a PARTIAL baseline: it accepts less than the base really had, so
             // the gate reports findings as new that the base would have accepted. The safe
@@ -1007,6 +1008,12 @@ fn run_with_engine(
             }
         };
         *resolution_gaps.tsconfig.entry(gap).or_insert(0) += count;
+    }
+    for (directory, count) in vitest_dedup::lang::take_package_gaps() {
+        *resolution_gaps
+            .packages_not_found
+            .entry(directory)
+            .or_insert(0) += count;
     }
     causes.missing_prerequisites =
         vitest_dedup::prerequisites::assess(&config.root, &resolution_gaps);

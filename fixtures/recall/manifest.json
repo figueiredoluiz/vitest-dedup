@@ -7428,9 +7428,7 @@
       ],
       "blindUnderCurrent": [
         "metadata.test.ts"
-      ],
-      "expectedIncompleteNext": false,
-      "expectedUnresolvedNext": 0
+      ]
     },
     {
       "name": "function-title-handlers-conflicting",
