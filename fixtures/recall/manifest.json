@@ -8884,6 +8884,61 @@
           ]
         }
       ]
+    },
+    {
+      "name": "runner-import-meta",
+      "path": "runner-import-meta",
+      "rule": "duplicate-test",
+      "role": "positive",
+      "engine": "next",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-03",
+      "expectedTests": 2,
+      "expectedIncomplete": false,
+      "expectedUnresolved": 0,
+      "expectedFindings": [
+        {
+          "rule": "duplicate-test",
+          "severity": "error",
+          "titles": [
+            "page reads module metadata",
+            "page reads module metadata"
+          ]
+        },
+        {
+          "rule": "duplicate-test-name",
+          "severity": "warning",
+          "titles": [
+            "page reads module metadata",
+            "page reads module metadata"
+          ]
+        }
+      ],
+      "expectedAbsent": []
+    },
+    {
+      "name": "runner-arguments-receiver",
+      "path": "runner-arguments-receiver",
+      "rule": "duplicate-test",
+      "role": "negative",
+      "engine": "next",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-03",
+      "expectedTests": 1,
+      "expectedIncomplete": true,
+      "expectedUnresolved": 1,
+      "expectedFindings": [],
+      "expectedAbsent": [
+        {
+          "rule": "duplicate-test",
+          "titles": [
+            "page sees arguments",
+            "page sees arguments"
+          ]
+        }
+      ]
     }
   ],
   "knownFalsePositiveBaseline": 1,

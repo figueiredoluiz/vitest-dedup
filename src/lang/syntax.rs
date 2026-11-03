@@ -4,6 +4,9 @@ use super::{NodeId, Scopes, SymbolId, Tree};
 
 /// Whether a subtree reads its surrounding invocation's receiver or implicit arguments.
 /// Arrow functions inherit those values; ordinary functions and class bodies bind their own.
+/// Meta properties are not receiver reads: Vitest only calls test callbacks, so `new.target`
+/// is deterministically absent and `import.meta` is fixed per module — neither can make two
+/// invocations of the same callback differ.
 pub fn uses_receiver(tree: &Tree, root: NodeId) -> bool {
     let binds = |node| {
         matches!(
@@ -20,7 +23,10 @@ pub fn uses_receiver(tree: &Tree, root: NodeId) -> bool {
     std::iter::once(root)
         .chain(tree.descendants(root))
         .any(|node| {
-            let reads = matches!(tree.kind(node), "ThisExpression" | "Super" | "MetaProperty")
+            // `new.target` flows through ordinary functions — only a construct frame sets it —
+            // so it is invocation-dependent wherever the callback's own frame reaches, but an
+            // intervening ordinary function or class binds its own.
+            let reads = matches!(tree.kind(node), "ThisExpression" | "Super")
                 || (tree.kind(node) == "Identifier"
                     && tree.text(node, "name") == Some("arguments"));
             reads
@@ -83,4 +89,59 @@ pub fn bound_symbols(tree: &Tree, scopes: &Scopes, pattern: NodeId) -> Vec<Symbo
         }
     }
     symbols
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::lang::{parse, Parsed};
+    use std::path::Path;
+
+    /// The body node of the first arrow function in `source`.
+    fn arrow_body(source: &str) -> (Parsed, NodeId) {
+        let parsed = parse(Path::new("a.test.ts"), source).expect("parses");
+        let tree = &parsed.tree;
+        let arrow = tree
+            .nodes()
+            .find(|&node| tree.kind(node) == "ArrowFunctionExpression")
+            .expect("an arrow");
+        let body = tree.child(arrow, "body").expect("a body");
+        (parsed, body)
+    }
+
+    fn body_reads(source: &str) -> bool {
+        let (parsed, body) = arrow_body(source);
+        uses_receiver(&parsed.tree, body)
+    }
+
+    #[test]
+    fn import_meta_is_not_a_receiver_read() {
+        assert!(!body_reads("() => import.meta.url"));
+        assert!(!body_reads("() => ({ env: import.meta.env })"));
+    }
+
+    #[test]
+    fn new_target_reads_are_not_receiver_reads() {
+        // `() => new.target` at module scope does not parse; the factory shape is the valid form.
+        let (parsed, body) = arrow_body("function factory() { return () => new.target }");
+        assert!(parsed.parse_errors == 0);
+        assert!(!uses_receiver(&parsed.tree, body));
+    }
+
+    #[test]
+    fn new_target_in_a_nested_function_binds_its_own() {
+        // The ordinary function between the callback and the read binds its own `new.target`,
+        // so the read does not depend on the callback's invocation.
+        let source =
+            "import { test } from 'vitest'; test('a', () => { function inner() { return new.target } return inner() })";
+        let (parsed, body) = arrow_body(source);
+        assert!(parsed.parse_errors == 0);
+        assert!(!uses_receiver(&parsed.tree, body));
+    }
+
+    #[test]
+    fn this_and_arguments_remain_receiver_reads() {
+        assert!(body_reads("() => this.value"));
+        assert!(body_reads("() => arguments.length"));
+    }
 }
