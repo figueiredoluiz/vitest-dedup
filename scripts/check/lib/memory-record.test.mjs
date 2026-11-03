@@ -16,6 +16,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { test } from 'node:test'
+import { printBreakdown } from '../check-memory.mjs'
 
 import {
   CONTEXT_FIELDS,
@@ -61,6 +62,116 @@ function valid(overrides = {}) {
     ...overrides,
   }
 }
+
+/** The owned record emitted by the binary: legacy buckets are zero and engine attribution sums. */
+function owned() {
+  const engineFields = { cases: 101, suites: 13, hooks: 17, sites: 19, blind: 23, modules: 29, exports: 31, scalars: 0 }
+  const retainedBytes = Object.values(engineFields).reduce((a, b) => a + b, 0)
+  return valid({
+    fields: { body: 0, context: 0, suitePath: 0, title: 0, modifiers: 0, location: 0, spine: 0, scalars: 0, engine: retainedBytes },
+    contextFields: { hooks: 0, mockedModules: 0, fixtures: 0, imports: 0, moduleSetup: 0, scalars: 0 },
+    retainedBytes, bytesPerTest: retainedBytes, engineFields,
+    engineMemoryNotice: 'Retained owned capacity; temporary parser state is excluded.',
+  })
+}
+
+test('the gate prints every owned population with real attribution and the estimate notice', () => {
+  const record = owned()
+  const lines = []
+  printBreakdown(record, (line) => lines.push(line))
+  assert.ok(lines.some((line) => line.includes(record.engineMemoryNotice)))
+  assert.ok(lines.some((line) => line.includes('owned-engine bytes by population')))
+  for (const [key, bytes] of Object.entries(record.engineFields)) {
+    const row = lines.find((line) => line.trim().startsWith(`${key} `))
+    assert.ok(row, key)
+    assert.match(row, new RegExp(`^\\s*${key}\\s+${bytes} bytes/test`))
+    assert.ok(row.includes(`${(100 * bytes / record.retainedBytes).toFixed(1)}%`), row)
+  }
+  assert.ok(!lines.some((line) => line.includes('context`')))
+})
+
+test('the gate preserves legacy attribution and explains empty owned runs without NaN rows', () => {
+  const legacy = []
+  printBreakdown(valid(), (line) => legacy.push(line))
+  assert.ok(legacy.some((line) => /^\s*body\s+500 bytes\/test/.test(line)))
+  assert.ok(legacy.some((line) => line.includes('context`')))
+  assert.ok(!legacy.some((line) => line.includes('owned-engine')))
+  const record = owned()
+  record.testsAnalyzed = 0
+  record.bytesPerTest = 0
+  assert.deepEqual(validateMemoryRecord(record), [])
+  const empty = []
+  printBreakdown(record, (line) => empty.push(line))
+  assert.ok(empty.some((line) => line.includes(record.engineMemoryNotice)))
+  assert.ok(empty.some((line) => line.includes('nothing was analyzed')))
+  assert.ok(!empty.some((line) => line.includes('bytes/test')))
+})
+
+test('owned attribution validates real populations, zero work and the unchanged legacy shape', () => {
+  assert.deepEqual(validateMemoryRecord(owned()), [])
+  const zero = owned()
+  for (const key of Object.keys(zero.engineFields)) zero.engineFields[key] = 0
+  zero.fields.engine = zero.retainedBytes = zero.bytesPerTest = zero.testsAnalyzed = zero.filesAnalyzed = zero.declarationsRetained = 0
+  assert.deepEqual(validateMemoryRecord(zero), [])
+  assert.deepEqual(validateMemoryRecord(valid()), [])
+})
+
+test('owned suite-only and parse-failure records count read files and omit zero engine bytes', () => {
+  const suite = owned()
+  suite.testsAnalyzed = suite.bytesPerTest = suite.declarationsRetained = 0
+  assert.deepEqual(validateMemoryRecord(suite), [])
+  const parse = owned()
+  for (const key of Object.keys(parse.engineFields)) parse.engineFields[key] = 0
+  parse.retainedBytes = parse.bytesPerTest = parse.testsAnalyzed = parse.declarationsRetained = 0
+  delete parse.fields.engine
+  assert.deepEqual(validateMemoryRecord(parse), [])
+  parse.engineFields.modules = 1
+  assert.ok(validateMemoryRecord(parse).some((p) => p.includes('must sum')))
+  const legacy = valid({ testsAnalyzed: 0, bytesPerTest: 0 })
+  assert.ok(validateMemoryRecord(legacy).some((p) => p.includes('filesAnalyzed')))
+})
+
+test('owned attribution rejects every missing, invalid and unknown bucket', () => {
+  for (const key of Object.keys(owned().engineFields)) {
+    for (const value of [undefined, -1, 0.5, '1', NaN, null]) {
+      const record = owned()
+      record.engineFields[key] = value
+      assert.ok(validateMemoryRecord(record).length, `${key}: ${value}`)
+    }
+    const mismatch = owned()
+    mismatch.engineFields[key] += 1
+    assert.ok(validateMemoryRecord(mismatch).some((p) => p.includes('must sum')))
+  }
+  for (const value of [undefined, null, [], 'bad']) {
+    assert.ok(validateMemoryRecord({ ...owned(), engineFields: value }).length)
+  }
+  const extra = owned()
+  extra.engineFields.unaccounted = 0
+  assert.ok(validateMemoryRecord(extra).length)
+})
+
+test('owned attribution requires both breakdowns and the notice without mixing legacy retention', () => {
+  for (const key of ['engineFields', 'engineMemoryNotice']) {
+    const record = owned()
+    delete record[key]
+    assert.ok(validateMemoryRecord(record).length, key)
+  }
+  for (const value of ['', null, 0]) {
+    assert.ok(validateMemoryRecord({ ...owned(), engineMemoryNotice: value }).length)
+  }
+  const missing = owned()
+  delete missing.fields.engine
+  assert.ok(validateMemoryRecord(missing).length)
+  const mixed = owned()
+  mixed.fields.body = 1
+  mixed.retainedBytes += 1
+  mixed.bytesPerTest += 1
+  assert.ok(validateMemoryRecord(mixed).some((p) => p.includes('must not mix')))
+  const outer = owned()
+  outer.retainedBytes += 1
+  outer.bytesPerTest += 1
+  assert.ok(validateMemoryRecord(outer).some((p) => p.includes('sums to')))
+})
 
 /**
  * Every named field must be NAMED in the problems when it holds any of `values`.

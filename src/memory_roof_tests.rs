@@ -11,7 +11,13 @@ fn analyze(
     flags: &[&str],
     resident: impl FnMut() -> Option<u64>,
 ) -> (ExitCode, serde_json::Value) {
-    analyze_on(root, reporters, flags, resident, None)
+    analyze_on(
+        root,
+        reporters,
+        flags,
+        resident,
+        vitest_dedup::corpus::Engine::selected(),
+    )
 }
 
 /// [`analyze`] on the engine given: the next engine, or `None` for the current core.
@@ -47,6 +53,28 @@ fn write_tree(root: &Path, files: usize) {
             format!("import {{test,expect}} from 'vitest'; test('case {file}',()=>{{expect(1).toBe(1)}});"),
         ).unwrap();
     }
+}
+
+/// Boundary controls must inspect findings from the same engine the shell selects.
+#[test]
+fn memory_boundary_harness_uses_the_selected_engine() {
+    let root = tempfile::tempdir().unwrap();
+    write_tree(root.path(), 2);
+    let (_, report) = analyze(root.path(), "json", &["--no-memory-cap"], || {
+        panic!("uncapped sampling")
+    });
+    assert_eq!(report["testsAnalyzed"], 2);
+    assert_eq!(report["filesAnalyzed"], 2);
+    let findings = report["findings"].as_array().unwrap();
+    assert!(!findings.is_empty());
+    let prefix = if vitest_dedup::corpus::Engine::selected().is_some() {
+        "vitestDedupFingerprint/v2:"
+    } else {
+        "vitestDedupFingerprint/v1:"
+    };
+    assert!(findings
+        .iter()
+        .all(|f| f["fingerprint"].as_str().unwrap().starts_with(prefix)));
 }
 
 /// RSS alone selects a prefix, whose findings equal an uncapped run over exactly that prefix.
@@ -166,7 +194,15 @@ fn a_test_file_retained_as_a_helper_is_charged_once() {
         .unwrap();
         let (_, html) = analyze(root.path(), "json,html", &["--max-memory", "1"], || None);
         assert_eq!(html["filesAnalyzed"], 3, "{runner}: {html}");
-        assert_eq!(html["testsAnalyzed"], 2, "{runner}: {html}");
+        // Owned inventory also records the helper declaration's refused registration site.
+        let owned = vitest_dedup::corpus::Engine::selected().is_some();
+        assert_eq!(
+            html["testsAnalyzed"],
+            if owned { 3 } else { 2 },
+            "{runner}: {html}"
+        );
+        assert_eq!(html["unresolvedTests"], usize::from(owned));
+        assert_eq!(html["incompleteCauses"]["filesOverMemoryBudget"], 0);
     }
 }
 

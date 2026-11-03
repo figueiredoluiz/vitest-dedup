@@ -93,6 +93,11 @@ export const CONTEXT_FIELDS = [
   'hooks', 'mockedModules', 'fixtures', 'imports', 'moduleSetup', 'scalars',
 ]
 
+/** Disjoint owned-engine populations; their sum is fields.engine, not additional retention. */
+export const ENGINE_FIELDS = [
+  'cases', 'suites', 'hooks', 'sites', 'blind', 'modules', 'exports', 'scalars',
+]
+
 const isCount = (value) => Number.isInteger(value) && value >= 0
 const sum = (object, keys) => keys.reduce((total, key) => total + object[key], 0)
 
@@ -160,7 +165,16 @@ export function validateMemoryRecord(record) {
     }
   }
 
-  const breakdowns = [['fields', FIELDS], ['contextFields', CONTEXT_FIELDS]]
+  const owned = Object.hasOwn(record, 'engineFields') ||
+    Object.hasOwn(record, 'engineMemoryNotice') ||
+    (record.fields !== null && typeof record.fields === 'object' && Object.hasOwn(record.fields, 'engine'))
+  const fieldKeys = owned && record.fields && Object.hasOwn(record.fields, 'engine')
+    ? [...FIELDS, 'engine'] : FIELDS
+  if (owned && (typeof record.engineMemoryNotice !== 'string' || record.engineMemoryNotice.length === 0)) {
+    problems.push('`engineMemoryNotice` must explain the owned retained-memory estimate')
+  }
+  const breakdowns = [['fields', fieldKeys], ['contextFields', CONTEXT_FIELDS]]
+  if (owned) breakdowns.push(['engineFields', ENGINE_FIELDS])
   for (const [name, keys] of breakdowns) {
     const group = record[name]
     if (group === null || typeof group !== 'object' || Array.isArray(group)) {
@@ -182,7 +196,7 @@ export function validateMemoryRecord(record) {
         `\`${name}\` carries ${extra.map((key) => `\`${key}\``).join(', ')}, which this gate does ` +
           'not know about. A new member is retention nobody budgeted: the sums would still ' +
           'balance and the total would still be compared, so the only symptom would be a bigger ' +
-          `number with no name on it. Add it to ${name === 'fields' ? 'FIELDS' : 'CONTEXT_FIELDS'}` +
+          `number with no name on it. Add it to ${name === 'fields' ? 'FIELDS' : name === 'engineFields' ? 'ENGINE_FIELDS' : 'CONTEXT_FIELDS'}` +
           ' with the measurement it changes.',
       )
     }
@@ -209,7 +223,15 @@ export function validateMemoryRecord(record) {
           'contract says 0. A per-test figure with no tests under it did not come from this run.',
     )
   }
-  const fieldTotal = sum(record.fields, FIELDS)
+  if (owned) {
+    if (sum(record.engineFields, ENGINE_FIELDS) !== (record.fields.engine ?? 0)) {
+      problems.push('`engineFields` must sum to `fields.engine`')
+    }
+    if (FIELDS.some((key) => record.fields[key] !== 0)) {
+      problems.push('owned memory records must not mix legacy field attribution with `fields.engine`')
+    }
+  }
+  const fieldTotal = sum(record.fields, fieldKeys)
   if (fieldTotal !== record.retainedBytes) {
     problems.push(
       `\`fields\` sums to ${fieldTotal} but \`retainedBytes\` is ${record.retainedBytes}. The ` +
@@ -231,7 +253,7 @@ export function validateMemoryRecord(record) {
         `(${record.testsAnalyzed}); it counts suites and benchmarks too, so it cannot be smaller.`,
     )
   }
-  if (record.filesAnalyzed > record.testsAnalyzed) {
+  if (!owned && record.filesAnalyzed > record.testsAnalyzed) {
     problems.push(
       `\`filesAnalyzed\` (${record.filesAnalyzed}) exceeds \`testsAnalyzed\` ` +
         `(${record.testsAnalyzed}); a file with no test is not in the report.`,

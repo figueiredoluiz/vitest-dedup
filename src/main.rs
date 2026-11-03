@@ -292,6 +292,7 @@ fn run_with_engine(
     // compile.
     let mut stderr: std::io::Stderr = std::io::stderr();
     let config = Config::load(&args.root, args.to_overrides())?;
+    let retired_cell_census = next_engine.is_some() && std::env::var_os("VD_CELL_CENSUS").is_some();
 
     if next_engine.is_some() {
         writeln!(
@@ -1369,7 +1370,12 @@ fn run_with_engine(
     }
     stdout.flush()?;
 
-    let census = frontend::take_cell_census();
+    let census = if retired_cell_census {
+        writeln!(stderr, "vitest-dedup: VD_CELL_CENSUS is retired for the owned engine; unreadable tables remain visible as exclusions.")?;
+        Vec::new()
+    } else {
+        frontend::take_cell_census()
+    };
     diagnostics::write_run(
         &mut stderr,
         &diagnostics::RunDiagnostics {
@@ -1879,7 +1885,8 @@ mod tests {
             let mut command = assert_cmd::Command::cargo_bin("vitest-dedup").unwrap();
             command
                 .arg(directory.path())
-                .args(["--reporters", "jsonl", "--threshold", "100"]);
+                .args(["--reporters", "jsonl", "--threshold", "100"])
+                .env_remove("VITEST_DEDUP_ENGINE");
             if enabled {
                 command.env("VD_CELL_CENSUS", "1");
             } else {
