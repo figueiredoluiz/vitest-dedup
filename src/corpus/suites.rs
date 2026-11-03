@@ -27,6 +27,22 @@ pub(super) fn collect(
         .map(|site| (site.node, site))
         .collect();
     let lines = Lines::new(source);
+    // Per-file invariants: with a focus anywhere in the file Vitest runs only the focused tests,
+    // so unfocused suite copies do not run this file's collection as written (copies that are
+    // themselves focused still run and are refused with it — over-refusal only). And a
+    // module-level conditional ending before a suite leaves that suite's registration uncertain.
+    let focused = found.sites.iter().any(|site| {
+        site.chain
+            .iter()
+            .any(|member| matches!(setting.dialect.chain_member(member), Some(Chain::Focus)))
+    });
+    let conditional_from = tree
+        .list(tree.root(), "body")
+        .into_iter()
+        .flatten()
+        .filter(|statement| tree.kind(*statement) == "IfStatement")
+        .map(|statement| tree.span(statement).end)
+        .min();
     let mut suites = Vec::new();
     for site in sites.values() {
         let Some(callback) = normalizer.callback(site.node).filter(|body| body.inline) else {
@@ -101,9 +117,34 @@ pub(super) fn collect(
                 site.span.start <= test.span.start_byte && test.span.end_byte <= site.span.end
             })
             .collect();
+        // Copies whose every child is skipped or a placeholder never run.
+        let all_children_unrun = !children.is_empty()
+            && children.iter().all(|test| {
+                found.sites.iter().any(|site| {
+                    site.kind == SiteKind::Registers(Registers::Test)
+                        && site.span.start <= test.span.start_byte
+                        && test.span.end_byte <= site.span.end
+                        && site.chain.iter().any(|member| {
+                            matches!(
+                                setting.dialect.chain_member(member),
+                                Some(Chain::Skip | Chain::Todo)
+                            )
+                        })
+                })
+            });
+        let registered_conditionally = conditional_from.is_some_and(|from| {
+            let mut at = site.node;
+            while tree.parent(at) != Some(tree.root()) {
+                at = tree.parent(at).expect("the chain reaches the root");
+            }
+            tree.span(at).start >= from
+        });
         if !eligible
             || children.is_empty()
             || children.iter().any(|test| test.exclusion.is_some())
+            || focused
+            || all_children_unrun
+            || registered_conditionally
             || normalizer.order_dependent(body)
         {
             continue;
