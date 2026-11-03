@@ -65,6 +65,7 @@
 // NOT_ISOLABLE.
 import { basename } from 'node:path'
 import { runAnalyzerJsonl } from './run-analyzer.mjs'
+import { isolationRecord } from './owned-records.mjs'
 
 /**
  * The closed vocabulary of variables a negative fixture may declare it isolates.
@@ -395,7 +396,8 @@ export function collectFingerprintRecords(binary, dir) {
   const byFile = new Map()
   const byHookLine = new Map()
   let count = 0
-  for (const record of records) {
+  for (const raw of records) {
+    const record = isolationRecord(raw)
     if (record.type === 'hook') {
       const file = basename(record.path)
       const hookKey = `${file}\n${record.line}`
@@ -826,6 +828,14 @@ function requireComparable(participants) {
   return null
 }
 
+/** A relation needs actual evidence for every field it reads, including equal unknowns. */
+function unavailableView(records, fields) {
+  for (const field of fields) {
+    if (records.some((record) => typeof record[field] !== 'string' || !record[field])) return field
+  }
+  return null
+}
+
 /**
  * Applies one combined dimension's relation: every field in `equal` matches across all
  * participants, every field in `differ` differs between every pair.
@@ -837,6 +847,8 @@ function requireComparable(participants) {
  * already routes an expectation to the matching checker before this runs.
  */
 function applyRelation(participants, equal, differ, declared, why) {
+  const unavailable = unavailableView(participants.map(({ record }) => record), new Set([...equal, ...differ]))
+  if (unavailable) return { status: 'fail', message: `cannot check ${declared}: ${unavailable} evidence is unavailable` }
   for (const field of equal) {
     for (let i = 1; i < participants.length; i += 1) {
       const left = participants[0]
@@ -949,6 +961,9 @@ function relateOverDimensions(expectation, participants) {
 function checkHookFingerprints(expectation, participants) {
   const missing = requireRecords(participants)
   if (missing) return missing
+  if (participants.some(({ record }) => record.engine === 'owned' && record.comparisonKeys.effects === null)) {
+    return { status: 'fail', message: 'owned hook body views do not establish a redundancy comparison proof' }
+  }
 
   const kinds = new Set(participants.map((entry) => entry.record.kind))
   if (kinds.size > 1) {
@@ -975,6 +990,9 @@ function checkHookFingerprints(expectation, participants) {
 function checkTitles(expectation, participants) {
   const missing = requireRecords(participants)
   if (missing) return missing
+  if (participants.some(({ record }) => record.engine === 'owned' && record.comparisonKeys.name === null)) {
+    return { status: 'fail', message: 'owned title evidence is not a proven runtime name' }
+  }
   const leaf = (entry) => entry.record.title.split(' > ').pop()
   const why = DIMENSIONS.get('suite-path').why
   for (let i = 1; i < participants.length; i += 1) {
@@ -1063,6 +1081,10 @@ function checkSuite(expectation, participants) {
             `declares it isolates suite-children, but the aligned child "${leftLeaves[k]}" has a ` +
             `trivial body on one side and is excluded from comparison entirely\n    ${why}`,
         }
+      }
+      const unavailable = unavailableView([a, b], ['structural', 'contextKey', 'modifierKey'])
+      if (unavailable) {
+        return { status: 'fail', message: `cannot check suite-children: ${unavailable} evidence is unavailable for aligned child "${leftLeaves[k]}"` }
       }
       for (const field of ['contextKey', 'modifierKey']) {
         if (a[field] !== b[field]) {

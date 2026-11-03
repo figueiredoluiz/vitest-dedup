@@ -314,6 +314,9 @@ const RUST_MODULES = {
   'src/corpus.rs': 99,
   // Retained next-engine ownership: first measured at 100% (165/165 lines).
   'src/corpus/memory.rs': 100,
+  // Initial owned-record measurements; existing module floors are unchanged.
+  'src/corpus/records.rs': 98.5,
+  'src/reporters/jsonl/owned.rs': 89.7,
   // Whole-suite collection: measured at 93.60% (117/125 lines).
   'src/corpus/suites.rs': 93,
   // Hook-chain collection: measured at 99.47% (189/190 lines).
@@ -435,6 +438,7 @@ const JS_MODULES = {
   'scripts/check/lib/recall-runner.mjs': 87,
   'scripts/check/lib/corpus-labels.mjs': 98,
   'scripts/check/lib/corpus-evaluation.mjs': 98,
+  'scripts/check/lib/owned-records.mjs': 100,
   'scripts/check/lib/corpus-comparison.mjs': 98,
   'scripts/check/lib/excluded-share.mjs': 100,
   'scripts/check/evaluate-corpus.mjs': 98,

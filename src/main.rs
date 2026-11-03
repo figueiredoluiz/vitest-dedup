@@ -1180,10 +1180,10 @@ fn run_with_engine(
     // default engine's rules read the extracted tests. Both share one tail: modes, gate capture,
     // the presentation cap, sorted findings.
     let engine_files = next_engine.as_mut().map(|engine| engine.take_files());
-    let mut result = match engine_files {
+    let mut result = match &engine_files {
         Some(files) => {
             let outcome = vitest_dedup::rules::run_with_hooks(
-                &files,
+                files,
                 next_engine.as_ref().expect("selected engine").suites(),
                 next_engine.as_ref().expect("selected engine").hooks(),
                 &config,
@@ -1299,6 +1299,15 @@ fn run_with_engine(
         .collect();
     let jsonl_reporter = JsonlReporter::with_fingerprints(hook_fingerprints, test_fingerprints)
         .with_memory(memory_reports)
+        .with_owned(
+            engine_files
+                .filter(|_| args.emit_test_fingerprints)
+                .unwrap_or_default(),
+            next_engine
+                .as_mut()
+                .map(|engine| engine.take_diagnostic_hooks())
+                .unwrap_or_default(),
+        )
         .with_sites(
             next_engine
                 .map(|engine| engine.into_sites())
@@ -3995,6 +4004,28 @@ mod tests {
         matches[0]
     }
 
+    /// Read a dimension from the selected engine's explicit diagnostic contract.
+    fn record_view<'a>(record: &'a serde_json::Value, field: &str) -> &'a serde_json::Value {
+        let value = if record["engine"] == "owned" {
+            let view = match field {
+                "alpha" => "body",
+                "structural" => "shape",
+                "behavior" => "trace",
+                "contextKey" => "context",
+                "modifierKey" => "modifiers",
+                _ => panic!("unknown diagnostic dimension"),
+            };
+            &record["views"][view]
+        } else {
+            &record[field]
+        };
+        assert!(
+            value.is_string(),
+            "the requested dimension must be proved: {record}"
+        );
+        value
+    }
+
     /// Two tests that differ in exactly one literal. `structural` collapses literal values to
     /// their kind, `alpha` keeps them, so this pair is the one that pins the difference between
     /// those two fields being real and both being the same hash under another name.
@@ -4011,6 +4042,7 @@ mod tests {
         });
     "#;
 
+    /// Literal-only differences vary the exact body view while preserving the shaped view.
     #[test]
     fn two_tests_differing_only_in_a_literal_share_structural_and_differ_in_alpha() {
         let directory = single_file_project("math.test.ts", LITERAL_ONLY_DIFFERENCE);
@@ -4021,22 +4053,32 @@ mod tests {
         let second = record_titled(&lines, "adds one and two");
 
         assert_eq!(
-            first["structural"], second["structural"],
+            record_view(first, "structural"),
+            record_view(second, "structural"),
             "literal values are collapsed to their kind in `structural`, so a pair differing \
              only in literals must share it: {first} / {second}"
         );
         assert_ne!(
-            first["alpha"], second["alpha"],
+            record_view(first, "alpha"),
+            record_view(second, "alpha"),
             "`alpha` preserves literal values, so this pair must differ in it -- if it does not, \
              `alpha` and `structural` are the same field and a consumer cannot tell a \
              literal-only difference from no difference at all"
         );
         assert_eq!(
-            first["contextKey"], second["contextKey"],
+            record_view(first, "contextKey"),
+            record_view(second, "contextKey"),
             "the pair shares a file, its imports, and its (empty) hook chain"
         );
-        assert_eq!(first["modifierKey"], second["modifierKey"]);
-        assert_eq!(first["trivial"], false);
+        assert_eq!(
+            record_view(first, "modifierKey"),
+            record_view(second, "modifierKey")
+        );
+        if first["engine"] == "owned" {
+            assert_eq!(first["comparable"], true);
+        } else {
+            assert_eq!(first["trivial"], false);
+        }
     }
 
     /// Two byte-identical bodies under different hook chains. The claim a source-level gate can
@@ -4063,6 +4105,7 @@ mod tests {
         });
     "#;
 
+    /// Different hook contexts remain visible independently of identical callback bodies.
     #[test]
     fn two_tests_differing_only_in_a_before_each_share_alpha_and_differ_in_context_key() {
         let directory = single_file_project("machine.test.ts", CONTEXT_ONLY_DIFFERENCE);
@@ -4073,13 +4116,21 @@ mod tests {
         let without_setup = record_titled(&lines, "without setup > computes");
 
         assert_eq!(
-            with_setup["alpha"], without_setup["alpha"],
+            record_view(with_setup, "alpha"),
+            record_view(without_setup, "alpha"),
             "the two bodies are byte-identical: {with_setup} / {without_setup}"
         );
-        assert_eq!(with_setup["structural"], without_setup["structural"]);
-        assert_eq!(with_setup["behavior"], without_setup["behavior"]);
+        assert_eq!(
+            record_view(with_setup, "structural"),
+            record_view(without_setup, "structural")
+        );
+        assert_eq!(
+            record_view(with_setup, "behavior"),
+            record_view(without_setup, "behavior")
+        );
         assert_ne!(
-            with_setup["contextKey"], without_setup["contextKey"],
+            record_view(with_setup, "contextKey"),
+            record_view(without_setup, "contextKey"),
             "one runs under a `beforeEach` and the other does not; a `contextKey` that could not \
              tell them apart would make an `isolates=context` claim uncheckable, which is the \
              entire reason this field is published"
@@ -4165,9 +4216,19 @@ mod tests {
         });
     "#;
 
+    /// Select an input each engine actually excludes, rather than imposing legacy row policy.
+    fn one_refused_record_source() -> &'static str {
+        if next_engine() {
+            "import { test, expect } from 'vitest'; const shared = () => expect(1).toBe(2); test('unresolved case', shared); test('resolved case', () => expect(1).toBeLessThan(2));"
+        } else {
+            ONE_UNRESOLVED_AND_ONE_RESOLVED
+        }
+    }
+
+    /// Published comparability follows the selected engine's recorded exclusion outcome.
     #[test]
     fn a_record_for_an_unresolved_test_carries_comparable_false_and_a_resolved_one_carries_true() {
-        let directory = single_file_project("mixed.test.ts", ONE_UNRESOLVED_AND_ONE_RESOLVED);
+        let directory = single_file_project("mixed.test.ts", one_refused_record_source());
         let root = directory.path();
 
         let lines = run_jsonl(root, &["--reporters", "jsonl", "--emit-test-fingerprints"]);
@@ -4176,9 +4237,8 @@ mod tests {
 
         assert_eq!(
             unresolved["comparable"], false,
-            "this test's `.each` table cannot be statically read, so its context is unresolved \
-             and it must be marked not-comparable rather than left indistinguishable from a \
-             genuinely compared test: {unresolved}"
+            "the selected engine excludes this declaration, so the record must not claim \
+             comparison eligibility: {unresolved}"
         );
         assert_eq!(
             resolved["comparable"], true,
@@ -4189,7 +4249,7 @@ mod tests {
     #[test]
     fn the_count_of_non_comparable_records_matches_summary_unresolved_tests() {
         let (lines, summary) =
-            fingerprint_stream_and_summary("mixed.test.ts", ONE_UNRESOLVED_AND_ONE_RESOLVED);
+            fingerprint_stream_and_summary("mixed.test.ts", one_refused_record_source());
 
         let non_comparable = records_of(&lines, "test")
             .into_iter()
@@ -4208,6 +4268,7 @@ mod tests {
         );
     }
 
+    /// Removing every optional diagnostic record restores the ordinary stream exactly.
     #[test]
     fn the_flag_is_purely_additive_to_the_stream_it_joins() {
         let ((code_off, stdout_off), (code_on, stdout_on)) =
@@ -4219,7 +4280,10 @@ mod tests {
         );
         let on_without_records: String = stdout_on
             .lines()
-            .filter(|line| !line.contains("\"type\":\"test\""))
+            .filter(|line| {
+                let value: serde_json::Value = serde_json::from_str(line).unwrap();
+                !matches!(value["type"].as_str(), Some("test" | "hook" | "site"))
+            })
             .map(|line| format!("{line}\n"))
             .collect();
         assert_eq!(
@@ -4556,6 +4620,7 @@ mod tests {
         });
     "#;
 
+    /// Hook body evidence distinguishes literal values independently of effect eligibility.
     #[test]
     fn two_before_each_hooks_differing_only_in_a_literal_share_structural_and_differ_in_alpha() {
         let directory = single_file_project(
@@ -4576,13 +4641,15 @@ mod tests {
         assert_eq!(outer["kind"], "beforeEach");
         assert_eq!(inner["kind"], "beforeEach");
         assert_eq!(
-            outer["structural"], inner["structural"],
+            record_view(outer, "structural"),
+            record_view(inner, "structural"),
             "literal values are collapsed to their kind in `structural`, so a pair of hook \
              bodies differing only in the connected replica's name must share it: {outer} / \
              {inner}"
         );
         assert_ne!(
-            outer["alpha"], inner["alpha"],
+            record_view(outer, "alpha"),
+            record_view(inner, "alpha"),
             "`alpha` preserves literal values, so this pair must differ in it -- if it does \
              not, `redundant-hook`'s own alpha-equality check could never distinguish this \
              fixture's claim from a genuine redundancy: {outer} / {inner}"
@@ -4608,6 +4675,7 @@ mod tests {
         });
     "#;
 
+    /// Identical hook body views do not erase distinct lifecycle phases.
     #[test]
     fn a_before_each_and_an_after_each_with_identical_bodies_stay_distinguishable_by_kind() {
         let directory = single_file_project(
@@ -4633,11 +4701,18 @@ mod tests {
             .expect("an afterEach record");
 
         assert_eq!(
-            before["alpha"], after["alpha"],
+            record_view(before, "alpha"),
+            record_view(after, "alpha"),
             "the bodies are byte-identical"
         );
-        assert_eq!(before["structural"], after["structural"]);
-        assert_eq!(before["behavior"], after["behavior"]);
+        assert_eq!(
+            record_view(before, "structural"),
+            record_view(after, "structural")
+        );
+        assert_eq!(
+            record_view(before, "behavior"),
+            record_view(after, "behavior")
+        );
         assert_ne!(
             before["kind"], after["kind"],
             "a beforeEach and an afterEach with byte-identical bodies must remain \
@@ -4686,9 +4761,22 @@ mod tests {
         let object = hook.as_object().expect("a hook record is a JSON object");
         let mut actual: Vec<&str> = object.keys().map(String::as_str).collect();
         actual.sort_unstable();
-        assert_eq!(
-            actual,
-            [
+        let expected: &[&str] = if hook["engine"] == "owned" {
+            &[
+                "column",
+                "comparisonKeys",
+                "contentNotice",
+                "engine",
+                "kind",
+                "line",
+                "path",
+                "schemaVersion",
+                "truncatedFields",
+                "type",
+                "views",
+            ]
+        } else {
+            &[
                 "alpha",
                 "behavior",
                 "column",
@@ -4701,7 +4789,10 @@ mod tests {
                 "trivial",
                 "truncatedFields",
                 "type",
-            ],
+            ]
+        };
+        assert_eq!(
+            actual, expected,
             "a hook record must carry exactly these fields -- no `title`, `comparable`, \
              `contextKey`, or `modifierKey`, none of which is a well-defined fact about a hook \
              body on its own (see `HookFingerprint`'s doc comment for why each is omitted \

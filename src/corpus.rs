@@ -6,6 +6,7 @@
 
 mod hooks;
 mod memory;
+pub mod records;
 mod runners;
 mod suites;
 pub use hooks::{Hook, Hooks};
@@ -112,6 +113,8 @@ pub struct Origin {
 pub struct TestCase {
     /// A declaration outside the file that registers it; absent for ordinary inline tests.
     pub origin: Option<Origin>,
+    /// Optional owned normalization evidence, retained only for diagnostic records.
+    pub views: Option<Box<records::Views>>,
     /// The registering call.
     pub span: Span,
     /// The title, when the source spells it.
@@ -200,6 +203,8 @@ pub struct FileCorpus {
     pub suites: Vec<TestCase>,
     /// Its registration sites and module loads.
     pub sites: Vec<SiteRecord>,
+    /// Known hook declarations, including those outside the redundancy proof population.
+    pub diagnostic_hooks: Vec<records::DiagnosticHook>,
     /// Table declarations for which normalization proved zero rows.
     pub empty_tables: usize,
     /// Suite containers registered, whether or not a comparable suite came of them.
@@ -223,6 +228,7 @@ impl FileCorpus {
 #[derive(Debug, Default)]
 pub struct Run {
     sources: lang::Sources,
+    diagnostics: bool,
     modules: inventory::Modules,
     exports: normal::Exports,
 }
@@ -234,6 +240,7 @@ impl Run {
             modules: inventory::Modules::with_sources(sources.clone()),
             exports: normal::Exports::with_sources(sources.clone()),
             sources,
+            diagnostics: false,
         }
     }
 
@@ -283,6 +290,21 @@ fn site_kind(dialect: &Dialect, kind: SiteKind) -> &'static str {
             .map_or("registration", |registration| registration.canonical),
         SiteKind::Wrapper(Reach::Tasks) => "wrapper",
         SiteKind::Wrapper(Reach::Hooks | Reach::Hook) => "hook-wrapper",
+    }
+}
+
+/// Convert a declaration byte range to the report's one-based UTF-16 coordinates.
+fn at_span(lines: &Lines, source: &str, start: u32, end: u32) -> Span {
+    let (line, column) = lines.position(source, start);
+    let (end_line, end_column) = lines.position(source, end);
+    Span {
+        start: Position { line, column },
+        end: Position {
+            line: end_line,
+            column: end_column,
+        },
+        start_byte: start,
+        end_byte: end,
     }
 }
 
@@ -482,6 +504,7 @@ fn read_parsed(
     // A case as its site spells it, before anything keys it.
     let unkeyed_case = |span: Span, title: Option<String>, exclusion: Option<Exclusion>| TestCase {
         origin: None,
+        views: None,
         span,
         title,
         full_title: None,
@@ -527,6 +550,11 @@ fn read_parsed(
             .is_some_and(|scopes| scopes.iter().any(|scope| dead.contains(scope)))
     };
 
+    // Display and comparison names use the same supported test-row renderer.
+    let render_test_row = |pattern: &str, row: &normal::TableRow, whole_rows| {
+        let (arguments, fields) = normal::titles::row(parsed, &row.value, whole_rows);
+        (setting.dialect.render_title)(pattern, &arguments, fields.as_ref(), row.index)
+    };
     let mut tests = Vec::new();
     let mut empty_tables = 0;
     for site in found
@@ -538,6 +566,25 @@ fn read_parsed(
             continue;
         }
         let mut record = unkeyed(site, None);
+        // Display identity survives every refusal; it is not a name-comparison proof.
+        let display_prefix = normalizer.suites_around(site.node).and_then(|scopes| {
+            scopes
+                .iter()
+                .map(|scope| {
+                    structure
+                        .suites
+                        .get(scope)
+                        .and_then(|call| suite_titles.get(call))
+                        .and_then(|title| title.clone())
+                })
+                .collect::<Option<Vec<_>>>()
+        });
+        let display_title = |title: &str| {
+            let mut segments = display_prefix.clone()?;
+            segments.push(title.to_owned());
+            Some(segments.join(" > "))
+        };
+        record.full_title = record.title.as_deref().and_then(display_title);
         let callee = tree.child(site.node, "callee");
         let modifiers = callee.map(|callee| normalizer.modifiers(callee));
         let arguments: Vec<NodeId> = tree
@@ -553,14 +600,23 @@ fn read_parsed(
             .and_then(|modifiers| modifiers.rows.as_ref());
         empty_tables += usize::from(table_rows.is_some_and(Vec::is_empty));
         let excluded = |exclusion| -> Vec<TestCase> {
-            let case = |row| TestCase {
-                row,
-                exclusion: Some(exclusion),
-                ..record.clone()
+            let case = |row: Option<&normal::TableRow>| {
+                let rendered = row.and_then(|row| {
+                    let pattern = record.title.as_deref()?;
+                    let modifiers = modifiers.as_ref()?;
+                    render_test_row(pattern, row, modifiers.whole_rows)
+                });
+                let mut case = record.clone();
+                case.row = row.map(|row| row.index);
+                if let Some(title) = rendered.as_deref().and_then(display_title) {
+                    case.full_title = Some(title);
+                }
+                case.exclusion = Some(exclusion);
+                case
             };
             match table_rows {
                 None => vec![case(None)],
-                Some(rows) => rows.iter().map(|row| case(Some(row.index))).collect(),
+                Some(rows) => rows.iter().map(|row| case(Some(row))).collect(),
             }
         };
         let unread_callee = modifiers.is_none();
@@ -698,21 +754,6 @@ fn read_parsed(
                 .collect(),
         };
         let table = modifiers.rows.is_some();
-        // The suite path a report names a participant by: every enclosing suite's spelled title,
-        // then the test's own. One segment the source does not spell leaves it unnamed.
-        let full_title = record.title.clone().and_then(|title| {
-            let mut segments = Vec::with_capacity(suites.len() + 1);
-            for scope in &suites {
-                let spelled = structure
-                    .suites
-                    .get(scope)
-                    .and_then(|call| suite_titles.get(call))
-                    .and_then(|title| title.as_deref())?;
-                segments.push(spelled.to_owned());
-            }
-            segments.push(title);
-            Some(segments.join(" > "))
-        });
         // Name comparison consumes values, not display fallbacks. In particular an unread table
         // or a suite table cannot stand for its runtime names through a raw pattern.
         let name_prefix: Option<Vec<String>> = suites
@@ -757,14 +798,7 @@ fn read_parsed(
                     .and_then(|(mut segments, pattern)| {
                         let title = if table_site(site) {
                             let row = modifiers.rows.as_ref()?.get(index)?;
-                            let (arguments, fields) =
-                                normal::titles::row(parsed, &row.value, modifiers.whole_rows);
-                            (setting.dialect.render_title)(
-                                pattern,
-                                &arguments,
-                                fields.as_ref(),
-                                row.index,
-                            )?
+                            render_test_row(pattern, row, modifiers.whole_rows)?
                         } else {
                             pattern.to_owned()
                         };
@@ -800,25 +834,41 @@ fn read_parsed(
                 "{chain}{fails}\u{1}{options}\u{1}{unbound}\u{1}{normal_body}\u{1}{context}"
             );
             let form = callback_form.token();
-            let parameterization_key = (trace.complete
-                && !parameterization_uncertain
-                && trace.ordinary_events != 0)
-                .then(|| {
-                    let bound = modifiers
-                        .rows
-                        .as_ref()
-                        .and_then(|rows| rows.get(index))
-                        .and_then(|row| {
-                            normalizer.bind_row_shape(parameters.as_deref()?, &row.value)
-                        })
-                        .map(|(bound, _)| bound)
-                        .unwrap_or_default();
-                    let shape = normalizer.shape(body, bound, *every);
-                    digest(&format!(
-                        "{chain}{fails}\u{1}{options}\u{1}{unbound}\u{1}{shape}\u{1}{context}"
-                    ))
-                });
+            let parameterization_eligible =
+                trace.complete && !parameterization_uncertain && trace.ordinary_events != 0;
+            let shape = (parameterization_eligible || run.diagnostics).then(|| {
+                let bound = modifiers
+                    .rows
+                    .as_ref()
+                    .and_then(|rows| rows.get(index))
+                    .and_then(|row| normalizer.bind_row_shape(parameters.as_deref()?, &row.value))
+                    .map(|(bound, _)| bound)
+                    .unwrap_or_default();
+                normalizer.take_truncated();
+                let shape = normalizer.shape(body, bound, *every);
+                let complete = !normalizer.take_truncated();
+                (shape, complete)
+            });
+            let parameterization_key = parameterization_eligible.then(|| {
+                let shape = &shape.as_ref().expect("eligible shape was rendered").0;
+                digest(&format!(
+                    "{chain}{fails}\u{1}{options}\u{1}{unbound}\u{1}{shape}\u{1}{context}"
+                ))
+            });
+            let views = run.diagnostics.then(|| {
+                let (shape, complete) = shape.as_ref().expect("diagnostic shape was rendered");
+                Box::new(records::Views {
+                    body: digest(&normal_body),
+                    shape: complete.then(|| digest(shape)),
+                    trace: trace
+                        .complete
+                        .then(|| digest(&format!("{:?}", trace.events))),
+                    context: digest(&format!("{context}\u{1}{module_context}")),
+                    modifiers: digest(&format!("{chain}{fails}\u{1}{options}\u{1}{unbound}")),
+                })
+            });
             tests.push(TestCase {
+                views,
                 row: modifiers.rows.as_ref().map(|rows| rows[index].index),
                 row_class,
                 key: digest(&key),
@@ -836,7 +886,6 @@ fn read_parsed(
                     && (!table_site(site) || modifiers.rows.is_some()))
                 .then(|| digest(&format!("{chain}\u{1}{unbound}\u{1}{context}\u{1}{form}"))),
                 callback_form,
-                full_title: full_title.clone(),
                 name,
                 inert: record.inert,
                 ..record.clone()
@@ -938,22 +987,36 @@ fn read_parsed(
         tests.extend(expansion.tests);
         helper_sources.extend(expansion.sources);
     }
+    let hooks = hooks::collect(
+        parsed,
+        &found,
+        &structure,
+        &tests,
+        &mut normalizer,
+        setting.dialect,
+        source,
+    );
+    let diagnostic_hooks = if run.diagnostics {
+        records::hooks(
+            parsed,
+            &found,
+            &hooks,
+            &mut normalizer,
+            setting.dialect,
+            source,
+        )
+    } else {
+        Vec::new()
+    };
     Ok(FileCorpus {
+        diagnostic_hooks,
         context_refusals: if found.direct_eval {
             vec![Exclusion::DynamicBindings]
         } else {
             Vec::new()
         },
         helper_sources: helper_sources.into_iter().collect(),
-        hooks: hooks::collect(
-            parsed,
-            &found,
-            &structure,
-            &tests,
-            &mut normalizer,
-            setting.dialect,
-            source,
-        ),
+        hooks,
         suites,
         tests,
         sites,
@@ -982,6 +1045,7 @@ pub struct Engine {
     pub containers: usize,
     /// Registration sites, by the file's path relative to the root, when they are kept.
     sites: Vec<(PathBuf, SiteRecord)>,
+    diagnostic_hooks: Vec<(PathBuf, records::DiagnosticHook)>,
     /// Each file's cases, by the file's path relative to the root: what the rules read once
     /// every file has been read. Retained payload and capacity feed the memory roof.
     files: Vec<(PathBuf, Vec<TestCase>)>,
@@ -1060,6 +1124,7 @@ impl Engine {
         further: Vec<(ExclusionReason, String)>,
     ) -> FileRead {
         // On a stack sized for the parser, as the current core runs: [`crate::lang::limits`].
+        self.run.diagnostics = keep_sites;
         let run = &mut self.run;
         let confined = std::sync::atomic::AtomicBool::new(false);
         let confined_flag = &confined;
@@ -1217,6 +1282,11 @@ impl Engine {
         let hooks = (relative.to_path_buf(), std::mem::take(&mut corpus.hooks));
         self.retained.hooks = self.retained.hooks.saturating_add(hooks.heap_bytes());
         self.hooks.push(hooks);
+        for hook in corpus.diagnostic_hooks {
+            let hook = (relative.to_path_buf(), hook);
+            self.retained.hooks = self.retained.hooks.saturating_add(hook.heap_bytes());
+            self.diagnostic_hooks.push(hook);
+        }
         self.tests += case_count;
         self.unresolved += unresolved;
         if unresolved > 0 && unresolved == case_count {

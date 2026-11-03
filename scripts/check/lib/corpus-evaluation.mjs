@@ -14,6 +14,7 @@ import { dirname, join, resolve } from 'node:path'
 
 import { ALL_RULES } from './fixture-directives.mjs'
 import { findingMatches } from './recall-runner.mjs'
+import { isOwnedRecord, validateOwnedRecord, classifyOwnedEligibility } from './owned-records.mjs'
 
 /** The comparison keys a `test` record carries, in the order a difference is reported. */
 export const KEY_FIELDS = Object.freeze(['alpha', 'structural', 'behavior', 'contextKey', 'modifierKey'])
@@ -66,6 +67,10 @@ function recordProblems(records, label) {
         problems.push(`${where}: a finding needs \`locations\` with a path and line each`)
       }
     } else if (record.type === 'test' || record.type === 'hook') {
+      if (isOwnedRecord(record)) {
+        try { validateOwnedRecord(record) } catch (error) { problems.push(`${where}: ${error.message}`) }
+        return
+      }
       if (typeof record.path !== 'string' || !Number.isInteger(record.line)) {
         problems.push(`${where}: a test record needs a \`path\` and a \`line\``)
       }
@@ -286,6 +291,7 @@ export function classifyEligibility(expectation, testRecords, disabled = new Set
   if (files.size > 1 && expectation.rule !== 'cross-file-duplicate') {
     return { eligibility: expectation.rule === 'redundant-hook' ? 'unresolved' : 'not-compared', differs: [] }
   }
+  if (participants.some(isOwnedRecord)) return classifyOwnedEligibility(expectation.rule, participants)
   const trivialExcludes = !IGNORES_TRIVIALITY.has(expectation.rule)
   if (participants.some((record) => record.comparable === false || (trivialExcludes && record.trivial))) {
     return { eligibility: 'not-compared', differs: [] }

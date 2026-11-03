@@ -13,6 +13,7 @@ mod origins;
 fn case(line: u32, site: u32, key: u64, module_key: u64) -> TestCase {
     TestCase {
         origin: None,
+        views: None,
         span: Span {
             start: Position { line, column: 3 },
             end: Position { line, column: 40 },
