@@ -302,6 +302,11 @@ fn runner(name: &'static str, helper_body: &str, caller: &str) -> Vec<(&'static 
 /// Each reason reachable from the CLI is listed once with its counts in every report.
 #[test]
 fn each_reason_reachable_from_the_cli_is_listed_with_its_counts() {
+    // These are legacy extraction reasons. The next core owns distinct refusal paths, exercised
+    // by `the_next_engine_lists_why_each_test_is_not_compared` and its focused contracts below.
+    if next_engine() {
+        return;
+    }
     let cases = vec![
         case(
             "unresolved-context",
@@ -493,6 +498,23 @@ fn independent_context_reasons_are_both_listed() {
 /// A helper refusal explains the generic fallback, but not a test's own unreadable mock factory.
 #[test]
 fn an_unreadable_mock_factory_is_listed_beside_a_helper_refusal() {
+    let expected = if next_engine() {
+        Expect {
+            path: "mixed.test.ts",
+            reason: "mock-factory-unreadable",
+            others: &["registered-elsewhere"],
+            excluded: 2,
+            total: 2,
+        }
+    } else {
+        Expect {
+            path: "mixed.test.ts",
+            reason: "runner-mocked",
+            others: &["mock-factory-unreadable"],
+            excluded: 1,
+            total: 1,
+        }
+    };
     scenario(
         &[
             ("helpers/factory.ts", "export const factory = () => ({});\n"),
@@ -503,7 +525,7 @@ fn an_unreadable_mock_factory_is_listed_beside_a_helper_refusal() {
             ),
         ],
         &[],
-        &[Expect { path: "mixed.test.ts", reason: "runner-mocked", others: &["mock-factory-unreadable"], excluded: 1, total: 1 }],
+        &[expected],
     );
 }
 
@@ -555,10 +577,19 @@ fn an_import_leaving_the_root_leads_the_helper_refusal_it_causes() {
         "import { run } from '@out/target';\nrun();\n",
     );
     let run = run(&root, &[]);
+    if cfg!(windows) && next_engine() {
+        // The Windows resolver cannot follow this alias from its canonical importer. The next
+        // core consequently has no local registration to attach the confinement fact to; the
+        // resolver's platform-specific tests pin that behavior.
+        assert!(run.json["excludedFiles"].as_array().unwrap().is_empty());
+        return;
+    }
     // On Windows the resolver does not apply a tsconfig `paths` alias from a canonical (`\\?\`)
     // importer at all, so the alias never resolves to a file outside the root and only the helper
     // refusal is recorded; see the matching branch in the resolver's own tests.
-    let (reason, others): (&str, &[&str]) = if cfg!(windows) {
+    let (reason, others): (&str, &[&str]) = if next_engine() {
+        ("import-outside-root", &[])
+    } else if cfg!(windows) {
         ("helper-export-unreadable", &[])
     } else {
         ("import-outside-root", &["helper-export-unreadable"])
@@ -1036,6 +1067,129 @@ test('complete', () => { expect(1).toBe(1); });
     assert_eq!(summary["incompleteCauses"]["unresolvedContexts"], 0);
 }
 
+/// Non-hoisted mocks affect dynamic imports at the point they run, so every test in their file is
+/// visibly excluded instead of sharing a context the next engine cannot model.
+#[test]
+fn the_next_engine_excludes_non_hoisted_mock_files_and_fails_incomplete_gates() {
+    let directory = tempfile::tempdir().unwrap();
+    write(directory.path(), "clean.test.ts", CLEAN);
+    write(
+        directory.path(),
+        "scoped.test.ts",
+        "import { test, expect, vi } from 'vitest';\n\
+         test('first', async () => {\n\
+           vi.doMock('./dep', () => ({ value: 1 }));\n\
+           const { value } = await import('./dep');\n\
+           expect(value).toBe(1);\n\
+         });\n\
+         test('second', () => { expect(1).toBe(1); });\n",
+    );
+    write(directory.path(), "dep.ts", "export const value = 0;\n");
+    let environment = [("VITEST_DEDUP_ENGINE", "next")];
+    let run = run_with(directory.path(), &[], &environment);
+    assert_eq!(run.json["testsAnalyzed"], 3);
+    assert_eq!(run.json["unresolvedTests"], 2);
+    assert!(run.json["findings"].as_array().unwrap().is_empty());
+    assert_listed(
+        &run,
+        &[Expect {
+            path: "scoped.test.ts",
+            reason: "unresolved-context",
+            others: &[],
+            excluded: 2,
+            total: 2,
+        }],
+    );
+
+    let mut command = assert_cmd::Command::cargo_bin("vitest-dedup").unwrap();
+    command
+        .arg(directory.path())
+        .arg("--fail-on-incomplete=reads")
+        .envs(environment)
+        .assert()
+        .code(2)
+        .stderr(predicates::str::contains("could not be fully analyzed"));
+}
+
+/// Dynamic test names are unresolved context, not a clean pair with equal callback text.
+#[test]
+fn the_next_engine_excludes_dynamic_titles() {
+    let directory = tempfile::tempdir().unwrap();
+    write(directory.path(), "clean.test.ts", CLEAN);
+    write(
+        directory.path(),
+        "dynamic.test.ts",
+        "import { test, expect } from 'vitest';\n\
+         const suffix = Math.random();\n\
+         test(`first ${suffix}`, () => { expect(1).toBe(1); });\n\
+         test(`second ${suffix}`, () => { expect(1).toBe(1); });\n",
+    );
+    let run = run_with(directory.path(), &[], &[("VITEST_DEDUP_ENGINE", "next")]);
+    assert_eq!(run.json["testsAnalyzed"], 3);
+    assert_eq!(run.json["unresolvedTests"], 2);
+    assert!(run.json["findings"].as_array().unwrap().is_empty());
+    assert_listed(
+        &run,
+        &[Expect {
+            path: "dynamic.test.ts",
+            reason: "unresolved-context",
+            others: &[],
+            excluded: 2,
+            total: 2,
+        }],
+    );
+}
+
+/// Static signed fixture values and unrelated helper imports retain ordinary comparison eligibility.
+#[test]
+fn the_next_engine_keeps_signed_fixtures_and_unrelated_helper_imports_comparable() {
+    let directory = tempfile::tempdir().unwrap();
+    write(
+        directory.path(),
+        "signed.test.ts",
+        "import { test as base, expect } from 'vitest';\n\
+         const test = base.extend({ count: -1, nested: [-2] });\n\
+         test('first', () => { expect(1).toBe(1); });\n\
+         test('second', () => { expect(1).toBe(1); });\n",
+    );
+    write(
+        directory.path(),
+        "fixture.ts",
+        "import { test as base } from 'vitest';\n\
+         export const extended = base.extend({ db: makeDb() });\n\
+         export const test = base;\n",
+    );
+    write(
+        directory.path(),
+        "token.test.ts",
+        "import { test, expect } from 'vitest';\n\
+         import { test as helperTest } from './fixture';\n\
+         void helperTest;\n\
+         test('third', () => { expect(1).toBe(1); });\n\
+         test('fourth', () => { expect(1).toBe(1); });\n",
+    );
+    write(
+        directory.path(),
+        "destructured.test.ts",
+        "import { test, expect, vi } from 'vitest';\n\
+         const { helper = { doMock() {} } } = vi;\n\
+         helper.doMock('./dep');\n\
+         function unused() { return; test.extend({ db: makeDb() }); }\n\
+         test('fifth', () => { expect(1).toBe(1); });\n\
+         test('sixth', () => { expect(1).toBe(1); });\n",
+    );
+    let run = run_with(directory.path(), &[], &[("VITEST_DEDUP_ENGINE", "next")]);
+    assert_eq!(run.json["testsAnalyzed"], 6, "{}", run.json_text);
+    assert_eq!(run.json["unresolvedTests"], 0, "{}", run.json_text);
+    assert_eq!(run.json["excludedFiles"], serde_json::json!([]));
+    assert_eq!(
+        run.json["findings"].as_array().unwrap().len(),
+        3,
+        "{}",
+        run.json_text
+    );
+}
+
 /// Benchmarks are counted under the next engine and listed as not compared, never dropped.
 #[test]
 fn the_next_engine_counts_benchmarks_as_not_compared() {
@@ -1370,6 +1524,11 @@ fn more_excluded_files_than_the_terminal_cap_are_all_listed_in_the_reports() {
 /// The histogram names five kinds and folds the rest into a count.
 #[test]
 fn the_histogram_names_the_top_kinds_then_folds_the_rest() {
+    // The setup deliberately relies on legacy helper extraction to create six distinct kinds.
+    // The next core's reporter formatting is covered by its own reason fixtures.
+    if next_engine() {
+        return;
+    }
     let directory = tempfile::tempdir().unwrap();
     write(directory.path(), "clean.test.ts", CLEAN);
     write(directory.path(), "helpers/opts.ts", OPTS_HELPER);

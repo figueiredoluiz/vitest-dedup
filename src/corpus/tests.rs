@@ -195,6 +195,94 @@ fn each_reason_has_one_cause() {
     assert_eq!(exclusion("imported"), Some(Exclusion::NamedCallback));
 }
 
+/// A scoped mock changes dynamic imports at runtime, so no test in its file is comparable.
+#[test]
+fn non_hoisted_mock_excludes_the_file_but_hoisted_mock_controls_remain_comparable() {
+    let scoped = counted_corpus(
+        "import { test, expect, vi } from 'vitest';\n\
+         test('first', async () => { vi.doMock('./dep', () => ({ value: 1 })); expect(1).toBe(1) });\n\
+         test('second', () => { expect(1).toBe(1) });\n",
+        "scoped.test.ts",
+        2,
+        2,
+    );
+    assert!(scoped
+        .tests
+        .iter()
+        .all(|test| test.exclusion == Some(Exclusion::NonHoistedMock)));
+    assert_eq!(scoped.context_refusals, [Exclusion::NonHoistedMock]);
+
+    let hoisted = counted_corpus(
+        "import { test, expect, vi } from 'vitest';\n\
+         vi.mock('./dep', () => ({ value: 1 }));\n\
+         test('first', () => { expect(1).toBe(1) });\n\
+         test('second', () => { expect(1).toBe(1) });\n",
+        "hoisted.test.ts",
+        2,
+        0,
+    );
+    assert!(hoisted.context_refusals.is_empty());
+}
+
+/// Context values that need evaluation are visibly refused instead of sharing a made-up context.
+#[test]
+fn unreadable_mock_factories_and_fixtures_exclude_their_file() {
+    let mock = counted_corpus(
+        "import { test, vi } from 'vitest'; import { factory } from './factory';\n\
+         vi.mock('./dep', factory); test('a', () => {});",
+        "mock.test.ts",
+        1,
+        1,
+    );
+    assert_eq!(
+        mock.tests[0].exclusion,
+        Some(Exclusion::UnreadableMockFactory)
+    );
+    assert_eq!(mock.context_refusals, [Exclusion::UnreadableMockFactory]);
+
+    let fixture = counted_corpus(
+        "import { test as base } from 'vitest'; import { makeDb } from './db';\n\
+         const test = base.extend({ db: makeDb() }); test('a', () => {});",
+        "fixture.test.ts",
+        1,
+        1,
+    );
+    assert_eq!(
+        fixture.tests[0].exclusion,
+        Some(Exclusion::UnreadableFixture)
+    );
+    assert_eq!(fixture.context_refusals, [Exclusion::UnreadableFixture]);
+}
+
+/// A title the analyzer cannot resolve cannot safely take part in either name or body comparison.
+#[test]
+fn dynamic_titles_are_excluded_but_literal_titles_remain_comparable() {
+    let dynamic = counted_corpus(
+        "import { test, expect } from 'vitest';\n\
+         const suffix = Math.random();\n\
+         test(`first ${suffix}`, () => { expect(1).toBe(1) });\n\
+         test(`second ${suffix}`, () => { expect(1).toBe(1) });\n",
+        "dynamic.test.ts",
+        2,
+        2,
+    );
+    assert!(dynamic
+        .tests
+        .iter()
+        .all(|test| test.exclusion == Some(Exclusion::UnresolvedTitle)));
+    assert!(dynamic.context_refusals.is_empty());
+
+    let literal = counted_corpus(
+        "import { test, expect } from 'vitest';\n\
+         test('first', () => { expect(1).toBe(1) });\n\
+         test('second', () => { expect(1).toBe(1) });\n",
+        "literal.test.ts",
+        2,
+        0,
+    );
+    assert_eq!(literal.tests[0].key, literal.tests[1].key);
+}
+
 /// A wrapper call, a module load and a registration function read as a value each register tests
 /// this file does not spell: one excluded case each.
 #[test]
@@ -1045,7 +1133,7 @@ fn owned_name_formats_match_runtime_without_widening_unknowns() {
         include_str!("../../fixtures/oracle/name-collisions/formats.test.ts"),
         "formats.test.ts",
         32,
-        0,
+        2,
         &[
             "constant",
             "array 1,,2,3",

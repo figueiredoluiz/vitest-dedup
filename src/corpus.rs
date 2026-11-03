@@ -55,6 +55,14 @@ pub enum Exclusion {
     /// A package manifest the file's imports need could not be read, so what they import is
     /// unknown.
     UnreadableManifest,
+    /// A non-hoisted Vitest mock changes dynamic imports at the point it runs.
+    NonHoistedMock,
+    /// A hoisted mock factory is not written as an inline function.
+    UnreadableMockFactory,
+    /// A fixture value requires evaluating user code outside the current core's model.
+    UnreadableFixture,
+    /// The declaration title cannot be proved, so neither its name nor invocation is comparable.
+    UnresolvedTitle,
 }
 
 impl Exclusion {
@@ -109,6 +117,22 @@ impl Exclusion {
                 ExclusionReason::HelperExportUnreadable,
                 "a helper module the file imports could not be parsed, so what it exports and \
                  registers is unknown",
+            )),
+            Self::NonHoistedMock => Some((
+                ExclusionReason::UnresolvedContext,
+                "a non-hoisted Vitest mock can change dynamic imports at the point it runs",
+            )),
+            Self::UnreadableMockFactory => Some((
+                ExclusionReason::MockFactoryUnreadable,
+                "a `vi.mock` factory could not be read, so the tests it governs were excluded",
+            )),
+            Self::UnreadableFixture => Some((
+                ExclusionReason::FixtureUnreadable,
+                "a `test.extend` fixture value could not be read, so the tests it governs were excluded",
+            )),
+            Self::UnresolvedTitle => Some((
+                ExclusionReason::UnresolvedContext,
+                "the test title could not be resolved, so the declaration cannot be compared",
             )),
             Self::EmptyBody | Self::NoCallback => None,
         }
@@ -643,8 +667,20 @@ fn read_parsed(
             tests.extend(excluded(Exclusion::UnreadableManifest));
             continue;
         }
-        if found.direct_eval {
-            tests.extend(excluded(Exclusion::DynamicBindings));
+        if found.direct_eval
+            || found.non_hoisted_mock
+            || found.unreadable_mock_factory
+            || found.unreadable_fixture
+        {
+            tests.extend(excluded(if found.direct_eval {
+                Exclusion::DynamicBindings
+            } else if found.non_hoisted_mock {
+                Exclusion::NonHoistedMock
+            } else if found.unreadable_mock_factory {
+                Exclusion::UnreadableMockFactory
+            } else {
+                Exclusion::UnreadableFixture
+            }));
             continue;
         }
         let refused = expanded.refused.contains(&None)
@@ -672,6 +708,10 @@ fn read_parsed(
             }));
             continue;
         };
+        if record.title.is_none() {
+            tests.extend(excluded(Exclusion::UnresolvedTitle));
+            continue;
+        }
         if !callback.inline {
             tests.extend(excluded(Exclusion::NamedCallback));
             continue;
@@ -1042,6 +1082,13 @@ fn read_parsed(
             // resolution needed it, and whether or not the file has a test to leave out.
             (frame.is_none() && (lang::take_manifest_refusal() || manifest_refused))
                 .then_some(Exclusion::UnreadableManifest),
+            found.non_hoisted_mock.then_some(Exclusion::NonHoistedMock),
+            found
+                .unreadable_mock_factory
+                .then_some(Exclusion::UnreadableMockFactory),
+            found
+                .unreadable_fixture
+                .then_some(Exclusion::UnreadableFixture),
         ]
         .into_iter()
         .flatten()

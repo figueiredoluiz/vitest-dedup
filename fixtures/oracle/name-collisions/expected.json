@@ -1,6 +1,6 @@
 {
   "files": {
-    "formats.test.ts": { "tasks": 32, "wrapperSites": [], "next": {} },
+    "formats.test.ts": { "tasks": 32, "wrapperSites": [], "next": { "reasons": ["unresolved-context"], "testsExcluded": 2 } },
     "rendering.test.ts": { "tasks": 34, "wrapperSites": [], "next": {} },
     "cases.test.ts": {
       "tasks": 20,

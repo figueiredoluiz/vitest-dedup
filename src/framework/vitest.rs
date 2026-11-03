@@ -4,8 +4,8 @@
 //! The names here are the ones `docs/vitest-surface.md` documents.
 
 use super::{
-    AssertionEntry, Chain, ChainMember, Dialect, FileDefaults, Framework, HookTiming, Namespace,
-    Registers, Registration, TableRows,
+    AssertionEntry, Chain, ChainMember, Dialect, FileDefaults, Framework, HookTiming, MockMember,
+    Mocking, Namespace, Registers, Registration, TableRows,
 };
 
 pub mod config;
@@ -100,6 +100,25 @@ pub static DIALECT: Dialect = Dialect {
         Namespace {
             name: "assertType",
             canonical: "assertType",
+        },
+    ],
+    mocking_namespace: Some("vi"),
+    mocking_members: &[
+        MockMember {
+            name: "mock",
+            mocking: Mocking::Hoisted,
+        },
+        MockMember {
+            name: "unmock",
+            mocking: Mocking::Hoisted,
+        },
+        MockMember {
+            name: "doMock",
+            mocking: Mocking::Dynamic,
+        },
+        MockMember {
+            name: "doUnmock",
+            mocking: Mocking::Dynamic,
         },
     ],
     assertions: &[AssertionEntry {

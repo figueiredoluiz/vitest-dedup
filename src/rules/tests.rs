@@ -155,6 +155,10 @@ fn an_excluded_case_never_anchors_a_finding() {
         Exclusion::NamedCallback,
         Exclusion::RegisteredElsewhere,
         Exclusion::Benchmark,
+        Exclusion::NonHoistedMock,
+        Exclusion::UnreadableMockFactory,
+        Exclusion::UnreadableFixture,
+        Exclusion::UnresolvedTitle,
     ] {
         let mut excluded = case(9, 200, 1, 1);
         excluded.exclusion = Some(exclusion);
@@ -500,6 +504,10 @@ fn names_use_proven_segments_and_preserve_all_exclusions() {
         Exclusion::RegisteredElsewhere,
         Exclusion::OrderDependentState,
         Exclusion::Benchmark,
+        Exclusion::NonHoistedMock,
+        Exclusion::UnreadableMockFactory,
+        Exclusion::UnreadableFixture,
+        Exclusion::UnresolvedTitle,
     ] {
         right.exclusion = Some(exclusion);
         assert!(

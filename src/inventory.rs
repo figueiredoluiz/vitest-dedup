@@ -132,6 +132,12 @@ pub struct Escape {
 pub struct Inventory {
     /// Intrinsic direct eval may write lexical bindings without ordinary assignment references.
     pub direct_eval: bool,
+    /// A `vi.doMock` or `vi.doUnmock` changes module state at its execution point.
+    pub non_hoisted_mock: bool,
+    /// A hoisted `vi.mock` factory is not an inline function or proven spy option.
+    pub unreadable_mock_factory: bool,
+    /// A `test.extend` fixture value cannot be represented without evaluating user code.
+    pub unreadable_fixture: bool,
     /// The module can read non-registration, non-assertion framework utilities. An invocation
     /// proof must account for their setup/mocking semantics even when a read is in a callback.
     pub setup_access: bool,
@@ -220,6 +226,8 @@ pub(crate) fn setup_access(parsed: &Parsed, setting: Setting) -> bool {
 
 /// The export name standing for "registers while the module loads".
 const ON_LOAD: &str = "\0load";
+/// Export-map marker: a derived registration API carries an unreadable fixture context.
+const UNREADABLE_FIXTURE: &str = "\0fixture";
 /// How many imports deep a module's exports are followed.
 const MAX_DEPTH: usize = 8;
 

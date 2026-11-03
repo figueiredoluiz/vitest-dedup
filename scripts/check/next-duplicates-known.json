@@ -69,10 +69,6 @@
       "reason": "Benchmarks are excluded until they are compared."
     },
     {
-      "id": "recall-extra|duplicate-test-dynamic-title|duplicate-test|session.test.ts:21,session.test.ts:26",
-      "reason": "The next engine renders no dynamic title and locates a participant at its call, so the finding differs in shape, not in claim."
-    },
-    {
       "id": "recall-absent|duplicate-test-imported-helper-arity-guard|duplicate-test|twin.test.ts:11,twin.test.ts:15",
       "reason": "False positive: calls of two different imported helpers key alike."
     },
@@ -209,20 +205,8 @@
       "reason": "Tests a helper registers are excluded, not compared, until they are compared where the helper is called."
     },
     {
-      "id": "recall-absent|mock-spy-options-unreadable|duplicate-test|unknown.test.ts:13,unknown.test.ts:9",
-      "reason": "The default engine abstains on this file; the next engine compares identical text in an identical context, as decided."
-    },
-    {
       "id": "recall-absent|framework-auto-import-table-depth|duplicate-test|clock.test.ts:8,clock.test.ts:9",
       "reason": "The default engine abstains on this file; the next engine compares identical text in an identical context, as decided."
-    },
-    {
-      "id": "recall-extra|function-title-unresolved|duplicate-test|run.test.ts:5,run.test.ts:6",
-      "reason": "The next engine renders no dynamic title and locates a participant at its call, so the finding differs in shape, not in claim."
-    },
-    {
-      "id": "recall-extra|function-title-unresolved|duplicate-test|run.test.ts:6,run.test.ts:7",
-      "reason": "The next engine renders no dynamic title and locates a participant at its call, so the finding differs in shape, not in claim."
     },
     {
       "id": "recall-miss|helper-inert-registration-callback|duplicate-test|hooked > reads,plain > reads",
@@ -258,10 +242,6 @@
     },
     {
       "id": "recall-miss|foreach-known-array|duplicate-test|loop a,outside",
-      "reason": "The next engine renders no dynamic title and locates a participant at its call, so the finding differs in shape, not in claim."
-    },
-    {
-      "id": "recall-extra|foreach-known-array|duplicate-test|run.test.ts:10,run.test.ts:15",
       "reason": "The next engine renders no dynamic title and locates a participant at its call, so the finding differs in shape, not in claim."
     },
     {

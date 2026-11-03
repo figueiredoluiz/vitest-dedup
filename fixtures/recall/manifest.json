@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "minimumCases": 211,
+  "minimumCases": 216,
   "knownMissBaseline": 0,
   "minimumRecall": 0.99,
   "recallDestination": 1,
@@ -867,8 +867,7 @@
       ],
       "blindUnderCurrent": [
         "session.test.ts"
-      ],
-      "expectedIncompleteNext": false
+      ]
     },
     {
       "name": "duplicate-test-in-source",
@@ -1109,8 +1108,7 @@
       ],
       "blindUnderCurrent": [
         "tenants.test.ts"
-      ],
-      "expectedIncompleteNext": false
+      ]
     },
     {
       "name": "duplicate-test-name-function-title",
@@ -2534,8 +2532,7 @@
       ],
       "blindUnderCurrent": [
         "pkg/loops.spec.ts"
-      ],
-      "expectedIncompleteNext": false
+      ]
     },
     {
       "name": "mixed-name-and-cross-file",
@@ -7261,6 +7258,137 @@
       "expectedUnresolvedNext": 4
     },
     {
+      "name": "mock-global-rewritten-control",
+      "path": "mock-global-rewritten-control",
+      "rule": "duplicate-test",
+      "role": "positive",
+      "engine": "next",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-04",
+      "expectedTests": 2,
+      "expectedIncomplete": false,
+      "expectedUnresolved": 0,
+      "expectedFindings": [
+        {
+          "rule": "duplicate-test",
+          "severity": "error",
+          "titles": [
+            "first rewritten mock global",
+            "second rewritten mock global"
+          ]
+        }
+      ],
+      "expectedAbsent": []
+    },
+    {
+      "name": "fixture-default-star-control",
+      "path": "fixture-default-star-control",
+      "rule": "duplicate-test",
+      "role": "positive",
+      "engine": "next",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-04",
+      "expectedTests": 2,
+      "expectedIncomplete": false,
+      "expectedUnresolved": 0,
+      "expectedFindings": [
+        {
+          "rule": "duplicate-test",
+          "severity": "error",
+          "titles": [
+            "first clean default",
+            "second clean default"
+          ]
+        }
+      ],
+      "expectedAbsent": []
+    },
+    {
+      "name": "fixture-builder-overloads-positive",
+      "path": "fixture-builder-overloads-positive",
+      "rule": "duplicate-test",
+      "role": "positive",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-04",
+      "expectedTests": 4,
+      "expectedIncomplete": false,
+      "expectedUnresolved": 0,
+      "expectedFindings": [
+        {
+          "rule": "duplicate-test",
+          "severity": "error",
+          "titles": [
+            "first literal builder",
+            "second literal builder"
+          ]
+        },
+        {
+          "rule": "duplicate-test",
+          "severity": "error",
+          "titles": [
+            "first options builder",
+            "second options builder"
+          ]
+        }
+      ],
+      "expectedAbsent": []
+    },
+    {
+      "name": "fixture-builder-unreadable",
+      "path": "fixture-builder-unreadable",
+      "rule": "duplicate-test",
+      "role": "negative",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-04",
+      "expectedTests": 2,
+      "expectedIncomplete": true,
+      "expectedUnresolved": 2,
+      "expectedFindings": [],
+      "expectedAbsent": [
+        {
+          "rule": "duplicate-test",
+          "titles": [
+            "first dynamic builder",
+            "second dynamic builder"
+          ]
+        }
+      ],
+      "blindUnderCurrent": [
+        "dynamic.test.ts"
+      ]
+    },
+    {
+      "name": "mock-spy-options-wrapped",
+      "path": "mock-spy-options-wrapped",
+      "rule": "duplicate-test",
+      "role": "positive",
+      "engine": "next",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-04",
+      "expectedTests": 2,
+      "expectedIncomplete": false,
+      "expectedUnresolved": 0,
+      "expectedFindings": [
+        {
+          "rule": "duplicate-test",
+          "severity": "error",
+          "titles": [
+            "first wrapped spy",
+            "second wrapped spy"
+          ]
+        }
+      ],
+      "expectedAbsent": [],
+      "blindUnderCurrent": [
+        "run.test.ts"
+      ]
+    },
+    {
       "name": "mock-spy-options-positive",
       "path": "mock-spy-options-positive",
       "rule": "cross-file-duplicate",
@@ -7328,9 +7456,7 @@
       ],
       "blindUnderCurrent": [
         "unknown.test.ts"
-      ],
-      "expectedIncompleteNext": false,
-      "expectedUnresolvedNext": 0
+      ]
     },
     {
       "name": "framework-auto-import-flat-table",
@@ -7657,9 +7783,7 @@
       ],
       "blindUnderCurrent": [
         "run.test.ts"
-      ],
-      "expectedIncompleteNext": false,
-      "expectedUnresolvedNext": 0
+      ]
     },
     {
       "name": "helper-initializer-hook",
@@ -8237,7 +8361,9 @@
             "loop b"
           ]
         }
-      ]
+      ],
+      "expectedIncompleteNext": true,
+      "expectedUnresolvedNext": 1
     },
     {
       "name": "callback-imported-data",

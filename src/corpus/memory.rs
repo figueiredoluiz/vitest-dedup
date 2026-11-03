@@ -19,7 +19,11 @@ impl HeapBytes for Exclusion {
             | Self::UnprovedRunner
             | Self::DynamicBindings
             | Self::UnreadableImport
-            | Self::UnreadableManifest => 0,
+            | Self::UnreadableManifest
+            | Self::NonHoistedMock
+            | Self::UnreadableMockFactory
+            | Self::UnreadableFixture
+            | Self::UnresolvedTitle => 0,
         }
     }
 }

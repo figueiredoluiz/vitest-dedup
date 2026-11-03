@@ -82,6 +82,24 @@ pub enum Chain {
     FixtureScoping,
 }
 
+/// How a framework mock API changes the module context.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Mocking {
+    /// A mock whose state applies before the module body runs.
+    Hoisted,
+    /// A mock whose state changes only where the call runs.
+    Dynamic,
+}
+
+/// One member of a framework's mocking namespace.
+#[derive(Debug)]
+pub struct MockMember {
+    /// The member spelling.
+    pub name: &'static str,
+    /// How the member changes mock state.
+    pub mocking: Mocking,
+}
+
 /// How a table row reaches the registered callback.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TableRows {
@@ -151,6 +169,10 @@ pub struct Dialect {
     pub registrations: &'static [Registration],
     /// Other API names: utility namespaces and the assertion entry point.
     pub namespaces: &'static [Namespace],
+    /// The canonical namespace whose members control module mocks, if the framework has one.
+    pub mocking_namespace: Option<&'static str>,
+    /// Members of [`Self::mocking_namespace`] that affect module context.
+    pub mocking_members: &'static [MockMember],
     /// The assertion entries the behavior trace recognizes.
     pub assertions: &'static [AssertionEntry],
     /// Members that can be chained onto a registration.
@@ -198,6 +220,14 @@ impl Dialect {
             .map(|namespace| namespace.canonical)
     }
 
+    /// What a member of the mocking namespace does.
+    pub fn mocking_member(&self, name: &str) -> Option<Mocking> {
+        self.mocking_members
+            .iter()
+            .find(|member| member.name == name)
+            .map(|member| member.mocking)
+    }
+
     /// The assertion entry the name `name` spells, if it is one.
     pub fn assertion(&self, name: &str) -> Option<&'static AssertionEntry> {
         self.assertions.iter().find(|entry| entry.name == name)
@@ -219,6 +249,7 @@ impl Dialect {
             .chain(self.in_source_member)
             .chain(registrations.iter().map(|registration| registration.name))
             .chain(namespaces.iter().map(|namespace| namespace.name))
+            .chain(self.mocking_members.iter().map(|member| member.name))
             .chain(chain.iter().map(|member| member.name))
             .chain(self.scheduling_options.iter().copied())
             .chain(self.name_observing_matchers.iter().copied())
