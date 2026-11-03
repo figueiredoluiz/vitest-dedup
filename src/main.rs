@@ -4430,10 +4430,16 @@ mod tests {
             fields["context"].as_u64().unwrap(),
             "`contextFields` must sum to `fields.context`, never to something else: {record}"
         );
+        // The next engine retains its own structures and reports them as one `engine` bucket.
+        let (bucket, measured) = if next_engine() {
+            ("fields.engine", &fields["engine"])
+        } else {
+            ("contextFields.hooks", &context_fields["hooks"])
+        };
         assert!(
-            context_fields["hooks"].as_u64().unwrap() > 0,
-            "this corpus has two `beforeEach` chains; a hooks bucket of zero would mean the \
-             largest structure in the IR is invisible to the breakdown: {record}"
+            measured.as_u64().unwrap() > 0,
+            "this corpus has two `beforeEach` chains; an empty `{bucket}` would mean the \
+             largest structure the engine retains is invisible to the breakdown: {record}"
         );
     }
 
@@ -4817,17 +4823,17 @@ mod tests {
     /// A nested `beforeEach` whose body is byte-identical to the one above it, which is exactly
     /// what `redundant-hook` fires on -- so one run produces both surfaces that publish a hook
     /// `Location`: the `"hook"` fingerprint records and a `redundant-hook` finding.
-    /// The hook body is `vi.clearAllMocks()` rather than an ordinary call, because since S5
-    /// `redundant-hook` reports only pairs whose bodies are provably IDEMPOTENT. This constant
-    /// exists to give the relativization assertions below a finding to read a `Location` off; an
-    /// ordinary `connect('primary')` -- what it used to say -- is now correctly unreportable, and
-    /// the test would have passed its first assertion and silently lost its second.
+    /// The hook body overwrites a module binding with a constant, which both engines prove
+    /// idempotent; an ordinary call such as `connect('primary')` is unreportable, and a framework
+    /// reset is refused by the next engine, so either would leave the assertions below no finding.
     const TWO_REDUNDANT_BEFORE_EACH_HOOKS: &str = r#"
-        import { describe, test, beforeEach, expect, vi } from 'vitest';
+        import { describe, test, beforeEach, expect } from 'vitest';
+
+        let region = '';
 
         describe('reporting', () => {
             beforeEach(() => {
-                vi.clearAllMocks();
+                region = 'primary';
             });
 
             test('outer', () => {
@@ -4836,7 +4842,7 @@ mod tests {
 
             describe('regional', () => {
                 beforeEach(() => {
-                    vi.clearAllMocks();
+                    region = 'primary';
                 });
 
                 test('inner', () => {

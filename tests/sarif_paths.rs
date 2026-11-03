@@ -3,6 +3,10 @@
 #[path = "support/sarif_uri.rs"]
 mod sarif_uri;
 
+#[path = "support/engine.rs"]
+mod engine;
+use engine::selected_version;
+
 const SOURCE: &str = include_str!("../fixtures/duplicates/sarif-path-locations.test.ts");
 
 /// Each filename retains the owned duplicate finding and both participants; only SARIF encodes it.
@@ -76,7 +80,7 @@ fn sarif_paths_preserve_owned_findings_and_other_reporter_paths() {
         let result = &results[0];
         assert_eq!(result["ruleId"], finding["rule"]);
         assert_eq!(
-            result["partialFingerprints"][vitest_dedup::model::FINGERPRINT_VERSION],
+            result["partialFingerprints"][selected_version()],
             finding["fingerprint"]
         );
         assert_eq!(result["locations"].as_array().unwrap().len(), 1);

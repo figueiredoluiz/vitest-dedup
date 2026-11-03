@@ -1,6 +1,10 @@
 //! CLI baseline output-path and positional-path contracts.
 
-use vitest_dedup::modes::load_baseline;
+use vitest_dedup::modes::load_baseline_as;
+
+#[path = "support/engine.rs"]
+mod engine;
+use engine::selected_version;
 
 /// A bare baseline filename uses the caller's working directory without changing global cwd.
 #[test]
@@ -24,7 +28,7 @@ fn a_bare_baseline_filename_is_written_in_the_cli_working_directory() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert_eq!(
-        load_baseline(&directory.path().join("baseline.json"))
+        load_baseline_as(&directory.path().join("baseline.json"), selected_version())
             .unwrap()
             .total(),
         0

@@ -320,23 +320,21 @@ test.each([[2], [2]])('doubles %i', (input) => {
     .unwrap();
 }
 
-/// The hook body is Vitest's own mock reset, not an ordinary `connect()`/`seed()` pair.
-///
-/// Since S5 `redundant-hook` reports only pairs whose bodies are provably IDEMPOTENT, and
-/// `connect('primary'); db.seed()` is exactly the shape that made the rule 0-of-10 on the
-/// 2026-09-27 scan: repeating it is not redundant, it is what the test does. This fixture's job
-/// is to make the rule emit ONE finding so the documented default severity can be read off a
-/// real report, so it uses a body the rule can legitimately report.
+/// The hook body overwrites a module binding with a constant, a body both engines prove
+/// idempotent. `redundant-hook` does not report an ordinary call such as `connect('primary')`,
+/// and the next engine refuses a framework reset; this fixture must emit ONE finding so the
+/// documented default severity can be read off a real report.
 fn write_redundant_hook_fixture(dir: &Path) {
     fs::write(
         dir.join("hook.test.ts"),
         r#"
-import { describe, test, expect, beforeEach, vi } from 'vitest'
+import { describe, test, expect, beforeEach } from 'vitest'
+
+let region = ''
 
 describe('outer', () => {
   beforeEach(() => {
-    vi.clearAllMocks()
-    vi.unstubAllGlobals()
+    region = 'primary'
   })
 
   test('monthly totals', () => {
@@ -346,8 +344,7 @@ describe('outer', () => {
 
   describe('inner', () => {
     beforeEach(() => {
-      vi.clearAllMocks()
-      vi.unstubAllGlobals()
+      region = 'primary'
     })
 
     test('regional totals', () => {
