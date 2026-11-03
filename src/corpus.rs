@@ -509,6 +509,24 @@ fn read_parsed(
         )
     };
 
+    // Suite callbacks whose table normalization proved empty: Vitest runs none of them, so nothing
+    // declared inside one, at any depth, registers.
+    let dead: std::collections::HashSet<NodeId> = structure
+        .suites
+        .iter()
+        .filter(|(_, &call)| {
+            tree.child(call, "callee")
+                .and_then(|callee| normalizer.modifiers(callee).rows)
+                .is_some_and(|rows| rows.is_empty())
+        })
+        .map(|(&scope, _)| scope)
+        .collect();
+    let unregistered = |normalizer: &mut Normalizer<'_>, node: NodeId| {
+        normalizer
+            .suites_around(node)
+            .is_some_and(|scopes| scopes.iter().any(|scope| dead.contains(scope)))
+    };
+
     let mut tests = Vec::new();
     let mut empty_tables = 0;
     for site in found
@@ -516,6 +534,9 @@ fn read_parsed(
         .iter()
         .filter(|site| site.kind == SiteKind::Registers(Registers::Test))
     {
+        if unregistered(&mut normalizer, site.node) {
+            continue;
+        }
         let mut record = unkeyed(site, None);
         let callee = tree.child(site.node, "callee");
         let modifiers = callee.map(|callee| normalizer.modifiers(callee));
@@ -825,13 +846,18 @@ fn read_parsed(
 
     // What a wrapper call, a module load or an escaped registration function registers is spelled
     // in another module: one excluded case per site, since how many tests it is is not known.
-    let elsewhere = found
+    let wrappers: Vec<_> = found
         .sites
         .iter()
         .filter(|site| {
-            site.kind == SiteKind::Wrapper(Reach::Tasks) && !admitted.contains(&site.node)
+            site.kind == SiteKind::Wrapper(Reach::Tasks)
+                && !admitted.contains(&site.node)
+                && !unregistered(&mut normalizer, site.node)
         })
         .map(|site| site.position)
+        .collect();
+    let elsewhere = wrappers
+        .into_iter()
         .chain(found.loads.iter().copied())
         .chain(found.escapes.iter().map(|escape| escape.offset));
     for start in elsewhere {
@@ -847,6 +873,9 @@ fn read_parsed(
         .iter()
         .filter(|site| site.kind == SiteKind::Registers(Registers::Bench))
     {
+        if unregistered(&mut normalizer, site.node) {
+            continue;
+        }
         tests.push(unkeyed(site, Some(Exclusion::Benchmark)));
     }
 
@@ -882,6 +911,9 @@ fn read_parsed(
         .iter()
         .filter(|site| site.kind == SiteKind::Registers(Registers::Suite))
     {
+        if unregistered(&mut normalizer, site.node) {
+            continue;
+        }
         let empty = tree
             .child(site.node, "callee")
             .and_then(|callee| normalizer.modifiers(callee).rows)
