@@ -2,11 +2,12 @@
 
 use super::{
     Escape, Export, Inventory, Label, Modules, Provenance, Reach, Setting, Site, SiteKind, ON_LOAD,
+    UNREADABLE_FIXTURE,
 };
-use crate::framework::{Chain, Registers};
+use crate::framework::{Chain, Mocking, Registers};
 use crate::lang::{
-    bound_symbols, export_name, member_name, property_name, Declaration, Name, NodeId, Parsed,
-    Span, SymbolId, Tree,
+    bound_symbols, export_name, member_name, property_name, Declaration, Imported, Name, NodeId,
+    Parsed, Span, SymbolId, Tree,
 };
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -68,6 +69,8 @@ struct Module<'s> {
     /// During a scan, nodes from which a callee chain reaches no registration root. A chain through
     /// one of them reaches none either, so a chain of `n` calls is walked once, not `n` times.
     dead_chains: std::cell::RefCell<HashSet<NodeId>>,
+    /// An imported registration API was built with a fixture value this core cannot model.
+    imported_unreadable_fixture: bool,
 }
 
 /// The inventory of a module, and the export names whose value registers when called with what
@@ -95,6 +98,7 @@ pub(super) fn analyse(
         rewritten_globals: HashSet::new(),
         scanning: std::cell::Cell::new(false),
         dead_chains: std::cell::RefCell::default(),
+        imported_unreadable_fixture: false,
     };
     module.redeclared = module.redeclarations();
     module.evaluates = module.has_direct_eval();
@@ -133,14 +137,31 @@ pub(super) fn analyse(
             }
         })
         .collect();
+    let unreadable_fixture_exports = module.unreadable_fixture_exports();
+    let direct_unreadable_fixture = module.unreadable_fixture();
+    let unreadable_fixture = direct_unreadable_fixture || module.imported_unreadable_fixture;
+    let fixture_export_names = module.fixture_export_names(&unreadable_fixture_exports);
     let inventory = Inventory {
         direct_eval: module.evaluates,
+        non_hoisted_mock: module.non_hoisted_mock(),
+        unreadable_mock_factory: module.unreadable_mock_factory(),
+        unreadable_fixture,
         setup_access: super::setup_access(parsed, setting),
         sites,
         loads: module.loads,
         escapes,
         registration_values: module.values,
     };
+    if direct_unreadable_fixture {
+        for name in fixture_export_names {
+            if exports.contains_key(&name) {
+                exports.insert(
+                    unreadable_fixture_export(&name),
+                    Export::Wrapper(Reach::Tasks),
+                );
+            }
+        }
+    }
     (inventory, exports)
 }
 
@@ -148,6 +169,355 @@ pub(super) fn analyse(
 type Found = (NodeId, Span, SiteKind, Vec<String>, Provenance);
 
 impl<'s> Module<'s> {
+    /// Whether this module reaches Vitest's non-hoisted mock APIs through a stable API binding.
+    ///
+    /// These calls affect imports when they run, unlike hoisted `vi.mock` and `vi.unmock`; the
+    /// next core does not model that dynamic-import state, so the corpus refuses the file rather
+    /// than comparing tests under an invented shared context.
+    fn non_hoisted_mock(&self) -> bool {
+        self.tree.nodes().any(|call| {
+            let Some((object, member)) = self.member_call(call) else {
+                return false;
+            };
+            self.setting.dialect.mocking_member(member) == Some(Mocking::Dynamic)
+                && self.mocking_namespace(object, &mut HashSet::new())
+                && !self.unreachable(call)
+        })
+    }
+
+    /// Whether a hoisted `vi.mock` has a factory whose behavior is not written inline.
+    fn unreadable_mock_factory(&self) -> bool {
+        self.tree.nodes().any(|call| {
+            let Some((object, member)) = self.member_call(call) else {
+                return false;
+            };
+            if self.setting.dialect.mocking_member(member) != Some(Mocking::Hoisted)
+                || !self.mocking_namespace(object, &mut HashSet::new())
+            {
+                return false;
+            }
+            let arguments: Vec<NodeId> = self
+                .tree
+                .list(call, "arguments")
+                .into_iter()
+                .flatten()
+                .collect();
+            arguments.len() > 1
+                && !self.inline_factory(arguments[1])
+                && !self.spy_options(arguments[1])
+        })
+    }
+
+    /// An inline factory is the only factory value the next core can preserve without evaluating
+    /// a binding.
+    fn inline_factory(&self, node: NodeId) -> bool {
+        matches!(
+            self.tree.kind(self.tree.inner(node)),
+            "ArrowFunctionExpression" | "FunctionExpression"
+        )
+    }
+
+    /// The one `vi.mock` option the legacy core distinguishes from both a factory and automock.
+    fn spy_options(&self, node: NodeId) -> bool {
+        let node = self.tree.inner(node);
+        if self.tree.kind(node) != "ObjectExpression" {
+            return false;
+        }
+        let properties: Vec<_> = self
+            .tree
+            .list(node, "properties")
+            .into_iter()
+            .flatten()
+            .collect();
+        matches!(properties.as_slice(), [property]
+        if self.tree.kind(*property) == "Property"
+            && !self.tree.flag(*property, "computed")
+            && self.tree.text(*property, "kind") == Some("init")
+            && property_name(self.tree, *property) == Some("spy")
+            && self.tree.child(*property, "value")
+                .is_some_and(|value| {
+                    self.tree.text(self.tree.inner(value), "raw") == Some("true")
+                }))
+    }
+
+    /// Whether a `test.extend` call supplies a fixture value the next core cannot model.
+    fn unreadable_fixture(&self) -> bool {
+        self.tree
+            .nodes()
+            .any(|call| self.unreadable_fixture_call(call))
+    }
+
+    /// The directly exported builders whose fixture values are unreadable.
+    fn unreadable_fixture_exports(&self) -> HashSet<SymbolId> {
+        self.tree
+            .nodes()
+            .filter(|&call| self.unreadable_fixture_call(call))
+            .filter_map(|call| {
+                let declarator = self.tree.parent(call)?;
+                (self.tree.kind(declarator) == "VariableDeclarator")
+                    .then(|| self.tree.child(declarator, "id"))
+                    .flatten()
+                    .filter(|&id| self.tree.kind(id) == "Identifier")
+                    .and_then(|id| self.declares(id))
+            })
+            .collect()
+    }
+
+    /// Whether one reachable `test.extend` call supplies a fixture value the next core cannot
+    /// model.
+    fn unreadable_fixture_call(&self, call: NodeId) -> bool {
+        let Some((object, member)) = self.member_call(call) else {
+            return false;
+        };
+        if self.setting.dialect.chain_member(member) != Some(Chain::FixtureExtension)
+            || !matches!(
+                self.value_origin(object),
+                Some(Origin::Api(Registers::Test) | Origin::Derived(Registers::Test))
+            )
+        {
+            return false;
+        }
+        if self.unreachable(call) {
+            return false;
+        }
+        let arguments: Vec<NodeId> = self
+            .tree
+            .list(call, "arguments")
+            .into_iter()
+            .flatten()
+            .collect();
+        if self.readable_fixture_builder(&arguments) {
+            return false;
+        }
+        let Some(fixtures) = arguments.first().copied() else {
+            return true;
+        };
+        let fixtures = self.tree.inner(fixtures);
+        if self.tree.kind(fixtures) != "ObjectExpression" {
+            return true;
+        }
+        self.tree
+            .list(fixtures, "properties")
+            .into_iter()
+            .flatten()
+            .any(|property| {
+                self.tree.kind(property) != "Property"
+                    || self.tree.flag(property, "computed")
+                    || self
+                        .tree
+                        .child(property, "value")
+                        .is_none_or(|value| !self.fixture_value(value))
+            })
+    }
+
+    /// The object and static member name of a call through a member expression.
+    fn member_call(&self, call: NodeId) -> Option<(NodeId, &str)> {
+        (self.tree.kind(call) == "CallExpression")
+            .then(|| self.tree.child(call, "callee"))
+            .flatten()
+            .map(|callee| self.tree.inner(callee))
+            .filter(|&callee| self.tree.kind(callee) == "MemberExpression")
+            .and_then(|callee| {
+                Some((
+                    self.tree.child(callee, "object")?,
+                    member_name(self.tree, callee)?,
+                ))
+            })
+    }
+
+    /// Whether builder arguments need no evaluation beyond the value forms this core retains.
+    fn readable_fixture_builder(&self, arguments: &[NodeId]) -> bool {
+        match arguments {
+            [name, value] => {
+                self.tree.kind(self.tree.inner(*name)) == "Literal" && self.fixture_value(*value)
+            }
+            [name, options, value] => {
+                self.tree.kind(self.tree.inner(*name)) == "Literal"
+                    && self.tree.kind(self.tree.inner(*options)) == "ObjectExpression"
+                    && self.fixture_value(*options)
+                    && self.fixture_value(*value)
+            }
+            _ => false,
+        }
+    }
+
+    /// The public names that export a local builder with an unreadable fixture.
+    fn fixture_export_names(&self, symbols: &HashSet<SymbolId>) -> HashSet<String> {
+        let tree = self.tree;
+        let mut names = HashSet::new();
+        let statements = tree.list(tree.root(), "body");
+        for statement in statements.into_iter().flatten() {
+            match tree.kind(statement) {
+                "ExportNamedDeclaration" if tree.child(statement, "source").is_none() => {
+                    if let Some(declaration) = tree.child(statement, "declaration") {
+                        for declarator in
+                            tree.list(declaration, "declarations").into_iter().flatten()
+                        {
+                            if let Some(id) = tree.child(declarator, "id") {
+                                if self
+                                    .declares(id)
+                                    .is_some_and(|symbol| symbols.contains(&symbol))
+                                {
+                                    if let Some(name) = tree.text(id, "name") {
+                                        names.insert(name.to_owned());
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    for (local, exported) in specifiers(tree, statement) {
+                        if self
+                            .read(local)
+                            .is_some_and(|symbol| symbols.contains(&symbol))
+                        {
+                            names.insert(export_name(tree, exported));
+                        }
+                    }
+                }
+                "ExportDefaultDeclaration" => {
+                    if let Some(declaration) = tree.child(statement, "declaration") {
+                        let declaration = tree.inner(declaration);
+                        if self
+                            .read(declaration)
+                            .is_some_and(|symbol| symbols.contains(&symbol))
+                        {
+                            names.insert("default".to_owned());
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        names
+    }
+
+    /// Fixture literals, setup functions and recursively literal containers are stable values;
+    /// every other expression requires evaluation or a normal-form representation this core does
+    /// not yet retain.
+    fn fixture_value(&self, node: NodeId) -> bool {
+        let node = self.tree.inner(node);
+        match self.tree.kind(node) {
+            "ArrowFunctionExpression" | "FunctionExpression" | "Literal" => true,
+            "UnaryExpression" => {
+                matches!(self.tree.text(node, "operator"), Some("+") | Some("-"))
+                    && self.tree.child(node, "argument").is_some_and(|argument| {
+                        self.tree.kind(self.tree.inner(argument)) == "Literal"
+                    })
+            }
+            "TemplateLiteral" => self.tree.list(node, "expressions").is_empty(),
+            "ArrayExpression" => self
+                .tree
+                .list(node, "elements")
+                .into_iter()
+                .flatten()
+                .all(|element| self.fixture_value(element)),
+            "ObjectExpression" => self
+                .tree
+                .list(node, "properties")
+                .into_iter()
+                .flatten()
+                .all(|property| {
+                    self.tree.kind(property) == "Property"
+                        && !self.tree.flag(property, "computed")
+                        && self
+                            .tree
+                            .child(property, "value")
+                            .is_some_and(|value| self.fixture_value(value))
+                }),
+            _ => false,
+        }
+    }
+
+    /// Whether `node` is a stable binding of the framework's mocking namespace.
+    fn mocking_namespace(&self, node: NodeId, seen: &mut HashSet<SymbolId>) -> bool {
+        let tree = self.tree;
+        let node = tree.inner(node);
+        if tree.kind(node) == "MemberExpression"
+            && member_name(tree, node).is_some_and(|name| {
+                self.setting.dialect.namespace(name) == self.setting.dialect.mocking_namespace
+            })
+        {
+            return tree
+                .child(node, "object")
+                .is_some_and(|object| self.vitest_module_namespace(object));
+        }
+        if tree.kind(node) != "Identifier" {
+            return false;
+        }
+        let Some(symbol) = self.read(node) else {
+            return self.setting.globals
+                && tree.text(node, "name").is_some_and(|name| {
+                    self.setting.dialect.namespace(name) == self.setting.dialect.mocking_namespace
+                        && !self.global_was_rewritten(name)
+                });
+        };
+        if self.reassigned(symbol) || !seen.insert(symbol) {
+            return false;
+        }
+        match &self.parsed.scopes.symbol(symbol).declaration {
+            Declaration::Import {
+                import,
+                specifier,
+                imported: Imported::Named(name),
+            } => {
+                self.runtime_api_import(*import, *specifier)
+                    && self.setting.dialect.namespace(name)
+                        == self.setting.dialect.mocking_namespace
+            }
+            Declaration::Variable(declarator)
+                if tree
+                    .outer_parent(*declarator)
+                    .and_then(|declaration| tree.text(declaration, "kind"))
+                    == Some("const")
+                    && tree
+                        .child(*declarator, "id")
+                        .is_some_and(|id| tree.kind(id) == "Identifier") =>
+            {
+                tree.child(*declarator, "init")
+                    .is_some_and(|init| self.mocking_namespace(init, seen))
+            }
+            _ => false,
+        }
+    }
+
+    /// Whether `node` is a namespace import from the framework module.
+    fn vitest_module_namespace(&self, node: NodeId) -> bool {
+        let tree = self.tree;
+        let node = tree.inner(node);
+        if tree.kind(node) != "Identifier" {
+            return false;
+        }
+        let Some(symbol) = self.read(node) else {
+            return false;
+        };
+        !self.reassigned(symbol)
+            && matches!(
+                &self.parsed.scopes.symbol(symbol).declaration,
+                Declaration::Import {
+                    import,
+                    specifier,
+                    imported: Imported::Namespace,
+                } if self.runtime_api_import(*import, *specifier)
+            )
+    }
+
+    /// Whether an import specifier is a runtime import from the configured framework module.
+    fn runtime_api_import(&self, import: NodeId, specifier: NodeId) -> bool {
+        self.tree.text(import, "importKind") != Some("type")
+            && self.tree.text(specifier, "importKind") != Some("type")
+            && self
+                .tree
+                .child(import, "source")
+                .and_then(|source| self.tree.text(source, "value"))
+                .is_some_and(|source| self.setting.dialect.is_api_module(source))
+    }
+
+    /// Whether a write through the global object may have replaced this free global.
+    fn global_was_rewritten(&self, name: &str) -> bool {
+        self.rewritten_globals.contains(&None)
+            || self.rewritten_globals.contains(&Some(name.to_owned()))
+    }
+
     /// The symbol an identifier node reads.
     fn read(&self, node: NodeId) -> Option<SymbolId> {
         match self.parsed.scopes.name_at(self.tree.span(node).start)? {
@@ -195,8 +565,7 @@ impl<'s> Module<'s> {
                 Name::Reference(None) if self.setting.globals => {
                     let name = tree.text(node, "name")?;
                     let registration = self.setting.dialect.registration(name)?;
-                    let rewritten = self.rewritten_globals.contains(&None)
-                        || self.rewritten_globals.contains(&Some(name.to_owned()));
+                    let rewritten = self.global_was_rewritten(name);
                     Some(if rewritten {
                         (Origin::Wrapper(Reach::Tasks), Provenance::Global)
                     } else {
@@ -439,6 +808,9 @@ impl<'s> Module<'s> {
                 continue;
             }
             for specifier in tree.list(statement, "specifiers").into_iter().flatten() {
+                if tree.text(specifier, "importKind") == Some("type") {
+                    continue;
+                }
                 let Some(local) = tree.child(specifier, "local") else {
                     continue;
                 };
@@ -458,6 +830,9 @@ impl<'s> Module<'s> {
                         continue;
                     }
                 };
+                self.imported_unreadable_fixture |= wrapper_exports
+                    .as_ref()
+                    .is_some_and(|exports| exports.contains_key(&unreadable_fixture_export(&name)));
                 match &wrapper_exports {
                     None => {
                         if let Some(registers) = self.api(&name) {
@@ -1260,8 +1635,16 @@ impl<'s> Module<'s> {
                             add(ON_LOAD.to_owned(), Export::Wrapper(Reach::Tasks));
                         }
                         for (local, exported) in specifiers(tree, statement) {
-                            if let Some(&export) = theirs.get(&export_name(tree, local)) {
-                                add(export_name(tree, exported), export);
+                            let local = export_name(tree, local);
+                            let exported = export_name(tree, exported);
+                            if let Some(&export) = theirs.get(&local) {
+                                add(exported.clone(), export);
+                            }
+                            if theirs.contains_key(&unreadable_fixture_export(&local)) {
+                                add(
+                                    unreadable_fixture_export(&exported),
+                                    Export::Wrapper(Reach::Tasks),
+                                );
                             }
                         }
                         continue;
@@ -1351,7 +1734,7 @@ impl<'s> Module<'s> {
                             .resolve(self.path, source, self.setting.root)
                     {
                         for (name, export) in modules.exports(&file, self.setting, depth + 1) {
-                            if name != "default" {
+                            if name != "default" && name != unreadable_fixture_export("default") {
                                 let export = forwarded(&name, export);
                                 add(name, export);
                             }
@@ -1393,6 +1776,11 @@ impl<'s> Module<'s> {
         }
         labels
     }
+}
+
+/// The private export-cache key recording that a derived test API has unreadable fixtures.
+fn unreadable_fixture_export(name: &str) -> String {
+    format!("{UNREADABLE_FIXTURE}:{name}")
 }
 
 /// Whether an export statement or specifier is erased: it loads nothing and exports no value.

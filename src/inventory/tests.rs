@@ -125,6 +125,228 @@ fn lookalikes_and_fixture_builders_register_nothing() {
     assert!(found.is_empty(), "{found:?}");
 }
 
+/// Non-hoisted mocks alter dynamic imports when they run, so their file needs a context refusal.
+#[test]
+fn non_hoisted_mocks_are_found_only_through_stable_vitest_bindings() {
+    let refused = [
+        "import { vi } from 'vitest'; vi.doMock('./dep', () => ({}));",
+        "import { vi as mocker } from 'vitest'; mocker.doUnmock('./dep');",
+        "import { vi } from 'vitest'; vi['doMock']('./dep', () => ({}));",
+        "import { vi } from 'vitest'; const mocker = vi; mocker.doMock('./dep');",
+        "import * as vitest from 'vitest'; vitest.vi.doMock('./dep');",
+        "import * as vitest from 'vitest'; vitest['vi'].doMock('./dep');",
+    ];
+    for source in refused {
+        assert!(
+            inventory_of(source, &[], false).0.non_hoisted_mock,
+            "{source}"
+        );
+    }
+    for source in [
+        "import { vi } from 'vitest'; vi.mock('./dep', () => ({}));",
+        "import { vi } from 'vitest'; vi.unmock('./dep');",
+        "import { doMock } from 'other'; doMock('./dep');",
+        "const vi = { doMock() {} }; vi.doMock('./dep');",
+        "import { vi } from 'vitest'; const { helper = { doMock() {} } } = vi; helper.doMock('./dep');",
+    ] {
+        assert!(
+            !inventory_of(source, &[], false).0.non_hoisted_mock,
+            "{source}"
+        );
+    }
+    let rewritten_global = "globalThis.vi = { doMock() {} }; vi.doMock('./dep', () => ({}));";
+    assert!(
+        !inventory_of(rewritten_global, &[], true).0.non_hoisted_mock,
+        "{rewritten_global}"
+    );
+}
+
+#[test]
+fn unreachable_fixture_extensions_do_not_refuse_the_module() {
+    let found = inventory_of(
+        "import { test } from 'vitest'; function unused() { return; test.extend({ db: makeDb() }); } test('a', () => {});",
+        &[],
+        false,
+    )
+    .0;
+    assert!(!found.unreadable_fixture);
+}
+
+/// Imported mock factories and evaluated fixture values are distinct from their inline controls.
+#[test]
+fn unreadable_context_values_are_found_without_rejecting_inline_controls() {
+    for source in [
+        "import { vi } from 'vitest'; import { factory } from './factory'; vi.mock('./dep', factory);",
+        "import { vi } from 'vitest'; vi.mock('./dep', makeFactory());",
+        "import { vi } from 'vitest'; vi.mock('./dep', { spy: Boolean(true) });",
+    ] {
+        let found = inventory_of(source, &[], false).0;
+        assert!(found.unreadable_mock_factory, "{source}");
+    }
+    for source in [
+        "import { vi } from 'vitest'; vi.mock('./dep');",
+        "import { vi } from 'vitest'; vi.mock('./dep', () => ({}));",
+        "import { vi } from 'vitest'; vi.mock('./dep', { spy: true });",
+        "import { vi } from 'vitest'; vi.mock('./dep', { spy: true as const });",
+    ] {
+        let found = inventory_of(source, &[], false).0;
+        assert!(!found.unreadable_mock_factory, "{source}");
+    }
+    for source in [
+        "import { test as base } from 'vitest'; const test = base.extend({ db: makeDb() });",
+        "import { test as base } from 'vitest'; const test = base.extend({ db });",
+        "import { test as base } from 'vitest'; const test = base.extend({ [makeKey()]: 1 });",
+    ] {
+        let found = inventory_of(source, &[], false).0;
+        assert!(found.unreadable_fixture, "{source}");
+    }
+    for source in [
+        "import { test as base } from 'vitest'; const test = base.extend({ db: 1 });",
+        "import { test as base } from 'vitest'; const test = base.extend({ count: -1, nested: [-2] });",
+        "import { test as base } from 'vitest'; const test = base.extend({ db: () => 1 });",
+        "import { test as base } from 'vitest'; const test = base.extend('db', () => 1);",
+        "import { test as base } from 'vitest'; const test = base.extend('db', 1);",
+        "import { test as base } from 'vitest'; const test = base.extend('db', { auto: true }, ({}) => 1);",
+    ] {
+        let found = inventory_of(source, &[], false).0;
+        assert!(!found.unreadable_fixture, "{source}");
+    }
+
+    for source in [
+        "import { test as base } from 'vitest'; const test = base.extend('db', makeDb());",
+        "import { test as base } from 'vitest'; const test = base.extend('db', { auto }, ({}) => 1);",
+        "import { test as base } from 'vitest'; const name = 'db'; const test = base.extend(name, 1);",
+    ] {
+        let found = inventory_of(source, &[], false).0;
+        assert!(found.unreadable_fixture, "{source}");
+    }
+}
+
+/// A fixture refusal follows a derived test API through the project-module export cache.
+#[test]
+fn unreadable_fixture_in_an_imported_test_api_is_retained() {
+    let (found, _) = inventory_of(
+        "import { test } from './fixture'; test('a', () => {});",
+        &[ (
+            "fixture.ts",
+            "import { test as base } from 'vitest'; export const test = base.extend({ db: makeDb() });",
+        ) ],
+        false,
+    );
+    assert!(found.unreadable_fixture);
+}
+
+/// A clean derived test API stays a test API when a later helper extends it with unreadable data.
+#[test]
+fn unreadable_fixture_on_an_imported_derived_test_api_is_retained() {
+    let (found, _) = inventory_of(
+        "import { test } from './fixture'; test('a', () => {});",
+        &[
+            ("base.ts", "import { test as base } from 'vitest'; export const test = base.extend({ db: () => 1 });"),
+            ("fixture.ts", "import { test as base } from './base'; export const test = base.extend({ db: makeDb() });"),
+        ],
+        false,
+    );
+    assert!(found.unreadable_fixture);
+}
+
+/// Renamed and default fixture builders preserve their refusal marker for importers.
+#[test]
+fn renamed_and_default_unreadable_fixture_exports_are_retained() {
+    for (exported, imported) in [
+        (
+            "const test = base.extend({ db: makeDb() }); export { test as it };",
+            "import { it as test } from './fixture';",
+        ),
+        (
+            "const test = base.extend({ db: makeDb() }); export default test;",
+            "import test from './fixture';",
+        ),
+    ] {
+        let (found, _) = inventory_of(
+            &format!("{imported} test('a', () => {{}});"),
+            &[(
+                "fixture.ts",
+                &format!("import {{ test as base }} from 'vitest'; {exported}"),
+            )],
+            false,
+        );
+        assert!(found.unreadable_fixture, "{exported}");
+    }
+}
+
+/// A star export excludes the default fixture refusal along with the default value itself.
+#[test]
+fn star_exports_do_not_forward_default_fixture_refusals() {
+    let (found, _) = inventory_of(
+        "import test from './barrel'; test('a', () => {});",
+        &[
+            (
+                "fixture.ts",
+                "import { test as base } from 'vitest'; const test = base.extend({ db: makeDb() }); export default test;",
+            ),
+            (
+                "barrel.ts",
+                "export * from './fixture'; export { test as default } from 'vitest';",
+            ),
+        ],
+        false,
+    );
+    assert!(!found.unreadable_fixture);
+}
+
+/// Starred named exports and explicitly re-exported defaults retain their fixture refusals.
+#[test]
+fn forwarded_unreadable_fixture_exports_are_retained() {
+    for (fixture, barrel, imported) in [
+        (
+            "import { test as base } from 'vitest'; export const test = base.extend({ db: makeDb() });",
+            "export * from './fixture';",
+            "import { test } from './barrel';",
+        ),
+        (
+            "import { test as base } from 'vitest'; const test = base.extend({ db: makeDb() }); export default test;",
+            "export { default } from './fixture';",
+            "import test from './barrel';",
+        ),
+    ] {
+        let (found, _) = inventory_of(
+            &format!("{imported} test('a', () => {{}});"),
+            &[("fixture.ts", fixture), ("barrel.ts", barrel)],
+            false,
+        );
+        assert!(found.unreadable_fixture, "{barrel}");
+    }
+}
+
+/// An erased type import cannot carry a runtime fixture refusal into its importer.
+#[test]
+fn type_only_imports_do_not_propagate_fixture_refusals() {
+    let (found, _) = inventory_of(
+        "import { test } from 'vitest'; import { type Fixture } from './fixture'; test('a', () => {});",
+        &[ (
+            "fixture.ts",
+            "import { test as base } from 'vitest'; export type Fixture = { db: number }; export const test = base.extend({ db: makeDb() });",
+        ) ],
+        false,
+    );
+    assert!(!found.unreadable_fixture);
+}
+
+/// A non-registration export from a helper with an unreadable fixture stays unrelated.
+#[test]
+fn unrelated_runtime_imports_do_not_propagate_fixture_refusals() {
+    let (found, _) = inventory_of(
+        "import { test } from './fixture'; test('a', () => {});",
+        &[ (
+            "fixture.ts",
+            "import { test as base } from 'vitest'; export const extended = base.extend({ db: makeDb() }); export const test = base;",
+        ) ],
+        false,
+    );
+    assert!(!found.unreadable_fixture);
+}
+
 #[test]
 fn wrappers_are_found_to_a_fixpoint_across_modules() {
     let helpers = "import { it } from 'vitest'\n\
