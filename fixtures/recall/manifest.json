@@ -8937,6 +8937,197 @@
           ]
         }
       ]
+    },
+    {
+      "name": "suite-skipped-children",
+      "path": "suite-skipped-children",
+      "rule": "duplicate-suite",
+      "role": "negative",
+      "engine": "next",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-04",
+      "expectedTests": 2,
+      "expectedIncomplete": false,
+      "expectedUnresolved": 0,
+      "expectedFindings": [
+        {
+          "rule": "duplicate-test",
+          "severity": "error",
+          "titles": [
+            "s > t",
+            "s > t"
+          ]
+        },
+        {
+          "rule": "duplicate-test-name",
+          "severity": "warning",
+          "titles": [
+            "s > t",
+            "s > t"
+          ]
+        }
+      ],
+      "expectedAbsent": [
+        {
+          "rule": "duplicate-suite",
+          "titles": [
+            "s",
+            "s"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "suite-focus-elsewhere",
+      "path": "suite-focus-elsewhere",
+      "rule": "duplicate-suite",
+      "role": "negative",
+      "engine": "next",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-04",
+      "expectedTests": 3,
+      "expectedIncomplete": false,
+      "expectedUnresolved": 0,
+      "expectedFindings": [
+        {
+          "rule": "duplicate-test",
+          "severity": "error",
+          "titles": [
+            "the only one",
+            "s > t"
+          ]
+        },
+        {
+          "rule": "duplicate-test",
+          "severity": "error",
+          "titles": [
+            "s > t",
+            "s > t"
+          ]
+        },
+        {
+          "rule": "duplicate-test-name",
+          "severity": "warning",
+          "titles": [
+            "s > t",
+            "s > t"
+          ]
+        }
+      ],
+      "expectedAbsent": [
+        {
+          "rule": "duplicate-suite",
+          "titles": [
+            "s",
+            "s"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "suite-registration-state",
+      "path": "suite-registration-state",
+      "rule": "duplicate-suite",
+      "role": "negative",
+      "engine": "next",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-04",
+      "expectedTests": 2,
+      "expectedIncomplete": true,
+      "expectedUnresolved": 2,
+      "expectedFindings": [],
+      "expectedAbsent": [
+        {
+          "rule": "duplicate-suite",
+          "titles": [
+            "s",
+            "s"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "suite-conditional-registration",
+      "path": "suite-conditional-registration",
+      "rule": "duplicate-suite",
+      "role": "negative",
+      "engine": "next",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-04",
+      "expectedTests": 2,
+      "expectedIncomplete": false,
+      "expectedUnresolved": 0,
+      "expectedFindings": [
+        {
+          "rule": "duplicate-test",
+          "severity": "error",
+          "titles": [
+            "s > t",
+            "s > t"
+          ]
+        },
+        {
+          "rule": "duplicate-test-name",
+          "severity": "warning",
+          "titles": [
+            "s > t",
+            "s > t"
+          ]
+        }
+      ],
+      "expectedAbsent": [
+        {
+          "rule": "duplicate-suite",
+          "titles": [
+            "s",
+            "s"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "suite-static-initializer",
+      "path": "suite-static-initializer",
+      "rule": "duplicate-suite",
+      "role": "negative",
+      "engine": "next",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-04",
+      "expectedTests": 2,
+      "expectedIncomplete": false,
+      "expectedUnresolved": 0,
+      "expectedFindings": [
+        {
+          "rule": "duplicate-test",
+          "severity": "error",
+          "titles": [
+            "s > t",
+            "s > t"
+          ]
+        },
+        {
+          "rule": "duplicate-test-name",
+          "severity": "warning",
+          "titles": [
+            "s > t",
+            "s > t"
+          ]
+        }
+      ],
+      "expectedAbsent": [
+        {
+          "rule": "duplicate-suite",
+          "titles": [
+            "s",
+            "s"
+          ]
+        }
+      ]
     }
   ],
   "knownFalsePositiveBaseline": 1,

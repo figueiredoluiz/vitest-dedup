@@ -657,6 +657,25 @@ impl<'s> Normalizer<'s> {
     }
 
     /// The suite callbacks enclosing `node`, outermost first, or `None` when a function that is
+    /// Whether `function` is a callback of a synchronous iteration — `cases.forEach((c) => ...)`,
+    /// `xs.map(...)` — so it runs while the file registers, like the code around it.
+    fn registration_time_callback(&self, function: NodeId) -> bool {
+        let tree = self.tree;
+        tree.outer_parent(function).is_some_and(|call| {
+            tree.kind(call) == "CallExpression"
+                && tree.child(call, "callee").is_some_and(|callee| {
+                    let callee = tree.inner(callee);
+                    tree.kind(callee) == "MemberExpression"
+                        && !tree.flag(callee, "computed")
+                        && matches!(
+                            tree.child(callee, "property")
+                                .and_then(|p| tree.text(p, "name")),
+                            Some("forEach" | "map")
+                        )
+                })
+        })
+    }
+
     /// neither a suite body nor an iteration callback encloses it: what it registers then depends
     /// on a caller.
     pub fn suites_around(&self, node: NodeId) -> Option<Vec<NodeId>> {
@@ -673,21 +692,7 @@ impl<'s> Normalizer<'s> {
                 chain.push(ancestor);
                 continue;
             }
-            // `cases.forEach((c) => it(...))` runs while the suite registers.
-            let iterates = tree.outer_parent(ancestor).is_some_and(|call| {
-                tree.kind(call) == "CallExpression"
-                    && tree.child(call, "callee").is_some_and(|callee| {
-                        let callee = tree.inner(callee);
-                        tree.kind(callee) == "MemberExpression"
-                            && !tree.flag(callee, "computed")
-                            && matches!(
-                                tree.child(callee, "property")
-                                    .and_then(|p| tree.text(p, "name")),
-                                Some("forEach" | "map")
-                            )
-                    })
-            });
-            if !iterates {
+            if !self.registration_time_callback(ancestor) {
                 return None;
             }
         }
@@ -722,11 +727,12 @@ impl<'s> Normalizer<'s> {
         None
     }
 
-    /// Whether a test whose body is `body` reads state another test writes, or a hook writes in a
-    /// way that depends on what it held before: equal text then observes different values
-    /// depending on which tests ran first. A binding every test starts from the same value of is
-    /// not such state: one the test assigns before reading it, or one a before-each hook around
-    /// the test assigns. Writes through a method call or a property (`list.push`) are not seen.
+    /// Whether a body whose text is `body` reads state another test writes, a hook writes in a
+    /// way that depends on what it held before, or a suite body writes at registration: equal
+    /// text then observes different values depending on which tests ran first or in which copy.
+    /// A binding every body starts from the same value of is not such state: one the body assigns
+    /// before reading it, or one a before-each hook around it assigns. Writes through a method
+    /// call or a property (`list.push`) are not seen.
     pub fn order_dependent(&self, body: NodeId) -> bool {
         let tree = self.tree;
         let own = tree.span(body);
@@ -758,6 +764,52 @@ impl<'s> Normalizer<'s> {
                     .any(|test| test.contains(reference.span))
                 {
                     return true;
+                }
+                for (&callback_function, &call) in &self.structure.suites {
+                    if !tree.span(call).contains(reference.span) {
+                        continue;
+                    }
+                    // A registration-time write: inside a suite callback's body with no function
+                    // between the write and that callback — it runs once per copy, at
+                    // collection, before any test. A nested function binds its own state. A
+                    // write the tree holds no identifier for cannot be walked and is not one.
+                    let Some(write_node) = reference.node else {
+                        continue;
+                    };
+                    let mut registration_write = false;
+                    for ancestor in tree.ancestors(write_node) {
+                        if ancestor == callback_function {
+                            registration_write = true;
+                            break;
+                        }
+                        // A static field's initializer or a static block runs once when the
+                        // class definition is evaluated — at registration. An instance field's
+                        // initializer waits for construction.
+                        if tree.kind(ancestor) == "StaticBlock" {
+                            registration_write = true;
+                            break;
+                        }
+                        if tree.kind(ancestor) == "PropertyDefinition" {
+                            registration_write = tree.flag(ancestor, "static");
+                            break;
+                        }
+                        if matches!(
+                            tree.kind(ancestor),
+                            "FunctionExpression"
+                                | "ArrowFunctionExpression"
+                                | "FunctionDeclaration"
+                                | "MethodDefinition"
+                        ) {
+                            // A callback of a synchronous iteration (`[0].forEach(f)`) runs
+                            // during registration like the code around it: keep walking.
+                            if !self.registration_time_callback(ancestor) {
+                                break;
+                            }
+                        }
+                    }
+                    if registration_write {
+                        return true;
+                    }
                 }
                 self.structure
                     .hooks

@@ -269,3 +269,99 @@ fn suite_local_names_and_unknown_activation() {
         assert_eq!(suite_count(&format!("{IMPORTS}{changed};{changed}"), 2), 0);
     }
 }
+
+/// A duplicate-suite claim is withheld when the copies cannot behave alike: every child skipped,
+/// a focus anywhere in the file, a registration-time write in the copy bodies, or a module-level
+/// conditional before a copy. Each shape is a one-edit twin of the plain pair, whose claim the
+/// machinery must still find.
+#[test]
+fn suite_claims_refuse_copies_that_cannot_behave_alike() {
+    let block = |body: &str| format!("describe('s', () => {{ {body} }})");
+    let child = "test('child', () => { expect(1).toBe(1) });";
+    let skipped_child = "test.skip('child', () => { expect(1).toBe(1) });";
+    let plain = format!("{IMPORTS}{};{}", block(child), block(child));
+    let skipped = format!("{IMPORTS}{};{}", block(skipped_child), block(skipped_child));
+    let focused = format!(
+        "{IMPORTS}test.only('only', () => {{ expect(1).toBe(1) }});{};{}",
+        block(child),
+        block(child)
+    );
+    let registration = format!(
+        "{IMPORTS}let n = 0;{};{}",
+        block("n = n + 1; test('child', () => { expect(n).toBe(1) });"),
+        block("n = n + 1; test('child', () => { expect(n).toBe(1) });")
+    );
+    let static_field = format!(
+        "{IMPORTS}let n = 0;{};{}",
+        block("class C { static value = ++n } test('child', () => { expect(C.value).toBe(1) });"),
+        block("class C { static value = ++n } test('child', () => { expect(C.value).toBe(1) });")
+    );
+    let static_block = format!(
+        "{IMPORTS}let n = 0;{};{}",
+        block("class C { static { n++ } } test('child', () => { expect(n).toBe(1) });"),
+        block("class C { static { n++ } } test('child', () => { expect(n).toBe(1) });")
+    );
+    let instance_field = format!(
+        "{IMPORTS}let n = 0;{};{}",
+        block("class C { value = ++n } test('child', () => { expect(new C().value).toBe(1) });"),
+        block("class C { value = ++n } test('child', () => { expect(new C().value).toBe(1) });")
+    );
+    let iteration = format!(
+        "{IMPORTS}let n = 0;{};{}",
+        block("[0].forEach(() => {{ n++ }}); test('child', () => {{ expect(n).toBe(1) }});"),
+        block("[0].forEach(() => {{ n++ }}); test('child', () => {{ expect(n).toBe(1) }});")
+    );
+    let conditional = format!(
+        "{IMPORTS}{};if (process.env.SKIP_REST) {{ throw new Error('stop') }};{}",
+        block(child),
+        block(child)
+    );
+    let conditional_after = format!(
+        "{IMPORTS}{};{};if (process.env.SKIP_REST) {{ throw new Error('stop') }}",
+        block(child),
+        block(child)
+    );
+
+    assert_eq!(suite_count(&plain, 2), 1, "the plain pair is claimed");
+    assert_eq!(suite_count(&skipped, 2), 0, "every child skipped");
+    assert_eq!(suite_count(&focused, 3), 0, "a focus elsewhere");
+    assert_eq!(suite_count(&registration, 2), 0, "registration-time writes");
+    assert_eq!(
+        suite_count(&iteration, 2),
+        0,
+        "writes in a forEach callback"
+    );
+    assert_eq!(
+        suite_count(&static_field, 2),
+        0,
+        "static field initializers"
+    );
+    assert_eq!(suite_count(&static_block, 2), 0, "static blocks");
+    assert_eq!(
+        suite_count(&instance_field, 2),
+        1,
+        "instance initializers run at construction, not registration"
+    );
+    assert_eq!(suite_count(&conditional, 2), 0, "conditional registration");
+    assert_eq!(
+        suite_count(&conditional_after, 2),
+        1,
+        "a conditional after the copies cannot un-register them"
+    );
+}
+
+#[test]
+fn probe_generated_sources_parse() {
+    let block = |body: &str| format!("describe('s', () => {{ {body} }})");
+    let sources = [
+        "class C { static value = ++n } test('child', () => { expect(C.value).toBe(1) });",
+        "class C { static { n++ } } test('child', () => { expect(n).toBe(1) });",
+        "class C { value = ++n } test('child', () => { expect(new C().value).toBe(1) });",
+    ];
+    for source in sources {
+        let body = block(source);
+        let full = format!("{IMPORTS}let n = 0;{body};{body}");
+        let parsed = crate::lang::parse(std::path::Path::new("probe.test.ts"), &full);
+        println!("PROBE ok={} src={full}", parsed.is_ok());
+    }
+}
