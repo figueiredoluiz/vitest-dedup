@@ -34,6 +34,71 @@
       "tasks": 2,
       "wrapperSites": [],
       "next": {}
+    },
+    "reset-dynamic-import.test.ts": {
+      "tasks": 2,
+      "wrapperSites": [],
+      "next": {
+        "reasons": [
+          "order-dependent-state"
+        ],
+        "testsExcluded": 1
+      }
+    },
+    "reset-import-actual.test.ts": {
+      "tasks": 2,
+      "wrapperSites": [],
+      "next": {
+        "reasons": [
+          "order-dependent-state"
+        ],
+        "testsExcluded": 1
+      }
+    },
+    "reset-mock-method.test.ts": {
+      "tasks": 2,
+      "wrapperSites": [],
+      "next": {
+        "reasons": [
+          "order-dependent-state"
+        ],
+        "testsExcluded": 1
+      }
+    },
+    "reset-value-of.test.ts": {
+      "tasks": 2,
+      "wrapperSites": [],
+      "next": {
+        "reasons": [
+          "order-dependent-state"
+        ],
+        "testsExcluded": 1
+      }
+    },
+    "reset-queued-stub.test.ts": {
+      "tasks": 2,
+      "wrapperSites": [],
+      "next": {}
+    },
+    "reset-meta-computed.test.ts": {
+      "tasks": 2,
+      "wrapperSites": [],
+      "next": {
+        "reasons": [
+          "order-dependent-state"
+        ],
+        "testsExcluded": 1
+      }
+    },
+    "reset-helper-load.test.ts": {
+      "tasks": 2,
+      "wrapperSites": [],
+      "next": {
+        "reasons": [
+          "order-dependent-state"
+        ],
+        "testsExcluded": 1
+      }
     }
   },
   "knownTitles": [

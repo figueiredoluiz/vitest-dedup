@@ -1,5 +1,6 @@
 {
   "files": {
-    "cases.test.ts": { "tasks": 10, "wrapperSites": [], "next": {} }
+    "cases.test.ts": { "tasks": 10, "wrapperSites": [], "next": {} },
+    "reset-stub.test.ts": { "tasks": 2, "wrapperSites": [], "next": {} }
   }
 }
