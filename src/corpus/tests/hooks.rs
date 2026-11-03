@@ -46,6 +46,55 @@ fn owned_hook_runtime_controls() {
         .all(|l| l.path == std::path::Path::new("cases.test.ts"))));
 }
 
+/// Owned Vitest counterexamples to a reset proof: each file passes with both reset hooks and fails
+/// with one, through a route that replaces the utility object's member or refills a registry between
+/// the hooks, so neither hook may be reported.
+#[test]
+fn owned_reset_counterexamples_report_no_pair() {
+    for source in [
+        include_str!("../../../fixtures/oracle/hook-proof-boundaries/reset-dynamic-import.test.ts"),
+        include_str!("../../../fixtures/oracle/hook-proof-boundaries/reset-value-of.test.ts"),
+        include_str!("../../../fixtures/oracle/hook-proof-boundaries/reset-import-actual.test.ts"),
+        include_str!("../../../fixtures/oracle/hook-proof-boundaries/reset-mock-method.test.ts"),
+        include_str!("../../../fixtures/oracle/hook-proof-boundaries/reset-queued-stub.test.ts"),
+        include_str!("../../../fixtures/oracle/hook-proof-boundaries/reset-meta-computed.test.ts"),
+        include_str!("../../../fixtures/oracle/hook-proof-boundaries/reset-result.test.ts"),
+        include_str!("../../../fixtures/oracle/hook-proof-boundaries/reset-alias.test.ts"),
+    ] {
+        let tests = source.matches("\ntest(").count();
+        assert!(findings(source, tests).is_empty(), "{source}");
+    }
+    let mut corpora = corpora(
+        &[
+            (
+                "cases.test.ts",
+                include_str!(
+                    "../../../fixtures/oracle/hook-proof-boundaries/reset-helper-load.test.ts"
+                ),
+            ),
+            (
+                "reset-helper.ts",
+                include_str!("../../../fixtures/oracle/hook-proof-boundaries/reset-helper.ts"),
+            ),
+        ],
+        &["cases.test.ts"],
+    );
+    let corpus = corpora.remove(0);
+    assert_eq!(corpus.tests.len(), 2);
+    assert!(owned_findings("cases.test.ts", corpus)
+        .findings
+        .iter()
+        .all(|finding| finding.rule != Rule::RedundantHook));
+}
+
+/// The reset pair in this owned file is redundant under Vitest (it passes with one hook and fails
+/// with none), and stays unreported while reset calls are opaque.
+#[test]
+fn an_owned_redundant_reset_pair_stays_unreported() {
+    let source = include_str!("../../../fixtures/oracle/redundant-hooks/reset-stub.test.ts");
+    assert!(findings(source, 2).is_empty());
+}
+
 /// Each lifecycle phase works in one scope; only per-test phases cross scope boundaries.
 #[test]
 fn hook_phase_and_scope_are_dimensions() {
