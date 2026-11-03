@@ -214,59 +214,82 @@ fn git(root: &Path, args: &[&str]) {
 }
 
 #[test]
-/// Requires partial historical baselines and changed-caller inclusion for helper findings.
-fn a_revision_baseline_is_partial_and_a_changed_caller_keeps_helper_findings() {
-    let directory = fixture();
-    let root = directory.path();
-    git(root, &["init", "--quiet"]);
-    git(root, &["add", "."]);
-    git(
-        root,
-        &[
-            "-c",
-            "user.name=Owned fixture",
-            "-c",
-            "user.email=fixture@example.test",
-            "commit",
-            "--quiet",
-            "-m",
-            "owned baseline",
-        ],
-    );
-    std::fs::write(
-        root.join("caller.test.ts"),
-        "import { run } from './runner'; run();",
-    )
-    .unwrap();
-    command(root)
-        .args(["--changed-since", "HEAD", "--reporters", "json", "--output"])
-        .arg(root.join("report"))
-        .assert()
-        .code(1);
-    let changed = report(root);
-    assert_eq!(changed["testsAnalyzed"], 2);
-    assert_eq!(changed["findings"].as_array().unwrap().len(), 1);
-    assert_eq!(changed["findings"][0]["locations"][0]["path"], "runner.ts");
-    assert_eq!(changed["modes"]["withheldUnchanged"], 0);
-    let output = command(root)
-        .args([
-            "--baseline-from-ref",
-            "HEAD",
-            "--reporters",
-            "json",
-            "--output",
-        ])
-        .arg(root.join("report"))
-        .output()
+/// Both engines keep changed callers; only the owned historical reader proves helper allowance.
+fn revision_baselines_and_changed_callers_follow_the_selected_engine() {
+    for engine in ["", "next"] {
+        let directory = fixture();
+        let root = directory.path();
+        let selected_command = || {
+            let mut command = command(root);
+            command.env("VITEST_DEDUP_ENGINE", engine);
+            command
+        };
+        git(root, &["init", "--quiet"]);
+        git(root, &["add", "."]);
+        git(
+            root,
+            &[
+                "-c",
+                "user.name=Owned fixture",
+                "-c",
+                "user.email=fixture@example.test",
+                "commit",
+                "--quiet",
+                "-m",
+                "owned baseline",
+            ],
+        );
+        std::fs::write(
+            root.join("caller.test.ts"),
+            "import { run } from './runner'; run();",
+        )
         .unwrap();
-    assert_eq!(output.status.code(), Some(1));
-    assert!(String::from_utf8(output.stderr)
-        .unwrap()
-        .contains("baseline may be partial"));
-    let baseline = report(root);
-    assert_eq!(baseline["testsAnalyzed"], 2);
-    assert_eq!(baseline["findings"].as_array().unwrap().len(), 1);
-    assert_eq!(baseline["findings"][0]["baselined"], false);
+        selected_command()
+            .args(["--changed-since", "HEAD", "--reporters", "json", "--output"])
+            .arg(root.join("report"))
+            .assert()
+            .code(1);
+        let changed = report(root);
+        assert_eq!(changed["testsAnalyzed"], 2);
+        assert_eq!(changed["findings"].as_array().unwrap().len(), 1);
+        assert_eq!(changed["findings"][0]["locations"][0]["path"], "runner.ts");
+        assert_eq!(changed["modes"]["withheldUnchanged"], 0);
+        let output = selected_command()
+            .args([
+                "--baseline-from-ref",
+                "HEAD",
+                "--reporters",
+                "json",
+                "--output",
+            ])
+            .arg(root.join("report"))
+            .output()
+            .unwrap();
+        let owned = engine == "next";
+        assert_eq!(output.status.code(), Some(if owned { 0 } else { 1 }));
+        assert_eq!(
+            String::from_utf8(output.stderr)
+                .unwrap()
+                .contains("baseline may be partial"),
+            !owned
+        );
+        let baseline = report(root);
+        assert_eq!(baseline["testsAnalyzed"], 2);
+        assert_eq!(baseline["findings"].as_array().unwrap().len(), 1);
+        assert_eq!(baseline["findings"][0]["baselined"], owned);
+        assert_eq!(baseline["incomplete"], false);
+        assert_eq!(baseline["modes"]["baselineApplied"], true);
+        assert_eq!(baseline["modes"]["baselined"], usize::from(owned));
+        assert_eq!(baseline["modes"]["newFindings"], usize::from(!owned));
+        assert!(baseline["findings"][0]["fingerprint"]
+            .as_str()
+            .unwrap()
+            .starts_with(if owned {
+                "vitestDedupFingerprint/v2:"
+            } else {
+                "vitestDedupFingerprint/v1:"
+            }));
+    }
 }
 
 #[test]
