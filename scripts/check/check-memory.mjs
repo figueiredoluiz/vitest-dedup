@@ -68,6 +68,7 @@ import { fileURLToPath } from 'node:url'
 import { CORPUS_SCALES, corpusRoot, generateCorpus } from './lib/memory-corpus.mjs'
 import {
   CONTEXT_FIELDS,
+  ENGINE_FIELDS,
   FIELDS,
   discardCorpus,
   mb,
@@ -125,23 +126,29 @@ const pct = (value) => `${(value * 100).toFixed(1)}%`
  * no "(other)" row -- a bucket that did not add up would have failed validation rather than being
  * papered over with a remainder.
  *
- * Skipped outright when nothing was analyzed. Every cell would read `NaN bytes/test  NaN%`, and a
- * table of NaNs printed beside a failure message is an invitation to read one of them as a
- * measurement.
+ * Owned populations still retain bytes with no tests: show absolute bytes in that case, without
+ * a per-test denominator or percentages. Legacy empty runs keep their existing explanation.
  */
-function printBreakdown(record) {
-  if (record.testsAnalyzed === 0) {
-    console.log('\n(no per-field breakdown: nothing was analyzed, so every figure would be NaN)')
+export function printBreakdown(record, log = console.log) {
+  if (record.engineFields) log(`\n${record.engineMemoryNotice}`)
+  if (record.testsAnalyzed === 0 && !record.engineFields) {
+    log('\n(no per-field breakdown: nothing was analyzed, so every figure would be NaN)')
     return
   }
   const row = (name, bytes) =>
-    console.log(
+    log(
+      record.testsAnalyzed === 0 ? `  ${name.padEnd(12)} ${bytes} bytes` :
       `  ${name.padEnd(12)} ${String(Math.round(bytes / record.testsAnalyzed)).padStart(6)} ` +
         `bytes/test  ${pct(bytes / record.retainedBytes).padStart(6)}  ${mb(bytes)}`,
     )
-  console.log('\nretained bytes by field:')
+  if (record.engineFields) {
+    log('\nretained owned-engine bytes by population:')
+    for (const field of ENGINE_FIELDS) row(field, record.engineFields[field])
+    return
+  }
+  log('\nretained bytes by field:')
   for (const field of FIELDS) row(field, record.fields[field])
-  console.log('\n  ...of which `context`, the field hooks and mocks are retained in:')
+  log('\n  ...of which `context`, the field hooks and mocks are retained in:')
   for (const field of CONTEXT_FIELDS) row(field, record.contextFields[field])
 }
 
@@ -204,11 +211,12 @@ function main() {
         `suites included) across ${record.filesAnalyzed} file(s) in ` +
         `${(elapsedMs / 1000).toFixed(1)}s\n` +
         `  retained      ${mb(record.retainedBytes)} (${bytesPerTest} bytes/test)\n` +
+        (record.engineFields ? '  attribution   owned engine populations (see breakdown below)\n' :
         `  of which      ${Math.round((record.retainedBytes - record.fields.spine) / record.testsAnalyzed)} ` +
         `bytes/test of IR and ${Math.round(record.fields.spine / record.testsAnalyzed)} of Vec spine ` +
         `(${Math.round(record.fields.spine / record.declarationsRetained)} bytes per retained ` +
         'declaration; the spine is `capacity * size_of::<TestCase>`, so it steps rather than ' +
-        'grows -- see check-memory-scaling.mjs)\n' +
+        'grows -- see check-memory-scaling.mjs)\n') +
         `  ratchet       ${MAX_BYTES_PER_TEST} bytes/test (+${(TOLERANCE * 100).toFixed(0)}% tolerance)\n` +
         `  target        ${TARGET_BYTES_PER_TEST} bytes/test (1M tests in 2 GB), ` +
         `${(bytesPerTest / TARGET_BYTES_PER_TEST).toFixed(1)}x away\n` +
