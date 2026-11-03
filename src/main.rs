@@ -4419,27 +4419,25 @@ mod tests {
             "`fields` must be disjoint and exhaustive: {record}"
         );
 
-        // `contextFields` refines `fields.context` rather than adding to it.
-        let context_fields = record["contextFields"].as_object().unwrap();
-        let context_summed: u64 = context_fields
-            .values()
-            .map(|value| value.as_u64().unwrap())
-            .sum();
-        assert_eq!(
-            context_summed,
-            fields["context"].as_u64().unwrap(),
-            "`contextFields` must sum to `fields.context`, never to something else: {record}"
-        );
-        // The next engine retains its own structures and reports them as one `engine` bucket.
-        let (bucket, measured) = if next_engine() {
-            ("fields.engine", &fields["engine"])
-        } else {
-            ("contextFields.hooks", &context_fields["hooks"])
-        };
+        // `contextFields` refines `fields.context`, and `engineFields` (the next engine's)
+        // refines `fields.engine`, rather than adding to them; each carries a hooks bucket.
+        let mut hooks = 0;
+        for (refinement, parent) in [("contextFields", "context"), ("engineFields", "engine")] {
+            let Some(refined) = record[refinement].as_object() else {
+                continue;
+            };
+            let summed: u64 = refined.values().map(|value| value.as_u64().unwrap()).sum();
+            assert_eq!(
+                summed,
+                fields[parent].as_u64().unwrap(),
+                "`{refinement}` must sum to `fields.{parent}`, never to something else: {record}"
+            );
+            hooks += refined["hooks"].as_u64().unwrap();
+        }
         assert!(
-            measured.as_u64().unwrap() > 0,
-            "this corpus has two `beforeEach` chains; an empty `{bucket}` would mean the \
-             largest structure the engine retains is invisible to the breakdown: {record}"
+            hooks > 0,
+            "this corpus has two `beforeEach` chains; empty hooks buckets would mean the largest \
+             structure the engine retains is invisible to the breakdown: {record}"
         );
     }
 
