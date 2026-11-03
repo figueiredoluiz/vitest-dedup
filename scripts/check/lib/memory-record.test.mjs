@@ -90,21 +90,31 @@ test('the gate prints every owned population with real attribution and the estim
   assert.ok(!lines.some((line) => line.includes('context`')))
 })
 
-test('the gate preserves legacy attribution and explains empty owned runs without NaN rows', () => {
+test('the gate preserves legacy attribution and prints absolute owned bytes with no tests', () => {
   const legacy = []
   printBreakdown(valid(), (line) => legacy.push(line))
   assert.ok(legacy.some((line) => /^\s*body\s+500 bytes\/test/.test(line)))
   assert.ok(legacy.some((line) => line.includes('context`')))
   assert.ok(!legacy.some((line) => line.includes('owned-engine')))
-  const record = owned()
-  record.testsAnalyzed = 0
-  record.bytesPerTest = 0
-  assert.deepEqual(validateMemoryRecord(record), [])
-  const empty = []
-  printBreakdown(record, (line) => empty.push(line))
-  assert.ok(empty.some((line) => line.includes(record.engineMemoryNotice)))
-  assert.ok(empty.some((line) => line.includes('nothing was analyzed')))
-  assert.ok(!empty.some((line) => line.includes('bytes/test')))
+  for (const zeroBytes of [false, true]) {
+    const record = owned()
+    record.testsAnalyzed = record.bytesPerTest = record.declarationsRetained = 0
+    if (zeroBytes) {
+      for (const key of Object.keys(record.engineFields)) record.engineFields[key] = 0
+      record.retainedBytes = record.fields.engine = 0
+    }
+    assert.deepEqual(validateMemoryRecord(record), [])
+    const empty = []
+    printBreakdown(record, (line) => empty.push(line))
+    assert.ok(empty.some((line) => line.includes(record.engineMemoryNotice)))
+    for (const [key, bytes] of Object.entries(record.engineFields)) {
+      assert.ok(empty.some((line) => new RegExp(`^\\s*${key}\\s+${bytes} bytes$`).test(line)), key)
+    }
+    assert.ok(!empty.some((line) => /bytes\/test|NaN|Infinity|%/.test(line)))
+  }
+  const legacyEmpty = []
+  printBreakdown(valid({ testsAnalyzed: 0 }), (line) => legacyEmpty.push(line))
+  assert.ok(legacyEmpty.some((line) => line.includes('nothing was analyzed')))
 })
 
 test('owned attribution validates real populations, zero work and the unchanged legacy shape', () => {

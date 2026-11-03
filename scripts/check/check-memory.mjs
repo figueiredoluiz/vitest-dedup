@@ -126,18 +126,18 @@ const pct = (value) => `${(value * 100).toFixed(1)}%`
  * no "(other)" row -- a bucket that did not add up would have failed validation rather than being
  * papered over with a remainder.
  *
- * Skipped outright when nothing was analyzed. Every cell would read `NaN bytes/test  NaN%`, and a
- * table of NaNs printed beside a failure message is an invitation to read one of them as a
- * measurement.
+ * Owned populations still retain bytes with no tests: show absolute bytes in that case, without
+ * a per-test denominator or percentages. Legacy empty runs keep their existing explanation.
  */
 export function printBreakdown(record, log = console.log) {
   if (record.engineFields) log(`\n${record.engineMemoryNotice}`)
-  if (record.testsAnalyzed === 0) {
+  if (record.testsAnalyzed === 0 && !record.engineFields) {
     log('\n(no per-field breakdown: nothing was analyzed, so every figure would be NaN)')
     return
   }
   const row = (name, bytes) =>
     log(
+      record.testsAnalyzed === 0 ? `  ${name.padEnd(12)} ${bytes} bytes` :
       `  ${name.padEnd(12)} ${String(Math.round(bytes / record.testsAnalyzed)).padStart(6)} ` +
         `bytes/test  ${pct(bytes / record.retainedBytes).padStart(6)}  ${mb(bytes)}`,
     )

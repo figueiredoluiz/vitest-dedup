@@ -87,6 +87,8 @@ The owned engine attributes its retained capacity to `fields.engine`, with a dis
 Those buckets sum to `fields.engine`; they are not extra bytes to add to `fields`. The legacy
 field buckets are zero in this record. `engineMemoryNotice` states the estimate's limits,
 including temporary parser state and private hash-table spare/control storage.
+When no tests were analyzed, the memory gate prints absolute owned population bytes, omitting
+per-test values and percentages.
 
 The legacy `VD_CELL_CENSUS` environment opt-in is retired for the owned engine. Setting it emits
 a notice on stderr and does not change machine output. Use the owned engine's table exclusions
