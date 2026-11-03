@@ -44,7 +44,7 @@ pub(super) fn run(
         &entries,
         groups,
         message,
-        |members| !covered(members, reported),
+        &|members| !covered(members, reported),
         budget,
         findings,
     )

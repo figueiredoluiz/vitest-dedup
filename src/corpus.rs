@@ -202,6 +202,8 @@ pub struct FileCorpus {
     pub sites: Vec<SiteRecord>,
     /// Table declarations for which normalization proved zero rows.
     pub empty_tables: usize,
+    /// Suite containers registered, whether or not a comparable suite came of them.
+    pub containers: usize,
     /// Parse errors the parser recovered from.
     pub parse_errors: usize,
 }
@@ -872,6 +874,24 @@ fn read_parsed(
             chain: site.chain.join("."),
         }
     }));
+    // A suite table whose rows normalization proved empty registers nothing, like a test table;
+    // every other suite declaration is a container.
+    let mut containers = 0;
+    for site in found
+        .sites
+        .iter()
+        .filter(|site| site.kind == SiteKind::Registers(Registers::Suite))
+    {
+        let empty = tree
+            .child(site.node, "callee")
+            .and_then(|callee| normalizer.modifiers(callee).rows)
+            .is_some_and(|rows| rows.is_empty());
+        if empty {
+            empty_tables += 1;
+        } else {
+            containers += 1;
+        }
+    }
     let suites = suites::collect(
         parsed,
         &found,
@@ -906,6 +926,7 @@ fn read_parsed(
         tests,
         sites,
         empty_tables,
+        containers,
         parse_errors: parsed.parse_errors,
     })
 }
@@ -925,6 +946,8 @@ pub struct Engine {
     pub unresolved: usize,
     /// Proven empty table declarations, independently of executable test counts.
     pub empty_tables: usize,
+    /// Suite containers registered, whether or not a comparable suite came of them.
+    pub containers: usize,
     /// Registration sites, by the file's path relative to the root, when they are kept.
     sites: Vec<(PathBuf, SiteRecord)>,
     /// Each file's cases, by the file's path relative to the root: what the rules read once
@@ -934,6 +957,8 @@ pub struct Engine {
     suites: Vec<(PathBuf, Vec<TestCase>)>,
     /// Files every test of which is unresolved.
     blind: Vec<BlindFile>,
+    /// Files with nothing to compare whose only declarations are tables proved to have no rows.
+    proven_empty: Vec<PathBuf>,
     /// Owned element heaps, excluding outer vector spines and separately measured caches.
     retained: crate::memory::EngineBytes,
 }
@@ -1092,6 +1117,7 @@ impl Engine {
             }
         };
         self.empty_tables += corpus.empty_tables;
+        self.containers += corpus.containers;
         let mut reasons: Vec<(ExclusionReason, String)> = Vec::new();
         let context_partial = !corpus.context_refusals.is_empty();
         for refusal in &corpus.context_refusals {
@@ -1111,6 +1137,17 @@ impl Engine {
                 unresolved += count;
                 reasons.push((reason, detail.to_owned()));
             }
+        }
+        // A file's own refusals, before the shell's reasons (an undetermined `globals` is no part of
+        // why a file has nothing to compare).
+        if corpus.tests.is_empty()
+            && corpus.containers == 0
+            && reasons.is_empty()
+            && corpus.empty_tables > 0
+        {
+            let path = relative.to_path_buf();
+            self.retained.blind = self.retained.blind.saturating_add(path.heap_bytes());
+            self.proven_empty.push(path);
         }
         reasons.extend(further);
         // Named so a comparable file read under a configuration that reaches past the root is
@@ -1168,6 +1205,11 @@ impl Engine {
         let entry =
             exclusions::counted_file(relative.to_path_buf(), reasons, unresolved, case_count);
         (entry, corpus.parse_errors > 0 || context_partial)
+    }
+
+    /// Files, by path relative to the root, whose only declarations are statically empty tables.
+    pub fn proven_empty_files(&self) -> &[PathBuf] {
+        &self.proven_empty
     }
 
     /// Files every test of which is unresolved, the most tests first, then by path.

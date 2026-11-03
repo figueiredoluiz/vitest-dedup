@@ -355,7 +355,7 @@ fn emit(
         entries,
         groups,
         message,
-        |_| true,
+        &|_| true,
         budget,
         findings,
     )
@@ -369,7 +369,8 @@ fn emit_where<'a>(
     entries: &[Entry<'a>],
     groups: Vec<Vec<usize>>,
     message: fn(&[Entry<'_>]) -> String,
-    keep: impl Fn(&[Entry<'_>]) -> bool,
+    // A trait object, not a generic: one instantiation, so coverage counts every line it runs.
+    keep: &dyn Fn(&[Entry<'_>]) -> bool,
     budget: &mut PairBudget,
     findings: &mut Vec<Finding>,
 ) -> bool {

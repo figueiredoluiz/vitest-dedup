@@ -45,9 +45,62 @@ fn report(root: &Path) -> serde_json::Value {
 #[test]
 /// Requires helper source bytes to drive HTML snippets and inline suppression decisions.
 fn imported_helper_sources_supply_html_snippets_and_source_suppressions() {
+    helper_sources_drive_snippets_and_suppressions(&[]);
+}
+
+#[test]
+/// The next engine hands the same helper source bytes to the snippet and to inline suppression.
+fn the_next_engine_reads_helper_sources_for_snippets_and_suppressions() {
+    helper_sources_drive_snippets_and_suppressions(&[("VITEST_DEDUP_ENGINE", "next")]);
+}
+
+/// A helper under a subdirectory with the same file name as a root helper does not take the root
+/// helper's suppression, whatever directory the analyzer runs from.
+#[test]
+fn the_next_engine_keeps_helper_identities_whatever_the_working_directory() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    std::fs::create_dir(root.join("sub")).unwrap();
+    std::fs::write(
+        root.join("runner.ts"),
+        "import { test, expect } from 'vitest';\nexport function run() {\n  // vitest-dedup-disable-next-line owned unrelated\n  test('different', () => { expect(100).toBe(100); });\n}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("sub/runner.ts"),
+        "import { test, expect } from 'vitest';\nexport function run() {\n  test('a', () => { expect(1).toBe(1); });\n  test('b', () => { expect(1).toBe(1); });\n}\n",
+    )
+    .unwrap();
+    for caller in ["caller.test.ts", "sub/caller.test.ts"] {
+        std::fs::write(root.join(caller), "import { run } from './runner'; run();").unwrap();
+    }
+    for directory in [root.to_path_buf(), root.join("sub")] {
+        command(root)
+            .current_dir(&directory)
+            .env("VITEST_DEDUP_ENGINE", "next")
+            .args(["--reporters", "json", "--output"])
+            .arg(root.join("report"))
+            .assert()
+            .code(1);
+        let result = report(root);
+        assert_eq!(
+            result["findings"].as_array().unwrap().len(),
+            1,
+            "{directory:?}"
+        );
+        assert_eq!(
+            result["findings"][0]["locations"][0]["path"],
+            "sub/runner.ts"
+        );
+    }
+}
+
+/// Runs the fixture with `environment`, then again with its first test suppressed in the helper.
+fn helper_sources_drive_snippets_and_suppressions(environment: &[(&str, &str)]) {
     let directory = fixture();
     let root = directory.path();
     command(root)
+        .envs(environment.iter().copied())
         .args(["--reporters", "json,html", "--output"])
         .arg(root.join("report"))
         .assert()
@@ -71,6 +124,7 @@ fn imported_helper_sources_supply_html_snippets_and_source_suppressions() {
     );
     std::fs::write(root.join("runner.ts"), suppressed).unwrap();
     command(root)
+        .envs(environment.iter().copied())
         .args(["--reporters", "json", "--output"])
         .arg(root.join("report"))
         .assert()
@@ -213,6 +267,45 @@ fn a_revision_baseline_is_partial_and_a_changed_caller_keeps_helper_findings() {
     assert_eq!(baseline["testsAnalyzed"], 2);
     assert_eq!(baseline["findings"].as_array().unwrap().len(), 1);
     assert_eq!(baseline["findings"][0]["baselined"], false);
+}
+
+#[test]
+/// A helper finding the base revision suppressed is new once the working tree drops the directive:
+/// the base pass reads the committed helper text, so it never records the finding as accepted.
+fn the_next_engine_base_pass_applies_committed_helper_suppressions() {
+    let directory = fixture();
+    let root = directory.path();
+    let suppressed = HELPER.replace(
+        "  test('first'",
+        "  // vitest-dedup-disable-next-line owned intentional pair\n  test('first'",
+    );
+    std::fs::write(root.join("runner.ts"), suppressed).unwrap();
+    git(root, &["init", "--quiet"]);
+    git(root, &["add", "."]);
+    git(
+        root,
+        &[
+            "-c",
+            "user.name=Owned fixture",
+            "-c",
+            "user.email=fixture@example.test",
+            "commit",
+            "--quiet",
+            "-m",
+            "owned suppressed pair",
+        ],
+    );
+    std::fs::write(root.join("runner.ts"), HELPER).unwrap();
+    command(root)
+        .env("VITEST_DEDUP_ENGINE", "next")
+        .args(["--baseline-from-ref", "HEAD", "--fail-on-new", "0"])
+        .args(["--reporters", "json", "--output"])
+        .arg(root.join("report"))
+        .assert()
+        .code(1);
+    let result = report(root);
+    assert_eq!(result["findings"].as_array().unwrap().len(), 1, "{result}");
+    assert_eq!(result["findings"][0]["baselined"], false, "{result}");
 }
 
 /// Runs a caller beside a one-hook runner with only `redundant-hook` enabled; returns the report.
