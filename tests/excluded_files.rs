@@ -999,6 +999,43 @@ test('kept', () => { expect(1).toBe(1); });
     );
 }
 
+/// A rule-local trace gap is reported without turning an otherwise complete run into an
+/// incomplete one.
+#[test]
+fn an_incomplete_trace_alone_keeps_the_next_run_complete() {
+    let directory = tempfile::tempdir().unwrap();
+    write(
+        directory.path(),
+        "trace.test.ts",
+        "import { test, expect } from 'vitest';
+test('partial', () => {
+  class C { [key]() {} }
+  new C();
+});
+test('complete', () => { expect(1).toBe(1); });
+",
+    );
+    let run = run_with(directory.path(), &[], &[("VITEST_DEDUP_ENGINE", "next")]);
+    assert_eq!(run.json["testsAnalyzed"], 2);
+    assert_eq!(run.json["unresolvedTests"], 0);
+    assert_eq!(run.json["incomplete"], false, "{:#}", run.json);
+    assert_eq!(run.json["incompleteCauses"]["unresolvedContexts"], 0);
+    assert_eq!(run.json["blindFiles"], 0);
+    assert_eq!(run.json["excludedFiles"].as_array().unwrap().len(), 1);
+    let entry = &run.json["excludedFiles"][0];
+    assert_eq!(entry["path"], "trace.test.ts");
+    assert_eq!(entry["reason"], "incomplete-trace");
+    assert_eq!(entry["testsExcluded"], 0);
+    assert_eq!(entry["testsTotal"], 2);
+    assert_eq!(entry["everyTestExcluded"], false);
+    let summary = run.jsonl.last().unwrap();
+    assert_eq!(summary["type"], "summary");
+    assert_eq!(summary["testsAnalyzed"], 2);
+    assert_eq!(summary["unresolvedTests"], 0);
+    assert_eq!(summary["incomplete"], false);
+    assert_eq!(summary["incompleteCauses"]["unresolvedContexts"], 0);
+}
+
 /// Benchmarks are counted under the next engine and listed as not compared, never dropped.
 #[test]
 fn the_next_engine_counts_benchmarks_as_not_compared() {
