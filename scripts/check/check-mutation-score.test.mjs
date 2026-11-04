@@ -6,6 +6,7 @@
 // and each rejection is matched on its *message*, because five guards that all throw the same
 // generic error cannot be told apart by a reader of CI output.
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import test from 'node:test'
 import {
   MINIMUM_SCORE,
@@ -13,6 +14,7 @@ import {
   NEXT_CORE,
   SCOPE,
   TARGET_SCORE,
+  TRACE,
   checkMutationScore,
   checkScope,
   isScoreableExit,
@@ -389,15 +391,44 @@ test('--run scores the report it just produced', () => {
   assert.match(out[1], /^ok: mutation score/)
 })
 
-test('--scope=next-core selects the next core scope and its floors; any other scope is refused', () => {
+test('mutation gate comments use the equals form for named scopes', () => {
+  const source = readFileSync(new URL('./check-mutation-score.mjs', import.meta.url), 'utf8')
+  assert.doesNotMatch(source, /--scope\s+(?:next-core|trace)\b/)
+})
+
+test('named scopes require the equals form', () => {
   assert.equal(selectScope([]).scope, SCOPE)
   assert.equal(selectScope(['--scope=next-core']), NEXT_CORE)
+  assert.equal(selectScope(['--scope=trace']), TRACE)
+  assert.throws(() => selectScope(['--scope', 'next-core']), {
+    message: /the named scopes are --scope=next-core and --scope=trace/,
+  })
+  assert.throws(() => selectScope(['--scope', 'trace']), {
+    message: /the named scopes are --scope=next-core and --scope=trace/,
+  })
   assert.ok(NEXT_CORE.scope.every(({ file }) => file.startsWith('src/normal')))
   assert.ok(NEXT_CORE.minimumScore > 0 && NEXT_CORE.minimumScore <= TARGET_SCORE)
   assert.ok(NEXT_CORE.minimumScored > 0)
   const printed = runCli(['--print-scope', '--scope=next-core'])
   assert.equal(printed.out.join(' '), scopeArguments(NEXT_CORE.scope).join(' '))
+})
+
+test('unknown named scopes are refused', () => {
   const unknown = runCli(['--print-scope', '--scope=everything'])
   assert.equal(unknown.status, 1)
   assert.match(unknown.err.join('\n'), /unknown scope --scope=everything/)
+})
+
+test('the weekly mutation workflow omits the manual trace scope', () => {
+  const workflow = readFileSync(new URL('../../.github/workflows/mutants.yml', import.meta.url), 'utf8')
+  const activeWorkflow = workflow
+    .split('\n')
+    .filter((line) => !line.trimStart().startsWith('#'))
+    .map((line) => line.replace(/\s+#.*$/, ''))
+    .join('\n')
+  const scheduled = [...activeWorkflow.matchAll(/^\s*script:\s*['"]?(mutants(?::[a-z-]+)?)['"]?\s*$/gm)]
+    .map((match) => match[1])
+  assert.ok(scheduled.includes('mutants'))
+  assert.ok(scheduled.includes('mutants:next-core'))
+  assert.doesNotMatch(activeWorkflow, /mutants:trace|--scope=trace/)
 })
