@@ -593,11 +593,16 @@ fn read_parsed(
             .is_some_and(|scopes| scopes.iter().any(|scope| dead.contains(scope)))
     };
 
-    // Display and comparison names use the same supported test-row renderer.
-    let render_test_row = |pattern: &str, row: &normal::TableRow, whole_rows| {
-        let (arguments, fields) = normal::titles::row(parsed, &row.value, whole_rows);
-        (setting.dialect.render_title)(pattern, &arguments, fields.as_ref(), row.index)
+    // Comparison names take only a rendering the values establish; display may also cut long
+    // values as the default limit does, which a project can change.
+    let render_with = |render: crate::framework::RenderTitle| {
+        move |pattern: &str, row: &normal::TableRow, whole_rows| {
+            let (arguments, fields) = normal::titles::row(parsed, &row.value, whole_rows);
+            render(pattern, &arguments, fields.as_ref(), row.index)
+        }
     };
+    let render_test_row = render_with(setting.dialect.render_title);
+    let display_test_row = render_with(setting.dialect.render_display_title);
     let mut tests = Vec::new();
     let mut empty_tables = 0;
     // Suite registration provenance, by the registering call: the prefix a row finding may
@@ -655,7 +660,7 @@ fn read_parsed(
                 let rendered = row.and_then(|row| {
                     let pattern = record.title.as_deref()?;
                     let modifiers = modifiers.as_ref()?;
-                    render_test_row(pattern, row, modifiers.whole_rows)
+                    display_test_row(pattern, row, modifiers.whole_rows)
                 });
                 let mut case = record.clone();
                 case.row = row.map(|row| row.index);
@@ -878,6 +883,14 @@ fn read_parsed(
                         segments.push(title);
                         Some(segments)
                     });
+            let full_title = table_site(site)
+                .then(|| {
+                    let row = modifiers.rows.as_ref()?.get(index)?;
+                    display_test_row(pattern.as_deref()?, row, modifiers.whole_rows)
+                })
+                .flatten()
+                .and_then(|title| display_title(&title))
+                .or_else(|| record.full_title.clone());
             let row_class = (|| {
                 if !row_prefix_known {
                     return None;
@@ -960,6 +973,7 @@ fn read_parsed(
                 .then(|| digest(&format!("{chain}\u{1}{unbound}\u{1}{context}\u{1}{form}"))),
                 callback_form,
                 name,
+                full_title,
                 inert: record.inert,
                 ..record.clone()
             });

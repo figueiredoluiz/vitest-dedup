@@ -3,12 +3,34 @@
 use serde_json::{Map, Value};
 
 /// Renders what Vitest's `formatTitle` renders for scalar items, or nothing: unknown cells are
-/// never undefined, and composite inspection, dotted fields and percent escaping are refused.
+/// never undefined, and composite inspection, dotted fields and percent escaping are refused. A
+/// `$` value past 40 UTF-16 units is refused too: a project may change that display limit.
 pub(super) fn render(
     pattern: &str,
     arguments: &[Option<Value>],
     fields: Option<&Map<String, Value>>,
     index: usize,
+) -> Option<String> {
+    render_with(pattern, arguments, fields, index, false)
+}
+
+/// [`render`] for display: a long `$` value is cut as Vitest's default 40-unit limit cuts it.
+pub(super) fn render_display(
+    pattern: &str,
+    arguments: &[Option<Value>],
+    fields: Option<&Map<String, Value>>,
+    index: usize,
+) -> Option<String> {
+    render_with(pattern, arguments, fields, index, true)
+}
+
+/// [`render`], cutting long `$` values when `truncate` holds and refusing them otherwise.
+fn render_with(
+    pattern: &str,
+    arguments: &[Option<Value>],
+    fields: Option<&Map<String, Value>>,
+    index: usize,
+    truncate: bool,
 ) -> Option<String> {
     if pattern.contains("%%") {
         return None;
@@ -67,10 +89,10 @@ pub(super) fn render(
                     fields?.get(&field)?
                 };
                 let rendered = scalar(value)?;
-                if rendered.encode_utf16().count() > 40 {
+                if rendered.encode_utf16().count() > 40 && !truncate {
                     return None;
                 }
-                text.push_str(&rendered);
+                text.push_str(&truncated(&rendered));
                 position += 1 + length;
                 continue;
             }
@@ -79,6 +101,23 @@ pub(super) fn render(
         position += 1;
     }
     (text.len() <= 65_536).then_some(text)
+}
+
+/// A `$` substitution as Vitest displays it: past 40 UTF-16 units, the first 39 and `…`, never
+/// keeping half of a surrogate pair.
+fn truncated(value: &str) -> String {
+    let units: Vec<u16> = value.encode_utf16().collect();
+    if units.len() <= 40 {
+        return value.to_owned();
+    }
+    let mut kept = &units[..39];
+    if kept
+        .last()
+        .is_some_and(|unit| (0xD800..0xDC00).contains(unit))
+    {
+        kept = &kept[..38];
+    }
+    format!("{}…", String::from_utf16_lossy(kept))
 }
 
 /// The plain spelling shared by scalar string and named-field substitutions.
