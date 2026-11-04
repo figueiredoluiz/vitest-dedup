@@ -244,7 +244,7 @@ pub struct FileCorpus {
     /// Its registration sites and module loads.
     pub sites: Vec<SiteRecord>,
     /// Known hook declarations, including those outside the redundancy proof population.
-    pub diagnostic_hooks: Vec<records::DiagnosticHook>,
+    pub diagnostic_hooks: Vec<(PathBuf, records::DiagnosticHook)>,
     /// Table declarations for which normalization proved zero rows.
     pub empty_tables: usize,
     /// Suite containers registered, whether or not a comparable suite came of them.
@@ -382,8 +382,8 @@ fn read_parsed(
     // The inventory resolved every import the file makes: a package manifest one of them needed
     // and the bounded reader refused leaves every test of the file unresolved.
     let manifest_refused = frame.is_none() && lang::take_manifest_refusal();
-    // Instantiation selects registrations, not a different module's mutation facts. Keep
-    // every recorded test/hook body for order dependence and registration-time write checks.
+    // Instantiation selects registrations, but every callback in the module still contributes
+    // mutation facts used to reject order-dependent comparisons.
     let structure = Structure::of(parsed, &found);
     if let Some(frame) = &frame {
         found.sites.retain(|site| frame.sites.contains(&site.node));
@@ -1056,9 +1056,33 @@ fn read_parsed(
         (setting, source),
     );
     let mut helper_sources = BTreeMap::new();
+    let mut imported_hooks = Vec::new();
+    let mut imported_diagnostic_hooks = Vec::new();
+    let imported_tests: Vec<_> = expanded
+        .calls
+        .iter()
+        .filter(|expansion| {
+            expansion
+                .tests
+                .iter()
+                .any(|test| !test.inert && test.exclusion.is_none())
+        })
+        .map(|expansion| expansion.call)
+        .collect();
+    let admitted_calls: Vec<_> = expanded
+        .calls
+        .iter()
+        .map(|expansion| expansion.call)
+        .collect();
     for expansion in expanded.calls {
         tests.extend(expansion.tests);
         helper_sources.extend(expansion.sources);
+        imported_hooks.extend(expansion.hooks);
+        imported_diagnostic_hooks.extend(expansion.diagnostic_hooks);
+    }
+    let imported_context = lifecycle_context(&imported_hooks);
+    if !imported_context.is_empty() {
+        contextualize_imported_tests(&mut tests, &imported_context);
     }
     let hooks = hooks::collect(
         parsed,
@@ -1066,9 +1090,22 @@ fn read_parsed(
         &structure,
         &tests,
         &mut normalizer,
-        setting.dialect,
-        source,
+        (setting.dialect, source),
+        (&imported_hooks, &imported_tests, &admitted_calls),
     );
+    for (path, diagnostic) in &mut imported_diagnostic_hooks {
+        diagnostic.effect_key = hooks
+            .declarations
+            .iter()
+            .enumerate()
+            .find_map(|(index, hook)| {
+                (hook.path.as_ref() == Some(path)
+                    && hook.span == diagnostic.span
+                    && hooks.chains.iter().any(|chain| chain.contains(&index)))
+                .then(|| hook.key.as_deref().map(digest))
+                .flatten()
+            });
+    }
     let diagnostic_hooks = if run.diagnostics {
         records::hooks(
             parsed,
@@ -1081,8 +1118,17 @@ fn read_parsed(
     } else {
         Vec::new()
     };
+    let diagnostic_path = run.sources.relative(path, setting.root).unwrap_or_else(|| {
+        path.strip_prefix(setting.root)
+            .unwrap_or(path)
+            .to_path_buf()
+    });
     Ok(FileCorpus {
-        diagnostic_hooks,
+        diagnostic_hooks: diagnostic_hooks
+            .into_iter()
+            .map(|hook| (diagnostic_path.clone(), hook))
+            .chain(imported_diagnostic_hooks)
+            .collect(),
         context_refusals: [
             found.direct_eval.then_some(Exclusion::DynamicBindings),
             // Taken once per file, after every module its reading followed.
@@ -1116,6 +1162,37 @@ fn read_parsed(
 
 /// The variable that selects the engine, and the value that selects this one.
 const ENGINE_VARIABLE: (&str, &str) = ("VITEST_DEDUP_ENGINE", "next");
+
+/// Context surrounding imported registrations belongs to their executions, even though their
+/// declarations were normalized in another module.
+fn lifecycle_context(imported: &[runners::ImportedHook]) -> String {
+    let context: Vec<_> = imported
+        .iter()
+        .map(|imported| {
+            format!(
+                "{:?}\u{1}{}",
+                imported.hook.timing,
+                imported.hook.key.as_deref().unwrap_or("unknown")
+            )
+        })
+        .collect();
+    context.join("\u{1}")
+}
+
+/// Prevent tests under an imported lifecycle from borrowing equivalence across another caller.
+fn contextualize_imported_tests(tests: &mut [TestCase], context: &str) {
+    let contextualize = |key: u64| digest(&format!("{key}\u{1}{context}"));
+    for test in tests {
+        test.key = contextualize(test.key);
+        test.module_key = contextualize(test.module_key);
+        test.parameterization_key = test.parameterization_key.map(contextualize);
+        test.similarity_key = contextualize(test.similarity_key);
+        test.subsumption_key = test.subsumption_key.map(contextualize);
+        if let Some(views) = &mut test.views {
+            views.context = contextualize(views.context);
+        }
+    }
+}
 
 /// The next engine inside the shell's file loop: what it read, summed over the run.
 #[derive(Debug, Default)]
@@ -1377,7 +1454,6 @@ impl Engine {
         self.retained.hooks = self.retained.hooks.saturating_add(hooks.heap_bytes());
         self.hooks.push(hooks);
         for hook in corpus.diagnostic_hooks {
-            let hook = (relative.to_path_buf(), hook);
             self.retained.hooks = self.retained.hooks.saturating_add(hook.heap_bytes());
             self.diagnostic_hooks.push(hook);
         }

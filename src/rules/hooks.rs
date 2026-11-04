@@ -5,7 +5,7 @@ use crate::corpus::{Hook, Hooks};
 use crate::framework::HookTiming;
 use crate::model::{Finding, Location, Rule, Severity};
 use crate::pairs::PairBudget;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 /// Bounded candidate scanning followed by one finding per distinct declaration pair.
@@ -67,15 +67,35 @@ pub(super) fn run(
                         continue;
                     }
                     let location = |hook: &Hook| Location {
-                        path: path.clone(),
+                        path: hook.path.clone().unwrap_or_else(|| path.clone()),
                         span: hook.span,
                     };
-                    pairs.insert((location(outer), location(inner)), outer.label);
+                    let (outer, inner) = if location(outer) <= location(inner) {
+                        (outer, inner)
+                    } else {
+                        (inner, outer)
+                    };
+                    let registration_files = [outer, inner]
+                        .map(|hook| {
+                            hook.registration_files
+                                .iter()
+                                .cloned()
+                                .collect::<BTreeSet<_>>()
+                        })
+                        .to_vec();
+                    pairs
+                        .entry((location(outer), location(inner)))
+                        .and_modify(|(_, retained): &mut (_, Vec<BTreeSet<PathBuf>>)| {
+                            for (retained, added) in retained.iter_mut().zip(&registration_files) {
+                                retained.extend(added.iter().cloned());
+                            }
+                        })
+                        .or_insert((outer.label, registration_files));
                 }
             }
         }
     }
-    for ((outer, inner), label) in pairs {
+    for ((outer, inner), (label, registration_files)) in pairs {
         if !budget.charge(1) {
             return (exhausted, true);
         }
@@ -86,7 +106,14 @@ pub(super) fn run(
                 "a {label} repeats idempotent work another {label} in its chain already performs"
             ),
             locations: vec![outer, inner],
-            registration_files: Vec::new(),
+            registration_files: if registration_files.iter().any(|files| !files.is_empty()) {
+                registration_files
+                    .into_iter()
+                    .map(|files| files.into_iter().collect())
+                    .collect()
+            } else {
+                Vec::new()
+            },
             titles: vec![label.to_owned(), label.to_owned()],
             inert: vec![false, false],
             baselined: false,

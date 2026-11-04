@@ -371,7 +371,13 @@ fn imported_hooks_take_part_in_redundant_hook_comparison() {
     assert_eq!(same["testsAnalyzed"], 1);
     assert_eq!(same["incomplete"], false);
     let findings = same["findings"].as_array().unwrap();
-    assert_eq!(findings.len(), 1, "{same}");
+    // The established engine compares this opaque property write. The next engine deliberately
+    // does not: a global property may have an accessor or be replaced between hook executions.
+    let next = std::env::var_os("VITEST_DEDUP_ENGINE").is_some_and(|engine| engine == "next");
+    assert_eq!(findings.len(), usize::from(!next), "{same}");
+    if next {
+        return;
+    }
     let paths: Vec<_> = findings[0]["locations"]
         .as_array()
         .unwrap()
@@ -388,4 +394,167 @@ fn imported_hooks_take_part_in_redundant_hook_comparison() {
         0,
         "{different}"
     );
+}
+
+/// Select one next-engine rule and a deterministic JSON output for delivery controls.
+fn next_report_command(root: &Path, selected: Rule) -> Command {
+    let mut command = Command::cargo_bin("vitest-dedup").unwrap();
+    command.arg(root).env("VITEST_DEDUP_ENGINE", "next");
+    for rule in Rule::ALL {
+        let level = if *rule != selected {
+            "off"
+        } else if selected == Rule::RedundantHook {
+            "warning"
+        } else {
+            "error"
+        };
+        command.args(["--rule", &format!("{}={level}", rule.id())]);
+    }
+    command
+        .args(["--reporters", "json", "--output"])
+        .arg(root.join("report"));
+    command
+}
+
+/// Require successful analysis with no claims from the selected rule.
+fn assert_no_next_findings(root: &Path, rule: Rule) {
+    next_report_command(root, rule).assert().success();
+    assert!(report(root)["findings"].as_array().unwrap().is_empty());
+}
+
+#[test]
+/// Two runner-owned lexical overwrites form one proven next-engine chain and retain the helper
+/// locations that a developer needs to remove either declaration.
+fn imported_lexical_hooks_take_part_in_next_redundant_hook_comparison() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    std::fs::write(
+        root.join("runner.ts"),
+        "import { beforeEach } from 'vitest';\nlet ready = 0;\nexport function install() {\n  beforeEach(() => { ready = 1; });\n  beforeEach(() => { ready = 1; });\n}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("caller.test.ts"),
+        "import { test, expect } from 'vitest'; import { install } from './runner'; install(); test('a', () => { const sentinel = 1; expect(sentinel).toBe(1); });\n",
+    )
+    .unwrap();
+    next_report_command(root, Rule::RedundantHook)
+        .assert()
+        .code(0);
+    let result = report(root);
+    assert_eq!(result["testsAnalyzed"], 1, "{result}");
+    assert_eq!(result["findings"].as_array().unwrap().len(), 1, "{result}");
+    let finding = &result["findings"].as_array().unwrap()[0];
+    let paths: Vec<_> = finding["locations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|location| location["path"].as_str().unwrap())
+        .collect();
+    assert_eq!(paths, ["runner.ts", "runner.ts"], "{result}");
+}
+
+#[test]
+/// Imported lifecycle setup is part of each expanded test's comparison context.
+fn imported_hook_timing_prevents_a_cross_file_duplicate() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    for (name, timing) in [("first", "beforeEach"), ("second", "afterEach")] {
+        std::fs::write(
+            root.join(format!("{name}.ts")),
+            format!(
+                "import {{ {timing}, test, expect }} from 'vitest'; let ready = 0; export function run() {{ {timing}(() => {{ ready = 1; }}); test('same', () => {{ expect(ready).toBe(1); }}); }}"
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            root.join(format!("{name}.test.ts")),
+            format!("import {{ run }} from './{name}'; run();"),
+        )
+        .unwrap();
+    }
+    assert_no_next_findings(root, Rule::CrossFileDuplicate);
+}
+
+#[test]
+/// A caller-local test inherits lifecycle context from an imported hook runner.
+fn imported_hook_timing_prevents_a_duplicate_of_a_caller_test() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    std::fs::write(
+        root.join("runner.ts"),
+        "import { beforeEach, afterEach } from 'vitest'; export let ready = 0; export function before() { beforeEach(() => { ready = 1; }); } export function after() { afterEach(() => { ready = 1; }); }",
+    )
+    .unwrap();
+    for (file, install) in [("first", "before"), ("second", "after")] {
+        std::fs::write(
+            root.join(format!("{file}.test.ts")),
+            format!(
+                "import {{ test, expect }} from 'vitest'; import {{ {install} }} from './runner'; {install}(); test('same', async () => {{ expect((await import('./runner')).ready).toBe(1); }});"
+            ),
+        )
+        .unwrap();
+    }
+    assert_no_next_findings(root, Rule::CrossFileDuplicate);
+    let second = root.join("second.test.ts");
+    let source = std::fs::read_to_string(&second).unwrap();
+    std::fs::write(&second, source.replace("after", "before")).unwrap();
+    next_report_command(root, Rule::CrossFileDuplicate)
+        .assert()
+        .code(1);
+    let positive = report(root);
+    assert_eq!(positive["testsAnalyzed"], 2);
+    assert!(positive["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|finding| { finding["rule"] == "cross-file-duplicate" }));
+}
+
+#[test]
+/// Lexically identical writes from different helper modules never share a local symbol identity.
+fn imported_hook_effects_are_scoped_to_their_helper_module() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    for (name, padding) in [("first", ""), ("second", "\n\n")] {
+        std::fs::write(
+            root.join(format!("{name}.ts")),
+            format!(
+                "import {{ beforeEach }} from 'vitest';{padding}let ready = 0; export function install() {{ beforeEach(() => {{ ready = 1; }}); }}"
+            ),
+        )
+        .unwrap();
+    }
+    std::fs::write(
+        root.join("caller.test.ts"),
+        "import { test, expect } from 'vitest'; import { install as first } from './first'; import { install as second } from './second'; first(); second(); test('a', () => { expect(1).toBe(1); });",
+    )
+    .unwrap();
+    assert_no_next_findings(root, Rule::RedundantHook);
+}
+
+#[test]
+/// A runner that owns every test still supplies its hook chain and caller provenance.
+fn imported_only_tests_build_hook_chains_and_keep_their_caller() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    std::fs::write(
+        root.join("runner.ts"),
+        "import { beforeEach, test, expect } from 'vitest'; let ready = 0; export function run() { beforeEach(() => { ready = 1; }); beforeEach(() => { ready = 1; }); test('a', () => { expect(ready).toBe(1); }); }",
+    )
+    .unwrap();
+    for caller in ["first.test.ts", "second.test.ts"] {
+        std::fs::write(root.join(caller), "import { run } from './runner'; run();").unwrap();
+    }
+    next_report_command(root, Rule::RedundantHook)
+        .assert()
+        .code(0);
+    let findings = report(root)["findings"].as_array().unwrap().clone();
+    assert_eq!(findings.len(), 1, "{findings:?}");
+    for participant in findings[0]["registrationFiles"].as_array().unwrap() {
+        assert_eq!(
+            participant,
+            &serde_json::json!(["first.test.ts", "second.test.ts"])
+        );
+    }
 }

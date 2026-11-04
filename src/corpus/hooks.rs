@@ -11,6 +11,11 @@ use std::collections::{BTreeSet, HashMap};
 /// One hook declaration, retained even when its body cannot license a redundancy claim.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Hook {
+    /// The helper file that owns this declaration, when it was registered through a proven runner.
+    /// Local declarations use the surrounding corpus file's path.
+    pub path: Option<std::path::PathBuf>,
+    /// Caller files whose registrations cause this hook to execute. Local hooks have none.
+    pub registration_files: Vec<std::path::PathBuf>,
     /// The registering call, in report coordinates.
     pub span: Span,
     /// Its lifecycle phase.
@@ -39,15 +44,18 @@ pub(super) fn collect(
     structure: &Structure,
     tests: &[TestCase],
     normalizer: &mut Normalizer<'_>,
-    dialect: &crate::framework::Dialect,
-    source: &str,
+    input: (&crate::framework::Dialect, &str),
+    expansions: (&[super::runners::ImportedHook], &[NodeId], &[NodeId]),
 ) -> Hooks {
+    let (dialect, source) = input;
+    let (imported, imported_tests, admitted_calls) = expansions;
     let mut result = Hooks::default();
     if found
         .sites
         .iter()
         .filter(|site| matches!(site.kind, SiteKind::Registers(Registers::Hook(_))))
         .count()
+        + imported.len()
         < 2
         || !found.loads.is_empty()
         || found.sites.iter().any(|site| {
@@ -65,7 +73,7 @@ pub(super) fn collect(
     let sites: HashMap<_, _> = found.sites.iter().map(|site| (site.node, site)).collect();
     if std::iter::once(None)
         .chain(structure.suites.keys().copied().map(Some))
-        .any(|scope| !closed_scope(scope, parsed, &sites, normalizer))
+        .any(|scope| !closed_scope(scope, parsed, &sites, normalizer, admitted_calls))
     {
         return result;
     }
@@ -80,7 +88,7 @@ pub(super) fn collect(
             ))
         })
         .collect();
-    let mut declarations: HashMap<Option<NodeId>, Vec<usize>> = HashMap::new();
+    let mut declarations: HashMap<Option<NodeId>, Vec<(u32, usize)>> = HashMap::new();
     for site in &found.sites {
         let SiteKind::Registers(Registers::Hook(timing)) = site.kind else {
             continue;
@@ -112,6 +120,8 @@ pub(super) fn collect(
             .expect("inventoried hook belongs to dialect")
             .canonical;
         result.declarations.push(Hook {
+            path: None,
+            registration_files: Vec::new(),
             span: Span {
                 start: position(site.span.start),
                 end: position(site.span.end),
@@ -126,7 +136,24 @@ pub(super) fn collect(
         declarations
             .entry(scope)
             .or_default()
-            .push(result.declarations.len() - 1);
+            .push((site.span.start, result.declarations.len() - 1));
+    }
+    // A runner's hook executes at its proved invocation, in that invocation's caller scope. Its
+    // body and source location remain the helper's, but its lifecycle position is the call site.
+    for imported in imported {
+        let &scope = scopes
+            .get(&imported.call)
+            .expect("admitted hook call has a caller scope");
+        let mut hook = imported.hook.clone();
+        hook.scope = scope.map(|node| tree.span(node).start);
+        result.declarations.push(hook);
+        declarations.entry(scope).or_default().push((
+            tree.span(imported.call).start,
+            result.declarations.len() - 1,
+        ));
+    }
+    for entries in declarations.values_mut() {
+        entries.sort_by_key(|(order, _)| *order);
     }
     let eligible: BTreeSet<_> = tests
         .iter()
@@ -135,17 +162,20 @@ pub(super) fn collect(
         .collect();
     let mut chains = BTreeSet::new();
     let mut paths = BTreeSet::new();
-    for site in found
+    let direct_tests = found
         .sites
         .iter()
-        .filter(|site| site.kind == SiteKind::Registers(Registers::Test))
-    {
-        if !site.chain.is_empty() || uncertain(site) || !eligible.contains(&site.span.start) {
-            continue;
-        }
-        let Some(around) = normalizer.suites_around(site.node) else {
-            continue;
-        };
+        .filter(|site| {
+            site.kind == SiteKind::Registers(Registers::Test)
+                && site.chain.is_empty()
+                && !uncertain(site)
+                && eligible.contains(&site.span.start)
+        })
+        .map(|site| site.node);
+    for call in direct_tests.chain(imported_tests.iter().copied()) {
+        let around = normalizer
+            .suites_around(call)
+            .expect("eligible registration has a closed scope");
         let path: Vec<_> = std::iter::once(None)
             .chain(around.iter().copied().map(Some))
             .collect();
@@ -154,7 +184,13 @@ pub(super) fn collect(
         }
         let mut chain = Vec::new();
         for scope in &path {
-            chain.extend(declarations.get(scope).into_iter().flatten().copied());
+            chain.extend(
+                declarations
+                    .get(scope)
+                    .into_iter()
+                    .flatten()
+                    .map(|(_, index)| *index),
+            );
         }
         if chain.iter().any(|&index| {
             !matches!(
@@ -188,6 +224,7 @@ fn closed_scope(
     parsed: &Parsed,
     sites: &HashMap<NodeId, &Site>,
     normalizer: &Normalizer<'_>,
+    admitted_calls: &[NodeId],
 ) -> bool {
     let tree = &parsed.tree;
     let statements = match scope {
@@ -221,8 +258,11 @@ fn closed_scope(
         let Some(site) = sites.get(&call) else {
             return false;
         };
-        if !site.chain.is_empty() || uncertain(site) || matches!(site.kind, SiteKind::Wrapper(_)) {
+        if !site.chain.is_empty() || uncertain(site) {
             return false;
+        }
+        if matches!(site.kind, SiteKind::Wrapper(_)) {
+            return admitted_calls.contains(&site.node);
         }
         let arguments = tree.list(call, "arguments");
         !arguments.is_empty()

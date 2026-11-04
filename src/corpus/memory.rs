@@ -95,9 +95,11 @@ impl HeapBytes for Origin {
 }
 
 impl HeapBytes for Hook {
-    /// A hook retains only its effect key; location and phase fields remain accounted inline.
+    /// A hook retains its optional helper path and effect key; locations and phases are inline.
     fn heap_bytes(&self) -> usize {
         let Self {
+            path,
+            registration_files,
             span,
             timing,
             label,
@@ -105,6 +107,8 @@ impl HeapBytes for Hook {
             key,
         } = self;
         [
+            path.heap_bytes(),
+            registration_files.heap_bytes(),
             span.heap_bytes(),
             timing.heap_bytes(),
             label.heap_bytes(),
@@ -268,12 +272,22 @@ impl Engine {
     pub fn take_diagnostic_hooks(
         &mut self,
     ) -> Vec<(std::path::PathBuf, super::records::DiagnosticHook)> {
-        let hooks = std::mem::take(&mut self.diagnostic_hooks);
+        let mut hooks = std::mem::take(&mut self.diagnostic_hooks);
         use crate::memory::HeapBytes;
         self.retained.hooks = self
             .retained
             .hooks
             .saturating_sub(hooks.iter().map(HeapBytes::heap_bytes).sum::<usize>());
+        hooks.sort_by(|a, b| (&a.0, a.1.span, a.1.kind).cmp(&(&b.0, b.1.span, b.1.kind)));
+        hooks.dedup_by(|a, b| {
+            if a.0 != b.0 || a.1.span != b.1.span || a.1.kind != b.1.kind {
+                return false;
+            }
+            if a.1.effect_key != b.1.effect_key {
+                b.1.effect_key = None;
+            }
+            true
+        });
         hooks
     }
 

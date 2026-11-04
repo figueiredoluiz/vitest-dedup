@@ -1,9 +1,10 @@
 //! Invocation frames for owned imported registration templates.
-use super::{Origin, Run, Setting, TestCase};
+use super::{Hook, Origin, Run, Setting, TestCase};
 use crate::framework::Registers;
 use crate::inventory::{self, Inventory, SiteKind};
-use crate::lang::{Declaration, Imported, NodeId, Parsed, SymbolId};
-use crate::normal;
+use crate::lang::{Declaration, Imported, Lines, NodeId, Parsed, SymbolId};
+use crate::model::{Position, Span};
+use crate::normal::{self, Normalizer, Structure};
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -22,6 +23,23 @@ pub(super) struct Expansion {
     pub call: NodeId,
     pub tests: Vec<TestCase>,
     pub sources: Vec<(PathBuf, String)>,
+    /// Hooks registered by this proved invocation, attached to its caller scope.
+    pub hooks: Vec<ImportedHook>,
+    pub diagnostic_hooks: Vec<(PathBuf, super::records::DiagnosticHook)>,
+}
+
+/// A hook written in a runner and registered at one caller invocation.
+#[derive(Clone)]
+pub(super) struct ImportedHook {
+    pub call: NodeId,
+    pub hook: Hook,
+}
+
+/// The registrations one invocation contributes before the caller assigns their scope.
+struct Invocation {
+    tests: Vec<TestCase>,
+    hooks: Vec<Hook>,
+    diagnostic_hooks: Vec<(PathBuf, super::records::DiagnosticHook)>,
 }
 
 /// Complete expansions, or the caller scopes whose effects remain unproved.
@@ -183,7 +201,7 @@ fn closed_batch(
             return None;
         }
         checked_bindings.insert(symbol);
-        let tests = planner.call(
+        let invocation = planner.call(
             Module {
                 path,
                 source,
@@ -196,8 +214,17 @@ fn closed_batch(
         )?;
         expansions.push(Expansion {
             call: call.node,
-            tests,
+            tests: invocation.tests,
             sources: Vec::new(),
+            hooks: invocation
+                .hooks
+                .into_iter()
+                .map(|hook| ImportedHook {
+                    call: call.node,
+                    hook,
+                })
+                .collect(),
+            diagnostic_hooks: invocation.diagnostic_hooks,
         });
     }
     // An unused import is still evaluated. Every project dependency must have a completed proof.
@@ -271,7 +298,7 @@ impl Planner<'_> {
         parent: Option<&Frame>,
         run: &mut Run,
         depth: usize,
-    ) -> Option<Vec<TestCase>> {
+    ) -> Option<Invocation> {
         if depth == 0 {
             return None;
         }
@@ -365,17 +392,7 @@ impl Planner<'_> {
                 depth,
             )
         } else {
-            let found = inventory::inventory(
-                module.path,
-                module.source,
-                parsed,
-                inventory::Setting {
-                    dialect: self.setting.dialect,
-                    globals: self.setting.globals,
-                    root: self.setting.root,
-                },
-                &mut run.modules,
-            );
+            let found = self.inventory(module, run);
             let plan = inventory::runners::local(parsed, &found, callee).ok()?;
             self.execute(module, plan, actual, parent, run, depth - 1)
         }
@@ -390,7 +407,7 @@ impl Planner<'_> {
         parent: Option<&Frame>,
         run: &mut Run,
         depth: usize,
-    ) -> Option<Vec<TestCase>> {
+    ) -> Option<Invocation> {
         let parsed = module.parsed;
         let tree = &parsed.tree;
         let relative = run.sources.relative(module.path, self.setting.root)?;
@@ -448,11 +465,23 @@ impl Planner<'_> {
                         title(parsed, *node, Some(&frame))?;
                         frame.sites.insert(*node);
                     }
+                    // The caller owns lifecycle context. These declarations are captured below
+                    // without entering the helper test frame's ambient context.
+                    inventory::runners::Step::Registration(_, Registers::Hook(_)) => {}
                     inventory::runners::Step::Call(_) => {}
                     _ => return None,
                 }
             }
             let mut direct: HashMap<u32, Vec<TestCase>> = HashMap::new();
+            let mut diagnostic_hooks = Vec::new();
+            let hook_sites: Vec<_> = plan
+                .steps
+                .iter()
+                .filter_map(|step| match step {
+                    inventory::runners::Step::Registration(node, Registers::Hook(_)) => Some(*node),
+                    _ => None,
+                })
+                .collect();
             if !frame.sites.is_empty() {
                 let corpus = super::read_parsed(
                     module.path,
@@ -463,6 +492,7 @@ impl Planner<'_> {
                     Some(frame.clone()),
                 )
                 .ok()?;
+                diagnostic_hooks.extend(corpus.diagnostic_hooks.clone());
                 for mut case in corpus.tests {
                     case.origin = Some(Origin {
                         path: relative.clone(),
@@ -471,21 +501,137 @@ impl Planner<'_> {
                     direct.entry(case.span.start_byte).or_default().push(case);
                 }
             }
+            if run.diagnostics && !hook_sites.is_empty() {
+                let mut diagnostic_frame = frame.clone();
+                diagnostic_frame.sites.extend(hook_sites.iter().copied());
+                let diagnostics = super::read_parsed(
+                    module.path,
+                    module.source,
+                    self.setting,
+                    run,
+                    parsed,
+                    Some(diagnostic_frame),
+                )
+                .ok()?;
+                diagnostic_hooks.extend(diagnostics.diagnostic_hooks);
+            }
             let mut tests = Vec::new();
+            let mut hooks = Vec::new();
+            let found = self.inventory(module, run);
+            let structure = Structure::of(parsed, &found);
+            let mut hook_normalizer = Normalizer::new(
+                module.path,
+                parsed,
+                normal::Setting {
+                    dialect: self.setting.dialect,
+                    root: self.setting.root,
+                    exports: &run.exports,
+                },
+                &structure,
+            )
+            .for_registration(frame.function, frame.bindings.clone());
+            let mut normalized_hooks = HashMap::new();
+            for step in &plan.steps {
+                if let inventory::runners::Step::Registration(node, Registers::Hook(timing)) = step
+                {
+                    normalized_hooks.insert(
+                        *node,
+                        self.hook(module, *node, *timing, &mut hook_normalizer, &relative)?,
+                    );
+                }
+            }
+            drop(hook_normalizer);
             for step in plan.steps {
                 match step {
-                    inventory::runners::Step::Registration(node, _) => {
+                    inventory::runners::Step::Registration(node, Registers::Test) => {
                         tests.extend(direct.remove(&tree.span(node).start)?)
                     }
+                    inventory::runners::Step::Registration(node, Registers::Hook(_)) => {
+                        hooks.push(normalized_hooks.remove(&node)?);
+                    }
                     inventory::runners::Step::Call(call) => {
-                        tests.extend(self.call(module, call, Some(&frame), run, depth)?)
+                        let nested = self.call(module, call, Some(&frame), run, depth)?;
+                        tests.extend(nested.tests);
+                        hooks.extend(nested.hooks);
+                        diagnostic_hooks.extend(nested.diagnostic_hooks);
                     }
                     _ => return None,
                 }
             }
-            Some(tests)
+            Some(Invocation {
+                tests,
+                hooks,
+                diagnostic_hooks,
+            })
         })();
         self.active.remove(&active);
         result
+    }
+
+    /// Read one module's registrations using the planner's shared resolution cache.
+    fn inventory(&self, module: Module<'_>, run: &mut Run) -> Inventory {
+        inventory::inventory(
+            module.path,
+            module.source,
+            module.parsed,
+            inventory::Setting {
+                dialect: self.setting.dialect,
+                globals: self.setting.globals,
+                root: self.setting.root,
+            },
+            &mut run.modules,
+        )
+    }
+
+    /// Read an imported hook's body under the invocation bindings. A runner with an opaque hook
+    /// stays unexpanded: the ordinary test rules do not model that hook's setup semantics.
+    fn hook(
+        &mut self,
+        module: Module<'_>,
+        node: NodeId,
+        timing: crate::framework::HookTiming,
+        normalizer: &mut Normalizer<'_>,
+        relative: &Path,
+    ) -> Option<Hook> {
+        // Only per-test setup establishes the same starting state for every test. Teardown
+        // writes can distinguish the first execution from later ones despite being idempotent.
+        if timing != crate::framework::HookTiming::BeforeEach {
+            return None;
+        }
+        let tree = &module.parsed.tree;
+        let arguments = tree.list(node, "arguments");
+        let callback = (arguments.len() == 1)
+            .then(|| arguments.first().copied().flatten())
+            .flatten()
+            .map(|argument| tree.inner(argument))
+            .filter(|&callback| tree.is_function(callback));
+        let key = callback.and_then(|callback| normalizer.hook_effects(callback))?;
+        let lines = Lines::new(module.source);
+        let position = |offset| {
+            let (line, column) = lines.position(module.source, offset);
+            Position { line, column }
+        };
+        Some(Hook {
+            path: Some(relative.to_path_buf()),
+            registration_files: vec![self.owner.clone()],
+            span: Span {
+                start: position(tree.span(node).start),
+                end: position(tree.span(node).end),
+                start_byte: tree.span(node).start,
+                end_byte: tree.span(node).end,
+            },
+            timing,
+            label: self
+                .setting
+                .dialect
+                .registrations
+                .iter()
+                .find(|entry| entry.registers == Registers::Hook(timing))?
+                .canonical,
+            scope: None,
+            // Symbol IDs are local to this parsed module. The module path makes two helpers'
+            // otherwise equal lexical IDs distinct without weakening comparisons within one helper.
+            key: Some(format!("{}\u{0}{key}", module.path.display())),
+        })
     }
 }
