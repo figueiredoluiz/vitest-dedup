@@ -119,7 +119,7 @@ pub(super) fn write(
     writer: &mut dyn Write,
 ) -> Result<()> {
     let mut hooks: Vec<_> = hooks.iter().collect();
-    hooks.sort_by_key(|(path, hook)| {
+    hooks.sort_by_cached_key(|(path, hook)| {
         (
             report_safe_path(path),
             hook.span.start.line,
@@ -134,7 +134,7 @@ pub(super) fn write(
         .iter()
         .flat_map(|(path, cases)| cases.iter().map(move |case| (path, case)))
         .collect();
-    cases.sort_by_key(|(path, case)| {
+    cases.sort_by_cached_key(|(path, case)| {
         (
             report_safe_path(case.declaration_path(path)),
             case.span.start.line,

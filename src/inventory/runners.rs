@@ -38,8 +38,6 @@ pub enum Step {
     Registration(NodeId, Registers),
     /// A nested wrapper call, which needs a separate invocation proof.
     Call(NodeId),
-    /// A fixture binding whose initializer creates a registration value.
-    Fixture(NodeId),
 }
 
 /// A first-party callable's owned source and ordered registration template.
@@ -572,7 +570,6 @@ pub(crate) fn inert_declaration(parsed: &Parsed, node: NodeId) -> bool {
                             .is_none_or(|init| inert_value(parsed, init, &mut 4096))
                 })
         }
-        "Identifier" => inert_value(parsed, node, &mut 4096),
         _ => inert_value(parsed, node, &mut 4096),
     }
 }
