@@ -71,7 +71,7 @@
 mod revision;
 pub use revision::RevisionFiles;
 
-use crate::model::{Finding, FINGERPRINT_VERSION};
+use crate::model::{Finding, Location, FINGERPRINT_VERSION};
 use crate::reporters::terminal_safe;
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
@@ -875,7 +875,7 @@ pub fn scan_inline_suppressions(source: &str, path: PathBuf) -> Vec<InlineSuppre
 }
 
 /// Removes every finding with at least one participant suppressed by a directive, returning how
-/// many were removed.
+/// many were removed, and drops suppressed tests from the cases the kept findings stand for.
 ///
 /// A finding is suppressed when *any* participant site carries the directive -- the author
 /// wrote it at one test's declaration, and the finding is about that test's relationship to
@@ -895,15 +895,21 @@ pub fn apply_inline_suppressions(
     if suppressions.is_empty() {
         return 0;
     }
-    let before = findings.len();
-    findings.retain(|finding| {
-        !finding.locations.iter().any(|location| {
-            suppressions.iter().any(|suppression| {
-                suppression.path == location.path
-                    && suppression.line + 1 == location.span.start.line
-            })
+    let suppressed = |location: &Location| {
+        suppressions.iter().any(|suppression| {
+            suppression.path == location.path && suppression.line + 1 == location.span.start.line
         })
-    });
+    };
+    let before = findings.len();
+    findings.retain(|finding| !finding.locations.iter().any(suppressed));
+    // A kept finding can still stand for a suppressed test it does not list, such as a
+    // declaration reduced behind another or a test inside a suite copy: that case is not charged.
+    for finding in findings.iter_mut() {
+        finding.cases.retain(|(location, _)| !suppressed(location));
+        if let Some(covers) = &mut finding.covers {
+            covers.cases.retain(|(location, _)| !suppressed(location));
+        }
+    }
     before - findings.len()
 }
 

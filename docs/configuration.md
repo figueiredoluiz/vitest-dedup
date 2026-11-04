@@ -48,7 +48,9 @@ finding.
 - Every analyzed test is eligible except benchmarks, placeholders for the tests a wrapper call or
   module load registers, and `test.todo` with no callback. A `.todo` or `.skip` with a callback
   stays, and so does a test the run could not compare.
-- Baselined findings leave the count of duplicated cases; their cases stay eligible.
+- A test under an inline suppression is not counted as duplicated, even inside a finding that
+  stays reported. Baselined findings leave the count of duplicated cases; their cases stay
+  eligible.
   `--changed-since` keeps every eligible case.
 - With no eligible case there is no rate, and the threshold passes. At the default threshold of 0
   any error-severity finding still fails the run.

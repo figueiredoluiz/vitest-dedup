@@ -446,8 +446,8 @@ describe('outer', () => {
     }
 }
 
-/// A suite copy at error counts every test inside its copies: suppressing one child finding
-/// leaves the count where it was.
+/// A suite copy at error counts every test inside its copies, not only those its child findings
+/// carry: suppressing one test removes that test alone.
 #[test]
 fn a_suite_at_error_counts_its_tests_whatever_its_children_report() {
     let block = |suppressed: bool| {
@@ -494,6 +494,47 @@ fn a_suite_at_error_counts_its_tests_whatever_its_children_report() {
             if suppressed { 2 } else { 4 },
             "suppressed {suppressed}"
         );
-        assert_eq!(gate(&run), (6, 6, Some(100.0)), "suppressed {suppressed}");
+        let charged = if suppressed { 5 } else { 6 };
+        assert_eq!(
+            gate(&run),
+            (charged, 6, Some(charged as f64 / 6.0 * 100.0)),
+            "suppressed {suppressed}"
+        );
+    }
+}
+
+/// A suppressed test is not charged when the finding that stands for it lists another
+/// declaration in its place.
+#[test]
+fn a_suppressed_test_behind_a_representative_is_not_charged() {
+    let same = "test('same', () => { expect(1).toBe(1) })\n";
+    let head = "import { test, expect } from 'vitest'\n";
+    for (suppressed, expected) in [(false, 3), (true, 2)] {
+        let directive = if suppressed {
+            "// vitest-dedup-disable-next-line intentional\n"
+        } else {
+            ""
+        };
+        let run = run(
+            &[
+                ("a.test.ts", &format!("{head}{same}{directive}{same}")),
+                ("b.test.ts", &format!("{head}{same}")),
+            ],
+            &[
+                "--rule",
+                "duplicate-test=off",
+                "--rule",
+                "cross-file-duplicate=error",
+                "--threshold",
+                "100",
+            ],
+        );
+        assert!(run.json["findings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|f| f["rule"] == "cross-file-duplicate" && f["severity"] == "error"));
+        assert_eq!(gate(&run).0, expected, "suppressed {suppressed}");
+        assert_eq!(gate(&run).1, 3);
     }
 }
