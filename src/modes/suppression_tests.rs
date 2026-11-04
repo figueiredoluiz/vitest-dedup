@@ -27,7 +27,7 @@ fn finding(path: &str, line: u32) -> Finding {
         inert: vec![false],
         baselined: false,
         covers: None,
-        rows: Vec::new(),
+        cases: Vec::new(),
     }
 }
 

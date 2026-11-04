@@ -1051,11 +1051,12 @@ pub struct Finding {
     /// Absent on every other finding. Not part of the fingerprint.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub covers: Option<Covers>,
-    /// The table row of each participant, parallel to `locations`; empty when no participant is
-    /// a row. With the location it identifies the runtime case the quality gate counts. Not a
-    /// report field and not part of the fingerprint.
+    /// Every runtime case the claim covers, rows included: the participants and the other rows of
+    /// their declarations the same match held, which the one-per-declaration participants leave
+    /// out. Empty means the participants themselves, with no rows. What the quality gate counts;
+    /// not a report field and not part of the fingerprint.
     #[serde(skip)]
-    pub rows: Vec<Option<usize>>,
+    pub cases: Vec<GateCase>,
 }
 
 /// One runtime case, as the quality gate counts it: its declaration's location and its table row.
@@ -1089,18 +1090,21 @@ impl Finding {
     pub fn gate_cases(&self, severity: Severity) -> Vec<GateCase> {
         match &self.covers {
             Some(covers) if self.gate_severity() == severity => covers.cases.clone(),
-            None if self.severity == severity => self.cases(),
+            None if self.severity == severity => Finding::cases(self),
             _ => Vec::new(),
         }
     }
 
-    /// Each participant as a runtime case: its location and its row.
+    /// The runtime cases the claim covers: [`Finding::cases`], or the participants when it is empty.
     pub fn cases(&self) -> Vec<GateCase> {
-        self.locations
-            .iter()
-            .enumerate()
-            .map(|(index, location)| (location.clone(), self.rows.get(index).copied().flatten()))
-            .collect()
+        if self.cases.is_empty() {
+            self.locations
+                .iter()
+                .map(|location| (location.clone(), None))
+                .collect()
+        } else {
+            self.cases.clone()
+        }
     }
 
     /// Calling files represented by participant `index`, with the legacy source-file fallback.
@@ -2584,7 +2588,7 @@ mod tests {
             inert: participants.iter().map(|_| false).collect(),
             baselined: false,
             covers: None,
-            rows: Vec::new(),
+            cases: Vec::new(),
         }
     }
 

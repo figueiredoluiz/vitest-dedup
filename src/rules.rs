@@ -7,7 +7,7 @@
 
 use crate::config::Config;
 use crate::corpus::TestCase;
-use crate::model::{Finding, Location, Rule, Severity};
+use crate::model::{Finding, GateCase, Location, Rule, Severity};
 use crate::pairs::{group_and_order, group_outcome, GroupOutcome, PairBudget};
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
@@ -44,6 +44,17 @@ struct Entry<'a> {
 }
 
 impl<'a> Entry<'a> {
+    /// The runtime case this entry is, as the quality gate counts it.
+    fn gate_case(self) -> GateCase {
+        (
+            Location {
+                path: self.case.declaration_path(self.path).to_path_buf(),
+                span: self.case.span,
+            },
+            self.case.row,
+        )
+    }
+
     /// Source identity is independent of the caller that happens to register this execution.
     fn declaration(self) -> (&'a Path, u32) {
         (
@@ -407,6 +418,17 @@ fn emit_where<'a>(
     let mut claimed: BTreeMap<_, (usize, Vec<BTreeSet<&Path>>)> = BTreeMap::new();
     let mut finished = true;
     'groups: for group in &groups {
+        // Every case the match holds, before one per declaration stands for each table below.
+        let matched: Vec<_> = group.iter().map(|&index| entries[index]).collect();
+        let covered = |members: &[Entry<'_>]| -> Vec<GateCase> {
+            let declarations: BTreeSet<_> =
+                members.iter().map(|member| member.declaration()).collect();
+            matched
+                .iter()
+                .filter(|entry| declarations.contains(&entry.declaration()))
+                .map(|entry| entry.gate_case())
+                .collect()
+        };
         let mut seen = BTreeSet::new();
         let group: Vec<_> = group
             .iter()
@@ -444,18 +466,20 @@ fn emit_where<'a>(
             }
             let key = (declarations(rule, &members), name_claim(rule, &members));
             let owners = ownership(&members);
-            if let Some((_, known)) = claimed.get_mut(&key) {
+            let cases = covered(&members);
+            if let Some((index, known)) = claimed.get_mut(&key) {
                 for (known, more) in known.iter_mut().zip(owners) {
                     known.extend(more);
                 }
+                findings[*index].cases.extend(cases);
             } else {
-                pending.push((key, members, owners));
+                pending.push((key, members, owners, cases));
             }
         }
         let cost = if clustered {
-            pending
-                .first()
-                .map_or(0, |(_, members, _)| members.len().saturating_sub(1) as u64)
+            pending.first().map_or(0, |(_, members, _, _)| {
+                members.len().saturating_sub(1) as u64
+            })
         } else {
             pending.len() as u64
         };
@@ -463,17 +487,21 @@ fn emit_where<'a>(
             finished = false;
             break 'groups;
         }
-        for (key, members, owners) in pending {
+        for (key, members, owners, cases) in pending {
             let mut text = message(&members);
             if clustered {
                 text.push_str(&crate::analysis::cluster_truncation_note(members.len()));
             }
             let index = findings.len();
-            findings.push(over(rule, severity, &members, text));
+            let mut finding = over(rule, severity, &members, text);
+            finding.cases.extend(cases);
+            findings.push(finding);
             claimed.insert(key, (index, owners));
         }
     }
     for (_, (index, owners)) in claimed {
+        findings[index].cases.sort();
+        findings[index].cases.dedup();
         if !owners.is_empty() {
             findings[index].set_registration_files(
                 owners
@@ -531,11 +559,7 @@ fn over(rule: Rule, severity: Severity, members: &[Entry<'_>], message: String) 
         inert: members.iter().map(|member| member.case.inert).collect(),
         baselined: false,
         covers: None,
-        rows: if members.iter().any(|member| member.case.row.is_some()) {
-            members.iter().map(|member| member.case.row).collect()
-        } else {
-            Vec::new()
-        },
+        cases: members.iter().map(|member| member.gate_case()).collect(),
     }
 }
 

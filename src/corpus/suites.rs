@@ -183,6 +183,7 @@ pub(super) fn collect(
             row: None,
             row_class: None,
             inert: false,
+            bodyless: false,
             exclusion: None,
         });
     }

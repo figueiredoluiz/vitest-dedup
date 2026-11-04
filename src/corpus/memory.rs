@@ -51,6 +51,7 @@ impl HeapBytes for TestCase {
             subsumption_key,
             callback_form,
             inert,
+            bodyless,
             exclusion,
         } = self;
         [
@@ -75,6 +76,7 @@ impl HeapBytes for TestCase {
             subsumption_key.heap_bytes(),
             callback_form.heap_bytes(),
             inert.heap_bytes(),
+            bodyless.heap_bytes(),
             exclusion.heap_bytes(),
         ]
         .into_iter()

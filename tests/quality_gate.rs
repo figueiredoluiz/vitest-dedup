@@ -270,3 +270,61 @@ fn changed_scope_keeps_the_full_denominator() {
     assert!(run.json["modes"]["withheldUnchanged"].as_u64().unwrap() > 0);
     assert_eq!(gate(&run), (0, 5, Some(0.0)));
 }
+
+/// Two copied tables count every matched row, not one representative per table, and the row order
+/// inside them does not change the rate.
+#[test]
+fn copied_tables_count_every_matched_row_whatever_the_order() {
+    let tables = |left: &str, right: &str| {
+        format!(
+            "import {{ test, expect }} from 'vitest'
+test.each([{left}])('first %s', (v) => {{ expect(v).toBeGreaterThan(0) }})
+test.each([{right}])('second %s', (v) => {{ expect(v).toBeGreaterThan(0) }})
+"
+        )
+    };
+    let copied = run(
+        &[("a.test.ts", &tables("[1], [2], [3]", "[1], [2], [3]"))],
+        &["--threshold", "100"],
+    );
+    assert_eq!(gate(&copied), (6, 6, Some(100.0)));
+    let flags = ["--rule", "duplicate-each-row=error", "--threshold", "100"];
+    let ordered = run(
+        &[("a.test.ts", &tables("[1], [1], [2]", "[1], [1], [2]"))],
+        &flags,
+    );
+    let reordered = run(
+        &[("a.test.ts", &tables("[2], [1], [1]", "[1], [1], [2]"))],
+        &flags,
+    );
+    assert_eq!(gate(&ordered), gate(&reordered));
+    assert_eq!(gate(&ordered).0, 6);
+}
+
+/// A bodyless todo stays out of the denominator when another refusal is recorded for it first.
+#[test]
+fn a_bodyless_todo_stays_ineligible_under_another_refusal() {
+    let run = run(
+        &[
+            (
+                "a.test.ts",
+                "import { test, expect } from 'vitest'
+test('one', () => { expect(1).toBe(1) })
+test('two', () => { expect(1).toBe(1) })
+",
+            ),
+            (
+                "todo.test.ts",
+                "import { test, vi } from 'vitest'
+vi.doMock('./dep')
+test.todo('first')
+test.todo('second')
+test.todo('third')
+",
+            ),
+        ],
+        &["--threshold", "50"],
+    );
+    assert_eq!(gate(&run), (2, 2, Some(100.0)));
+    assert_eq!(run.code, Some(1));
+}

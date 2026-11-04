@@ -84,7 +84,7 @@ fn parameterization_row_order_preserves_declaration_claims() {
                 .iter()
                 .cloned()
                 .map(|mut finding| {
-                    finding.rows.clear();
+                    finding.cases.clear();
                     finding
                 })
                 .collect();

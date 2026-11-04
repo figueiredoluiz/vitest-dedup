@@ -996,7 +996,7 @@ fn sample_analysis_result() -> AnalysisResult {
             inert: vec![false, false],
             baselined: false,
             covers: None,
-            rows: Vec::new(),
+            cases: Vec::new(),
         }],
         tests_analyzed: 4,
         eligible_cases: 4,
