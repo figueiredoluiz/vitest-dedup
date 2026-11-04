@@ -53,10 +53,6 @@
       "reason": "A concise suite body sequences its setup, and the suite context reads block bodies only."
     },
     {
-      "id": "recall-absent|cross-file-duplicate-dynamic-import-different-module|cross-file-duplicate|a/panel.test.ts:13,b/panel.test.ts:13",
-      "reason": "False positive: one relative `import()` path resolves to two modules, and the key reads the text."
-    },
-    {
       "id": "recall-absent|cross-file-duplicate-per-directory-config|cross-file-duplicate|happy-dom/url.test.ts:3,node/url.test.ts:3",
       "reason": "False positive: two projects with different environments share a test. Waits on the cross-file environment key."
     },

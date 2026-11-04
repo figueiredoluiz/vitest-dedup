@@ -6,6 +6,7 @@ use crate::lang::{Field, Name, NodeId, Tree};
 use serde_json::Value;
 use std::collections::HashSet;
 use std::fmt::Write as _;
+use std::path::Path;
 
 /// ESTree keys that carry source spelling or TypeScript-only information.
 const DROPPED: [&str; 12] = [
@@ -623,6 +624,11 @@ impl Normalizer<'_> {
                 self.write_node(child, walk, out);
                 // The trailing comma is the one a written-out statement list carries.
                 out.push_str("),])");
+            } else if let Some(module) = child
+                .filter(|_| kind == "ImportExpression" && &**key == "source")
+                .and_then(|source| self.module_source(source))
+            {
+                let _ = write!(out, "(module {module:?})");
             } else {
                 let structural = walk.structural;
                 if !walk.trace
@@ -639,6 +645,55 @@ impl Normalizer<'_> {
         }
         walk.in_type -= usize::from(type_level);
         out.push(')');
+    }
+
+    /// The root-relative path an `import()` source names: a static relative specifier joined
+    /// to the importing file's directory, `.` and `..` folded, the rest kept as written. Nothing
+    /// is resolved, so a query, a fragment or an extension stays part of the identity, and a
+    /// missing file adds no gap to the run. `None` keeps the spelling.
+    fn module_source(&self, source: NodeId) -> Option<String> {
+        let tree = self.tree;
+        if !static_selector(tree, source) {
+            return None;
+        }
+        let source = tree.inner(source);
+        let specifier = match tree.kind(source) {
+            "Literal" => tree.text(source, "value").map(str::to_owned),
+            _ => tree
+                .list(source, "quasis")
+                .first()
+                .copied()
+                .flatten()
+                .and_then(|quasi| {
+                    quasi_text(tree, quasi, "cooked")
+                        .as_str()
+                        .map(str::to_owned)
+                }),
+        }?;
+        if !specifier.starts_with("./") && !specifier.starts_with("../") {
+            return None;
+        }
+        let importer = self
+            .setting
+            .exports
+            .sources
+            .relative(self.path, self.setting.root)?;
+        let mut segments: Vec<String> = importer
+            .parent()
+            .into_iter()
+            .flat_map(Path::components)
+            .map(|component| component.as_os_str().to_string_lossy().into_owned())
+            .collect();
+        for segment in specifier.split('/') {
+            match segment {
+                "." | "" => {}
+                ".." if segments.last().is_some_and(|last| last != "..") => {
+                    segments.pop();
+                }
+                other => segments.push(other.to_owned()),
+            }
+        }
+        Some(segments.join("/"))
     }
 
     /// Writes an identifier: a local by its order of appearance, anything else by what declares it.

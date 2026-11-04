@@ -263,6 +263,48 @@
       ]
     },
     {
+      "name": "cross-file-duplicate-dynamic-import-template-different-module",
+      "path": "cross-file-duplicate-dynamic-import-template-different-module",
+      "rule": "cross-file-duplicate",
+      "role": "negative",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-05",
+      "expectedTests": 2,
+      "expectedIncomplete": false,
+      "expectedFindings": [],
+      "expectedAbsent": [
+        {
+          "rule": "cross-file-duplicate",
+          "titles": [
+            "renders the servings field",
+            "renders the servings field"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "cross-file-duplicate-dynamic-import-query",
+      "path": "cross-file-duplicate-dynamic-import-query",
+      "rule": "cross-file-duplicate",
+      "role": "negative",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-05",
+      "expectedTests": 2,
+      "expectedIncomplete": false,
+      "expectedFindings": [],
+      "expectedAbsent": [
+        {
+          "rule": "cross-file-duplicate",
+          "titles": [
+            "lists the module exports",
+            "lists the module exports"
+          ]
+        }
+      ]
+    },
+    {
       "name": "cross-file-duplicate-module-scope-custom-matcher",
       "path": "cross-file-duplicate-module-scope-custom-matcher",
       "rule": "cross-file-duplicate",
