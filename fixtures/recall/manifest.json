@@ -1009,25 +1009,26 @@
       ]
     },
     {
-      "name": "duplicate-test-imported-helper-arity-guard",
-      "path": "duplicate-test-imported-helper-arity-guard",
+      "name": "duplicate-test-imported-helper-missing-argument",
+      "path": "duplicate-test-imported-helper-missing-argument",
       "rule": "duplicate-test",
-      "role": "negative",
+      "role": "positive",
       "origin": "synthetic",
       "verdict": "generated",
       "classifiedAt": "2026-10-20",
       "expectedTests": 2,
       "expectedIncomplete": false,
-      "expectedFindings": [],
-      "expectedAbsent": [
+      "expectedFindings": [
         {
           "rule": "duplicate-test",
+          "severity": "error",
           "titles": [
             "accepts a plain label",
             "accepts a plain label, again"
           ]
         }
-      ]
+      ],
+      "expectedAbsent": []
     },
     {
       "name": "duplicate-test-imported-helper-differs",

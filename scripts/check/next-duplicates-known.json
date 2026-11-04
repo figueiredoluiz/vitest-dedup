@@ -69,10 +69,6 @@
       "reason": "Benchmarks are excluded until they are compared."
     },
     {
-      "id": "recall-absent|duplicate-test-imported-helper-arity-guard|duplicate-test|twin.test.ts:11,twin.test.ts:15",
-      "reason": "False positive: calls of two different imported helpers key alike."
-    },
-    {
       "id": "recall-absent|framework-package-mock-call-uninstalled|duplicate-test|users.test.ts:15,users.test.ts:20",
       "reason": "The default engine abstains on this file; the next engine compares identical text in an identical context, as decided."
     },
