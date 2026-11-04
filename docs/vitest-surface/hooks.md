@@ -30,9 +30,10 @@ not just as context members.
 - Default execution order is a "stack": `beforeAll`/`beforeEach` run outer-to-inner (parent before
   child), `afterAll`/`afterEach` run inner-to-outer (child before parent), i.e. `afterEach` order
   is the reverse of `beforeEach` registration order, configurable globally via `sequence.hooks`.
-- `test.beforeEach`/`test.afterEach`/`test.beforeAll`/`test.afterAll` (hooks hung off a
-  `test.extend()`-produced object) are the same hooks, scoped to whatever suite they're declared
-  in, just spelled through the extended-test namespace so they can see fixture types.
+- `test.beforeEach`/`test.afterEach`/`test.beforeAll`/`test.afterAll` (hooks hung off any test
+  function, `test.extend()`-produced or not) are the top-level hook functions themselves, scoped
+  to whatever suite they're declared in, so a modifier chained before one (`test.skip.beforeEach`)
+  does not apply. On an extended test they can see fixture types.
 - `test.aroundEach`/`test.aroundAll` (v4.1+) combine setup+teardown in one wrapper; exact signature
   UNVERIFIED, treat as an opaque hook-registering call for extraction purposes (record its
   presence and scope; don't try to model control flow inside it yet).

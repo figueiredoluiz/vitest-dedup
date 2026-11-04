@@ -71,20 +71,6 @@
       "reason": "A table the analyzer cannot read counts as one test with an unproven title, not one per row."
     },
     {
-      "dir": "fixtures/fixtures",
-      "path": "fixtures-scoped-hooks.test.ts",
-      "kind": "missing-hook",
-      "item": "beforeEach@fixtures-scoped-hooks.test.ts:10",
-      "reason": "`test.beforeEach` and `test.afterEach` on an extended test binding are not recorded as hooks."
-    },
-    {
-      "dir": "fixtures/fixtures",
-      "path": "fixtures-scoped-hooks.test.ts",
-      "kind": "missing-hook",
-      "item": "afterEach@fixtures-scoped-hooks.test.ts:11",
-      "reason": "`test.beforeEach` and `test.afterEach` on an extended test binding are not recorded as hooks."
-    },
-    {
       "dir": "fixtures/recall/duplicate-each-row-describe-each",
       "path": "roles.test.ts",
       "kind": "missing-test",
@@ -258,20 +244,6 @@
       "kind": "missing-hook",
       "item": "afterEach@server-hooks.ts:8",
       "reason": "A helper that registers only hooks is a `hook-wrapper` site at its call; the hooks it registers are not recorded in the helper."
-    },
-    {
-      "dir": "fixtures/fixtures",
-      "path": "fixtures-scoped-hooks.test.ts",
-      "kind": "extra-test",
-      "item": "",
-      "reason": "`test.beforeEach` and `test.afterEach` on an extended test binding are read as tests with no callback, and the empty-bodied test has no proven title."
-    },
-    {
-      "dir": "fixtures/fixtures",
-      "path": "fixtures-scoped-hooks.test.ts",
-      "kind": "extra-test",
-      "item": "with scoped hooks",
-      "reason": "`test.beforeEach` and `test.afterEach` on an extended test binding are read as tests with no callback, and the empty-bodied test has no proven title."
     },
     {
       "dir": "fixtures/recall/framework-setup-helper-spy-context-negative",
