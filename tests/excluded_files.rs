@@ -30,12 +30,7 @@ fn write(root: &Path, name: &str, contents: impl AsRef<[u8]>) {
 }
 
 /// Runs the binary over `root` with the JSON reporter, then again with JSONL.
-fn run(root: &Path, flags: &[&str]) -> Run {
-    run_with(root, flags, &[])
-}
-
-/// [`run`] with `environment` set for both runs.
-fn run_with(root: &Path, flags: &[&str], environment: &[(&str, &str)]) -> Run {
+fn analyze(root: &Path, flags: &[&str]) -> Run {
     let output = tempfile::tempdir().unwrap();
     let prefix = output.path().join("report");
     let _json_run = assert_cmd::Command::cargo_bin("vitest-dedup")
@@ -44,7 +39,6 @@ fn run_with(root: &Path, flags: &[&str], environment: &[(&str, &str)]) -> Run {
         .args(["--reporters", "json", "--no-metrics", "--output"])
         .arg(&prefix)
         .args(flags)
-        .envs(environment.iter().copied())
         .output()
         .unwrap();
     let json_text = std::fs::read_to_string(prefix.with_extension("json")).unwrap();
@@ -53,7 +47,6 @@ fn run_with(root: &Path, flags: &[&str], environment: &[(&str, &str)]) -> Run {
         .arg(root)
         .args(["--reporters", "jsonl", "--no-metrics"])
         .args(flags)
-        .envs(environment.iter().copied())
         .output()
         .unwrap();
     let jsonl_text = String::from_utf8(jsonl_run.stdout).unwrap();
@@ -213,31 +206,15 @@ fn assert_listed(run: &Run, expected: &[Expect]) {
     assert_eq!(run.json["blindFiles"], every);
 }
 
-/// Whether this run of the suite selects the next engine.
-fn next_engine() -> bool {
-    std::env::var_os("VITEST_DEDUP_ENGINE").is_some_and(|engine| engine == "next")
-}
-
-/// The entry for a file that a nested runner keeps from being compared. The default engine names
-/// the refusal and counts no test; the next engine leaves the one test the runner registers out
-/// as `registered-elsewhere`.
-fn nested_runner(path: &'static str, default: (&'static str, &'static [&'static str])) -> Expect {
-    if next_engine() {
-        Expect {
-            path,
-            reason: "registered-elsewhere",
-            others: &[],
-            excluded: 1,
-            total: 1,
-        }
-    } else {
-        Expect {
-            path,
-            reason: default.0,
-            others: default.1,
-            excluded: 0,
-            total: 0,
-        }
+/// The entry for a file that a nested runner keeps from being compared: the one test the runner
+/// registers is left out as `registered-elsewhere`.
+fn nested_runner(path: &'static str) -> Expect {
+    Expect {
+        path,
+        reason: "registered-elsewhere",
+        others: &[],
+        excluded: 1,
+        total: 1,
     }
 }
 
@@ -248,235 +225,84 @@ fn scenario(files: &[(&str, &str)], flags: &[&str], expected: &[Expect]) {
     for (name, contents) in files {
         write(directory.path(), name, contents);
     }
-    let run = run(directory.path(), flags);
+    let run = analyze(directory.path(), flags);
     assert_listed(&run, expected);
 }
 
 const OPTS_HELPER: &str = "import { test, expect } from 'vitest';\nexport function run() { test('a', { timeout: 5 }, () => { expect(1).toBe(1); }); }\n";
-const RUN_OPTS: &str = "import { run } from './helpers/opts';\nrun();\n";
 const WITH: &str = "import { test } from 'vitest';\nwith ({}) { test('w', () => {}); }\n";
 const DYNAMIC: &str = "import { test, expect } from 'vitest';\nconst n = Math.random();\ntest(`d ${n}`, () => { expect(1).toBe(1); });\n";
-const RECURSIVE: &str = "import { test, expect } from 'vitest';\nfunction f() { f(); test('x', () => { expect(1).toBe(1); }); }\nf();\n";
-const HELPER_PREFIX: &str = "import { test, expect } from 'vitest';\n";
 
-/// One reason code reachable from the CLI: the files that produce it and what is listed.
-struct Case {
-    reason: &'static str,
-    files: Vec<(&'static str, String)>,
-    path: &'static str,
-    excluded: u64,
-    total: u64,
-}
-
-/// Builds one [`Case`] for the table of CLI-reachable reasons.
-fn case(
-    reason: &'static str,
-    files: Vec<(&'static str, String)>,
-    path: &'static str,
-    (excluded, total): (u64, u64),
-) -> Case {
-    Case {
-        reason,
-        files,
-        path,
-        excluded,
-        total,
-    }
-}
-
-/// Owned copy of a fixture source.
-fn text(source: &str) -> String {
-    source.to_owned()
-}
-
-/// A runner helper at `helpers/<name>.ts` and the caller `<name>.test.ts` that runs it.
-fn runner(name: &'static str, helper_body: &str, caller: &str) -> Vec<(&'static str, String)> {
-    let helper: &'static str = Box::leak(format!("helpers/{name}.ts").into_boxed_str());
-    let test: &'static str = Box::leak(format!("{name}.test.ts").into_boxed_str());
-    vec![
-        (helper, format!("{HELPER_PREFIX}{helper_body}")),
-        (test, caller.to_owned()),
-    ]
-}
-
-/// Each reason reachable from the CLI is listed once with its counts in every report.
+/// A runner the analyzer cannot expand leaves the one test its call registers out as
+/// `registered-elsewhere`, whatever stopped the expansion: a refused option, a second missing
+/// helper, recursion, effects in two nested helpers, a default export, module setup or a mock.
 #[test]
-fn each_reason_reachable_from_the_cli_is_listed_with_its_counts() {
-    // These are legacy extraction reasons. The next core owns distinct refusal paths, exercised
-    // by `the_next_engine_lists_why_each_test_is_not_compared` and its focused contracts below.
-    if next_engine() {
-        return;
-    }
-    let cases = vec![
-        case(
-            "unresolved-context",
-            vec![("ctx.test.ts", format!("{DYNAMIC}test('ok', () => {{ expect(2).toBe(2); }});\n"))],
-            "ctx.test.ts",
-            (1, 2),
-        ),
-        case(
-            "mock-factory-unreadable",
-            vec![
-                ("helpers/factory.ts", text("export const factory = () => ({});\n")),
-                ("mockfac.test.ts", text("import { test, expect, vi } from 'vitest';\nimport { factory } from './helpers/factory';\nvi.mock('./helpers/dep', factory);\ntest('a', () => { expect(1).toBe(1); });\n")),
-            ],
-            "mockfac.test.ts",
-            (1, 1),
-        ),
-        case(
-            "fixture-unreadable",
-            vec![
-                ("helpers/db.ts", text("export const makeDb = () => 1;\n")),
-                ("fixture.test.ts", text("import { test as base, expect } from 'vitest';\nimport { makeDb } from './helpers/db';\nconst test = base.extend({ db: makeDb() });\ntest('a', ({ db }) => { expect(db).toBe(1); });\n")),
-            ],
-            "fixture.test.ts",
-            (1, 1),
-        ),
-        case(
-            "helper-export-unreadable",
-            runner("defexp", "let run = () => { test('inside', () => { expect(1).toBe(1); }); };\nexport default run;\n", "import run from './helpers/defexp';\nrun();\n"),
-            "defexp.test.ts",
-            (0, 0),
-        ),
-        case(
-            "helper-setup-effects",
-            runner("setup", "globalThing();\nexport function run() { test('inside', () => { expect(1).toBe(1); }); }\n", "import { run } from './helpers/setup';\nrun();\n"),
-            "setup.test.ts",
-            (0, 0),
-        ),
-        case(
-            "helper-effects-unproved",
-            runner("eff", "export function run(name: string) { prep(); test(name, () => { expect(1).toBe(1); }); }\n", "import { run } from './helpers/eff';\nrun('x');\n"),
-            "eff.test.ts",
-            (0, 0),
-        ),
-        case("helper-limit", vec![("recur.test.ts", text(RECURSIVE))], "recur.test.ts", (1, 1)),
-        case(
-            "runner-mocked",
-            vec![
-                ("helpers/opts.ts", text(OPTS_HELPER)),
-                ("mocked.test.ts", text("import { vi } from 'vitest';\nimport { run } from './helpers/opts';\nvi.mock('./helpers/opts');\nrun();\n")),
-            ],
-            "mocked.test.ts",
-            (0, 0),
-        ),
-        case(
-            "unsupported-expression",
-            vec![("helpers/opts.ts", text(OPTS_HELPER)), ("opts.test.ts", text(RUN_OPTS))],
-            "opts.test.ts",
-            (0, 0),
-        ),
-        // Tests already extracted, directly and from a good runner, are excluded with the file.
-        case(
-            "unsupported-expression",
-            vec![
-                ("helpers/ok.ts", format!("{HELPER_PREFIX}export function run() {{ test('from helper', () => {{ expect(1).toBe(1); }}); }}\n")),
-                ("helpers/opts.ts", text(OPTS_HELPER)),
-                ("mix.test.ts", text("import { test, expect } from 'vitest';\nimport { run } from './helpers/ok';\nimport { run as bad } from './helpers/opts';\ntest('direct', () => { expect(1).toBe(1); });\nrun();\nbad();\n")),
-            ],
-            "mix.test.ts",
-            (2, 2),
-        ),
-        case("unsupported-statement", vec![("with.test.ts", text(WITH))], "with.test.ts", (0, 0)),
-        case(
-            "parse-error",
-            vec![("parse.test.ts", text("import { test } from 'vitest';\ntest('a', () => { let = ; });\n"))],
-            "parse.test.ts",
-            (0, 0),
-        ),
-        case(
-            "source-limit",
-            vec![("nest.test.ts", format!("import {{ test }} from 'vitest';\ntest('n', () => {{ const x = {}{}; }});\n", "[".repeat(300), "]".repeat(300)))],
-            "nest.test.ts",
-            (0, 0),
-        ),
-        case(
-            "walk-limit",
-            vec![("many.test.ts", format!("import {{ test }} from 'vitest';\ntest.each([{}])('t %d', () => {{}});\n", vec!["1"; 10_001].join(",")))],
-            "many.test.ts",
-            (0, 0),
-        ),
-        case(
-            "file-too-large",
-            vec![("big.test.ts", format!("import {{ test }} from 'vitest';\n// {}\ntest('b', () => {{}});\n", "x".repeat(8 * 1024 * 1024 + 10)))],
-            "big.test.ts",
-            (0, 0),
-        ),
+fn a_runner_that_is_not_expanded_leaves_its_test_registered_elsewhere() {
+    let runner = |helper: &str| format!("import {{ test, expect }} from 'vitest';\n{helper}");
+    let shapes: [Vec<(&str, String)>; 6] = [
+        vec![
+            ("helpers/opts.ts", OPTS_HELPER.to_owned()),
+            ("case.test.ts", "import { run } from './helpers/opts';\nimport { missing } from './helpers/missing';\nrun();\nmissing();\n".to_owned()),
+        ],
+        vec![
+            ("helpers/rec.ts", runner("export function run() { run(); test('x', () => { expect(1).toBe(1); }); }\n")),
+            ("case.test.ts", "import { run } from './helpers/rec';\nrun();\n".to_owned()),
+        ],
+        vec![
+            ("helpers/a.ts", "import { test } from 'vitest';\nexport async function a() { test('a', () => {}); }\n".to_owned()),
+            ("helpers/b.ts", "import { test } from 'vitest';\nexport function b(x) { x = 1; test('b', () => {}); }\n".to_owned()),
+            ("helpers/wrap.ts", "import { a } from './a';\nimport { b } from './b';\nexport function run() { a(); b(0); }\n".to_owned()),
+            ("case.test.ts", "import { run } from './helpers/wrap';\nrun();\n".to_owned()),
+        ],
+        vec![
+            ("helpers/defexp.ts", runner("let run = () => { test('inside', () => { expect(1).toBe(1); }); };\nexport default run;\n")),
+            ("case.test.ts", "import run from './helpers/defexp';\nrun();\n".to_owned()),
+        ],
+        vec![
+            ("helpers/setup.ts", runner("globalThing();\nexport function run() { test('inside', () => { expect(1).toBe(1); }); }\n")),
+            ("case.test.ts", "import { run } from './helpers/setup';\nrun();\n".to_owned()),
+        ],
+        vec![
+            ("helpers/opts.ts", OPTS_HELPER.to_owned()),
+            ("case.test.ts", "import { vi } from 'vitest';\nimport { run } from './helpers/opts';\nvi.mock('./helpers/opts');\nrun();\n".to_owned()),
+        ],
     ];
-    for case in cases {
-        let directory = tempfile::tempdir().unwrap();
-        write(directory.path(), "clean.test.ts", CLEAN);
-        for (name, contents) in &case.files {
-            write(directory.path(), name, contents);
-        }
-        let run = run(directory.path(), &[]);
-        assert_listed(
-            &run,
-            &[Expect {
-                path: case.path,
-                reason: case.reason,
-                others: &[],
-                excluded: case.excluded,
-                total: case.total,
-            }],
-        );
+    for files in shapes {
+        let files: Vec<(&str, &str)> = files
+            .iter()
+            .map(|(path, text)| (*path, text.as_str()))
+            .collect();
+        scenario(&files, &[], &[nested_runner("case.test.ts")]);
     }
 }
 
-/// A second distinct helper refusal survives the one-diagnostic cap as an other reason.
+/// A file the analyzer refuses as a whole, or whose imported helper does not parse, is listed
+/// with the refusal's own code.
 #[test]
-fn a_second_distinct_helper_refusal_is_kept_beside_the_first() {
-    scenario(
-        &[
-            ("helpers/opts.ts", OPTS_HELPER),
-            (
-                "two.test.ts",
-                "import { run } from './helpers/opts';\nimport { missing } from './helpers/missing';\nrun();\nmissing();\n",
-            ),
-        ],
-        &[],
-        &[nested_runner("two.test.ts", ("unsupported-expression", &["helper-export-unreadable"]))],
+fn file_level_refusals_are_listed_with_their_own_code() {
+    let big = format!(
+        "import {{ test }} from 'vitest';\n// {}\ntest('b', () => {{}});\n",
+        "0".repeat(8 * 1024 * 1024 + 10)
     );
-}
-
-/// A runner refused inside another runner keeps the inner refusal code.
-#[test]
-fn a_nested_runner_refusal_keeps_its_own_code() {
-    let directory = tempfile::tempdir().unwrap();
-    write(directory.path(), "clean.test.ts", CLEAN);
-    write(directory.path(), "helpers/rec.ts", "import { test, expect } from 'vitest';\nexport function run() { run(); test('x', () => { expect(1).toBe(1); }); }\n");
-    write(
-        directory.path(),
-        "rec.test.ts",
-        "import { run } from './helpers/rec';\nrun();\n",
-    );
-    let run = run(directory.path(), &[]);
-    assert_listed(&run, &[nested_runner("rec.test.ts", ("helper-limit", &[]))]);
-    // The outer sentence carries the nested cause, not only the fact that extraction failed.
-    if next_engine() {
-        return;
+    for (files, expected) in [
+        (
+            vec![
+                ("helpers/bad.ts", "export const = ;\n"),
+                ("case.test.ts", "import { test, expect } from 'vitest';\nimport { x } from './helpers/bad';\ntest('a', () => { expect(x).toBe(1); });\n"),
+            ],
+            Expect { path: "case.test.ts", reason: "helper-export-unreadable", others: &[], excluded: 0, total: 1 },
+        ),
+        (
+            vec![("case.test.ts", "import { test } from 'vitest';\ntest('a', () => { let = ; });\n")],
+            Expect { path: "case.test.ts", reason: "parse-error", others: &[], excluded: 0, total: 0 },
+        ),
+        (
+            vec![("case.test.ts", big.as_str())],
+            Expect { path: "case.test.ts", reason: "file-too-large", others: &[], excluded: 0, total: 0 },
+        ),
+    ] {
+        scenario(&files, &[], &[expected]);
     }
-    let detail = run.json["excludedFiles"][0]["detail"].as_str().unwrap();
-    assert!(
-        detail.contains("could not be fully extracted:") && detail.contains("calls itself"),
-        "{detail}"
-    );
-}
-
-/// A wrapper runner that calls two refused helpers keeps both reasons: the first leads, the other
-/// is listed beside it.
-#[test]
-fn a_nested_runner_keeps_every_distinct_refusal_it_hit() {
-    scenario(
-        &[
-            ("helpers/a.ts", "import { test } from 'vitest';\nexport async function a() { test('a', () => {}); }\n"),
-            ("helpers/b.ts", "import { test } from 'vitest';\nexport function b(x) { x = 1; test('b', () => {}); }\n"),
-            ("helpers/wrap.ts", "import { a } from './a';\nimport { b } from './b';\nexport function run() { a(); b(0); }\n"),
-            ("wrap.test.ts", "import { run } from './helpers/wrap';\nrun();\n"),
-        ],
-        &[],
-        &[nested_runner("wrap.test.ts", ("unsupported-expression", &["helper-effects-unproved"]))],
-    );
 }
 
 /// A test can have an unreadable mock factory and an unreadable fixture at once: both are listed.
@@ -498,22 +324,12 @@ fn independent_context_reasons_are_both_listed() {
 /// A helper refusal explains the generic fallback, but not a test's own unreadable mock factory.
 #[test]
 fn an_unreadable_mock_factory_is_listed_beside_a_helper_refusal() {
-    let expected = if next_engine() {
-        Expect {
-            path: "mixed.test.ts",
-            reason: "mock-factory-unreadable",
-            others: &["registered-elsewhere"],
-            excluded: 2,
-            total: 2,
-        }
-    } else {
-        Expect {
-            path: "mixed.test.ts",
-            reason: "runner-mocked",
-            others: &["mock-factory-unreadable"],
-            excluded: 1,
-            total: 1,
-        }
+    let expected = Expect {
+        path: "mixed.test.ts",
+        reason: "mock-factory-unreadable",
+        others: &["registered-elsewhere"],
+        excluded: 2,
+        total: 2,
     };
     scenario(
         &[
@@ -576,24 +392,15 @@ fn an_import_leaving_the_root_leads_the_helper_refusal_it_causes() {
         "outside.test.ts",
         "import { run } from '@out/target';\nrun();\n",
     );
-    let run = run(&root, &[]);
-    if cfg!(windows) && next_engine() {
+    let run = analyze(&root, &[]);
+    if cfg!(windows) {
         // The Windows resolver cannot follow this alias from its canonical importer. The next
         // core consequently has no local registration to attach the confinement fact to; the
         // resolver's platform-specific tests pin that behavior.
         assert!(run.json["excludedFiles"].as_array().unwrap().is_empty());
         return;
     }
-    // On Windows the resolver does not apply a tsconfig `paths` alias from a canonical (`\\?\`)
-    // importer at all, so the alias never resolves to a file outside the root and only the helper
-    // refusal is recorded; see the matching branch in the resolver's own tests.
-    let (reason, others): (&str, &[&str]) = if next_engine() {
-        ("import-outside-root", &[])
-    } else if cfg!(windows) {
-        ("helper-export-unreadable", &[])
-    } else {
-        ("import-outside-root", &["helper-export-unreadable"])
-    };
+    let (reason, others): (&str, &[&str]) = ("import-outside-root", &[]);
     assert_listed(
         &run,
         &[Expect {
@@ -626,9 +433,9 @@ fn an_undetermined_globals_setting_is_globals_undetermined() {
     );
 }
 
-/// The next engine lists an undetermined `globals` too, after its own reasons for the file.
+/// The analyzer lists an undetermined `globals` too, after its own reasons for the file.
 #[test]
-fn the_next_engine_keeps_an_undetermined_globals_setting() {
+fn the_analyzer_keeps_an_undetermined_globals_setting() {
     let directory = tempfile::tempdir().unwrap();
     write(
         directory.path(),
@@ -645,7 +452,7 @@ test('writes', () => { count = 1; expect(count).toBe(1); });
 test('reads', () => { expect(count).toBe(0); });
 ",
     );
-    let run = run_with(directory.path(), &[], &[("VITEST_DEDUP_ENGINE", "next")]);
+    let run = analyze(directory.path(), &[]);
     assert_listed(
         &run,
         &[
@@ -677,7 +484,7 @@ fn a_file_that_is_not_utf8_is_unreadable() {
         "binary.test.ts",
         b"\xff\xfe\x00bad".as_slice(),
     );
-    let run = run(directory.path(), &[]);
+    let run = analyze(directory.path(), &[]);
     assert_listed(
         &run,
         &[Expect {
@@ -712,7 +519,7 @@ fn files_left_unanalyzed_by_the_memory_budget_are_memory_budget() {
             ),
         );
     }
-    let run = run(directory.path(), &["--max-memory", "1"]);
+    let run = analyze(directory.path(), &["--max-memory", "1"]);
     let skipped = run.json["incompleteCauses"]["filesOverMemoryBudget"]
         .as_u64()
         .unwrap();
@@ -731,10 +538,10 @@ fn files_left_unanalyzed_by_the_memory_budget_are_memory_budget() {
     assert_eq!(run.json["exclusions"]["reasons"][0]["files"], skipped);
 }
 
-/// The next engine stops at the memory budget. Without HTML output it charges no retained bytes,
+/// The analyzer stops at the memory budget. Without HTML output it charges no retained bytes,
 /// so the RSS backstop, below the process's startup footprint at one megabyte, stops the run.
 #[test]
-fn the_next_engine_stops_at_the_memory_budget() {
+fn the_analyzer_stops_at_the_memory_budget() {
     let directory = tempfile::tempdir().unwrap();
     for file in 0..3 {
         write(
@@ -743,11 +550,7 @@ fn the_next_engine_stops_at_the_memory_budget() {
             format!("import {{ test, expect }} from 'vitest';\ntest('t{file}', () => {{ expect({file}).toBe({file}); }});\n"),
         );
     }
-    let run = run_with(
-        directory.path(),
-        &["--max-memory", "1"],
-        &[("VITEST_DEDUP_ENGINE", "next")],
-    );
+    let run = analyze(directory.path(), &["--max-memory", "1"]);
     assert_eq!(run.json["incompleteCauses"]["filesOverMemoryBudget"], 2);
     let reasons: Vec<_> = run.json["excludedFiles"]
         .as_array()
@@ -775,11 +578,11 @@ fn refused_package_metadata_is_reported_without_tainting_independent_files() {
         format!("{{\"name\":\"owned\"}}{}", " ".repeat(1024 * 1024)),
     );
     write(root, "dependent.test.ts", "import { test, expect } from 'vitest';\nimport { value } from 'owned';\ntest('first', () => expect(value).toBe(1));\ntest('second', () => expect(value).toBe(1));\n");
-    // Both engines refuse the oversized manifest and leave only the dependent file's tests out.
-    for environment in [&[][..], &[("VITEST_DEDUP_ENGINE", "next")][..]] {
-        let result = run_with(root, &[], environment);
-        assert_eq!(result.json["testsAnalyzed"], 3, "{environment:?}");
-        assert_eq!(result.json["unresolvedTests"], 2, "{environment:?}");
+    // The oversized manifest is refused and only the dependent file's tests are left out.
+    {
+        let result = analyze(root, &[]);
+        assert_eq!(result.json["testsAnalyzed"], 3);
+        assert_eq!(result.json["unresolvedTests"], 2);
         assert!(result.json["findings"].as_array().unwrap().is_empty());
         assert_listed(
             &result,
@@ -815,7 +618,7 @@ fn a_refused_manifest_behind_a_shared_helper_reaches_every_importer() {
     let pair = "import { test, expect } from 'vitest';\nimport { read } from './helper';\ntest('first', () => expect(read()).toBe(1));\ntest('second', () => expect(read()).toBe(1));\n";
     write(root, "a.test.ts", pair);
     write(root, "b.test.ts", pair);
-    let result = run_with(root, &[], &[("VITEST_DEDUP_ENGINE", "next")]);
+    let result = analyze(root, &[]);
     assert_eq!(result.json["testsAnalyzed"], 5);
     assert_eq!(
         result.json["unresolvedTests"], 4,
@@ -870,7 +673,7 @@ fn a_refused_manifest_behind_a_shared_helper_reaches_every_importer() {
         "only.test.ts",
         "import { unused } from './helper';\n",
     );
-    let result = run_with(lone.path(), &[], &[("VITEST_DEDUP_ENGINE", "next")]);
+    let result = analyze(lone.path(), &[]);
     assert_eq!(result.json["incomplete"], true, "{:#}", result.json);
     assert!(result.json["excludedFiles"]
         .as_array()
@@ -880,10 +683,10 @@ fn a_refused_manifest_behind_a_shared_helper_reaches_every_importer() {
             && entry["reason"] == "package-manifest-unreadable"));
 }
 
-/// The next engine's reasons for a test it leaves unresolved, one file each, beside a clean file
+/// The analyzer's reasons for a test it leaves unresolved, one file each, beside a clean file
 /// and files whose tests have nothing to compare, which are counted but not listed.
 #[test]
-fn the_next_engine_lists_why_each_test_is_not_compared() {
+fn the_analyzer_lists_why_each_test_is_not_compared() {
     let directory = tempfile::tempdir().unwrap();
     write(directory.path(), "clean.test.ts", CLEAN);
     write(
@@ -953,7 +756,7 @@ suite();
 test('kept', () => { expect(1).toBe(1); });
 ",
     );
-    let run = run_with(directory.path(), &[], &[("VITEST_DEDUP_ENGINE", "next")]);
+    let run = analyze(directory.path(), &[]);
     let unresolved = |path, reason, others, excluded, total| Expect {
         path,
         reason,
@@ -1022,18 +825,12 @@ test('kept', () => { expect(1).toBe(1); });
             ),
         ]
     );
-    assert!(
-        run.stderr
-            .contains("near-duplicate-test, subsumed-test, redundant-hook"),
-        "{}",
-        run.stderr
-    );
 }
 
 /// A rule-local trace gap is reported without turning an otherwise complete run into an
 /// incomplete one.
 #[test]
-fn an_incomplete_trace_alone_keeps_the_next_run_complete() {
+fn an_incomplete_trace_alone_keeps_the_run_complete() {
     let directory = tempfile::tempdir().unwrap();
     write(
         directory.path(),
@@ -1046,7 +843,7 @@ test('partial', () => {
 test('complete', () => { expect(1).toBe(1); });
 ",
     );
-    let run = run_with(directory.path(), &[], &[("VITEST_DEDUP_ENGINE", "next")]);
+    let run = analyze(directory.path(), &[]);
     assert_eq!(run.json["testsAnalyzed"], 2);
     assert_eq!(run.json["unresolvedTests"], 0);
     assert_eq!(run.json["incomplete"], false, "{:#}", run.json);
@@ -1068,9 +865,9 @@ test('complete', () => { expect(1).toBe(1); });
 }
 
 /// Non-hoisted mocks affect dynamic imports at the point they run, so every test in their file is
-/// visibly excluded instead of sharing a context the next engine cannot model.
+/// visibly excluded instead of sharing a context the analyzer cannot model.
 #[test]
-fn the_next_engine_excludes_non_hoisted_mock_files_and_fails_incomplete_gates() {
+fn the_analyzer_excludes_non_hoisted_mock_files_and_fails_incomplete_gates() {
     let directory = tempfile::tempdir().unwrap();
     write(directory.path(), "clean.test.ts", CLEAN);
     write(
@@ -1085,8 +882,7 @@ fn the_next_engine_excludes_non_hoisted_mock_files_and_fails_incomplete_gates() 
          test('second', () => { expect(1).toBe(1); });\n",
     );
     write(directory.path(), "dep.ts", "export const value = 0;\n");
-    let environment = [("VITEST_DEDUP_ENGINE", "next")];
-    let run = run_with(directory.path(), &[], &environment);
+    let run = analyze(directory.path(), &[]);
     assert_eq!(run.json["testsAnalyzed"], 3);
     assert_eq!(run.json["unresolvedTests"], 2);
     assert!(run.json["findings"].as_array().unwrap().is_empty());
@@ -1105,7 +901,6 @@ fn the_next_engine_excludes_non_hoisted_mock_files_and_fails_incomplete_gates() 
     command
         .arg(directory.path())
         .arg("--fail-on-incomplete=reads")
-        .envs(environment)
         .assert()
         .code(2)
         .stderr(predicates::str::contains("could not be fully analyzed"));
@@ -1113,7 +908,7 @@ fn the_next_engine_excludes_non_hoisted_mock_files_and_fails_incomplete_gates() 
 
 /// Dynamic test names are unresolved context, not a clean pair with equal callback text.
 #[test]
-fn the_next_engine_excludes_dynamic_titles() {
+fn the_analyzer_excludes_dynamic_titles() {
     let directory = tempfile::tempdir().unwrap();
     write(directory.path(), "clean.test.ts", CLEAN);
     write(
@@ -1124,7 +919,7 @@ fn the_next_engine_excludes_dynamic_titles() {
          test(`first ${suffix}`, () => { expect(1).toBe(1); });\n\
          test(`second ${suffix}`, () => { expect(1).toBe(1); });\n",
     );
-    let run = run_with(directory.path(), &[], &[("VITEST_DEDUP_ENGINE", "next")]);
+    let run = analyze(directory.path(), &[]);
     assert_eq!(run.json["testsAnalyzed"], 3);
     assert_eq!(run.json["unresolvedTests"], 2);
     assert!(run.json["findings"].as_array().unwrap().is_empty());
@@ -1142,7 +937,7 @@ fn the_next_engine_excludes_dynamic_titles() {
 
 /// Static signed fixture values and unrelated helper imports retain ordinary comparison eligibility.
 #[test]
-fn the_next_engine_keeps_signed_fixtures_and_unrelated_helper_imports_comparable() {
+fn the_analyzer_keeps_signed_fixtures_and_unrelated_helper_imports_comparable() {
     let directory = tempfile::tempdir().unwrap();
     write(
         directory.path(),
@@ -1178,7 +973,7 @@ fn the_next_engine_keeps_signed_fixtures_and_unrelated_helper_imports_comparable
          test('fifth', () => { expect(1).toBe(1); });\n\
          test('sixth', () => { expect(1).toBe(1); });\n",
     );
-    let run = run_with(directory.path(), &[], &[("VITEST_DEDUP_ENGINE", "next")]);
+    let run = analyze(directory.path(), &[]);
     assert_eq!(run.json["testsAnalyzed"], 6, "{}", run.json_text);
     assert_eq!(run.json["unresolvedTests"], 0, "{}", run.json_text);
     assert_eq!(run.json["excludedFiles"], serde_json::json!([]));
@@ -1190,9 +985,9 @@ fn the_next_engine_keeps_signed_fixtures_and_unrelated_helper_imports_comparable
     );
 }
 
-/// Benchmarks are counted under the next engine and listed as not compared, never dropped.
+/// Benchmarks are counted and listed as not compared, never dropped.
 #[test]
-fn the_next_engine_counts_benchmarks_as_not_compared() {
+fn the_analyzer_counts_benchmarks_as_not_compared() {
     let directory = tempfile::tempdir().unwrap();
     write(
         directory.path(),
@@ -1203,7 +998,7 @@ bench('cbrt', () => { Math.cbrt(5); });
 ",
     );
     write(directory.path(), "clean.test.ts", CLEAN);
-    let run = run_with(directory.path(), &[], &[("VITEST_DEDUP_ENGINE", "next")]);
+    let run = analyze(directory.path(), &[]);
     assert_listed(
         &run,
         &[Expect {
@@ -1218,9 +1013,9 @@ bench('cbrt', () => { Math.cbrt(5); });
     assert_eq!(run.json["unresolvedTests"], 2);
 }
 
-/// Tests with nothing to compare leave the run complete under the next engine.
+/// Tests with nothing to compare leave the run complete by the analyzer.
 #[test]
-fn the_next_engine_counts_tests_with_nothing_to_compare_without_listing_them() {
+fn the_analyzer_counts_tests_with_nothing_to_compare_without_listing_them() {
     let directory = tempfile::tempdir().unwrap();
     write(
         directory.path(),
@@ -1231,7 +1026,7 @@ test('no callback');
 test('options only', { timeout: 1000 });
 ",
     );
-    let run = run_with(directory.path(), &[], &[("VITEST_DEDUP_ENGINE", "next")]);
+    let run = analyze(directory.path(), &[]);
     assert_eq!(run.json["testsAnalyzed"], 3);
     assert_eq!(run.json["unresolvedTests"], 0);
     assert_eq!(run.json["incomplete"], false, "{:#}", run.json);
@@ -1239,11 +1034,11 @@ test('options only', { timeout: 1000 });
     assert_eq!(run.json["blindFiles"], 0);
 }
 
-/// The config's severities rule the next engine's findings the way they rule the default's: a
+/// The config's severities rule the findings: a
 /// rule turned off reports nothing and exits clean, an override reaches the findings that stay,
 /// and an error-severity duplicate fails the quality gate.
 #[test]
-fn the_next_engine_honors_the_configured_severities() {
+fn the_analyzer_honors_the_configured_severities() {
     let directory = tempfile::tempdir().unwrap();
     write(
         directory.path(),
@@ -1259,7 +1054,6 @@ fn the_next_engine_honors_the_configured_severities() {
             .args(["--reporters", "json", "--no-metrics", "--output"])
             .arg(&prefix)
             .args(flags)
-            .env("VITEST_DEDUP_ENGINE", "next")
             .output()
             .unwrap();
         let json = serde_json::from_str::<Value>(
@@ -1282,14 +1076,14 @@ fn the_next_engine_honors_the_configured_severities() {
 
 /// An inert (`.skip`/`.todo`) participant is marked and named the way the default rule names it.
 #[test]
-fn the_next_engine_marks_inert_participants() {
+fn the_analyzer_marks_inert_participants() {
     let directory = tempfile::tempdir().unwrap();
     write(
         directory.path(),
         "s.test.ts",
         "import { test, expect } from 'vitest';\ntest.skip('lazy', () => { expect(1).toBe(1); });\ntest('keen', () => { expect(1).toBe(1); });\n",
     );
-    let run = run_with(directory.path(), &[], &[("VITEST_DEDUP_ENGINE", "next")]);
+    let run = analyze(directory.path(), &[]);
     let findings = run.json["findings"].as_array().unwrap();
     assert_eq!(findings.len(), 1, "{}", run.jsonl_text);
     assert_eq!(findings[0]["inert"], serde_json::json!([true, false]));
@@ -1303,17 +1097,17 @@ fn the_next_engine_marks_inert_participants() {
     );
 }
 
-/// An inline suppression directive suppresses a next-engine finding like any other: it is a
+/// An inline suppression directive suppresses a finding like any other: it is a
 /// claim about a file's findings, not about how its tests were read.
 #[test]
-fn an_inline_suppression_suppresses_a_next_engine_finding() {
+fn an_inline_suppression_suppresses_a_finding() {
     let directory = tempfile::tempdir().unwrap();
     write(
         directory.path(),
         "s.test.ts",
         "import { test, expect } from 'vitest';\n// vitest-dedup-disable-next-line the pair is intentional\ntest('one', () => { expect(1).toBe(1); });\ntest('two', () => { expect(1).toBe(1); });\n",
     );
-    let run = run_with(directory.path(), &[], &[("VITEST_DEDUP_ENGINE", "next")]);
+    let run = analyze(directory.path(), &[]);
     assert_eq!(
         run.json["findings"],
         serde_json::json!([]),
@@ -1326,7 +1120,7 @@ fn an_inline_suppression_suppresses_a_next_engine_finding() {
 /// A suppression sits above where the declaration starts, also when Vitest places the test on a
 /// later line: a multi-line table's location is the call, the way the default engine reports it.
 #[test]
-fn an_inline_suppression_above_a_multi_line_table_suppresses_a_next_engine_finding() {
+fn an_inline_suppression_above_a_multi_line_table_suppresses_a_finding() {
     let directory = tempfile::tempdir().unwrap();
     let table = |title: &str| {
         format!("test.each([\n  [1, 2],\n  [3, 4],\n])('{title} %i %i', (a, b) => {{ expect(a + b).toBeGreaterThan(0); }});\n")
@@ -1339,7 +1133,7 @@ fn an_inline_suppression_above_a_multi_line_table_suppresses_a_next_engine_findi
         )
     };
     write(directory.path(), "s.test.ts", source(""));
-    let run = run_with(directory.path(), &[], &[("VITEST_DEDUP_ENGINE", "next")]);
+    let run = analyze(directory.path(), &[]);
     let findings = run.json["findings"].as_array().unwrap();
     assert_eq!(findings.len(), 1, "{}", run.json_text);
     assert_eq!(
@@ -1352,7 +1146,7 @@ fn an_inline_suppression_above_a_multi_line_table_suppresses_a_next_engine_findi
         "s.test.ts",
         source("// vitest-dedup-disable-next-line the tables are intentional\n"),
     );
-    let run = run_with(directory.path(), &[], &[("VITEST_DEDUP_ENGINE", "next")]);
+    let run = analyze(directory.path(), &[]);
     assert_eq!(
         run.json["findings"],
         serde_json::json!([]),
@@ -1364,7 +1158,7 @@ fn an_inline_suppression_above_a_multi_line_table_suppresses_a_next_engine_findi
 
 /// Reference baselines require a repository before any analysis or report is emitted.
 #[test]
-fn the_next_engine_requires_git_for_reference_baselines() {
+fn the_analyzer_requires_git_for_reference_baselines() {
     let directory = tempfile::tempdir().unwrap();
     write(directory.path(), "clean.test.ts", CLEAN);
     let flags = ["--baseline-from-ref", "HEAD"];
@@ -1373,7 +1167,6 @@ fn the_next_engine_requires_git_for_reference_baselines() {
         .arg(directory.path())
         .args(["--reporters", "json,jsonl", "--no-metrics"])
         .args(flags)
-        .env("VITEST_DEDUP_ENGINE", "next")
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -1383,13 +1176,6 @@ fn the_next_engine_requires_git_for_reference_baselines() {
         "{flags:?}: {stderr}"
     );
     assert!(output.stdout.is_empty(), "{flags:?}");
-    let default = run_with(directory.path(), &[], &[("VITEST_DEDUP_ENGINE", "current")]);
-    assert!(
-        !default.stderr.contains("VITEST_DEDUP_ENGINE"),
-        "{}",
-        default.stderr
-    );
-    assert_eq!(default.json["testsAnalyzed"], 1);
 }
 
 /// Every code has a scenario here or a named unit test elsewhere.
@@ -1401,15 +1187,9 @@ fn every_closed_code_has_a_scenario_or_a_named_unit_test() {
         "mock-factory-unreadable",
         "fixture-unreadable",
         "helper-export-unreadable",
-        "helper-setup-effects",
         "helper-effects-unproved",
-        "helper-limit",
-        "runner-mocked",
-        "unsupported-expression",
-        "unsupported-statement",
         "parse-error",
         "source-limit",
-        "walk-limit",
         "import-outside-root",
         "package-manifest-unreadable",
         "globals-undetermined",
@@ -1426,14 +1206,8 @@ fn every_closed_code_has_a_scenario_or_a_named_unit_test() {
         "registered-elsewhere",
     ];
     // `unsupported-source` and `extraction-failed` need a path the CLI cannot reach (an extension
-    // outside the classified set, a recovered panic); `helper-sources-unavailable` needs a
-    // revision baseline. Each is asserted in `src/frontend/extract/tests/imported.rs` or
-    // `src/exclusions.rs`.
-    const BY_UNIT_TEST: &[&str] = &[
-        "unsupported-source",
-        "extraction-failed",
-        "helper-sources-unavailable",
-    ];
+    // outside the classified set, a recovered panic); `src/corpus/tests.rs` asserts both.
+    const BY_UNIT_TEST: &[&str] = &["unsupported-source", "extraction-failed"];
     // A listed scenario code must still appear in an expectation of this file besides the list
     // above, so deleting its scenario fails here.
     let source = include_str!("excluded_files.rs");
@@ -1455,7 +1229,7 @@ fn every_closed_code_has_a_scenario_or_a_named_unit_test() {
 fn a_clean_project_lists_nothing_and_emits_no_record() {
     let directory = tempfile::tempdir().unwrap();
     write(directory.path(), "clean.test.ts", CLEAN);
-    let run = run(directory.path(), &[]);
+    let run = analyze(directory.path(), &[]);
     assert_eq!(run.json["excludedFiles"], serde_json::json!([]));
     assert_eq!(
         run.json["exclusions"],
@@ -1478,7 +1252,7 @@ fn more_excluded_files_than_the_terminal_cap_are_all_listed_in_the_reports() {
     for index in 0..25 {
         write(directory.path(), &format!("dyn{index:02}.test.ts"), DYNAMIC);
     }
-    let run = run(directory.path(), &[]);
+    let run = analyze(directory.path(), &[]);
     let listed = run.json["excludedFiles"].as_array().unwrap();
     assert_eq!(listed.len(), 25);
     assert_eq!(
@@ -1521,55 +1295,6 @@ fn more_excluded_files_than_the_terminal_cap_are_all_listed_in_the_reports() {
     );
 }
 
-/// The histogram names five kinds and folds the rest into a count.
-#[test]
-fn the_histogram_names_the_top_kinds_then_folds_the_rest() {
-    // The setup deliberately relies on legacy helper extraction to create six distinct kinds.
-    // The next core's reporter formatting is covered by its own reason fixtures.
-    if next_engine() {
-        return;
-    }
-    let directory = tempfile::tempdir().unwrap();
-    write(directory.path(), "clean.test.ts", CLEAN);
-    write(directory.path(), "helpers/opts.ts", OPTS_HELPER);
-    write(directory.path(), "opts.test.ts", RUN_OPTS);
-    write(directory.path(), "with.test.ts", WITH);
-    write(
-        directory.path(),
-        "parse.test.ts",
-        "import { test } from 'vitest';\ntest('a', () => { let = ; });\n",
-    );
-    write(
-        directory.path(),
-        "binary.test.ts",
-        b"\xff\xfe\x00bad".as_slice(),
-    );
-    write(directory.path(), "recur.test.ts", RECURSIVE);
-    write(directory.path(), "ctx.test.ts", DYNAMIC);
-    let run = run(directory.path(), &[]);
-    assert_eq!(
-        run.json["exclusions"]["reasons"].as_array().unwrap().len(),
-        6
-    );
-    let named = run
-        .stderr
-        .lines()
-        .filter(|l| {
-            ExclusionReason::ALL.iter().any(|r| {
-                l.trim_start().starts_with(r.code())
-                    && l.contains("file(s)")
-                    && l.contains("test(s)")
-            })
-        })
-        .count();
-    assert_eq!(named, 5, "{}", run.stderr);
-    assert!(
-        run.stderr.contains("... and 1 more kind(s)"),
-        "{}",
-        run.stderr
-    );
-}
-
 /// Two runs over one project produce byte-identical reports and stderr.
 #[test]
 fn two_runs_are_byte_identical() {
@@ -1584,8 +1309,8 @@ fn two_runs_are_byte_identical() {
         "binary.test.ts",
         b"\xff\xfe\x00bad".as_slice(),
     );
-    let first = run(directory.path(), &[]);
-    let second = run(directory.path(), &[]);
+    let first = analyze(directory.path(), &[]);
+    let second = analyze(directory.path(), &[]);
     assert_eq!(first.json_text, second.json_text);
     assert_eq!(first.jsonl_text, second.jsonl_text);
     assert_eq!(first.stderr, second.stderr);
@@ -1601,18 +1326,18 @@ fn a_hostile_file_name_is_sanitized_in_every_report() {
         "evil\u{202e}gnp.test.ts",
         b"\xff\xfe\x00bad".as_slice(),
     );
-    let run = run(directory.path(), &[]);
+    let run = analyze(directory.path(), &[]);
     assert_eq!(run.json["excludedFiles"][0]["path"], "evilgnp.test.ts");
     assert!(!run.jsonl_text.contains('\u{202e}'));
     assert!(!run.stderr.contains('\u{202e}'));
 }
 
-/// The next engine over the owned fixtures: floors on the work it did, and a ceiling on what it
+/// The analyzer over the owned fixtures: floors on the work it did, and a ceiling on what it
 /// leaves unresolved, so neither an empty read nor a mass exclusion passes.
 #[test]
-fn the_next_engine_reads_the_owned_fixtures() {
+fn the_analyzer_reads_the_owned_fixtures() {
     let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures");
-    let run = run_with(&fixtures, &[], &[("VITEST_DEDUP_ENGINE", "next")]);
+    let run = analyze(&fixtures, &[]);
     let count = |field: &str| run.json[field].as_u64().unwrap();
     assert!(count("filesAnalyzed") >= 580, "{}", count("filesAnalyzed"));
     assert!(count("testsAnalyzed") >= 1250, "{}", count("testsAnalyzed"));
@@ -1634,12 +1359,11 @@ fn the_next_engine_reads_the_owned_fixtures() {
 
 /// The name port reaches reporters, severity gates and line suppressions over the owned source.
 #[test]
-fn next_name_findings_preserve_titles_severity_and_suppression() {
+fn name_findings_preserve_titles_severity_and_suppression() {
     let directory = tempfile::tempdir().unwrap();
     let source = include_str!("../fixtures/oracle/name-collisions/cases.test.ts");
     write(directory.path(), "cases.test.ts", source);
-    let environment = [("VITEST_DEDUP_ENGINE", "next")];
-    let result = run_with(
+    let result = analyze(
         directory.path(),
         &[
             "--rule",
@@ -1649,7 +1373,6 @@ fn next_name_findings_preserve_titles_severity_and_suppression() {
             "--rule",
             "parameterization-candidate=off",
         ],
-        &environment,
     );
     assert_eq!(result.json["testsAnalyzed"], 18);
     let findings = result.json["findings"].as_array().unwrap();
@@ -1689,7 +1412,6 @@ fn next_name_findings_preserve_titles_severity_and_suppression() {
                 "--reporters",
                 "jsonl",
             ])
-            .envs(environment)
             .output()
             .unwrap();
         assert_eq!(output.status.code(), Some(expected_exit));
@@ -1699,7 +1421,7 @@ fn next_name_findings_preserve_titles_severity_and_suppression() {
         "// vitest-dedup-disable-next-line the name is intentional\ntest('collision'",
     );
     write(directory.path(), "cases.test.ts", suppressed);
-    let result = run_with(
+    let result = analyze(
         directory.path(),
         &[
             "--rule",
@@ -1709,7 +1431,6 @@ fn next_name_findings_preserve_titles_severity_and_suppression() {
             "--rule",
             "parameterization-candidate=off",
         ],
-        &environment,
     );
     assert_eq!(
         result.json["findings"].as_array().unwrap().len(),

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Differential check of hooks-only helpers: generated helpers, collected by the pinned Vitest and
-// analysed by the next engine, compared with the collection oracle's own site comparison.
+// analysed by the analyzer, compared with the collection oracle's own site comparison.
 //
 // The corpus gates only see shapes someone wrote down, and every way around the hooks-only claim so
 // far was found in review, not by a gate. `lib/hooks-differential.mjs` writes one case per known

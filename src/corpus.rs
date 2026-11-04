@@ -40,7 +40,7 @@ pub enum Exclusion {
     /// Its callback is passed by name, not written inline: whether that binding is reassigned, or
     /// shared with another test, decides what runs.
     NamedCallback,
-    /// It is a benchmark, which the next engine does not compare yet.
+    /// It is a benchmark, which is not compared yet.
     Benchmark,
     /// A wrapper call, a module load or a registration function read as a value registers it: the
     /// file does not spell the tests, nor how many there are, so one is counted per site.
@@ -59,7 +59,7 @@ pub enum Exclusion {
     NonHoistedMock,
     /// A hoisted mock factory is not written as an inline function.
     UnreadableMockFactory,
-    /// A fixture value requires evaluating user code outside the current core's model.
+    /// A fixture value requires evaluating user code the analyzer does not model.
     UnreadableFixture,
     /// The declaration title cannot be proved, so neither its name nor invocation is comparable.
     UnresolvedTitle,
@@ -67,7 +67,7 @@ pub enum Exclusion {
 
 impl Exclusion {
     /// The report's reason code and sentence, for an exclusion that leaves a test unresolved;
-    /// `None` for a test with nothing to compare, which the current core screens as trivial.
+    /// `None` for a test with nothing to compare.
     pub fn reason(self) -> Option<(ExclusionReason, &'static str)> {
         match self {
             Self::RegisteredInsideFunction => Some((
@@ -526,8 +526,8 @@ fn read_parsed(
         .filter(|site| site.kind == SiteKind::Registers(Registers::Suite))
         .map(|site| (site.node, site.title.clone()))
         .collect();
-    // A report location: the registering call, from its first byte, the way the default engine
-    // reports a test, so a suppression comment above the declaration applies to it.
+    // A report location: the registering call, from its first byte, so a suppression comment
+    // above the declaration applies to it.
     let at = |start: u32, end: u32| {
         let (start_line, start_column) = lines.position(source, start);
         let (end_line, end_column) = lines.position(source, end);
@@ -1180,9 +1180,6 @@ fn read_parsed(
     })
 }
 
-/// The variable that selects the engine, and the value that selects this one.
-const ENGINE_VARIABLE: (&str, &str) = ("VITEST_DEDUP_ENGINE", "next");
-
 /// Context surrounding imported registrations belongs to their executions, even though their
 /// declarations were normalized in another module.
 fn lifecycle_context(imported: &[runners::ImportedHook]) -> String {
@@ -1214,7 +1211,7 @@ fn contextualize_imported_tests(tests: &mut [TestCase], context: &str) {
     }
 }
 
-/// The next engine inside the shell's file loop: what it read, summed over the run.
+/// The engine inside the shell's file loop: what it read, summed over the run.
 #[derive(Debug, Default)]
 pub struct Engine {
     /// Hook declarations and chains per relative file.
@@ -1273,14 +1270,6 @@ impl Engine {
         }
     }
 
-    /// The engine, when the environment selects it.
-    pub fn selected() -> Option<Self> {
-        let (variable, value) = ENGINE_VARIABLE;
-        std::env::var_os(variable)
-            .is_some_and(|selected| selected == value)
-            .then(Self::default)
-    }
-
     /// Reads one test file at `path` (`relative` to the root): its exclusion entry, if it has one,
     /// and whether the file was read only in part. `further` holds reasons the shell found before
     /// the read (an undetermined `globals`), listed after the engine's own.
@@ -1308,7 +1297,7 @@ impl Engine {
         keep_sites: bool,
         further: Vec<(ExclusionReason, String)>,
     ) -> FileRead {
-        // On a stack sized for the parser, as the current core runs: [`crate::lang::limits`].
+        // On a stack sized for the parser: [`crate::lang::limits`].
         self.run.diagnostics = keep_sites;
         let run = &mut self.run;
         let confined = std::sync::atomic::AtomicBool::new(false);
@@ -1319,7 +1308,7 @@ impl Engine {
                 .stack_size(crate::lang::limits::EXTRACTION_STACK_BYTES)
                 .spawn_scoped(scope, move || {
                     // A tsconfig-confined resolution leaves the root through the project's own
-                    // configuration; the read is partial exactly as the current core's is.
+                    // configuration; the read is partial.
                     let corpus = file(path, source, setting, run);
                     confined_flag.store(
                         crate::lang::take_confinement_refusal(),
@@ -1336,7 +1325,7 @@ impl Engine {
             Ok(Ok(corpus)) => std::mem::take(&mut corpus.helper_sources),
             _ => Vec::new(),
         };
-        // A budget refusal is named by the bound it hit, as the current core names it.
+        // A budget refusal is named by the bound it hit.
         let limit = matches!(read, Ok(Err(Refusal::SourceLimit)))
             .then(|| crate::lang::limits::parse_refusal(source))
             .flatten();

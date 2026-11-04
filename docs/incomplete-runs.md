@@ -24,8 +24,8 @@ is a blind spot; see [Blind spots](#blind-spots).
 for different responses.
 
 - `=reads` counts only causes meaning the project could not be fully read: unreadable, oversized or
-  partially read files, undetermined config, tests whose context could not be resolved, and
-  [missing prerequisites](#missing-prerequisites) and [package worker failures](#package-worker-failures).
+  partially read files, undetermined config, tests whose context could not be resolved,
+  and [missing prerequisites](#missing-prerequisites).
 - `=limits` counts only the analyzer's own bounded work being capped: the pair budget, the hook-scan
   budget, the memory budget, and truncated findings.
 
@@ -55,20 +55,6 @@ reported. On Windows a tsconfig is not found from a canonical importer path at a
 `tsconfig-*` kinds are not detected there (the same gap that keeps `paths` aliases from applying); the
 `node-modules` kind does not depend on tsconfig discovery. The failures are collected process-wide and
 drained once per run, so the reports describe one analysis per process.
-
-### Package worker failures
-
-`incompleteCauses.packageWorkerFailures` counts failed installed-package scan attempts by cause:
-`start` (executable or parser thread unavailable), `timeout`, `exit` (unsuccessful exit or signal),
-`output` (invalid or oversized response), `io`, and `nested` (recursive worker startup blocked).
-Every reporter includes the counts in its run notice. Counts are per uncached attempt, not per test;
-a cached refusal does not increment them. A valid package refusal is not a worker failure.
-
-These failures make the run incomplete and count for `--fail-on-incomplete=reads` and `=any`.
-They do not add findings. For `start`, check executable permissions and process/thread limits;
-for `nested`, remove an inherited `VITEST_DEDUP_PACKAGE_WORKER` environment marker from the caller.
-Library callers drain `frontend::take_package_worker_failures()` between analyses, alongside
-`frontend::take_resolution_gaps()`; overlapping analyses share these process-wide counters.
 
 ### Blind spots
 
@@ -109,13 +95,8 @@ alone. Past the cap the files with the fewest excluded tests are left out of the
 
 | Code | Meaning |
 | --- | --- |
-| `helper-export-unreadable` | An imported runner's export could not be resolved, read, or proved to be one function, and the call could not be proved to register nothing; a local helper the call names is declared more than once or reassigned, so the body that runs is not the one a declaration states; or a called local helper that is neither a `function` declaration nor a `const` function initialized before the call (a `let` binding, a parameter, a computed value, a generator, a `const` declared in another `switch` case, or a call whose arguments or parameter defaults run code that may register) could not be proved to register nothing. |
-| `helper-setup-effects` | An imported runner or a module on its chain has setup, fixture or module effects that were not proved inert, and the call could not be proved to register nothing. |
-| `helper-effects-unproved` | A call, argument or parameter write inside an imported runner has unproved effects, an expression in a called local helper is not walked and may register tests or hooks, or the arguments or parameter defaults of a call to a local helper run code that may register (a default that calls another parameter runs whatever the caller passed, and a value forwarded from an enclosing function's parameter or a `catch` binding is not shown where the helper reads it); or an inline callback handed to a call the analyzer does not read (`rows.forEach(() => test(...))` over an array it cannot see) may register. |
-| `helper-limit` | A helper expansion budget, recursion or depth limit was reached. |
-| `helper-sources-unavailable` | Helper bodies, or the imported constants a table cell reads, are unavailable in a historical revision baseline. |
-| `runner-mocked` | The runner, or a module on its re-export chain, is mocked or mocking is unresolved. |
-| `unsupported-expression` | A title, callback, option or registration expression is outside the supported shapes, a called local helper is a generator or an async function that awaits, or a call passes a value that cannot bind the helper's destructuring parameter (`null`, `undefined`, or a non-iterable for an array pattern). |
+| `helper-export-unreadable` | A project module the file imports could not be parsed, so what it exports and registers is unknown. |
+| `helper-effects-unproved` | A runner call in the scope was not expanded (see [Imported runners](imported-runners.md#what-a-refusal-does)), so the tests around it are excluded with it. |
 | `mock-factory-unreadable` | A `vi.mock` factory could not be read. |
 | `fixture-unreadable` | A `test.extend` fixture value could not be read. |
 | `unresolved-context` | Another ambient fact of a test could not be resolved: a dynamic title, an unreadable `.each` table or nested config, or a body deeper than the analyzer's recursion cap (whose behavior trace was cut short and must not be compared). |
@@ -126,12 +107,10 @@ alone. Past the cap the files with the fewest excluded tests are left out of the
 | `unsupported-benchmark` | A benchmark is counted but not compared. |
 | `incomplete-trace` | A test holds a branch or a shape the behavior trace does not model, so `near-duplicate-test`, `subsumed-test` and `parameterization-candidate` leave it out. The other rules still compare it, and the run stays complete. |
 | `registered-elsewhere` | A wrapper call, a call through the `test` a suite callback receives (`describe('s', (test) => ...)`), an import of a module that registers while it loads, or a registration function read as a value registers tests the file does not spell. One test is counted per such call, import or read. A call of a helper found to register only hooks is not counted: it registers no test, and its hooks are part of the context of the tests around it. Neither is a call that runs only while a test, row or hook callback runs, directly or through a local function only such code calls: Vitest has collected the file by then. |
-| `unsupported-statement` | A statement form the walker does not enter, such as `with`, may hide declarations. |
 | `parse-error` | The parser reported errors. |
 | `unsupported-source` | The source type is unsupported. |
 | `source-limit` | The nesting or syntax-unit limit refused the file. |
-| `extraction-failed` | Extraction could not run, or panicked and was recovered. |
-| `walk-limit` | The per-file declaration or loop-unrolling budget was reached. |
+| `extraction-failed` | Analysis of the file could not run, or panicked and was recovered. |
 | `package-manifest-unreadable` | Module resolution needed a `package.json` that could not be read as a UTF-8 regular file of at most 1 MiB. The affected test file is excluded; refused metadata cannot select an ancestor manifest or an index fallback. |
 | `import-outside-root` | An import resolved outside the analysis root and was not read. |
 | `globals-undetermined` | The governing project's `globals` setting could not be determined. |
@@ -142,7 +121,7 @@ alone. Past the cap the files with the fewest excluded tests are left out of the
 
 ## Source limits
 
-Source files are limited to 8 MiB. Before parsing, the frontend also refuses lexical bracket
+Source files are limited to 8 MiB. Before parsing, the analyzer also refuses lexical bracket
 nesting deeper than 256 and more than 36,864 raw syntax units.
 
 - The units count opening brackets, operator, member, label and escape punctuation, and recursive
@@ -159,22 +138,12 @@ available. First-party imported helpers use the same preflight limits. Use
 failure. Admitted extraction runs on an explicitly sized worker stack; a larger stack alone would
 not protect against unbounded input.
 
-## Declaration limits
-
-Each file emits at most 10,000 declarations (tests, `.each` rows and suite records, including those
-from imported runners) and unrolls at most 10,000 literal `for...of` and known-array `forEach`
-iterations. Each `forEach` element is also one helper expansion, of which a file has 2,000
-(`helper-limit`). A `.each` table or loop array longer than what remains of its limit is skipped
-without being read. Past either limit
-the file stops emitting and counts as not read in full; the declarations already emitted are
-compared as usual.
-
 ## Memory budget
 
 The run reads whole files until the analyzer holds more than its memory budget: 2,048 MiB by
 default, set with `--max-memory <MiB>` and removed with `--no-memory-cap`. The figure is the retained
 heap `--debug-memory` reports plus source text kept for the HTML report.
-The experimental engine includes retained cases, suites, hook chains, saved sites, blind-file
+The figure includes retained cases, suites, hook chains, saved sites, blind-file
 records and both export caches. Its hash-table estimate counts usable entry-capacity payload
 and live owned keys/values; private spare buckets, control bytes and allocator metadata remain
 outside that estimate. Temporary parser state is not retained engine heap. The separate RSS

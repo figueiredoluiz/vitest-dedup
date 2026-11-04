@@ -1,4 +1,4 @@
-//! Parameterization outcomes over the same corpus records every next-engine rule reads.
+//! Parameterization outcomes over the same corpus records every rule reads.
 
 use super::*;
 use crate::model::Rule;

@@ -51,7 +51,7 @@ or wrapped-factory support.
 
 - **Hoisted:** **No**
 - **Scope:** Scoped, affects only dynamic `import()`s evaluated *after* this call runs, in whichever test/hook calls it; static imports and earlier dynamic imports are unaffected
-- **Notes:** **Handled conservatively** (`src/frontend/extract.rs`): a `doMock` call cannot be soundly attributed to one test by static analysis, so this extractor marks the **whole file's** mocks unresolved whenever any `vi.doMock` call appears anywhere in it. The alternatives are both false-duplicate hazards:
+- **Notes:** **Handled conservatively** (`src/inventory/module.rs`): a `doMock` call cannot be soundly attributed to one test by static analysis, so the analyzer excludes the file's tests as `unresolved-context` whenever a non-hoisted mock appears in it. The alternatives are both false-duplicate hazards:
   - treating it as file-wide like `vi.mock`
   - silently ignoring it
 
@@ -113,10 +113,9 @@ genuinely unmocked at runtime, which is exactly the shape of a false `duplicate-
 ## What is modelled, and what still taints
 
 All four primitives are recognized.
-`collect_mocked_modules` (`src/frontend/extract.rs`) models the hoisted pair, `vi.mock` with its
-factory and `vi.unmock`, as an ordered event list read from the module's top-level statements and
-folded per specifier, last in source order winning. The file's `Context` then carries exactly the
-specifiers Vitest's registry would hold.
+The analyzer models the hoisted pair, `vi.mock` with its factory and `vi.unmock`, read from the
+module's top-level statements, last in source order winning per specifier; each test's context then
+carries the specifiers Vitest's registry would hold.
 
 That yields **two** distinct contexts from three source shapes, not three. "Mocks `./m`" stands
 alone; "mocks then unmocks `./m`" and "never mentions `./m`" fold to the same empty

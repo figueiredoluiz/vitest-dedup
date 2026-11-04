@@ -1,8 +1,7 @@
-//! JavaScript and TypeScript as the new core reads them: an owned syntax tree, its scopes, module
+//! JavaScript and TypeScript as the analyzer reads them: an owned syntax tree, its scopes, module
 //! resolution and positions.
 //!
-//! With [`crate::frontend`] (the current core, until it is retired), the only module tree that
-//! imports an `oxc_*` crate. The tree is the ESTree serialization of oxc's AST, with parent links
+//! The only module tree that imports an `oxc_*` crate. The tree is the ESTree serialization of oxc's AST, with parent links
 //! and node ids; everything above reads that published vocabulary through [`Tree`] and [`Scopes`]
 //! and knows nothing of tests.
 
@@ -20,7 +19,7 @@ mod tree;
 pub use resolve::{
     classify_tsconfig_gap, confinement_refusals, manifest_refusals, resolve, resolve_file,
     take_confinement_refusal, take_manifest_refusal, take_package_gaps, take_tsconfig_gaps,
-    TsconfigGap,
+    ResolutionGaps, TsconfigGap,
 };
 pub use scopes::{Declaration, Imported, Name, Reference, Scopes, Symbol, SymbolId};
 pub use sources::{SourceKind, SourceTree, Sources};
@@ -53,8 +52,8 @@ pub enum Refusal {
 
 /// Parses `source`, read from `path`, whose extension decides the language.
 pub fn parse(path: &Path, source: &str) -> Result<Parsed, Refusal> {
-    // Parsing, serialization and tree building recurse with the source's nesting, deeper than the
-    // current core's extraction: see [`limits::PARSE_STACK_BYTES`].
+    // Parsing, serialization and tree building recurse with the source's nesting: see
+    // [`limits::PARSE_STACK_BYTES`].
     std::thread::scope(|scope| {
         std::thread::Builder::new()
             .name("vitest-dedup-parse".to_owned())

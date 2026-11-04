@@ -35,49 +35,19 @@ test('an exit with no summary record is a failure', () => {
 test('an operational failure is kept, and never reads as agreement', () => {
   assert.equal(summarize([], 2, 'first\nsecond\nthird\n').failure, 'second third')
   assert.equal(summarize([], null, 'killed').failure, 'killed')
-  const failed = engine({ exit: 2, failure: 'no binary', tests: 0 })
-  const row = { vitest: [], next: engine({ tests: 0 }), current: failed }
-  assert.deepEqual(disagreements(row), ['default-failed'])
-  assert.deepEqual(disagreements({ ...row, next: failed, current: engine({ tests: 0 }) }), ['next-failed'])
-  assert.match(render({ ...row, name: 'a', sites: [] }), /^DIFF a \(default-failed\)[\s\S]*failed: no binary/)
+  const row = { vitest: [], run: engine({ exit: 2, failure: 'no binary', tests: 0 }) }
+  assert.deepEqual(disagreements(row), ['analyzer-failed'])
+  assert.match(render({ ...row, name: 'a', sites: [] }), /^DIFF a \(analyzer-failed\)[\s\S]*failed: no binary/)
 })
 
 test('each way the readings part is named, and agreement is silent', () => {
-  const row = { vitest: ['a', 'b'], next: engine(), current: engine() }
+  const row = { vitest: ['a', 'b'], run: engine() }
   assert.deepEqual(disagreements(row), [])
   assert.deepEqual(disagreements({ ...row, vitest: null }), ['vitest-unread'])
-  assert.deepEqual(disagreements({ ...row, next: engine({ tests: 1 }) }), ['next-count-differs'])
-  assert.deepEqual(disagreements({ ...row, next: engine({ tests: 3 }) }), ['next-count-differs'])
-  assert.deepEqual(disagreements({ ...row, current: engine({ tests: 3 }) }), ['default-count-differs'])
-  const on = (place) => engine({ findings: [`duplicate-test ${place}`], rules: ['duplicate-test'] })
-  assert.deepEqual(disagreements({ ...row, next: on('a.ts:1'), current: on('a.ts:9') }), ['findings-differ'])
-  assert.deepEqual(disagreements({ ...row, next: on('a.ts:1'), current: on('a.ts:1') }), [])
-  assert.deepEqual(disagreements({ ...row, next: engine({ incomplete: true }) }), ['completeness-differs'])
-  assert.deepEqual(disagreements({ ...row, next: engine({ unresolved: 1 }) }), ['diagnostics-differ'])
-  assert.deepEqual(disagreements({ ...row, next: engine({ reasons: ['named-callback'] }) }), ['diagnostics-differ'])
-})
-
-test('a rule the next engine does not run never reads as disagreement', () => {
-  const ported = new Set(['duplicate-test'])
-  const shared = 'duplicate-test a.ts:1,a.ts:2'
-  const unported = 'pending-rule a.ts:1,a.ts:3'
-  const row = {
-    name: 'a',
-    vitest: ['a', 'b'],
-    sites: [],
-    next: engine({ findings: [shared] }),
-    current: engine({ findings: [shared, unported] }),
-  }
-  assert.deepEqual(disagreements(row, ported), [])
-  assert.match(render(row, ported), /^SAME a\n[\s\S]*default only, rule not ported: pending-rule a\.ts:1,a\.ts:3$/)
-  // A ported rule still disagrees beside it, and the row says so.
-  const parted = { ...row, next: engine({ findings: ['duplicate-test a.ts:1,a.ts:9'] }) }
-  assert.deepEqual(disagreements(parted, ported), ['findings-differ'])
-  assert.match(render(parted, ported), /^DIFF a \(findings-differ\)/)
-  assert.doesNotMatch(render({ ...row, current: engine({ findings: [shared] }) }, ported), /rule not ported/)
-  // A rule next should not run is a disagreement, or a stray claim would read as agreement.
-  const stray = { ...row, next: engine({ findings: [shared, unported] }), current: engine({ findings: [shared] }) }
-  assert.deepEqual(disagreements(stray, ported), ['findings-differ'])
+  assert.deepEqual(disagreements({ ...row, run: engine({ tests: 1 }) }), ['count-differs'])
+  assert.deepEqual(disagreements({ ...row, run: engine({ tests: 3 }) }), ['count-differs'])
+  const on = engine({ findings: ['duplicate-test a.ts:1,a.ts:2'] })
+  assert.match(render({ ...row, name: 'a', sites: [], run: on }), /^SAME a\n[\s\S]*findings \[duplicate-test a\.ts:1,a\.ts:2\]/)
 })
 
 test('a truncated or missing oracle view never reads as agreement', () => {
@@ -91,11 +61,11 @@ test('a truncated or missing oracle view never reads as agreement', () => {
   for (const view of views) {
     const result = collect('/owned', () => view)
     assert.equal(result.vitest, null)
-    assert.match(render({ name: 'partial', ...result, sites: [], next: engine({ tests: 1 }), current: engine({ tests: 1 }) }), /^DIFF partial \(vitest-unread\)/)
+    assert.match(render({ name: 'partial', ...result, sites: [], run: engine({ tests: 1 }) }), /^DIFF partial \(vitest-unread\)/)
   }
   const single = collect('/owned', () => vitestView([record], [], '/owned'))
   assert.deepEqual(single, { vitest: ['one test'] })
-  assert.match(render({ name: 'single', ...single, sites: [], next: engine({ tests: 1 }), current: engine({ tests: 1 }) }), /^SAME single/)
+  assert.match(render({ name: 'single', ...single, sites: [], run: engine({ tests: 1 }) }), /^SAME single/)
   assert.deepEqual(collect('/owned', () => new Map()), { vitest: [] })
   for (const field of ['collectErrors', 'stubReads']) {
     assert.equal(collect('/owned', () => vitestView([{ ...record, [field]: ['untrusted'] }], [], '/owned')).vitest, null)
@@ -120,33 +90,33 @@ test('real overlapping Vitest projects stay unread while a single project stays 
 test('a run that cannot start or prints no JSONL fails its own row, and does not throw', () => {
   const work = mkdtempSync(join(tmpdir(), 'probe-test-'))
   try {
-    const missing = analyze(join(work, 'absent'), work, null)
+    const missing = analyze(join(work, 'absent'), work)
     assert.equal(missing.exit, null)
     assert.match(missing.failure, /ENOENT/)
     const noise = join(work, 'noise')
     writeFileSync(noise, '#!/bin/sh\necho not json\n', { mode: 0o755 })
-    assert.notEqual(analyze(noise, work, 'next').failure, null)
+    assert.notEqual(analyze(noise, work).failure, null)
     const clean = join(work, 'clean')
     writeFileSync(clean, '#!/bin/sh\necho \'{"type":"summary","testsAnalyzed":1}\'\n', { mode: 0o755 })
-    assert.equal(analyze(clean, work, 'next').failure, null)
+    assert.equal(analyze(clean, work).failure, null)
   } finally {
     rmSync(work, { recursive: true, force: true })
   }
 })
 
-test('a row shows all three readings and leads with its verdict', () => {
-  const same = render({ name: 'a', vitest: ['t'], sites: ['test@2'], next: engine({ tests: 1 }), current: engine({ tests: 1 }) })
+test('a row shows both readings and leads with its verdict', () => {
+  const same = render({ name: 'a', vitest: ['t'], sites: ['test@2'], run: engine({ tests: 1 }) })
   assert.match(same, /^SAME a\n/)
   assert.match(same, /vitest: \["t"\]/)
   assert.match(same, /sites: test@2/)
   const diff = render({
     name: 'b', vitest: null, error: 'broke', sites: [],
-    next: engine({ incomplete: true, reasons: ['named-callback'] }), current: engine(),
+    run: engine({ incomplete: true, reasons: ['named-callback'] }),
   })
-  assert.match(diff, /^DIFF b \(vitest-unread, completeness-differs, diagnostics-differ\)/)
+  assert.match(diff, /^DIFF b \(vitest-unread\)/)
   assert.match(diff, /unread: broke/)
   assert.match(diff, /sites: none/)
-  assert.match(diff, /next: exit 0, 2 analyzed, 0 unresolved, incomplete; rules \[\]; excluded \[named-callback\]/)
+  assert.match(diff, /analyzer: exit 0, 2 analyzed, 0 unresolved, incomplete; findings \[\]; excluded \[named-callback\]/)
 })
 
 test('a case copies a file or a directory, and arguments are read strictly', () => {

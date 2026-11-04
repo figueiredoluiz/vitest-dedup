@@ -7,9 +7,6 @@ const POSITIVE: &str = "import {test,expect} from 'vitest';\n\
     test('a',()=>{expect(Math.abs(-1)).toBe(1)});\n\
     test('b',()=>{expect(Math.abs(-1)).toBe(1)});";
 
-/// The engines each refusal and admission must hold under: the default, then the next engine.
-const ENGINES: [&[(&str, &str)]; 2] = [&[], &[("VITEST_DEDUP_ENGINE", "next")]];
-
 /// Build adversarial syntax cases that must exceed the parser safety budgets.
 fn hostile_sources() -> Vec<(&'static str, String)> {
     let deep = format!("{}1{}", "(".repeat(100_000), ")".repeat(100_000));
@@ -75,33 +72,29 @@ fn hostile_syntax_is_refused_without_aborting_or_losing_other_findings() {
             source,
         )
         .unwrap();
-        for engine in ENGINES {
-            let prefix = dir.path().join("report");
-            let output = Command::cargo_bin("vitest-dedup")
-                .unwrap()
-                .envs(engine.iter().copied())
-                .timeout(Duration::from_secs(15))
-                .arg(dir.path())
-                .args(["--reporters", "json", "--output"])
-                .arg(&prefix)
-                .arg("--fail-on-incomplete=reads")
-                .output()
-                .unwrap();
-            assert_eq!(
-                output.status.code(),
-                Some(2),
-                "{name}: {}",
-                String::from_utf8_lossy(&output.stderr)
-            );
-            let report: Value =
-                serde_json::from_slice(&std::fs::read(prefix.with_extension("json")).unwrap())
-                    .unwrap();
-            assert_preserved_report(&report, name);
-            assert!(
-                String::from_utf8_lossy(&output.stderr).contains("raw syntax budget"),
-                "{name}"
-            );
-        }
+        let prefix = dir.path().join("report");
+        let output = Command::cargo_bin("vitest-dedup")
+            .unwrap()
+            .timeout(Duration::from_secs(15))
+            .arg(dir.path())
+            .args(["--reporters", "json", "--output"])
+            .arg(&prefix)
+            .arg("--fail-on-incomplete=reads")
+            .output()
+            .unwrap();
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "{name}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let report: Value =
+            serde_json::from_slice(&std::fs::read(prefix.with_extension("json")).unwrap()).unwrap();
+        assert_preserved_report(&report, name);
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("raw syntax budget"),
+            "{name}"
+        );
     }
 }
 
@@ -124,29 +117,26 @@ fn imported_hostile_syntax_is_refused_without_aborting_or_losing_other_findings(
         ),
     )
     .unwrap();
-    for engine in ENGINES {
-        let prefix = dir.path().join("report");
-        let output = Command::cargo_bin("vitest-dedup")
-            .unwrap()
-            .envs(engine.iter().copied())
-            .timeout(Duration::from_secs(15))
-            .arg(dir.path())
-            .args(["--reporters", "json", "--output"])
-            .arg(&prefix)
-            .arg("--fail-on-incomplete=reads")
-            .output()
-            .unwrap();
-        assert_eq!(
-            output.status.code(),
-            Some(2),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        let report: Value =
-            serde_json::from_slice(&std::fs::read(prefix.with_extension("json")).unwrap()).unwrap();
-        assert_preserved_report(&report, "helper");
-        assert!(String::from_utf8_lossy(&output.stderr).contains("helper"));
-    }
+    let prefix = dir.path().join("report");
+    let output = Command::cargo_bin("vitest-dedup")
+        .unwrap()
+        .timeout(Duration::from_secs(15))
+        .arg(dir.path())
+        .args(["--reporters", "json", "--output"])
+        .arg(&prefix)
+        .arg("--fail-on-incomplete=reads")
+        .output()
+        .unwrap();
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: Value =
+        serde_json::from_slice(&std::fs::read(prefix.with_extension("json")).unwrap()).unwrap();
+    assert_preserved_report(&report, "helper");
+    assert!(String::from_utf8_lossy(&output.stderr).contains("helper"));
 }
 
 /// Keep bounded ambiguous syntax and wide literal data analyzable without findings or incompleteness.
@@ -193,29 +183,65 @@ fn bounded_ambiguous_syntax_and_wide_literal_payload_remain_analyzable() {
     assert_eq!(report["findings"].as_array().unwrap().len(), 0);
 }
 
-/// Require current and historical extraction to refuse excessive syntax without claiming a proven-empty file.
+/// Require the working tree and a base revision to refuse excessive syntax the same way: excluded
+/// as past the syntax budget, the run incomplete, and never claimed as a proven-empty file.
 #[test]
-fn current_and_revision_extraction_share_the_same_refusal_contract() {
-    use vitest_dedup::discovery::{ModuleFlavor, SourceFile, SourceLanguage};
-    use vitest_dedup::frontend::{extract, extract_from_revision, Globals};
-    let file = SourceFile::without_project_context(
-        std::path::PathBuf::from("hostile.test.ts"),
-        SourceLanguage::TypeScript,
-        ModuleFlavor::ForcedEsm,
+fn current_and_revision_reads_share_the_same_refusal_contract() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    std::fs::write(
+        root.join("hostile.test.ts"),
+        format!("const x={}1;", "!".repeat(200_000)),
+    )
+    .unwrap();
+    let git = |args: &[&str]| {
+        let status = std::process::Command::new("git")
+            .args(["-c", "user.email=t@example.com", "-c", "user.name=t"])
+            .args(args)
+            .current_dir(root)
+            .output()
+            .unwrap()
+            .status;
+        assert!(status.success(), "git {args:?}");
+    };
+    git(&["init", "-q"]);
+    git(&["add", "-A"]);
+    git(&["commit", "-qm", "base"]);
+    let output = tempfile::tempdir().unwrap();
+    let prefix = output.path().join("report");
+    let run = Command::cargo_bin("vitest-dedup")
+        .unwrap()
+        .arg(root)
+        .args([
+            "--reporters",
+            "json",
+            "--no-metrics",
+            "--baseline-from-ref",
+            "HEAD",
+            "--output",
+        ])
+        .arg(&prefix)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&run.stderr);
+    assert!(
+        stderr.contains("the HEAD analysis was incomplete"),
+        "the base revision refuses the file too: {stderr}"
     );
-    let source = format!("const x={}1;", "!".repeat(200_000));
-    for extraction in [
-        extract(&source, &file, Globals::Disabled),
-        extract_from_revision(&source, &file, Globals::Disabled),
-    ] {
-        assert_eq!(extraction.tests.len(), 0);
-        assert!(extraction.incomplete);
-        assert!(!extraction.proven_empty);
-        assert!(extraction
-            .diagnostics
-            .iter()
-            .any(|reason| reason.contains("raw syntax budget")));
-    }
+    assert!(!stderr.contains("statically empty"), "{stderr}");
+    let report: Value =
+        serde_json::from_str(&std::fs::read_to_string(prefix.with_extension("json")).unwrap())
+            .unwrap();
+    assert_eq!(report["testsAnalyzed"], 0);
+    assert_eq!(report["incomplete"], true);
+    assert_eq!(
+        report["excludedFiles"][0]["reason"], "source-limit",
+        "{report}"
+    );
+    assert!(report["excludedFiles"][0]["detail"]
+        .as_str()
+        .unwrap()
+        .contains("raw syntax budget"));
 }
 
 /// Exercise admitted deep syntax on the worker stack without aborting, losing the test or reporting findings.
@@ -267,34 +293,26 @@ fn admitted_bracket_free_chains_use_the_bounded_worker_stack() {
             "chain.test.ts"
         };
         std::fs::write(dir.path().join(path), source).unwrap();
-        for engine in ENGINES {
-            let prefix = dir.path().join("report");
-            let output = Command::cargo_bin("vitest-dedup")
-                .unwrap()
-                .envs(engine.iter().copied())
-                .timeout(Duration::from_secs(60))
-                .arg(dir.path())
-                .args(["--reporters", "json", "--output"])
-                .arg(&prefix)
-                .arg("--fail-on-incomplete=reads")
-                .output()
-                .unwrap();
-            assert_eq!(
-                output.status.code(),
-                Some(0),
-                "{name} {engine:?}: {}",
-                String::from_utf8_lossy(&output.stderr)
-            );
-            let report: Value =
-                serde_json::from_slice(&std::fs::read(prefix.with_extension("json")).unwrap())
-                    .unwrap();
-            assert_eq!(report["testsAnalyzed"], 1, "{name} {engine:?}");
-            assert_eq!(report["incomplete"], false, "{name} {engine:?}");
-            assert_eq!(
-                report["findings"].as_array().unwrap().len(),
-                0,
-                "{name} {engine:?}"
-            );
-        }
+        let prefix = dir.path().join("report");
+        let output = Command::cargo_bin("vitest-dedup")
+            .unwrap()
+            .timeout(Duration::from_secs(60))
+            .arg(dir.path())
+            .args(["--reporters", "json", "--output"])
+            .arg(&prefix)
+            .arg("--fail-on-incomplete=reads")
+            .output()
+            .unwrap();
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{name}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let report: Value =
+            serde_json::from_slice(&std::fs::read(prefix.with_extension("json")).unwrap()).unwrap();
+        assert_eq!(report["testsAnalyzed"], 1, "{name}");
+        assert_eq!(report["incomplete"], false, "{name}");
+        assert_eq!(report["findings"].as_array().unwrap().len(), 0, "{name}");
     }
 }

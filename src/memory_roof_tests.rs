@@ -11,23 +11,6 @@ fn analyze(
     flags: &[&str],
     resident: impl FnMut() -> Option<u64>,
 ) -> (ExitCode, serde_json::Value) {
-    analyze_on(
-        root,
-        reporters,
-        flags,
-        resident,
-        vitest_dedup::corpus::Engine::selected(),
-    )
-}
-
-/// [`analyze`] on the engine given: the next engine, or `None` for the current core.
-fn analyze_on(
-    root: &Path,
-    reporters: &str,
-    flags: &[&str],
-    resident: impl FnMut() -> Option<u64>,
-    engine: Option<vitest_dedup::corpus::Engine>,
-) -> (ExitCode, serde_json::Value) {
     let output = tempfile::tempdir().unwrap();
     let prefix = output.path().join("report");
     let mut args = vec![
@@ -40,7 +23,12 @@ fn analyze_on(
         prefix.as_os_str().to_owned(),
     ];
     args.extend(flags.iter().map(OsString::from));
-    let code = run_with_engine(ParsedArgs::parse_from(args).unwrap(), resident, engine).unwrap();
+    let code = run_with_engine(
+        ParsedArgs::parse_from(args).unwrap(),
+        resident,
+        vitest_dedup::corpus::Engine::default(),
+    )
+    .unwrap();
     let report = std::fs::read_to_string(prefix.with_extension("json")).unwrap();
     (code, serde_json::from_str(&report).unwrap())
 }
@@ -55,9 +43,9 @@ fn write_tree(root: &Path, files: usize) {
     }
 }
 
-/// Boundary controls must inspect findings from the same engine the shell selects.
+/// Boundary controls inspect findings with the engine's fingerprint label.
 #[test]
-fn memory_boundary_harness_uses_the_selected_engine() {
+fn memory_boundary_harness_reads_the_engine_findings() {
     let root = tempfile::tempdir().unwrap();
     write_tree(root.path(), 2);
     let (_, report) = analyze(root.path(), "json", &["--no-memory-cap"], || {
@@ -67,11 +55,7 @@ fn memory_boundary_harness_uses_the_selected_engine() {
     assert_eq!(report["filesAnalyzed"], 2);
     let findings = report["findings"].as_array().unwrap();
     assert!(!findings.is_empty());
-    let prefix = if vitest_dedup::corpus::Engine::selected().is_some() {
-        "vitestDedupFingerprint/v2:"
-    } else {
-        "vitestDedupFingerprint/v1:"
-    };
+    let prefix = "vitestDedupFingerprint/v2:";
     assert!(findings
         .iter()
         .all(|f| f["fingerprint"].as_str().unwrap().starts_with(prefix)));
@@ -147,32 +131,16 @@ fn source_retained_for_html_counts_against_the_budget() {
             format!("import {{ test, expect }} from 'vitest';\n{padding}test('case {file}', () => {{ expect({file}).toBe({file}); }});\n"),
         ).unwrap();
     }
-    // Both engines: the next one charges the source it retains as the current core does.
-    for next in [false, true] {
-        let engine = || next.then(vitest_dedup::corpus::Engine::default);
-        let (_, json) = analyze_on(
-            root.path(),
-            "json",
-            &["--max-memory", "1"],
-            || None,
-            engine(),
-        );
-        assert_eq!(json["incomplete"], false, "{json}");
-        let (_, html) = analyze_on(
-            root.path(),
-            "json,html",
-            &["--max-memory", "1"],
-            || None,
-            engine(),
-        );
-        assert!(
-            html["incompleteCauses"]["filesOverMemoryBudget"]
-                .as_u64()
-                .unwrap()
-                > 0,
-            "{next}: {html}"
-        );
-    }
+    let (_, json) = analyze(root.path(), "json", &["--max-memory", "1"], || None);
+    assert_eq!(json["incomplete"], false, "{json}");
+    let (_, html) = analyze(root.path(), "json,html", &["--max-memory", "1"], || None);
+    assert!(
+        html["incompleteCauses"]["filesOverMemoryBudget"]
+            .as_u64()
+            .unwrap()
+            > 0,
+        "{html}"
+    );
 }
 
 /// Imported runner source retained for HTML is charged once whichever file sorts first.
@@ -194,14 +162,9 @@ fn a_test_file_retained_as_a_helper_is_charged_once() {
         .unwrap();
         let (_, html) = analyze(root.path(), "json,html", &["--max-memory", "1"], || None);
         assert_eq!(html["filesAnalyzed"], 3, "{runner}: {html}");
-        // Owned inventory also records the helper declaration's refused registration site.
-        let owned = vitest_dedup::corpus::Engine::selected().is_some();
-        assert_eq!(
-            html["testsAnalyzed"],
-            if owned { 3 } else { 2 },
-            "{runner}: {html}"
-        );
-        assert_eq!(html["unresolvedTests"], usize::from(owned));
+        // The inventory also records the helper declaration's refused registration site.
+        assert_eq!(html["testsAnalyzed"], 3, "{runner}: {html}");
+        assert_eq!(html["unresolvedTests"], 1);
         assert_eq!(html["incompleteCauses"]["filesOverMemoryBudget"], 0);
     }
 }
@@ -280,20 +243,19 @@ fn rss_stops_the_historical_pass_before_it_accepts_unseen_duplicates() {
     assert_eq!(resident["findings"], exact["findings"]);
 }
 
-/// The next engine's retained titles stop later files even without an OS RSS sample.
+/// The engine's retained titles stop later files even without an OS RSS sample.
 #[test]
-fn next_retained_heap_stops_at_a_whole_file_boundary_without_rss() {
+fn retained_heap_stops_at_a_whole_file_boundary_without_rss() {
     let root = tempfile::tempdir().unwrap();
     write_tree(root.path(), 3);
     let title = "x".repeat(200_000);
     let source=format!("import {{test,expect}} from 'vitest';test('a{title}',()=>expect(1).toBe(1));test('b{title}',()=>expect(1).toBe(1));");
     std::fs::write(root.path().join("0.test.ts"), &source).unwrap();
-    let (code, partial) = analyze_on(
+    let (code, partial) = analyze(
         root.path(),
         "json",
         &["--max-memory", "1", "--fail-on-incomplete=limits"],
         || None,
-        Some(vitest_dedup::corpus::Engine::default()),
     );
     assert_eq!(code, ExitCode::OperationalError);
     assert_eq!(partial["filesAnalyzed"], 1);
@@ -302,22 +264,14 @@ fn next_retained_heap_stops_at_a_whole_file_boundary_without_rss() {
     assert_eq!(partial["incomplete"], true);
     let prefix = tempfile::tempdir().unwrap();
     std::fs::write(prefix.path().join("0.test.ts"), source).unwrap();
-    let (_, expected) = analyze_on(
-        prefix.path(),
-        "json",
-        &["--no-memory-cap"],
-        || panic!("disabled budget sampled RSS"),
-        Some(vitest_dedup::corpus::Engine::default()),
-    );
+    let (_, expected) = analyze(prefix.path(), "json", &["--no-memory-cap"], || {
+        panic!("disabled budget sampled RSS")
+    });
     assert!(!expected["findings"].as_array().unwrap().is_empty());
     assert_eq!(partial["findings"], expected["findings"]);
-    let (_, full) = analyze_on(
-        root.path(),
-        "json",
-        &["--no-memory-cap"],
-        || panic!("disabled budget sampled RSS"),
-        Some(vitest_dedup::corpus::Engine::default()),
-    );
+    let (_, full) = analyze(root.path(), "json", &["--no-memory-cap"], || {
+        panic!("disabled budget sampled RSS")
+    });
     assert_eq!(full["filesAnalyzed"], 3);
     assert_eq!(full["testsAnalyzed"], 4);
     assert_eq!(full["incomplete"], false);

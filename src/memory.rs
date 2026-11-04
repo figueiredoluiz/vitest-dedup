@@ -244,7 +244,7 @@ impl<K, V> HeapBytes for RetainedMap<K, V> {
     }
 }
 
-/// Disjoint retained populations of the next engine. Containers include their own capacities;
+/// Disjoint retained populations of the analysis engine. Containers include their own capacities;
 /// parser trees and file-local normalization scratch are not retained by the engine.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -627,7 +627,7 @@ pub struct FieldBytes {
     /// [`TestCase`] fields that hold no heap of their own. Always zero; reported for the reason
     /// [`ContextFieldBytes::scalars`] is.
     pub scalars: usize,
-    /// Next-engine retained state, further split by MemoryReport::engine_fields.
+    /// retained state, further split by MemoryReport::engine_fields.
     pub engine: usize,
 }
 
@@ -780,7 +780,7 @@ pub struct MemoryReport {
     /// peak RSS has no safe portable API, so the binary reads it and hands it in. `None` on a
     /// platform with no reader wired up.
     pub peak_rss_bytes: Option<u64>,
-    /// Next-engine ownership breakdown; absent for the unchanged default-engine record.
+    /// ownership breakdown; absent for the unchanged default-engine record.
     pub engine_fields: Option<EngineBytes>,
 }
 
@@ -816,8 +816,8 @@ impl MemoryReport {
         )
     }
 
-    /// A next-engine snapshot taken before its populations are moved into the rule evaluator.
-    pub fn next_engine(
+    /// An engine snapshot taken before its populations are moved into the rule evaluator.
+    pub fn engine(
         fields: EngineBytes,
         tests_analyzed: usize,
         files_analyzed: usize,

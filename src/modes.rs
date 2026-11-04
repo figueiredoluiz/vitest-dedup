@@ -115,7 +115,7 @@ pub struct BaselineFile {
     /// Format version of this file. See [`BASELINE_SCHEMA_VERSION`].
     pub schema_version: u32,
     /// The fingerprint derivation these entries were computed with, e.g.
-    /// `vitestDedupFingerprint/v1`.
+    /// `vitestDedupFingerprint/v2`.
     ///
     /// Recorded separately from the fingerprints themselves (which already embed it) so a stale
     /// baseline is detected in one comparison, with an actionable message, instead of silently
@@ -190,15 +190,7 @@ pub struct BaselineUpdate {
 /// apparently-new findings, while one that fell back to "suppress everything" would turn it into a
 /// silent pass. Neither is an answer, so neither is offered.
 pub fn load_baseline(path: &Path) -> Result<Baseline> {
-    load_baseline_as(path, FINGERPRINT_VERSION)
-}
-
-/// [`load_baseline`], for the engine whose fingerprints carry `version`.
-///
-/// # Errors
-///
-/// As [`load_baseline`], including a file written under any other version.
-pub fn load_baseline_as(path: &Path, version: &str) -> Result<Baseline> {
+    let version = FINGERPRINT_VERSION;
     let text = crate::discovery::read_bounded(path, MAX_BASELINE_BYTES)
         .with_context(|| format!("reading baseline {}", path.display()))?
         .with_context(|| {
@@ -272,22 +264,12 @@ pub fn load_baseline_as(path: &Path, version: &str) -> Result<Baseline> {
 /// Refusing to write from an incomplete run is the caller's job, not this function's -- see
 /// `main.rs`. This function only records what it was given.
 pub fn write_baseline(path: &Path, findings: &[Finding]) -> Result<BaselineUpdate> {
-    write_baseline_as(path, findings, FINGERPRINT_VERSION)
-}
-
-/// [`write_baseline`], for the engine whose fingerprints carry `version`.
-pub fn write_baseline_as(
-    path: &Path,
-    findings: &[Finding],
-    version: &str,
-) -> Result<BaselineUpdate> {
+    let version = FINGERPRINT_VERSION;
     let previous = if path.is_file() {
         // A previous file that cannot be read at all is still worth reporting against, but an
         // unreadable one must not stop the rewrite the user explicitly asked for: treat it as
         // empty for the added/removed arithmetic rather than failing to record the current run.
-        load_baseline_as(path, version)
-            .map(|baseline| baseline.allowance)
-            .ok()
+        load_baseline(path).map(|baseline| baseline.allowance).ok()
     } else {
         Some(BTreeMap::new())
     }

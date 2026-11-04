@@ -44,45 +44,206 @@
     },
     {
       "dir": "fixtures/duplicates",
-      "path": "not-duplicate-concise-suite-body.test.ts",
+      "path": "redundant-hook-describe-each-suite.test.ts",
       "kind": "missing-test",
-      "item": "alpha > reads the mode",
-      "reason": "A concise suite body sequences its tests, and the default engine reads block bodies only."
+      "item": "viewer permissions > grants its scope",
+      "reason": "A suite table is read as one suite whose title is not rendered, so its children count once rather than once per row."
     },
     {
-      "dir": "fixtures/duplicates",
-      "path": "not-duplicate-concise-suite-body.test.ts",
+      "dir": "fixtures/each",
+      "path": "describe-each.test.ts",
       "kind": "missing-test",
-      "item": "beta > reads the mode",
-      "reason": "A concise suite body sequences its tests, and the default engine reads block bodies only."
+      "item": "Suite B > nested test",
+      "reason": "A suite table is read as one suite whose title is not rendered, so its children count once rather than once per row."
     },
     {
-      "dir": "fixtures/recall/helper-hook-runtime-calls",
-      "path": "page.ts",
-      "kind": "missing-hook",
-      "item": "beforeAll@page.ts:6",
-      "reason": "The next inventory represents imported hook registrations at the collection-time setupPage() call as a hook-wrapper site; it does not emit physical hook records for the imported module."
+      "dir": "fixtures/each",
+      "path": "each-nonliteral-table.test.ts",
+      "kind": "missing-test",
+      "item": "with nonliteral table",
+      "reason": "A table the analyzer cannot read counts as one test with an unproven title, not one per row."
     },
     {
-      "dir": "fixtures/recall/helper-hook-runtime-calls",
-      "path": "page.ts",
-      "kind": "missing-hook",
-      "item": "afterAll@page.ts:9",
-      "reason": "The next inventory represents imported hook registrations at the collection-time setupPage() call as a hook-wrapper site; it does not emit physical hook records for the imported module."
+      "dir": "fixtures/each",
+      "path": "each-tagged-template.test.ts",
+      "kind": "missing-test",
+      "item": "returns 5",
+      "reason": "A table the analyzer cannot read counts as one test with an unproven title, not one per row."
     },
     {
-      "dir": "fixtures/recall/helper-hook-runtime-local",
-      "path": "page.ts",
+      "dir": "fixtures/fixtures",
+      "path": "fixtures-scoped-hooks.test.ts",
       "kind": "missing-hook",
-      "item": "beforeAll@page.ts:6",
-      "reason": "The next inventory represents imported hook registrations at the collection-time setupPage() call as a hook-wrapper site; it does not emit physical hook records for the imported module."
+      "item": "beforeEach@fixtures-scoped-hooks.test.ts:10",
+      "reason": "`test.beforeEach` and `test.afterEach` on an extended test binding are not recorded as hooks."
     },
     {
-      "dir": "fixtures/recall/helper-hook-runtime-local",
-      "path": "page.ts",
+      "dir": "fixtures/fixtures",
+      "path": "fixtures-scoped-hooks.test.ts",
       "kind": "missing-hook",
-      "item": "afterAll@page.ts:9",
-      "reason": "The next inventory represents imported hook registrations at the collection-time setupPage() call as a hook-wrapper site; it does not emit physical hook records for the imported module."
+      "item": "afterEach@fixtures-scoped-hooks.test.ts:11",
+      "reason": "`test.beforeEach` and `test.afterEach` on an extended test binding are not recorded as hooks."
+    },
+    {
+      "dir": "fixtures/recall/duplicate-each-row-describe-each",
+      "path": "roles.test.ts",
+      "kind": "missing-test",
+      "item": "editor permissions > resolves a permission set",
+      "reason": "A suite table is read as one suite whose title is not rendered, so its children count once rather than once per row."
+    },
+    {
+      "dir": "fixtures/recall/duplicate-each-row-describe-each",
+      "path": "roles.test.ts",
+      "kind": "missing-test",
+      "item": "editor permissions > renders a label",
+      "reason": "A suite table is read as one suite whose title is not rendered, so its children count once rather than once per row."
+    },
+    {
+      "dir": "fixtures/recall/duplicate-each-row-describe-each",
+      "path": "roles.test.ts",
+      "kind": "missing-test",
+      "item": "admin permissions > resolves a permission set",
+      "reason": "A suite table is read as one suite whose title is not rendered, so its children count once rather than once per row."
+    },
+    {
+      "dir": "fixtures/recall/duplicate-each-row-describe-each",
+      "path": "roles.test.ts",
+      "kind": "missing-test",
+      "item": "admin permissions > renders a label",
+      "reason": "A suite table is read as one suite whose title is not rendered, so its children count once rather than once per row."
+    },
+    {
+      "dir": "fixtures/recall/duplicate-suite-describe-each",
+      "path": "roles.test.ts",
+      "kind": "missing-test",
+      "item": "editor permissions > resolves a permission set",
+      "reason": "A suite table is read as one suite whose title is not rendered, so its children count once rather than once per row."
+    },
+    {
+      "dir": "fixtures/recall/duplicate-suite-describe-each",
+      "path": "roles.test.ts",
+      "kind": "missing-test",
+      "item": "viewer permissions > resolves a permission set",
+      "reason": "A suite table is read as one suite whose title is not rendered, so its children count once rather than once per row."
+    },
+    {
+      "dir": "fixtures/recall/framework-package-parenthesised-registration",
+      "path": "users.test.ts",
+      "kind": "missing-test",
+      "item": "package check",
+      "reason": "A package under node_modules registers this test when the file calls it; the analyzer does not read package code."
+    },
+    {
+      "dir": "fixtures/recall/framework-package-global-newline-registration",
+      "path": "users.test.ts",
+      "kind": "missing-test",
+      "item": "package check",
+      "reason": "A package under node_modules registers this test when the file calls it; the analyzer does not read package code."
+    },
+    {
+      "dir": "fixtures/recall/duplicate-each-row-imported-constants",
+      "path": "values.test.ts",
+      "kind": "missing-test",
+      "item": "tags fast",
+      "reason": "A table the analyzer cannot read counts as one test with an unproven title, not one per row."
+    },
+    {
+      "dir": "fixtures/recall/guarded-hook-differing",
+      "path": "run.test.ts",
+      "kind": "extra-hook",
+      "item": "beforeEach@run.test.ts:25",
+      "reason": "The hook follows an exit the suite callback always takes at collection; its declaration is recorded, and Vitest never registers it."
+    },
+    {
+      "dir": "fixtures/recall/guarded-hook-named-exit",
+      "path": "run.test.ts",
+      "kind": "extra-hook",
+      "item": "beforeEach@run.test.ts:16",
+      "reason": "The hook follows an exit the suite callback always takes at collection; its declaration is recorded, and Vitest never registers it."
+    },
+    {
+      "dir": "fixtures/recall/labeled-return-hook-uncertainty",
+      "path": "run.test.ts",
+      "kind": "extra-hook",
+      "item": "beforeEach@run.test.ts:14",
+      "reason": "The hook follows an exit the suite callback always takes at collection; its declaration is recorded, and Vitest never registers it."
+    },
+    {
+      "dir": "fixtures/recall/guarded-return-before-break",
+      "path": "run.test.ts",
+      "kind": "extra-hook",
+      "item": "beforeEach@run.test.ts:14",
+      "reason": "The hook follows an exit the suite callback always takes at collection; its declaration is recorded, and Vitest never registers it."
+    },
+    {
+      "dir": "fixtures/recall/labeled-return-before-break",
+      "path": "run.test.ts",
+      "kind": "extra-hook",
+      "item": "beforeEach@run.test.ts:14",
+      "reason": "The hook follows an exit the suite callback always takes at collection; its declaration is recorded, and Vitest never registers it."
+    },
+    {
+      "dir": "fixtures/recall/braceless-return-hook-uncertainty",
+      "path": "run.test.ts",
+      "kind": "extra-hook",
+      "item": "beforeEach@run.test.ts:14",
+      "reason": "The hook follows an exit the suite callback always takes at collection; its declaration is recorded, and Vitest never registers it."
+    },
+    {
+      "dir": "fixtures/recall/helper-inert-registration-callback",
+      "path": "run.test.ts",
+      "kind": "extra-hook",
+      "item": "beforeEach@run.test.ts:7",
+      "reason": "A hook inside a callback the helper creates and never calls is recorded; Vitest never registers it."
+    },
+    {
+      "dir": "fixtures/recall/callback-registers-foreach",
+      "path": "run.test.ts",
+      "kind": "missing-test",
+      "item": "hidden",
+      "reason": "A registration in a `forEach` callback is one record; Vitest registers one test per element."
+    },
+    {
+      "dir": "fixtures/recall/suite-local-table-withheld",
+      "path": "a.test.ts",
+      "kind": "missing-test",
+      "item": "scope a > row",
+      "reason": "A suite table is read as one suite whose title is not rendered, so its children count once rather than once per row."
+    },
+    {
+      "dir": "fixtures/recall/suite-local-table-withheld",
+      "path": "a.test.ts",
+      "kind": "missing-test",
+      "item": "scope a > row",
+      "reason": "A suite table is read as one suite whose title is not rendered, so its children count once rather than once per row."
+    },
+    {
+      "dir": "fixtures/recall/suite-local-table-withheld",
+      "path": "a.test.ts",
+      "kind": "missing-test",
+      "item": "scope b > row",
+      "reason": "A suite table is read as one suite whose title is not rendered, so its children count once rather than once per row."
+    },
+    {
+      "dir": "fixtures/recall/suite-local-table-withheld",
+      "path": "a.test.ts",
+      "kind": "missing-test",
+      "item": "scope b > row",
+      "reason": "A suite table is read as one suite whose title is not rendered, so its children count once rather than once per row."
+    },
+    {
+      "dir": "fixtures/recall/suite-local-table-withheld",
+      "path": "a.test.ts",
+      "kind": "extra-test",
+      "item": "scope %s > row",
+      "reason": "A suite table is read as one suite whose title is not rendered, so its children count once rather than once per row."
+    },
+    {
+      "dir": "fixtures/recall/suite-local-table-withheld",
+      "path": "a.test.ts",
+      "kind": "extra-test",
+      "item": "scope %s > row",
+      "reason": "A suite table is read as one suite whose title is not rendered, so its children count once rather than once per row."
     }
   ],
   "siteDisagreements": [

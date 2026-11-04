@@ -1,4 +1,4 @@
-//! Retained next-engine ownership, excluding per-file parser/normalizer scratch.
+//! Retained ownership, excluding per-file parser/normalizer scratch.
 use super::{Engine, Exclusion, Hook, Hooks, Origin, Run, SiteRecord, TestCase};
 use crate::memory::{EngineBytes, HeapBytes};
 use crate::model::BlindFile;
@@ -243,7 +243,7 @@ impl Engine {
             .chain(self.suites.iter())
             .map(|(_, cases)| cases.len())
             .sum();
-        crate::memory::MemoryReport::next_engine(
+        crate::memory::MemoryReport::engine(
             self.memory_fields(),
             self.tests,
             files_analyzed,

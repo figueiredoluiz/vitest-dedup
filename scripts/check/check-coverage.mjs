@@ -17,11 +17,10 @@
 //
 // ## Per module, not just a total
 //
-// A total is the wrong unit for this project. `frontend/fingerprint.rs` is the weakest module at
-// 71.3% and it is also where the last four adjudicated false positives lived -- so it is
-// simultaneously the least-tested and the most-consequential file in the tree. A single total
-// would let it slide from 71% to 60% while `main.rs` picking up a few tests held the average
-// still. Every module carries its own floor; a regression names the file.
+// A total is the wrong unit for this project. The weakest module can also be the one where the
+// adjudicated false positives live -- the earlier analyzer's fingerprint module was both, at 71.3%.
+// A single total would let such a module slide from 71% to 60% while `main.rs` picking up a few
+// tests held the average still. Every module carries its own floor; a regression names the file.
 //
 // ## Why nothing is excluded, which is a decision and not an omission
 //
@@ -44,7 +43,7 @@
 // claim nobody can check:
 //
 //   1. **Rust: inline `#[cfg(test)] mod tests` bodies are counted.** `cargo-llvm-cov` excludes
-//      whole test-only files (`src/analysis/tests.rs` does not appear in its report) but has no
+//      whole test-only files (a `tests.rs` beside its module does not appear in its report) but has no
 //      region-level notion of `#[cfg(test)]`, so the instrumented test functions inside a
 //      production file count as covered lines. `reporters/html.rs` is 909 lines of which 540 are
 //      its test module, and llvm-cov counts 608 instrumented lines for it. The reported figure is
@@ -139,88 +138,13 @@ const RUST_MODULES = {
   'src/diagnostics.rs': 98,
   'src/exclusions.rs': 100,
   'src/discovery.rs': 94,
-  'src/frontend.rs': 100,
-  'src/frontend/extract.rs': 98,
-  // First-party imported registration frames: first measured at 93.01% (399/429 lines).
-  'src/frontend/extract/imported.rs': 93,
-  'src/frontend/extract/registration_free.rs': 93,
-  'src/frontend/extract/setup_identity.rs': 93,
-  'src/frontend/auto_imports.rs': 97,
-  'src/frontend/package_manifests.rs': 98,
-  // N19b: 98.61% (142/144), including portable child-process tests and deadline ordering.
-  'src/frontend/package_supervisor.rs': 98,
-  // Formerly the weakest module at 71.3%, and the one the last four adjudicated false positives
-  // lived in. Raised after a survivor-driven pass over the 466 depth-guard and 135 deleted-arm
-  // mutants; the documented-unreachable lines (a Windows-only path component, `should not happen`
-  // floors, span fallbacks for node kinds the arms above them already total) are counted as
-  // uncovered here, never excluded. The figure below is the one llvm-cov reports, which per
-  // caveat 1 also counts this file's inline test module.
-  //
-  // Re-measured 2026-09-25: 98.29% reported (3852/3919), 98.39% production-only -- 29 of its
-  // 1796 production lines uncovered, every one of them a defensive floor its own comments name
-  // as unreachable (verified case by case, including `ModuleExportName::IdentifierReference`,
-  // which oxc's parser marks `unreachable!()` for an import specifier). Closing it needs
-  // production lines covered, not more tests: a table-driven test adds mostly uninstrumented
-  // data lines, so volume alone moves this figure by hundredths.
-  // The former 11.9k-line fingerprint.rs and its 2.6k-line classes.rs were split into the modules
-  // below (a pure move: the same production lines, the same tests). These floors are re-measured,
-  // each the integer part of the figure the split produced. They are lower than the 98 and 83 the
-  // two files carried because their inline test modules, now `fingerprint/tests/`, were counted
-  // as covered lines in the old denominators; the production halves aggregate to 2846/2918 lines
-  // (97.53%) and 1821/2139 (85.13%). `classes/mod.rs` holds only module declarations and has no
-  // instrumented line, so it carries no floor.
-  'src/frontend/fingerprint.rs': 96,
-  'src/frontend/fingerprint/behavior.rs': 99,
-  'src/frontend/fingerprint/behavior_calls.rs': 98,
-  'src/frontend/fingerprint/context.rs': 100,
-  'src/frontend/fingerprint/dataflow.rs': 93,
-  'src/frontend/fingerprint/identity.rs': 97,
-  'src/frontend/fingerprint/imports.rs': 98,
-  'src/frontend/fingerprint/row_substitution.rs': 100,
-  'src/frontend/fingerprint/serializer.rs': 98,
-  'src/frontend/fingerprint/serializer_members.rs': 96,
-  'src/frontend/fingerprint/text.rs': 100,
-  'src/frontend/fingerprint/trivial.rs': 98,
-  // Raised 2026-10-28 after branch-constraining owned-class regressions; measured respectively
-  // at 85.34% (611/716), 85.92% (360/419), 86.60% (278/321), 86.92% (319/367),
-  // and 91.25% (292/320).
-  'src/frontend/fingerprint/classes/captures.rs': 85,
-  'src/frontend/fingerprint/classes/callables.rs': 85,
-  'src/frontend/fingerprint/classes/escape.rs': 86,
-  'src/frontend/fingerprint/classes/identity.rs': 86,
-  'src/frontend/fingerprint/classes/summary.rs': 91,
-  // Raised 2026-09-25 from 97.6, measured 97.88% (2309/2359). Production-only coverage is 98.45%
-  // -- 13 of its 841 production lines uncovered, enumerated rather than excluded:
-  //
-  //   - 2 AST variants the parser never produces in this position (an `ImportSpecifier` whose
-  //     `imported` is a `ModuleExportName::IdentifierReference`, which oxc's own parser marks
-  //     `unreachable!()`; a namespace specifier whose symbol failed to bind).
-  //   - 6 type re-checks whose caller already matched the shape they re-test
-  //     (`is_namespace`, `literal_table_rows`, `inherits_default_string_coercion`,
-  //     `array_elements`, `object_fields`, `fold_signed_number`).
-  //   - 3 recursion-depth guards (`render_coerce`, `render_json`, `fold_template`) that the
-  //     renderer calling them refuses one level earlier, so the guard is never the one that
-  //     fires. The two bounds that ARE reachable -- the composite fold and the ToString
-  //     renderer -- are asserted at the edge, readable side included, rather than left to a
-  //     test that only proves a guard exists.
-  //   - 1 template-arity invariant a parsed template cannot violate, and 1 `%j` fallthrough
-  //     reachable only for values `%s` has already refused.
-  //
-  // The gap between 98.45% and the figure below is the never-taken `panic!` arms in this file's
-  // own test helpers, which caveat 1 makes visible.
-  // Imported-helper resolution. What stays uncovered is unreachable by construction: a `let-else`
-  // after an `is_none` check, and a default-export function-expression arm the parser's
-  // paren handling never produces.
-  'src/frontend/helpers.rs': 98,
   // JavaScript string text: measured at 91.94% (57/62); the 5 uncovered lines are the `panic!`
   // arms of this file's own test helpers, reached only by a malformed test input.
-  'src/lang/js_text.rs': 91,
-  'src/frontend/registry.rs': 97,
-  // Imported table constants: measured at 94.57% (87/92 instrumented lines).
-  'src/frontend/registry/imported_constants.rs': 94,
-  'src/frontend/resolver.rs': 100,
+  // Lowered 2026-11-04 to 90.70% (39/43): the template-text reader and its test went with the
+  // earlier analyzer; the 4 uncovered lines are this file's test-helper `panic!` arms.
+  'src/lang/js_text.rs': 90,
   'src/lang/manifest_fs.rs': 99,
-  // Installable-package classification, shared by both resolvers: first measured at 100% (51/51).
+  // Installable-package classification: first measured at 100% (51/51).
   'src/lang/packages.rs': 100,
   'src/main.rs': 97,
   // Native memory readers: measured 41/44 instrumented lines (93.18%) on macOS.
@@ -239,7 +163,9 @@ const RUST_MODULES = {
   // `inline_only!` (no field in today's IR is a bare `usize`; every collection reports capacity
   // through arithmetic that never calls `.heap_bytes()` on the count itself).
   'src/memory.rs': 98,
-  'src/model.rs': 99,
+  // Lowered 2026-11-04 to 96.98%: the earlier analyzer's IR (`Context` serialization, hook guards,
+  // `TestCase` helpers) lost its only producer and is uncovered until it is deleted.
+  'src/model.rs': 96,
   'src/package_json.rs': 94,
   'src/prerequisites.rs': 99,
   'src/modes.rs': 97,
@@ -253,7 +179,9 @@ const RUST_MODULES = {
   'src/reporters.rs': 100,
   'src/reporters/html.rs': 99,
   'src/reporters/json.rs': 98,
-  'src/reporters/jsonl.rs': 99,
+  // Lowered 2026-11-04 to 98.51%: the legacy test-record path lost its only producer with the
+  // earlier analyzer and is uncovered until it is deleted.
+  'src/reporters/jsonl.rs': 98,
   'src/reporters/sarif.rs': 99,
   'src/reporters/shared.rs': 100,
   'src/reporters/terminal.rs': 96,
@@ -494,7 +422,6 @@ const JS_NOT_MEASURED = {
   'scripts/check/check-collection-oracle.mjs': 'gate entry point; needs a release binary and the pinned Vitest devDependency, and spawns both per directory',
   'scripts/check/lib/collection-probe-runner.mjs': 'loaded by Vitest as its test runner inside a Vitest worker, never imported by a node --test suite; the run excludes it from coverage because a spawned worker can leak it into the report, and the collection oracle gate checks it against a self-check directory',
   'scripts/check/check-hooks-differential.mjs': 'gate entry point; needs a release binary and the pinned Vitest devDependency, and spawns both over the generated cases',
-  'scripts/check/check-next-duplicates.mjs': 'gate entry point; needs a release binary, and spawns it under the next engine over the fixture directories',
   'scripts/check/check-duplicates-corpus.mjs': 'gate entry point; needs a release binary',
   'scripts/check/check-duplication.mjs': 'gate entry point; needs jscpd',
   'scripts/check/check-fixture-isolation.mjs': 'gate entry point; needs a release binary',

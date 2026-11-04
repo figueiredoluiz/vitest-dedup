@@ -48,16 +48,10 @@ fn imported_helper_sources_supply_html_snippets_and_source_suppressions() {
     helper_sources_drive_snippets_and_suppressions(&[]);
 }
 
-#[test]
-/// The next engine hands the same helper source bytes to the snippet and to inline suppression.
-fn the_next_engine_reads_helper_sources_for_snippets_and_suppressions() {
-    helper_sources_drive_snippets_and_suppressions(&[("VITEST_DEDUP_ENGINE", "next")]);
-}
-
 /// A helper under a subdirectory with the same file name as a root helper does not take the root
 /// helper's suppression, whatever directory the analyzer runs from.
 #[test]
-fn the_next_engine_keeps_helper_identities_whatever_the_working_directory() {
+fn the_analyzer_keeps_helper_identities_whatever_the_working_directory() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path();
     std::fs::create_dir(root.join("sub")).unwrap();
@@ -77,7 +71,6 @@ fn the_next_engine_keeps_helper_identities_whatever_the_working_directory() {
     for directory in [root.to_path_buf(), root.join("sub")] {
         command(root)
             .current_dir(&directory)
-            .env("VITEST_DEDUP_ENGINE", "next")
             .args(["--reporters", "json", "--output"])
             .arg(root.join("report"))
             .assert()
@@ -214,16 +207,12 @@ fn git(root: &Path, args: &[&str]) {
 }
 
 #[test]
-/// Both engines keep changed callers; only the owned historical reader proves helper allowance.
-fn revision_baselines_and_changed_callers_follow_the_selected_engine() {
-    for engine in ["", "next"] {
+/// Changed callers are kept, and the historical reader proves the helper's allowance.
+fn revision_baselines_and_changed_callers_follow_the_helper() {
+    {
         let directory = fixture();
         let root = directory.path();
-        let selected_command = || {
-            let mut command = command(root);
-            command.env("VITEST_DEDUP_ENGINE", engine);
-            command
-        };
+        let selected_command = || command(root);
         git(root, &["init", "--quiet"]);
         git(root, &["add", "."]);
         git(
@@ -265,37 +254,29 @@ fn revision_baselines_and_changed_callers_follow_the_selected_engine() {
             .arg(root.join("report"))
             .output()
             .unwrap();
-        let owned = engine == "next";
-        assert_eq!(output.status.code(), Some(if owned { 0 } else { 1 }));
-        assert_eq!(
-            String::from_utf8(output.stderr)
-                .unwrap()
-                .contains("baseline may be partial"),
-            !owned
-        );
+        assert_eq!(output.status.code(), Some(0));
+        assert!(!String::from_utf8(output.stderr)
+            .unwrap()
+            .contains("baseline may be partial"));
         let baseline = report(root);
         assert_eq!(baseline["testsAnalyzed"], 2);
         assert_eq!(baseline["findings"].as_array().unwrap().len(), 1);
-        assert_eq!(baseline["findings"][0]["baselined"], owned);
+        assert_eq!(baseline["findings"][0]["baselined"], true);
         assert_eq!(baseline["incomplete"], false);
         assert_eq!(baseline["modes"]["baselineApplied"], true);
-        assert_eq!(baseline["modes"]["baselined"], usize::from(owned));
-        assert_eq!(baseline["modes"]["newFindings"], usize::from(!owned));
+        assert_eq!(baseline["modes"]["baselined"], 1);
+        assert_eq!(baseline["modes"]["newFindings"], 0);
         assert!(baseline["findings"][0]["fingerprint"]
             .as_str()
             .unwrap()
-            .starts_with(if owned {
-                "vitestDedupFingerprint/v2:"
-            } else {
-                "vitestDedupFingerprint/v1:"
-            }));
+            .starts_with("vitestDedupFingerprint/v2:"));
     }
 }
 
 #[test]
 /// A helper finding the base revision suppressed is new once the working tree drops the directive:
 /// the base pass reads the committed helper text, so it never records the finding as accepted.
-fn the_next_engine_base_pass_applies_committed_helper_suppressions() {
+fn the_analyzer_base_pass_applies_committed_helper_suppressions() {
     let directory = fixture();
     let root = directory.path();
     let suppressed = HELPER.replace(
@@ -320,7 +301,6 @@ fn the_next_engine_base_pass_applies_committed_helper_suppressions() {
     );
     std::fs::write(root.join("runner.ts"), HELPER).unwrap();
     command(root)
-        .env("VITEST_DEDUP_ENGINE", "next")
         .args(["--baseline-from-ref", "HEAD", "--fail-on-new", "0"])
         .args(["--reporters", "json", "--output"])
         .arg(root.join("report"))
@@ -364,42 +344,19 @@ fn redundant_hook_report(helper_hook: &str, caller_hook: &str) -> serde_json::Va
 }
 
 #[test]
-/// A helper-installed hook equal to a caller hook is reported against the helper's own location;
-/// a different hook body is not.
-fn imported_hooks_take_part_in_redundant_hook_comparison() {
+/// A helper-installed hook whose only effect is an opaque global property write is not compared
+/// with the caller's: the property may have an accessor or be replaced between hook executions.
+fn imported_hooks_with_opaque_global_writes_are_not_compared() {
     let same = redundant_hook_report("globalThis.ready = true;", "globalThis.ready = true;");
     assert_eq!(same["testsAnalyzed"], 1);
     assert_eq!(same["incomplete"], false);
-    let findings = same["findings"].as_array().unwrap();
-    // The established engine compares this opaque property write. The next engine deliberately
-    // does not: a global property may have an accessor or be replaced between hook executions.
-    let next = std::env::var_os("VITEST_DEDUP_ENGINE").is_some_and(|engine| engine == "next");
-    assert_eq!(findings.len(), usize::from(!next), "{same}");
-    if next {
-        return;
-    }
-    let paths: Vec<_> = findings[0]["locations"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|location| location["path"].as_str().unwrap())
-        .collect();
-    assert!(
-        paths.contains(&"runner.ts") && paths.contains(&"caller.test.ts"),
-        "{paths:?}"
-    );
-    let different = redundant_hook_report("globalThis.ready = true;", "globalThis.other = false;");
-    assert_eq!(
-        different["findings"].as_array().unwrap().len(),
-        0,
-        "{different}"
-    );
+    assert!(same["findings"].as_array().unwrap().is_empty(), "{same}");
 }
 
-/// Select one next-engine rule and a deterministic JSON output for delivery controls.
-fn next_report_command(root: &Path, selected: Rule) -> Command {
+/// Select one rule and a deterministic JSON output for delivery controls.
+fn rule_report_command(root: &Path, selected: Rule) -> Command {
     let mut command = Command::cargo_bin("vitest-dedup").unwrap();
-    command.arg(root).env("VITEST_DEDUP_ENGINE", "next");
+    command.arg(root);
     for rule in Rule::ALL {
         let level = if *rule != selected {
             "off"
@@ -417,15 +374,15 @@ fn next_report_command(root: &Path, selected: Rule) -> Command {
 }
 
 /// Require successful analysis with no claims from the selected rule.
-fn assert_no_next_findings(root: &Path, rule: Rule) {
-    next_report_command(root, rule).assert().success();
+fn assert_no_findings(root: &Path, rule: Rule) {
+    rule_report_command(root, rule).assert().success();
     assert!(report(root)["findings"].as_array().unwrap().is_empty());
 }
 
 #[test]
-/// Two runner-owned lexical overwrites form one proven next-engine chain and retain the helper
+/// Two runner-owned lexical overwrites form one proven chain and retain the helper
 /// locations that a developer needs to remove either declaration.
-fn imported_lexical_hooks_take_part_in_next_redundant_hook_comparison() {
+fn imported_lexical_hooks_take_part_in_redundant_hook_comparison() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path();
     std::fs::write(
@@ -438,7 +395,7 @@ fn imported_lexical_hooks_take_part_in_next_redundant_hook_comparison() {
         "import { test, expect } from 'vitest'; import { install } from './runner'; install(); test('a', () => { const sentinel = 1; expect(sentinel).toBe(1); });\n",
     )
     .unwrap();
-    next_report_command(root, Rule::RedundantHook)
+    rule_report_command(root, Rule::RedundantHook)
         .assert()
         .code(0);
     let result = report(root);
@@ -473,7 +430,7 @@ fn imported_hook_timing_prevents_a_cross_file_duplicate() {
         )
         .unwrap();
     }
-    assert_no_next_findings(root, Rule::CrossFileDuplicate);
+    assert_no_findings(root, Rule::CrossFileDuplicate);
 }
 
 #[test]
@@ -495,11 +452,11 @@ fn imported_hook_timing_prevents_a_duplicate_of_a_caller_test() {
         )
         .unwrap();
     }
-    assert_no_next_findings(root, Rule::CrossFileDuplicate);
+    assert_no_findings(root, Rule::CrossFileDuplicate);
     let second = root.join("second.test.ts");
     let source = std::fs::read_to_string(&second).unwrap();
     std::fs::write(&second, source.replace("after", "before")).unwrap();
-    next_report_command(root, Rule::CrossFileDuplicate)
+    rule_report_command(root, Rule::CrossFileDuplicate)
         .assert()
         .code(1);
     let positive = report(root);
@@ -530,7 +487,7 @@ fn imported_hook_effects_are_scoped_to_their_helper_module() {
         "import { test, expect } from 'vitest'; import { install as first } from './first'; import { install as second } from './second'; first(); second(); test('a', () => { expect(1).toBe(1); });",
     )
     .unwrap();
-    assert_no_next_findings(root, Rule::RedundantHook);
+    assert_no_findings(root, Rule::RedundantHook);
 }
 
 #[test]
@@ -546,7 +503,7 @@ fn imported_only_tests_build_hook_chains_and_keep_their_caller() {
     for caller in ["first.test.ts", "second.test.ts"] {
         std::fs::write(root.join(caller), "import { run } from './runner'; run();").unwrap();
     }
-    next_report_command(root, Rule::RedundantHook)
+    rule_report_command(root, Rule::RedundantHook)
         .assert()
         .code(0);
     let findings = report(root)["findings"].as_array().unwrap().clone();

@@ -1,6 +1,6 @@
 // Generated helpers for the hooks-only differential check (`check-hooks-differential.mjs`).
 //
-// The next engine reads a call of a helper as `hook-wrapper` (registers only hooks, so no test)
+// The analyzer reads a call of a helper as `hook-wrapper` (registers only hooks, so no test)
 // when the helper's body runs nothing but hook registrations. That is a claim about every program
 // the body can run, and each way around it found so far hid a test Vitest collects. This module
 // writes one case per way around it ("route") and per way of declaring and reaching the helper

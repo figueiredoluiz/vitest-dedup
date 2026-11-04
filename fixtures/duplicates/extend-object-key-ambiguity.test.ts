@@ -4,11 +4,11 @@
 // @vitest-dedup:extracted 4
 // @vitest-dedup:not-runnable Each pair contains an intentional runtime failure: the hostile-key fixture's Object.keys differ from the expected keys.
 // @vitest-dedup:expect rule=none verdict=distinct severity=none
-// @vitest-dedup:isolates context
+// @vitest-dedup:isolates fixture
 // @vitest-dedup:participant L19 "reads two keys"
 // @vitest-dedup:participant L20 "reads merged key"
 // @vitest-dedup:expect rule=none verdict=distinct severity=none
-// @vitest-dedup:isolates context
+// @vitest-dedup:isolates fixture
 // @vitest-dedup:participant L21 "reads two object values"
 // @vitest-dedup:participant L22 "reads merged object values"
 import {test,expect} from 'vitest';

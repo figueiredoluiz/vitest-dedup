@@ -330,7 +330,7 @@ fn rust_files(dir: &Path, files: &mut Vec<PathBuf>) {
 }
 
 #[test]
-fn only_the_parser_layers_import_oxc() {
+fn only_the_parser_layer_imports_oxc() {
     let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let mut files = Vec::new();
     rust_files(&src, &mut files);
@@ -342,9 +342,7 @@ fn only_the_parser_layers_import_oxc() {
     let allowed = |path: &Path| {
         let relative = path.strip_prefix(&src).unwrap();
         let first = relative.components().next().unwrap().as_os_str();
-        ["frontend", "frontend.rs", "lang", "lang.rs"]
-            .iter()
-            .any(|allowed| first == *allowed)
+        ["lang", "lang.rs"].iter().any(|allowed| first == *allowed)
     };
     let mut importing = 0;
     for file in files {

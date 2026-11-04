@@ -1,4 +1,4 @@
-//! Which import specifiers name an installable package, shared by both engines' resolvers.
+//! Which import specifiers name an installable package.
 
 /// `module.builtinModules` of Node 26 without its prefixed entries, plus the `_stream_*` names that
 /// earlier versions still list. Matched exactly, subpaths included, so `fs/promises` is a builtin
@@ -105,11 +105,6 @@ fn has_package_syntax(specifier: &str) -> bool {
     }
 }
 
-/// Whether `specifier` is a Node core module (prefixed, or one of the unprefixed names).
-pub(crate) fn is_node_builtin(specifier: &str) -> bool {
-    specifier.starts_with("node:") || NODE_BUILTINS.contains(&specifier)
-}
-
 /// Whether `specifier` names an installable package the analyzer does not resolve by name.
 ///
 /// Node's prefix-only modules (`node:sqlite`, `node:sea`, `node:test`) are not in the builtin list:
@@ -138,4 +133,34 @@ fn framework_package(specifier: &str) -> bool {
                     .and_then(|rest| rest.strip_prefix(module))
                     .is_some_and(|rest| rest.starts_with('/'))
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_package_specifier;
+
+    /// The framework, its subpaths and its scope are read by name; a lookalike and Node builtins
+    /// are classified on their own terms.
+    #[test]
+    fn the_framework_and_its_scope_are_not_installable_packages() {
+        let framework = crate::framework::current().dialect().api_modules[0];
+        for name in [
+            framework.to_owned(),
+            format!("{framework}/config"),
+            format!("@{framework}/spy"),
+        ] {
+            assert!(!is_package_specifier(&name), "{name}");
+        }
+        for name in [
+            format!("{framework}-mock-extended"),
+            format!("@{framework}-x/tool"),
+            "lodash/fp".to_owned(),
+            "left-pad".to_owned(),
+        ] {
+            assert!(is_package_specifier(&name), "{name}");
+        }
+        for name in ["fs", "node:fs", "node:sqlite", "./local", "/abs"] {
+            assert!(!is_package_specifier(name), "{name}");
+        }
+    }
 }

@@ -1,41 +1,22 @@
 //! Owned runtime examples keep spy registrations comparable without conflating mock modes.
 
+#[path = "support/report.rs"]
+mod report;
+use report::{findings, report_on};
 use std::path::Path;
-use vitest_dedup::analysis::analyze;
-use vitest_dedup::config::{Config, ConfigOverrides};
-use vitest_dedup::discovery::discover;
-use vitest_dedup::frontend::{extract, Globals};
-use vitest_dedup::model::{IncompleteCauses, Rule};
 
 /// Analyze the permanent corpus sources that the collection oracle also collects with Vitest.
-fn check_case(name: &str, expected_tests: usize, unresolved: usize, findings: usize) {
+fn check_case(name: &str, expected_tests: u64, unresolved: u64, expected_findings: usize) {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("fixtures/recall")
         .join(name);
-    let config = Config::load(&root, ConfigOverrides::default()).unwrap();
-    let discovered = discover(&config, None).unwrap();
-    assert!(!discovered.incomplete);
-    let mut tests = Vec::new();
-    for file in &discovered.files {
-        let source = std::fs::read_to_string(&file.path).unwrap();
-        let extracted = extract(&source, file, Globals::Disabled);
-        assert!(!extracted.incomplete, "{:?}", extracted.diagnostics);
-        assert!(!extracted.tests.is_empty(), "{}", file.path.display());
-        tests.extend(extracted.tests);
-    }
-    assert_eq!(tests.len(), expected_tests);
-    let result = analyze(
-        tests,
-        &config,
-        discovered.files.len(),
-        IncompleteCauses::default(),
-    )
-    .unwrap();
-    assert_eq!(result.tests_analyzed, expected_tests);
-    assert_eq!(result.unresolved_tests, unresolved);
-    assert_eq!(result.findings.len(), findings, "{:?}", result.findings);
-    if findings > 0 {
-        assert_eq!(result.findings[0].rule, Rule::CrossFileDuplicate);
+    let result = report_on(&root, &[]);
+    assert_eq!(result["testsAnalyzed"], expected_tests, "{result}");
+    assert_eq!(result["unresolvedTests"], unresolved, "{result}");
+    let findings = findings(&result);
+    assert_eq!(findings.len(), expected_findings, "{findings:?}");
+    if expected_findings > 0 {
+        assert_eq!(findings[0]["rule"], "cross-file-duplicate");
     }
 }
 

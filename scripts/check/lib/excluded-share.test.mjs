@@ -13,7 +13,7 @@ const summary = (over = {}) => ({
     tests: 50,
     omitted: 0,
     reasons: [
-      { reason: 'helper-setup-effects', files: 4, tests: 40 },
+      { reason: 'helper-effects-unproved', files: 4, tests: 40 },
       { reason: 'unresolved-context', files: 2, tests: 10 },
     ],
   },
@@ -27,7 +27,7 @@ test('the figures are read with their share and recorded without the run totals'
   assert.deepEqual(recordable(figures), {
     tests: 50,
     files: 6,
-    reasons: { 'helper-setup-effects': { files: 4, tests: 40 }, 'unresolved-context': { files: 2, tests: 10 } },
+    reasons: { 'helper-effects-unproved': { files: 4, tests: 40 }, 'unresolved-context': { files: 2, tests: 10 } },
   })
 })
 
@@ -56,21 +56,21 @@ test('a rise is reported as a regression, a fall as a gain, and an unchanged run
         files: 9,
         tests: 80,
         reasons: [
-          { reason: 'helper-setup-effects', files: 7, tests: 70 },
+          { reason: 'helper-effects-unproved', files: 7, tests: 70 },
           { reason: 'unresolved-context', files: 2, tests: 10 },
         ],
       },
     }),
   )
   const rise = compareExcluded(base, worse)
-  assert.deepEqual(rise.rose, ['tests excluded 50 -> 80', 'files excluded 6 -> 9', 'helper-setup-effects tests 40 -> 70', 'helper-setup-effects files 4 -> 7'])
+  assert.deepEqual(rise.rose, ['tests excluded 50 -> 80', 'files excluded 6 -> 9', 'helper-effects-unproved tests 40 -> 70', 'helper-effects-unproved files 4 -> 7'])
   assert.deepEqual(rise.fell, [])
   const better = excludedFigures(
     summary({ exclusions: { files: 2, tests: 10, reasons: [{ reason: 'unresolved-context', files: 2, tests: 10 }] } }),
   )
   const gain = compareExcluded(base, better)
   assert.deepEqual(gain.rose, [])
-  assert.deepEqual(gain.fell, ['tests excluded 50 -> 10', 'files excluded 6 -> 2', 'helper-setup-effects tests 40 -> 0', 'helper-setup-effects files 4 -> 0'])
+  assert.deepEqual(gain.fell, ['tests excluded 50 -> 10', 'files excluded 6 -> 2', 'helper-effects-unproved tests 40 -> 0', 'helper-effects-unproved files 4 -> 0'])
 })
 
 test('a reason that appears or disappears is a change in that reason, not a hidden one', () => {

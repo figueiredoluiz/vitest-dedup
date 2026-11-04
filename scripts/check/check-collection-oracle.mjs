@@ -9,10 +9,12 @@
 // hook declaration sites. A disagreement is something Vitest collected that the analyzer never
 // read, or something the analyzer recorded that Vitest never registers.
 //
-// The same collection also checks the next engine's inventory (`VITEST_DEDUP_ENGINE=next`): every
-// test and suite Vitest collected must have a registration site of its kind on the line Vitest
-// places it on (`lib/collection-oracle.mjs`'s `compareSites`). Sites that registered nothing Vitest
-// collected are counted, not failed: those are what the engine's exclusion reasons are for.
+// The same collection checks the registration sites: every test and suite Vitest collected must
+// have a site of its kind on the line Vitest places it on (`lib/collection-oracle.mjs`'s
+// `compareSites`). Sites that registered nothing Vitest collected are counted, not failed: those
+// are what the exclusion reasons are for. A test whose title the analyzer did not prove is counted
+// rather than compared by title, and a helper's hook registered through a hook-wrapper call is
+// accounted at that call's site.
 //
 // Owned cases under `fixtures/oracle/` run the same comparisons against their own `expected.json`
 // (`lib/oracle-cases.mjs`).
@@ -36,7 +38,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { isDeepStrictEqual } from 'node:util'
-import { collectNextEngine, collectSites, collectWithAnalyzer, collectWithVitest, compareDirectory, compareSites, matchKnown, oracleBinary } from './lib/collection-oracle.mjs'
+import { collectAnalyzer, collectWithVitest, compareDirectory, compareSites, matchKnown, oracleBinary } from './lib/collection-oracle.mjs'
 import { judgeCase, readCases } from './lib/oracle-cases.mjs'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
@@ -55,7 +57,7 @@ const FIXTURE_DIRS = [
 const MIN_FILES_COMPARED = 374
 const MIN_TESTS_COMPARED = 842
 const MIN_HOOK_SITES_COMPARED = 95
-// The same floor for the next engine's inventory, whose registration sites are compared with the
+// The same floor for the registration sites, which are compared with the
 // line Vitest places each collected test and suite on.
 const MIN_SITE_FILES_COMPARED = 546
 const MIN_SITE_TASKS_COMPARED = 1465
@@ -120,12 +122,13 @@ function runCases(binary) {
   for (const oracleCase of cases) {
     const { dir } = oracleCase
     const vitest = collectWithVitest(ROOT, dir)
-    const next = collectNextEngine(binary, ROOT, dir)
+    const { titles, sites, exclusions } = collectAnalyzer(binary, ROOT, dir)
     const judged = judgeCase(oracleCase, {
       vitest,
-      located: compareSites(vitest, next.sites),
-      titles: compareDirectory(vitest, collectWithAnalyzer(binary, ROOT, dir)),
-      ...next,
+      located: compareSites(vitest, sites),
+      titles: compareDirectory(vitest, titles),
+      sites,
+      exclusions,
     })
     totals.failures.push(...judged.failures)
     totals.held.push(...judged.held)
@@ -135,7 +138,7 @@ function runCases(binary) {
   return totals
 }
 
-/** Collects every directory with Vitest and both engines, compares them, and returns the exit code. */
+/** Collects every directory with Vitest and the analyzer, compares them, and returns the exit code. */
 function main() {
   const binary = oracleBinary(ROOT, process.argv[2])
   if (binary === null) return 2
@@ -143,7 +146,7 @@ function main() {
   const dirs = [...FIXTURE_DIRS, ...manifest.cases.map((c) => `fixtures/recall/${c.path}`)]
   const known = JSON.parse(readFileSync(KNOWN, 'utf8')).disagreements
 
-  const totals = { files: 0, tests: 0, hooks: 0, siteFiles: 0, tasks: 0, sites: 0, unexecuted: 0 }
+  const totals = { files: 0, tests: 0, unproven: 0, hooks: 0, viaWrapper: 0, siteFiles: 0, tasks: 0, sites: 0, unexecuted: 0 }
   const knownSites = JSON.parse(readFileSync(KNOWN, 'utf8')).siteDisagreements ?? []
   const foundSites = []
   // Every file not compared, per bucket, with what kept it out (Vitest's first collection error,
@@ -154,16 +157,19 @@ function main() {
   const found = []
   for (const dir of dirs) {
     const vitest = collectWithVitest(ROOT, dir)
-    const located = compareSites(vitest, collectSites(binary, ROOT, dir))
+    const analyzer = collectAnalyzer(binary, ROOT, dir)
+    const located = compareSites(vitest, analyzer.sites)
     totals.siteFiles += located.compared.length
     totals.tasks += located.tasksCompared
     totals.sites += located.sites
     totals.unexecuted += located.unexecuted
     foundSites.push(...located.disagreements.map((d) => ({ dir, ...d })))
-    const result = compareDirectory(vitest, collectWithAnalyzer(binary, ROOT, dir))
+    const result = compareDirectory(vitest, analyzer.titles)
     totals.files += result.compared.length
     totals.tests += result.testsCompared
+    totals.unproven += result.testsUnproven
     totals.hooks += result.hooksCompared
+    totals.viaWrapper += result.hooksViaWrapper
     for (const [bucket, entries] of result.skipped) {
       if (!buckets.has(bucket)) buckets.set(bucket, [])
       buckets.get(bucket).push(...entries.map((entry) => ({ dir, ...entry })))
@@ -179,12 +185,13 @@ function main() {
 
   console.log(
     `collection oracle: ${dirs.length} directories, ${totals.files} files compared, ` +
-      `${totals.tests} tests, ${totals.hooks} hook sites; ${found.length} disagreements ` +
+      `${totals.tests} tests (${totals.unproven} with an unproven title not compared), ` +
+      `${totals.hooks} hook sites (${totals.viaWrapper} more through a hook-wrapper call); ${found.length} disagreements ` +
       `(${found.length - unlisted.length} known)`,
   )
   console.log(`  not compared: ${[...buckets].map(([bucket, entries]) => `${bucket} ${entries.length}`).join(', ')}`)
   console.log(
-    `  next-engine sites: ${totals.siteFiles} files, ${totals.tasks} collected tests and suites, ` +
+    `  sites: ${totals.siteFiles} files, ${totals.tasks} collected tests and suites, ` +
       `${foundSites.length} without a site (${foundSites.length - sitesMatched.unlisted.length} known); ` +
       `${totals.unexecuted} of ${totals.sites} sites registered nothing Vitest collected`,
   )

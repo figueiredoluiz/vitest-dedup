@@ -20,7 +20,6 @@ fn location(path: &str, line: u32) -> Location {
 /// baseline flag.
 fn finding(rule: Rule, participants: &[(&str, u32, &str)]) -> Finding {
     Finding {
-        identity: Default::default(),
         registration_files: Vec::new(),
         rule,
         severity: rule.default_severity(),
@@ -185,7 +184,7 @@ fn a_stale_or_malformed_baseline_is_an_error_never_a_silent_empty_baseline() {
     let cases: [(&str, &str); 5] = [
         ("not json at all", "failed to parse baseline"),
         (
-            r#"{"schemaVersion":99,"fingerprintVersion":"vitestDedupFingerprint/v1","findings":[]}"#,
+            r#"{"schemaVersion":99,"fingerprintVersion":"vitestDedupFingerprint/v2","findings":[]}"#,
             "schema version",
         ),
         (
@@ -193,11 +192,11 @@ fn a_stale_or_malformed_baseline_is_an_error_never_a_silent_empty_baseline() {
             "fingerprint version",
         ),
         (
-            r#"{"schemaVersion":1,"fingerprintVersion":"vitestDedupFingerprint/v1","findings":[{"fingerprint":"vitestDedupFingerprint/v1:aaaa","count":0}]}"#,
+            r#"{"schemaVersion":1,"fingerprintVersion":"vitestDedupFingerprint/v2","findings":[{"fingerprint":"vitestDedupFingerprint/v2:aaaa","count":0}]}"#,
             "0 occurrences",
         ),
         (
-            r#"{"schemaVersion":1,"fingerprintVersion":"vitestDedupFingerprint/v1","findings":[{"fingerprint":"vitestDedupFingerprint/v1:aaaa","count":1},{"fingerprint":"vitestDedupFingerprint/v1:aaaa","count":1}]}"#,
+            r#"{"schemaVersion":1,"fingerprintVersion":"vitestDedupFingerprint/v2","findings":[{"fingerprint":"vitestDedupFingerprint/v2:aaaa","count":1},{"fingerprint":"vitestDedupFingerprint/v2:aaaa","count":1}]}"#,
             "same fingerprint twice",
         ),
     ];
@@ -236,7 +235,7 @@ fn an_oversized_or_overlong_baseline_is_rejected_by_the_bound_it_actually_crosse
     );
 
     let mut overlong = String::from(
-        r#"{"schemaVersion":1,"fingerprintVersion":"vitestDedupFingerprint/v1","findings":["#,
+        r#"{"schemaVersion":1,"fingerprintVersion":"vitestDedupFingerprint/v2","findings":["#,
     );
     for index in 0..=MAX_BASELINE_ENTRIES {
         if index > 0 {
@@ -267,7 +266,7 @@ fn a_baseline_entry_whose_fingerprint_is_not_a_versioned_value_is_rejected() {
     let path = directory.path().join("baseline.json");
     std::fs::write(
         &path,
-        r#"{"schemaVersion":1,"fingerprintVersion":"vitestDedupFingerprint/v1","findings":[{"fingerprint":"cukeDedupFingerprint/v2:aaaa","count":1}]}"#,
+        r#"{"schemaVersion":1,"fingerprintVersion":"vitestDedupFingerprint/v2","findings":[{"fingerprint":"cukeDedupFingerprint/v2:aaaa","count":1}]}"#,
     )
     .unwrap();
     let error = format!("{:#}", load_baseline(&path).unwrap_err());
@@ -288,7 +287,7 @@ fn a_baseline_is_empty_only_when_it_accepts_no_instance_at_all() {
 
     std::fs::write(
         &path,
-        r#"{"schemaVersion":1,"fingerprintVersion":"vitestDedupFingerprint/v1","findings":[]}"#,
+        r#"{"schemaVersion":1,"fingerprintVersion":"vitestDedupFingerprint/v2","findings":[]}"#,
     )
     .unwrap();
     let empty = load_baseline(&path).unwrap();

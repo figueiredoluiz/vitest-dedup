@@ -2,10 +2,6 @@
 use assert_cmd::Command;
 use serde_json::Value;
 
-#[path = "support/engine.rs"]
-mod engine;
-use engine::selected_version;
-
 /// A minimal owned input shared by layout and stream-policy regressions.
 fn duplicate_project() -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
@@ -122,7 +118,7 @@ fn policy_report(dir: &std::path::Path, flags: &[&str]) -> (std::process::Output
 fn policy_footer_matches_threshold_new_limit_and_baseline() {
     let dir = duplicate_project();
     let baseline = dir.path().join("baseline.json");
-    vitest_dedup::modes::write_baseline_as(&baseline, &[], selected_version()).unwrap();
+    vitest_dedup::modes::write_baseline(&baseline, &[]).unwrap();
     let path = baseline.to_str().unwrap();
     for (flags, exit, threshold, policy) in [
         (vec!["--threshold", "99"], 1, "99.00% — FAIL", "FAIL"),
@@ -196,31 +192,25 @@ fn policy_footer_respects_incomplete_classes() {
     }
 }
 
-/// Zero-work does not imply success, including when suites still carry real quality findings.
+/// Zero-work does not imply success, including when the file holds duplicated suites without tests.
 #[test]
-fn zero_work_footer_preserves_suite_quality_failures() {
+fn zero_work_footer_stays_unavailable_with_case_free_suites() {
     let dir = tempfile::tempdir().unwrap();
     let source = dir.path().join("suite.test.ts");
-    // The next engine compares suites that hold cases, so two copies with no test inside are no
+    // Suites are compared only when they hold cases, so two copies with no test inside are no
     // finding and the run stays the operational failure a zero-test run is.
-    let next = std::env::var_os("VITEST_DEDUP_ENGINE").is_some_and(|engine| engine == "next");
-    let (copies, copies_exit, copies_policy) = if next {
-        (0, 2, "UNAVAILABLE")
-    } else {
-        (1, 1, "FAIL")
-    };
-    for (content, count, exit, policy) in [
-        ("import {describe} from 'vitest';", 0, 2, "UNAVAILABLE"),
-        ("import {describe} from 'vitest'; describe('copy',()=>{const v=setup()}); describe('copy',()=>{const v=setup()});", copies, copies_exit, copies_policy),
+    for content in [
+        "import {describe} from 'vitest';",
+        "import {describe} from 'vitest'; describe('copy',()=>{const v=setup()}); describe('copy',()=>{const v=setup()});",
     ] {
         std::fs::write(&source, content).unwrap();
         let (run, report) = policy_report(dir.path(), &["--rule", "duplicate-suite=error"]);
         assert_eq!(report["testsAnalyzed"], 0);
-        assert_eq!(report["findings"].as_array().unwrap().len(), count);
-        assert_eq!(run.status.code(), Some(exit));
+        assert!(report["findings"].as_array().unwrap().is_empty());
+        assert_eq!(run.status.code(), Some(2));
         let text = String::from_utf8(run.stdout).unwrap();
         assert!(text.contains("Error-level duplication: unavailable (no executable tests)"));
-        assert!(text.contains(&format!("Analysis policy: {policy}")));
+        assert!(text.contains("Analysis policy: UNAVAILABLE"));
         assert!(!text.contains("% — PASS"));
     }
 }

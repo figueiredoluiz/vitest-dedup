@@ -54,7 +54,6 @@
     }
   },
   "blindUnderCurrent": [
-    "closed.test.ts",
     "escape-callee.test.ts",
     "member.test.ts",
     "result-call.test.ts"

@@ -25,7 +25,7 @@
 //!   "unresolvedTests": 3,
 //!   "blindFiles": 1,
 //!   "exclusions": { "files": 1, "tests": 3, "omitted": 0, "reasons": [
-//!     { "reason": "helper-setup-effects", "files": 1, "tests": 3 }
+//!     { "reason": "helper-effects-unproved", "files": 1, "tests": 3 }
 //!   ] },
 //!   "modes": {
 //!     "baselineApplied": false,
@@ -37,7 +37,7 @@
 //!   "excludedFiles": [
 //!     {
 //!       "path": "src/cart.test.ts",
-//!       "reason": "helper-setup-effects",
+//!       "reason": "helper-effects-unproved",
 //!       "otherReasons": [],
 //!       "detail": "a called helper's body was not analyzed (the imported runner has unproved setup or fixture effects); any test/describe declarations inside it were not counted",
 //!       "testsExcluded": 3,
@@ -58,7 +58,7 @@
 //!       "titles": ["suite > a", "suite > b"],
 //!       "inert": [false, false],
 //!       "baselined": false,
-//!       "fingerprint": "vitestDedupFingerprint/v1:0123456789abcdef"
+//!       "fingerprint": "vitestDedupFingerprint/v2:0123456789abcdef"
 //!     }
 //!   ]
 //! }

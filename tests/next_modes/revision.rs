@@ -1,4 +1,4 @@
-//! Historical next-engine outcomes use committed dependencies and the same v2 finalizer.
+//! Historical outcomes use committed dependencies and the same v2 finalizer.
 use super::{git, run, summary};
 use serde_json::Value;
 use std::path::Path;

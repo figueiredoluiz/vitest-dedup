@@ -48,11 +48,10 @@
 //                       positive integer even for a pending case -- a case that could never
 //                       extract anything would measure nothing, and the floor exists precisely so
 //                       that shape is written down instead of worked around.
-//   `engine: "next"`    a CASE-level marker for behaviour the default engine refuses outright
-//                       (exit 2), so this gate can neither observe nor judge it. The case stays
-//                       out of this gate's run and its floors, and is asserted by the
-//                       next-engine recall loop in `check-next-duplicates.mjs`, which runs every
-//                       case. Declared, counted and printed -- never a silent `continue`.
+//
+// The judge does not yet read `knownFalsePositives`, `knownMisses` or `pending` per case: the
+// deltas they would hold are listed in `next-duplicates-known.json`, and only the manifest-wide
+// counts are ratcheted against `knownMissBaseline` and `knownFalsePositiveBaseline`.
 //
 // ---------------------------------------------------------------------------------------------
 // The rule that makes it a barrier: expectations are established, never recorded
@@ -106,21 +105,24 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { ALL_RULES } from './lib/fixture-directives.mjs'
 import { validateManifestLabels } from './lib/manifest-schema.mjs'
-import { describeMatcher, judgeRecallCase, newTotals, observeRecallCase } from './lib/recall-runner.mjs'
-import { defaultBinary } from './lib/run-analyzer.mjs'
+import { judgeRecall, knownProblems, strayFindings } from './lib/next-duplicates.mjs'
+import { describeMatcher } from './lib/recall-runner.mjs'
+import { defaultBinary, runAnalyzerJsonl } from './lib/run-analyzer.mjs'
 
 const binary = process.argv[2] ?? defaultBinary()
 const root = process.argv[3] ?? 'fixtures/recall'
+const KNOWN_PATH = 'scripts/check/next-duplicates-known.json'
 
 // `ALL_RULES` (lib/fixture-directives.mjs) is derived from the verdict table that rejects any
 // `@vitest-dedup:expect` naming a rule no verdict admits, so a tenth rule arriving in `Rule::ALL`
 // fails THIS gate until it has a positive and a negative recall case, instead of arriving with
 // no recall coverage and nothing to say so.
 
-// Per-case running and judging live in `lib/recall-runner.mjs` (`observeRecallCase`, then
-// `judgeRecallCase`), so an evaluator can reuse the observation and classify instead of
-// asserting. Everything the gate prints on a per-case basis is that module's output contract;
-// the corpus-wide floors and the manifest validation stay here.
+// Each case is judged by `lib/next-duplicates.mjs`'s `judgeRecall`: every expected finding
+// reported, every expected absence kept, no other finding, and the declared test count,
+// completeness and unresolved count. A delta from that is a failure unless
+// `next-duplicates-known.json` lists it with a reason; a listed delta that no longer occurs fails
+// too. The corpus-wide floors and the manifest validation stay here.
 
 /**
  * Rejects a manifest that cannot be measured, before anything is run.
@@ -176,17 +178,10 @@ function validateManifest(manifest, failures) {
     if (!['positive', 'negative', 'variant'].includes(testCase.role)) {
       failures.push(`FAIL ${where}: role must be positive, negative, or variant`)
     }
-    if (testCase.engine !== undefined && testCase.engine !== 'next') {
-      failures.push(
-        `FAIL ${where}: \`engine\` must be "next" when set -- the only engine whose facts a case ` +
-          `may withhold from this gate. Any other value would skip the case here while no other ` +
-          `gate claimed it`,
-      )
-    }
     if (testCase.expectedIncompleteNext !== undefined && typeof testCase.expectedIncompleteNext !== 'boolean') {
       failures.push(
-        `FAIL ${where}: \`expectedIncompleteNext\` must be a boolean -- the next engine's ` +
-          `completeness for the case, asserted by the next-engine recall judge`,
+        `FAIL ${where}: \`expectedIncompleteNext\` must be a boolean -- the analyzer's ` +
+          `completeness for the case, asserted by the recall judge`,
       )
     }
     if (
@@ -462,41 +457,48 @@ function main() {
     process.exit(1)
   }
 
-  const pendingHeld = []
-  const nextEngineCases = manifest.cases.filter((testCase) => testCase.engine === 'next')
-  const totals = newTotals()
-
+  // Recall deltas from `next-duplicates-known.json`; the corpus gate consumes the others.
+  const known = JSON.parse(readFileSync(KNOWN_PATH, 'utf8')).cases.filter(({ id }) => id.startsWith('recall-'))
+  for (const problem of knownProblems(known)) failures.push(`FAIL ${problem}`)
+  const consumed = new Set()
+  const held = []
+  const totals = { ran: 0, testsAnalyzed: 0, expectedFindings: 0, missed: 0, knownMisses: 0, knownFalsePositivesTotal: 0 }
   for (const testCase of manifest.cases) {
-    if (testCase.engine === 'next') {
-      // Declared next-engine facts: the default engine refuses the case outright, so the
-      // next-engine recall loop in `check-next-duplicates.mjs` asserts it. The directory must
-      // still exist: a vanished case fails here, not only in the other gate.
-      if (!existsSync(join(root, testCase.path))) {
-        failures.push(
-          `FAIL case ${testCase.name} (${testCase.path}): case directory is missing. A vanished ` +
-            `case cannot fail its own expectations, so it has to fail here`,
-        )
-      }
+    const { records } = runAnalyzerJsonl(binary, [join(root, testCase.path), ...(testCase.arguments ?? [])])
+    const analyzed = records.find((record) => record.type === 'summary')?.testsAnalyzed
+    if (!Number.isInteger(analyzed)) {
+      failures.push(`FAIL case ${testCase.name}: the run stated no tests analyzed`)
       continue
     }
-    judgeRecallCase(
-      testCase,
-      observeRecallCase({ binary, root, testCase }),
-      { failures, pendingHeld, totals },
-    )
+    totals.ran += 1
+    totals.testsAnalyzed += analyzed
+    totals.knownMisses += (testCase.knownMisses ?? []).length
+    totals.knownFalsePositivesTotal += (testCase.knownFalsePositives ?? []).length
+    for (const finding of strayFindings(records)) {
+      failures.push(`FAIL case ${testCase.name}: ${finding.rule} reported a finding, and the judge reads no such rule`)
+    }
+    const judged = judgeRecall(testCase, records)
+    totals.expectedFindings += judged.judged
+    for (const failure of judged.failures) {
+      const entry = known.find(({ id }) => id === failure.id)
+      if (!entry) {
+        failures.push(failure.message)
+        continue
+      }
+      consumed.add(entry.id)
+      held.push(`${entry.id} -- ${entry.reason}`)
+      if (entry.id.startsWith('recall-miss|')) totals.missed += 1
+    }
   }
-
-  if (totals.ran !== manifest.cases.length - nextEngineCases.length) {
+  for (const entry of known) {
+    if (!consumed.has(entry.id)) {
+      failures.push(`FAIL known entry "${entry.id}" no longer applies: its delta is gone or changed. Remove it -- ${entry.reason}`)
+    }
+  }
+  if (totals.ran !== manifest.cases.length) {
     failures.push(
-      `FAIL: ${totals.ran} of ${manifest.cases.length - nextEngineCases.length} manifest case(s) ` +
-        `actually ran. A recall figure computed over a subset of the corpus is not the corpus's ` +
-        `recall`,
-    )
-  }
-  if (nextEngineCases.length > 0) {
-    console.error(
-      `note: ${nextEngineCases.length} next-engine case(s) held out of this gate's run; the ` +
-        `next-engine recall loop in check-next-duplicates asserts them`,
+      `FAIL: ${totals.ran} of ${manifest.cases.length} manifest case(s) actually ran. A recall ` +
+        `figure computed over a subset of the corpus is not the corpus's recall`,
     )
   }
   if (totals.testsAnalyzed === 0) {
@@ -518,8 +520,9 @@ function main() {
     )
   }
 
+  // A held miss is a finding the case expects and the analyzer does not report.
   const desired = totals.expectedFindings + totals.knownMisses
-  const recall = desired === 0 ? 0 : totals.detected / desired
+  const recall = desired === 0 ? 0 : (totals.expectedFindings - totals.missed) / desired
   if (desired === 0) {
     failures.push('FAIL: no desired findings declared anywhere; recall is undefined, not perfect')
   } else if (recall < manifest.minimumRecall) {
@@ -535,18 +538,12 @@ function main() {
     process.exit(1)
   }
 
-  if (pendingHeld.length > 0) {
-    console.log(
-      `note: ${pendingHeld.length} pending case(s) held -- the defect each waits on is still ` +
-        'present, and the gate fails the moment one starts satisfying its expectations:',
-    )
-    for (const line of pendingHeld) console.log(`  ${line}`)
-  }
+  for (const line of held) console.log(`  held: ${line}`)
   console.log(
     `Recall corpus: ${totals.ran} case(s) across ${ALL_RULES.size} rule(s), ${totals.testsAnalyzed} test(s) ` +
-      `extracted, ${totals.detected}/${totals.expectedFindings} expected finding(s) matched, ${totals.knownMisses} ` +
-      `known miss(es), ${totals.knownFalsePositivesTotal} known false positive(s) (${pendingHeld.length} ` +
-      `pending case(s) excluded from the recall figure).`,
+      `analyzed, ${totals.expectedFindings - totals.missed}/${totals.expectedFindings} expected finding(s) ` +
+      `matched, ${totals.knownMisses} known miss(es), ${totals.knownFalsePositivesTotal} known false ` +
+      `positive(s), ${held.length} known delta(s) held.`,
   )
   console.log(
     `Recall ${(recall * 100).toFixed(1)}% (floor ${(manifest.minimumRecall * 100).toFixed(1)}%, ` +

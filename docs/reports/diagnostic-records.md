@@ -35,8 +35,7 @@ compares hooks of matching `kind`.
 
 ### Owned-core records
 
-With the experimental `VITEST_DEDUP_ENGINE=next` selection, test and hook records use
-`schemaVersion: "0.2"` and `engine: "owned"`. Other record kinds keep their existing versions.
+Test and hook records use `schemaVersion: "0.2"` and `engine: "owned"`. Other record kinds keep their existing versions.
 The legacy five fingerprint fields are not synthesized from combined owned comparison keys.
 Consumers must dispatch on the record's version and engine rather than compare hashes across
 engines or runs built with different toolchains.
@@ -74,7 +73,7 @@ Hooks precede tests; both precede findings. Registration `site` records remain a
 them for the collection oracle. Sites count declarations rather than expanded tests, so their
 population can differ from `testsAnalyzed`. With the flag off, none of these optional records are
 emitted. Optional retained evidence is charged to the existing memory budget; hitting that budget remains
-a visible refusal. The old engine's `0.1` record contract is unchanged.
+a visible refusal.
 
 ## `--debug-memory`
 
@@ -82,17 +81,13 @@ Adds one run-level `memory` record: the bytes retained after extraction, split b
 them, with the number of tests and `bytesPerTest`, which is their average. The buckets are disjoint
 and sum to the reported total, so a consumer can both trust the total and attribute it.
 
-The owned engine attributes its retained capacity to `fields.engine`, with a disjoint
+The analyzer attributes its retained capacity to `fields.engine`, with a disjoint
 `engineFields` breakdown: cases, suites, hooks, sites, blind files, modules, exports and scalars.
 Those buckets sum to `fields.engine`; they are not extra bytes to add to `fields`. The legacy
 field buckets are zero in this record. `engineMemoryNotice` states the estimate's limits,
 including temporary parser state and private hash-table spare/control storage.
 When no tests were analyzed, the memory gate prints absolute owned population bytes, omitting
 per-test values and percentages.
-
-The legacy `VD_CELL_CENSUS` environment opt-in is retired for the owned engine. Setting it emits
-a notice on stderr and does not change machine output. Use the owned engine's table exclusions
-instead of treating the legacy histogram as an owned-cell measurement.
 
 Shared text is apportioned rather than multiplied: a body referenced by three tests is counted once
 and divided among them, so the per-test figure is an average rather than an overcount.

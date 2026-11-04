@@ -155,10 +155,9 @@ fn absent_extends_target_is_named_with_its_generator() {
     assert_eq!(entries[0]["kind"], "tsconfig-extends");
     assert_eq!(entries[0]["path"], ".nuxt/tsconfig.json");
     assert_eq!(entries[0]["fix"], "nuxt prepare");
-    // Every import under the missing tsconfig fails; the next engine never resolves the framework's
-    // own module, so it counts the two helper imports and not `vitest`.
-    let next = std::env::var_os("VITEST_DEDUP_ENGINE").is_some_and(|engine| engine == "next");
-    let unresolved = if next { 2 } else { 3 };
+    // Every import under the missing tsconfig fails; the framework's own module is never resolved,
+    // so the two helper imports count and `vitest` does not.
+    let unresolved = 2;
     assert_eq!(entries[0]["unresolvedImports"], unresolved);
     assert!(
         report
@@ -365,12 +364,12 @@ fn missing_node_modules_names_the_install_command_the_lockfile_implies() {
     }
 }
 
-/// The next engine reports a missing install with the command its lockfile implies, counting the
+/// The analyzer reports a missing install with the command its lockfile implies, counting the
 /// package import once however many of its readers resolve it.
 #[test]
-fn the_next_engine_names_a_missing_install() {
+fn the_analyzer_names_a_missing_install() {
     let directory = package_project(Some("pnpm-lock.yaml"), None);
-    let report = run_with(directory.path(), &[], &[("VITEST_DEDUP_ENGINE", "next")]);
+    let report = run_with(directory.path(), &[], &[]);
     let entries = prerequisites(&report);
     assert_eq!(entries.len(), 1, "{entries:?}");
     assert_eq!(entries[0]["kind"], "node-modules");
@@ -379,13 +378,13 @@ fn the_next_engine_names_a_missing_install() {
     assert_eq!(report.json["incomplete"], true);
 }
 
-/// The next engine counts each import under a missing tsconfig target once.
+/// The analyzer counts each import under a missing tsconfig target once.
 #[test]
 #[cfg_attr(
     windows,
     ignore = "tsconfig discovery from a canonical importer does not work on Windows yet"
 )]
-fn the_next_engine_counts_each_import_under_a_missing_tsconfig_once() {
+fn the_analyzer_counts_each_import_under_a_missing_tsconfig_once() {
     let directory = project();
     let root = directory.path();
     write(
@@ -398,7 +397,7 @@ fn the_next_engine_counts_each_import_under_a_missing_tsconfig_once() {
         "package.json",
         r#"{ "devDependencies": { "nuxt": "3.0.0" } }"#,
     );
-    let report = run_with(root, &[], &[("VITEST_DEDUP_ENGINE", "next")]);
+    let report = run_with(root, &[], &[]);
     let entries = prerequisites(&report);
     assert_eq!(entries.len(), 1, "{entries:?}");
     assert_eq!(entries[0]["kind"], "tsconfig-extends");

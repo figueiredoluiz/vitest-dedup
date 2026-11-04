@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Vitest and both engines, side by side, on throwaway inputs.
+// Vitest and the analyzer, side by side, on throwaway inputs.
 //
 // Each argument is a test file, or a directory holding one and its helpers. It is copied to a
 // temporary project that can resolve the checkout's Vitest, so nothing is written to the repository.
@@ -8,8 +8,7 @@ import { cpSync, existsSync, mkdtempSync, realpathSync, rmSync, statSync, symlin
 import { tmpdir } from 'node:os'
 import { basename, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { collectNextEngine, collectWithVitest } from '../check/lib/collection-oracle.mjs'
-import { PORTED_RULES } from '../check/lib/next-duplicates.mjs'
+import { collectInventory, collectWithVitest } from '../check/lib/collection-oracle.mjs'
 import { parseJsonl } from '../check/lib/run-analyzer.mjs'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
@@ -33,7 +32,7 @@ export function summarize(records, exit, stderr = '') {
   return {
     exit,
     failure: ran ? null : stderr.trim().split('\n').slice(-2).join(' ').slice(0, 200) || 'no summary record',
-    // By place, not fingerprint: the two engines fingerprint the same finding differently.
+    // By place, so a reader can find each claim in the source.
     findings: findings.map(identity).sort(),
     rules: [...new Set(findings.map((record) => record.rule))].sort(),
     tests: summary?.testsAnalyzed ?? 0,
@@ -44,60 +43,34 @@ export function summarize(records, exit, stderr = '') {
 }
 
 /**
- * A run's findings, parted by whether the next engine runs their rule.
- * @param {{findings: string[]}} run One engine's run.
- * @param {Set<string>} ported The rules the next engine runs.
- * @returns {{compared: string[], unported: string[]}} The findings each way.
+ * Where a case's two readings part: the analyzer's count against what Vitest collected.
+ * @param {{vitest: string[]|null, run: object}} row One case.
+ * @returns {string[]} Disagreements; empty when both agree.
  */
-function split({ findings }, ported) {
-  const isPorted = (finding) => ported.has(finding.split(' ', 1)[0])
-  return { compared: findings.filter(isPorted), unported: findings.filter((finding) => !isPorted(finding)) }
-}
-
-/**
- * Where a case's three readings part: each engine's count against what Vitest collected, and the
- * findings of one engine against the other's.
- * @param {{vitest: string[]|null, next: object, current: object}} row One case.
- * @param {Set<string>} [ported] The rules the next engine runs; the default's other findings say nothing.
- * @returns {string[]} Disagreements; empty when all three agree.
- */
-export function disagreements({ vitest, next, current }, ported = PORTED_RULES) {
+export function disagreements({ vitest, run }) {
   const notes = []
-  if (next.failure !== null) notes.push('next-failed')
-  if (current.failure !== null) notes.push('default-failed')
+  if (run.failure !== null) notes.push('analyzer-failed')
   if (vitest === null) notes.push('vitest-unread')
-  else {
-    if (next.tests !== vitest.length) notes.push('next-count-differs')
-    if (current.tests !== vitest.length) notes.push('default-count-differs')
-  }
-  // Only the default's side is filtered: a rule next should not run is itself a disagreement.
-  if (next.findings.join() !== split(current, ported).compared.join()) notes.push('findings-differ')
-  if (next.incomplete !== current.incomplete) notes.push('completeness-differs')
-  if (next.unresolved !== current.unresolved || next.reasons.join() !== current.reasons.join()) notes.push('diagnostics-differ')
+  else if (run.tests !== vitest.length) notes.push('count-differs')
   return notes
 }
 
 /**
  * Render one case for a terminal.
- * @param {{name: string, vitest: string[]|null, error?: string, sites: string[], next: object, current: object}} row One case.
- * @param {Set<string>} [ported] The rules the next engine runs.
+ * @param {{name: string, vitest: string[]|null, error?: string, sites: string[], run: object}} row One case.
  * @returns {string} Its lines.
  */
-export function render(row, ported = PORTED_RULES) {
-  const engine = (label, run) =>
-    `  ${label}: exit ${run.exit}, ${run.tests} analyzed, ${run.unresolved} unresolved` +
-    `${run.incomplete ? ', incomplete' : ''}; rules [${run.rules.join(', ')}]` +
-    `${run.reasons.length ? `; excluded [${run.reasons.join(', ')}]` : ''}` +
-    `${run.failure === null ? '' : `; failed: ${run.failure}`}`
-  const notes = disagreements(row, ported)
-  const { unported } = split(row.current, ported)
+export function render(row) {
+  const { run } = row
+  const notes = disagreements(row)
   return [
     `${notes.length ? 'DIFF' : 'SAME'} ${row.name}${notes.length ? ` (${notes.join(', ')})` : ''}`,
     `  vitest: ${row.vitest === null ? `unread: ${row.error ?? ''}` : JSON.stringify(row.vitest)}`,
     `  sites: ${row.sites.join(' ') || 'none'}`,
-    engine('next', row.next),
-    engine('default', row.current),
-    ...(unported.length ? [`  default only, rule not ported: ${unported.join('; ')}`] : []),
+    `  analyzer: exit ${run.exit}, ${run.tests} analyzed, ${run.unresolved} unresolved` +
+      `${run.incomplete ? ', incomplete' : ''}; findings [${run.findings.join('; ')}]` +
+      `${run.reasons.length ? `; excluded [${run.reasons.join(', ')}]` : ''}` +
+      `${run.failure === null ? '' : `; failed: ${run.failure}`}`,
   ].join('\n')
 }
 
@@ -116,18 +89,14 @@ export function project(source, work) {
 }
 
 /**
- * One engine's run over `directory`. A run that cannot start, times out or prints something that is
- * not JSONL is that row's failure, so it never costs the other inputs their rows.
+ * The analyzer's run over `directory`. A run that cannot start, times out or prints something that
+ * is not JSONL is that row's failure, so it never costs the other inputs their rows.
  * @param {string} binary The analyzer.
  * @param {string} directory The project.
- * @param {string|null} engine The engine to select, or null for the default.
  * @returns {object} The run's summary.
  */
-export function analyze(binary, directory, engine) {
-  const env = { ...process.env }
-  delete env.VITEST_DEDUP_ENGINE
-  if (engine) env.VITEST_DEDUP_ENGINE = engine
-  const run = spawnSync(binary, [directory, '--reporters', 'jsonl'], { encoding: 'utf8', env, maxBuffer: 256 << 20, timeout: 120_000 })
+export function analyze(binary, directory) {
+  const run = spawnSync(binary, [directory, '--reporters', 'jsonl'], { encoding: 'utf8', maxBuffer: 256 << 20, timeout: 120_000 })
   try {
     if (run.error) throw run.error
     return summarize(parseJsonl(run.stdout), run.status, run.stderr)
@@ -136,10 +105,10 @@ export function analyze(binary, directory, engine) {
   }
 }
 
-/** The next engine's sites in `directory`; a run that cannot report any is shown by `analyze`. */
+/** The registration sites in `directory`; a run that cannot report any is shown by `analyze`. */
 function sitesOf(binary, directory) {
   try {
-    return [...collectNextEngine(binary, ROOT, directory).sites.values()].flat()
+    return [...collectInventory(binary, ROOT, directory).sites.values()].flat()
   } catch {
     return []
   }
@@ -177,8 +146,7 @@ export function probe(sources, { binary }) {
         name: source,
         ...collect(directory),
         sites: sitesOf(binary, directory).map((site) => `${site.kind}@${site.line}`),
-        next: analyze(binary, directory, 'next'),
-        current: analyze(binary, directory, null),
+        run: analyze(binary, directory),
       }
     })
   } finally {

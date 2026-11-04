@@ -55,7 +55,7 @@ the selected stream reporter.
 ## Diagnostics
 
 Diagnostics stay on stderr: early operational errors, globals detection, incomplete coverage,
-baseline and changed-file qualifications, and the opt-in cell census. Disabled globals and absent
+baseline and changed-file qualifications. Disabled globals and absent
 configuration remain silent. Globals detection markers retain their existing wording for corpus
 tooling. Diagnostic text is plain and sanitized; writer failures are operational errors.
 
@@ -86,7 +86,3 @@ process-dependent figures such as peak RSS. A memory-limited run may admit a dif
 file prefix as process residency changes. Findings are ordered by their participants' locations
 (root-relative path, then position), then by rule, then by message. Paths are compared component by
 component rather than as strings, so the order does not depend on the platform's separator.
-
-Set `VD_CELL_CENSUS` to enable unreadable `.each` cell diagnostics on stderr. This is a
-presence-based debugging switch: any value, including empty, `0`, or `1`, enables it.
-Unset the variable to disable it. It does not change findings or machine-readable stdout.

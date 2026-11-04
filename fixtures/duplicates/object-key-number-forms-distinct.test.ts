@@ -13,7 +13,7 @@
 // @vitest-dedup:participant L20 "exponent each"
 // @vitest-dedup:participant L21 "decimal each"
 // @vitest-dedup:expect rule=none verdict=distinct severity=none
-// @vitest-dedup:isolates context
+// @vitest-dedup:isolates fixture
 // @vitest-dedup:participant L24 "exponent extend"
 // @vitest-dedup:participant L25 "decimal extend"
 import {test,expect} from 'vitest';

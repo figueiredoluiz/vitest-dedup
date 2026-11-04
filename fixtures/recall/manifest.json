@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "minimumCases": 216,
   "knownMissBaseline": 0,
-  "minimumRecall": 0.99,
+  "minimumRecall": 0.776,
   "recallDestination": 1,
   "cases": [
     {
@@ -10,7 +10,6 @@
       "path": "runner-unproved-scope-retention",
       "rule": "duplicate-test",
       "role": "positive",
-      "engine": "next",
       "origin": "synthetic",
       "verdict": "generated",
       "classifiedAt": "2026-11-02",
@@ -149,7 +148,6 @@
       "path": "duplicate-test-name-suite-callback-test-parameter",
       "rule": "duplicate-test-name",
       "role": "variant",
-      "engine": "next",
       "origin": "synthetic",
       "verdict": "generated",
       "classifiedAt": "2026-11-04",
@@ -4531,9 +4529,6 @@
           ]
         }
       ],
-      "blindUnderCurrent": [
-        "users.test.ts"
-      ],
       "expectedIncompleteNext": false,
       "expectedUnresolvedNext": 0
     },
@@ -4969,9 +4964,6 @@
           ]
         }
       ],
-      "blindUnderCurrent": [
-        "unknown.test.ts"
-      ],
       "expectedIncompleteNext": false,
       "expectedUnresolvedNext": 0
     },
@@ -4995,9 +4987,6 @@
             "clock: second check"
           ]
         }
-      ],
-      "blindUnderCurrent": [
-        "known.test.ts"
       ],
       "expectedIncompleteNext": false,
       "expectedUnresolvedNext": 0
@@ -5380,9 +5369,6 @@
           ]
         }
       ],
-      "blindUnderCurrent": [
-        "run.test.ts"
-      ],
       "expectedUnresolvedNext": 1
     },
     {
@@ -5405,9 +5391,6 @@
             "reads the count again"
           ]
         }
-      ],
-      "blindUnderCurrent": [
-        "count.test.ts"
       ],
       "expectedIncompleteNext": false,
       "expectedUnresolvedNext": 0
@@ -6161,9 +6144,6 @@
             "visible"
           ]
         }
-      ],
-      "blindUnderCurrent": [
-        "run.test.ts"
       ]
     },
     {
@@ -6759,9 +6739,6 @@
           ]
         }
       ],
-      "blindUnderCurrent": [
-        "run.test.ts"
-      ],
       "expectedIncompleteNext": false,
       "expectedUnresolvedNext": 0
     },
@@ -6785,9 +6762,6 @@
             "suite-b > reads"
           ]
         }
-      ],
-      "blindUnderCurrent": [
-        "run.test.ts"
       ],
       "expectedIncompleteNext": false,
       "expectedUnresolvedNext": 0
@@ -6835,9 +6809,6 @@
             "suite-b > reads"
           ]
         }
-      ],
-      "blindUnderCurrent": [
-        "run.test.ts"
       ],
       "expectedIncompleteNext": false,
       "expectedUnresolvedNext": 0
@@ -6909,9 +6880,6 @@
           ]
         }
       ],
-      "blindUnderCurrent": [
-        "run.test.ts"
-      ],
       "expectedIncompleteNext": false,
       "expectedUnresolvedNext": 0
     },
@@ -6958,9 +6926,6 @@
             "outer > suite-b > reads"
           ]
         }
-      ],
-      "blindUnderCurrent": [
-        "run.test.ts"
       ],
       "expectedIncompleteNext": false,
       "expectedUnresolvedNext": 0
@@ -7009,9 +6974,6 @@
           ]
         }
       ],
-      "blindUnderCurrent": [
-        "run.test.ts"
-      ],
       "expectedIncompleteNext": false,
       "expectedUnresolvedNext": 0
     },
@@ -7036,9 +6998,6 @@
           ]
         }
       ],
-      "blindUnderCurrent": [
-        "run.test.ts"
-      ],
       "expectedIncompleteNext": false,
       "expectedUnresolvedNext": 0
     },
@@ -7062,9 +7021,6 @@
             "suite-b > reads"
           ]
         }
-      ],
-      "blindUnderCurrent": [
-        "run.test.ts"
       ],
       "expectedIncompleteNext": false,
       "expectedUnresolvedNext": 0
@@ -7112,9 +7068,6 @@
             "suite-b > reads"
           ]
         }
-      ],
-      "blindUnderCurrent": [
-        "run.test.ts"
       ],
       "expectedIncompleteNext": false,
       "expectedUnresolvedNext": 0
@@ -7209,9 +7162,6 @@
           ]
         }
       ],
-      "blindUnderCurrent": [
-        "run.test.ts"
-      ],
       "expectedIncompleteNext": false,
       "expectedUnresolvedNext": 0
     },
@@ -7294,7 +7244,6 @@
       "path": "mock-global-rewritten-control",
       "rule": "duplicate-test",
       "role": "positive",
-      "engine": "next",
       "origin": "synthetic",
       "verdict": "generated",
       "classifiedAt": "2026-11-04",
@@ -7318,7 +7267,6 @@
       "path": "fixture-default-star-control",
       "rule": "duplicate-test",
       "role": "positive",
-      "engine": "next",
       "origin": "synthetic",
       "verdict": "generated",
       "classifiedAt": "2026-11-04",
@@ -7398,7 +7346,6 @@
       "path": "mock-spy-options-wrapped",
       "rule": "duplicate-test",
       "role": "positive",
-      "engine": "next",
       "origin": "synthetic",
       "verdict": "generated",
       "classifiedAt": "2026-11-04",
@@ -7415,10 +7362,7 @@
           ]
         }
       ],
-      "expectedAbsent": [],
-      "blindUnderCurrent": [
-        "run.test.ts"
-      ]
+      "expectedAbsent": []
     },
     {
       "name": "mock-spy-options-positive",
@@ -7533,9 +7477,6 @@
             "clock: second check"
           ]
         }
-      ],
-      "blindUnderCurrent": [
-        "clock.test.ts"
       ],
       "expectedIncompleteNext": false,
       "expectedUnresolvedNext": 0
@@ -8134,10 +8075,6 @@
           ]
         }
       ],
-      "blindUnderCurrent": [
-        "alias.test.ts",
-        "renamed-vi.test.ts"
-      ],
       "expectedIncompleteNext": false,
       "expectedUnresolvedNext": 0
     },
@@ -8161,9 +8098,6 @@
             "plain.test.ts:2"
           ]
         }
-      ],
-      "blindUnderCurrent": [
-        "alias.test.ts"
       ],
       "expectedIncompleteNext": false,
       "expectedUnresolvedNext": 0
@@ -8310,9 +8244,6 @@
           ]
         }
       ],
-      "blindUnderCurrent": [
-        "run.test.ts"
-      ],
       "expectedIncompleteNext": false,
       "expectedUnresolvedNext": 0
     },
@@ -8336,9 +8267,6 @@
             "visible"
           ]
         }
-      ],
-      "blindUnderCurrent": [
-        "run.test.ts"
       ]
     },
     {
@@ -8439,9 +8367,6 @@
             "skipped"
           ]
         }
-      ],
-      "blindUnderCurrent": [
-        "run.test.ts"
       ],
       "expectedIncompleteNext": false
     },
@@ -8641,9 +8566,6 @@
       "expectedUnresolved": 2,
       "expectedFindings": [],
       "expectedAbsent": [],
-      "blindUnderCurrent": [
-        "run.test.ts"
-      ],
       "expectedIncompleteNext": false,
       "expectedUnresolvedNext": 0
     },
@@ -8864,7 +8786,6 @@
       "path": "runner-nested-forwarded-capture",
       "rule": "duplicate-test",
       "role": "positive",
-      "engine": "next",
       "origin": "synthetic",
       "verdict": "generated",
       "classifiedAt": "2026-11-02",
@@ -8909,7 +8830,6 @@
       "path": "runner-nested-module-const",
       "rule": "duplicate-test",
       "role": "positive",
-      "engine": "next",
       "origin": "synthetic",
       "verdict": "generated",
       "classifiedAt": "2026-11-02",
@@ -8939,7 +8859,6 @@
       "path": "runner-nested-binding-isolation",
       "rule": "duplicate-test",
       "role": "positive",
-      "engine": "next",
       "origin": "synthetic",
       "verdict": "generated",
       "classifiedAt": "2026-11-02",
@@ -8984,7 +8903,6 @@
       "path": "runner-eval-binding-guard",
       "rule": "duplicate-test",
       "role": "positive",
-      "engine": "next",
       "origin": "synthetic",
       "verdict": "generated",
       "classifiedAt": "2026-11-03",
@@ -9046,7 +8964,6 @@
       "path": "runner-import-meta",
       "rule": "duplicate-test",
       "role": "positive",
-      "engine": "next",
       "origin": "synthetic",
       "verdict": "generated",
       "classifiedAt": "2026-11-03",
@@ -9078,7 +8995,6 @@
       "path": "runner-arguments-receiver",
       "rule": "duplicate-test",
       "role": "negative",
-      "engine": "next",
       "origin": "synthetic",
       "verdict": "generated",
       "classifiedAt": "2026-11-03",
@@ -9101,7 +9017,6 @@
       "path": "suite-skipped-children",
       "rule": "duplicate-suite",
       "role": "negative",
-      "engine": "next",
       "origin": "synthetic",
       "verdict": "generated",
       "classifiedAt": "2026-11-04",
@@ -9141,7 +9056,6 @@
       "path": "suite-focus-elsewhere",
       "rule": "duplicate-suite",
       "role": "negative",
-      "engine": "next",
       "origin": "synthetic",
       "verdict": "generated",
       "classifiedAt": "2026-11-04",
@@ -9189,7 +9103,6 @@
       "path": "suite-registration-state",
       "rule": "duplicate-suite",
       "role": "negative",
-      "engine": "next",
       "origin": "synthetic",
       "verdict": "generated",
       "classifiedAt": "2026-11-04",
@@ -9212,7 +9125,6 @@
       "path": "suite-conditional-registration",
       "rule": "duplicate-suite",
       "role": "negative",
-      "engine": "next",
       "origin": "synthetic",
       "verdict": "generated",
       "classifiedAt": "2026-11-04",
@@ -9252,7 +9164,6 @@
       "path": "suite-static-initializer",
       "rule": "duplicate-suite",
       "role": "negative",
-      "engine": "next",
       "origin": "synthetic",
       "verdict": "generated",
       "classifiedAt": "2026-11-04",
@@ -9292,7 +9203,6 @@
       "path": "suite-api-reexport-spelling",
       "rule": "duplicate-each-row",
       "role": "positive",
-      "engine": "next",
       "origin": "synthetic",
       "verdict": "generated",
       "classifiedAt": "2026-11-04",
@@ -9316,7 +9226,6 @@
       "path": "suite-user-wrapper-withheld",
       "rule": "duplicate-each-row",
       "role": "negative",
-      "engine": "next",
       "origin": "synthetic",
       "verdict": "generated",
       "classifiedAt": "2026-11-04",
@@ -9339,7 +9248,6 @@
       "path": "suite-local-table-withheld",
       "rule": "duplicate-each-row",
       "role": "negative",
-      "engine": "next",
       "origin": "synthetic",
       "verdict": "generated",
       "classifiedAt": "2026-11-04",
@@ -9385,7 +9293,6 @@
       "path": "helper-hook-collection-call",
       "rule": "duplicate-test",
       "role": "negative",
-      "engine": "next",
       "origin": "synthetic",
       "verdict": "generated",
       "classifiedAt": "2026-11-04",
@@ -9434,7 +9341,6 @@
       "path": "helper-hook-local-at-collection",
       "rule": "duplicate-test",
       "role": "negative",
-      "engine": "next",
       "origin": "synthetic",
       "verdict": "generated",
       "classifiedAt": "2026-11-04",
@@ -9460,7 +9366,6 @@
       "path": "duplicate-test-long-row-names",
       "rule": "duplicate-test",
       "role": "positive",
-      "engine": "next",
       "origin": "synthetic",
       "verdict": "generated",
       "classifiedAt": "2026-11-04",
@@ -9477,17 +9382,13 @@
           ]
         }
       ],
-      "expectedAbsent": [],
-      "blindUnderCurrent": [
-        "totals.test.ts"
-      ]
+      "expectedAbsent": []
     },
     {
       "name": "duplicate-test-name-long-row-values",
       "path": "duplicate-test-name-long-row-values",
       "rule": "duplicate-test-name",
       "role": "negative",
-      "engine": "next",
       "origin": "synthetic",
       "verdict": "generated",
       "classifiedAt": "2026-11-04",

@@ -121,7 +121,6 @@ pub struct RunDiagnostics<'a> {
     pub baseline: Option<&'a Path>,
     pub diagnostics: &'a [Sanitized],
     pub files_with_diagnostics: usize,
-    pub census: &'a [(String, u64)],
 }
 
 /// Most reason kinds the terminal names before folding the rest into "and N more kind(s)".
@@ -195,7 +194,6 @@ pub fn write_run(writer: &mut dyn Write, context: &RunDiagnostics<'_>) -> io::Re
         baseline,
         diagnostics,
         files_with_diagnostics,
-        census,
     } = *context;
     // Written to stderr, never stdout: a machine reporter owns stdout and must stay parseable.
     // Bounded, because a corpus with thousands of degraded files would otherwise bury the report
@@ -320,18 +318,6 @@ pub fn write_run(writer: &mut dyn Write, context: &RunDiagnostics<'_>) -> io::Re
         }
     }
 
-    // T1's census (backlog): setting `VD_CELL_CENSUS` (any value) histograms why every unreadable `.each` cell was
-    // refused, worst cause first. stderr and last, so it never interleaves with a machine
-    // reporter's stdout. Empty -- and free -- on every run without the variable.
-    if !census.is_empty() {
-        writeln!(
-            writer,
-            "\nvitest-dedup: unreadable `.each` cell census (VD_CELL_CENSUS):"
-        )?;
-        for (cause, count) in census {
-            writeln!(writer, "  {count:6}  {}", Sanitized::new(cause))?;
-        }
-    }
     Ok(())
 }
 
@@ -470,7 +456,6 @@ mod tests {
             let messages: Vec<_> = (0..count)
                 .map(|i| Sanitized::new(&format!("message{i}\n\x1b[31m")))
                 .collect();
-            let census = vec![("identifier\n\u{202e}".to_owned(), 7)];
             let context = RunDiagnostics {
                 result: &result,
                 unresolved_tests: 3,
@@ -479,7 +464,6 @@ mod tests {
                 baseline: Some(Path::new("base\u{202e}.json")),
                 diagnostics: &messages,
                 files_with_diagnostics: 2,
-                census: &census,
             };
             let mut bytes = Vec::new();
             write_run(&mut bytes, &context).unwrap();
@@ -492,7 +476,6 @@ mod tests {
             assert!(text.contains("2 finding(s) lying entirely within unchanged files"));
             assert!(text.contains("baseline base.json accounted for 1 finding(s)"));
             assert!(text.contains("3 finding(s) are not in it"));
-            assert!(text.contains("     7  identifier"));
             assert_eq!(
                 text.lines()
                     .filter(|line| line.starts_with("  blind"))
@@ -536,7 +519,6 @@ mod tests {
             baseline: None,
             diagnostics: &[],
             files_with_diagnostics: 0,
-            census: &[],
         };
         let mut bytes = Vec::new();
         write_run(&mut bytes, &context).unwrap();

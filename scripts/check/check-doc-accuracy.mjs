@@ -113,12 +113,14 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 // floors exist to catch a SCAN that collapsed, not to stop documentation getting shorter on
 // purpose, so they follow a deliberate reduction rather than blocking it. They do not follow an
 // accidental one: anything that drops a claim without an edit here still fails.
+// Lowered 2026-11-04 when the earlier analyzer core was deleted: its fingerprint module held one
+// of the three checked claims (checked 3 -> 2).
 export const FLOORS = {
   files: 25,
   fences: 20,
   jsonFamilyFences: 4,
   unitClaims: 24,
-  checkedUnitClaims: 3,
+  checkedUnitClaims: 2,
   // Check 2b's floor, and the reason it is at the measured value rather than below it. The other
   // floors here guard against a scan that collapsed; this one guards against the check quietly
   // narrowing, which is a different failure with the same symptom. A tie is admitted only while

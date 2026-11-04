@@ -104,17 +104,10 @@
   "knownTitles": [
     {
       "path": "concise.test.ts",
-      "kind": "missing-test",
-      "item": "conditional registration in an expression body > requires the only registered overwrite",
-      "reason": "The default collector does not enter this expression-bodied suite callback; Vitest and the next inventory collect its active declarations.",
-      "waitsOn": "the default collector following expression-bodied suite callbacks"
-    },
-    {
-      "path": "concise.test.ts",
-      "kind": "missing-hook",
-      "item": "beforeEach@concise.test.ts:5",
-      "reason": "The default collector does not enter this expression-bodied suite callback; Vitest and the next inventory collect its active declarations.",
-      "waitsOn": "the default collector following expression-bodied suite callbacks"
+      "kind": "extra-hook",
+      "item": "beforeEach@concise.test.ts:4",
+      "reason": "A hook in the untaken branch of a conditional expression is recorded; Vitest never registers it.",
+      "waitsOn": "the analyzer reading this shape"
     }
   ]
 }

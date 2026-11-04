@@ -1,11 +1,11 @@
-//! Glob component boundaries through discovery, extraction, and duplicate findings.
+//! Glob component boundaries through discovery and the final duplicate findings.
 
+#[path = "support/report.rs"]
+mod report;
+use report::{findings, report_on};
 use std::fs;
-use vitest_dedup::analysis::analyze;
 use vitest_dedup::config::{Config, ConfigOverrides};
 use vitest_dedup::discovery::discover;
-use vitest_dedup::frontend::{extract, Globals};
-use vitest_dedup::model::{IncompleteCauses, Rule};
 use vitest_dedup::vitest_projects::resolve_projects;
 
 const SOURCE: &str = include_str!("fixtures/config-globs/duplicate-source.txt");
@@ -42,27 +42,13 @@ fn check_scope(tool_config: Option<&str>, vitest_config: Option<&str>, expected:
         .collect();
     actual.sort();
     assert_eq!(actual, expected);
-    let mut tests = Vec::new();
-    for file in &discovered.files {
-        let extracted = extract(SOURCE, file, Globals::Disabled);
-        assert!(!extracted.incomplete, "{:?}", extracted.diagnostics);
-        assert_eq!(extracted.tests.len(), 2);
-        tests.extend(extracted.tests);
-    }
-    let result = analyze(
-        tests,
-        &config,
-        discovered.files.len(),
-        IncompleteCauses::default(),
-    )
-    .unwrap();
-    assert_eq!(result.files_analyzed, expected.len());
-    assert_eq!(result.tests_analyzed, expected.len() * 2);
+    let result = report_on(root, &[]);
+    assert_eq!(result["filesAnalyzed"], expected.len(), "{result}");
+    assert_eq!(result["testsAnalyzed"], expected.len() * 2, "{result}");
     assert_eq!(
-        result
-            .findings
+        findings(&result)
             .iter()
-            .filter(|f| f.rule == Rule::DuplicateTest)
+            .filter(|finding| finding["rule"] == "duplicate-test")
             .count(),
         expected.len()
     );

@@ -81,8 +81,6 @@
     }
   },
   "blindUnderCurrent": [
-    "star-spelled.test.ts",
-    "type-named.test.ts",
-    "type-only.test.ts"
+    "star-spelled.test.ts"
   ]
 }
