@@ -1,7 +1,7 @@
 //! The same behavior events, spelled differently: a suspicion, never a proof.
 
 use super::parameters::{declaration, Reported};
-use super::{emit_where, keyed, one_per_body, one_per_declaration, Entry, Files};
+use super::{emit_where, keyed, per_body, per_declaration, whole, Entry, Files};
 use crate::analysis::{near_duplicate_text, MIN_BEHAVIOR_EVENTS_FOR_NEAR_DUPLICATE};
 use crate::config::Config;
 use crate::model::{Finding, Rule, Severity};
@@ -35,7 +35,7 @@ pub(super) fn run(
     });
     let groups = groups
         .iter()
-        .map(|group| one_per_body(&one_per_declaration(group, &entries), &entries))
+        .map(|group| per_body(per_declaration(whole(group), &entries), &entries))
         .filter(|group| group.len() >= 2)
         .collect();
     emit_where(

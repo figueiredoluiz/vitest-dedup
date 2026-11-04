@@ -1,6 +1,6 @@
 //! Repeated cases within a single directly read table.
 
-use super::{emit, keyed, Entry, Files};
+use super::{emit, keyed, whole, Entry, Files};
 use crate::config::Config;
 use crate::model::{Finding, Rule, Severity};
 use crate::pairs::PairBudget;
@@ -33,7 +33,7 @@ pub(super) fn run(
         Rule::DuplicateEachRow,
         severity,
         &entries,
-        groups,
+        groups.iter().map(|group| whole(group)).collect(),
         message,
         budget,
         findings,

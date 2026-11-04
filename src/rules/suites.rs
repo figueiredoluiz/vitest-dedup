@@ -1,6 +1,6 @@
 //! Whole-suite copies and the child findings already covered by them.
 
-use super::{emit, keyed, one_per_declaration, Entry, Files};
+use super::{emit, keyed, per_declaration, whole, Entry, Files};
 use crate::config::Config;
 use crate::model::{Covers, Finding, GateCase, Location, Rule, Severity};
 use crate::modes::{apply_inline_suppressions, InlineSuppression};
@@ -196,13 +196,13 @@ pub(super) fn run(
             .flatten()
     });
     for group in groups {
-        let group = one_per_declaration(&group, &entries);
+        let group = per_declaration(whole(&group), &entries);
         if group.len() < 2 {
             continue;
         }
         let locations: Vec<_> = group
             .iter()
-            .map(|&index| Location {
+            .map(|&(index, _)| Location {
                 path: entries[index].path.to_path_buf(),
                 span: entries[index].case.span,
             })

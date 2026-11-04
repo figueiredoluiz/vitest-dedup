@@ -183,9 +183,9 @@ fn run_all(
                 .is_none()
                 .then_some((entry.path, entry.case.key))
         });
-        let groups: Vec<Vec<usize>> = groups
+        let groups: Vec<Reduced> = groups
             .into_iter()
-            .map(|group| one_per_declaration(&group, &entries))
+            .map(|group| per_declaration(whole(&group), &entries))
             .filter(|group| group.len() >= 2)
             .collect();
         budget_exhausted |= !emit(
@@ -214,9 +214,9 @@ fn run_all(
                 .is_none()
                 .then_some(entry.case.module_key)
         });
-        let groups: Vec<Vec<usize>> = groups
+        let groups: Vec<Reduced> = groups
             .into_iter()
-            .map(|group| one_per_file(&group, &entries))
+            .map(|group| per_file(whole(&group), &entries))
             .filter(|group| group.len() >= 2)
             .collect();
         budget_exhausted |= !emit(
@@ -315,6 +315,71 @@ fn one_per_file(group: &[usize], entries: &[Entry<'_>]) -> Vec<usize> {
     selected
 }
 
+/// A matching group reduced to the entries a finding names: each kept entry with every entry of
+/// the original group it stands for, itself included. The named entries are the presentation; what
+/// they stand for is what the quality gate counts.
+type Reduced = Vec<(usize, Vec<usize>)>;
+
+/// A group in which every entry stands for itself.
+fn whole(group: &[usize]) -> Reduced {
+    group.iter().map(|&index| (index, vec![index])).collect()
+}
+
+/// `group` reduced to the entries `keep` selects; each dropped entry stands with the first kept
+/// entry `same` relates it to, so no matched case is lost by the reduction.
+fn reduce(
+    group: Reduced,
+    keep: impl Fn(&[usize]) -> Vec<usize>,
+    same: impl Fn(usize, usize) -> bool,
+) -> Reduced {
+    let indices: Vec<usize> = group.iter().map(|(index, _)| *index).collect();
+    let mut kept: Reduced = keep(&indices)
+        .into_iter()
+        .map(|index| (index, Vec::new()))
+        .collect();
+    for (index, stands) in group {
+        let slot = kept
+            .iter()
+            .position(|(kept, _)| *kept == index)
+            .or_else(|| kept.iter().position(|(kept, _)| same(*kept, index)));
+        if let Some(slot) = slot {
+            kept[slot].1.extend(stands);
+        }
+    }
+    kept
+}
+
+/// [`one_per_declaration`] over a reduced group: rows of one table stand with its representative.
+fn per_declaration(group: Reduced, entries: &[Entry<'_>]) -> Reduced {
+    reduce(
+        group,
+        |group| one_per_declaration(group, entries),
+        |kept, other| entries[kept].declaration() == entries[other].declaration(),
+    )
+}
+
+/// [`one_per_body`] over a reduced group: equal bodies stand with the one kept.
+fn per_body(group: Reduced, entries: &[Entry<'_>]) -> Reduced {
+    reduce(
+        group,
+        |group| one_per_body(group, entries),
+        |kept, other| entries[kept].case.body == entries[other].case.body,
+    )
+}
+
+/// [`one_per_file`] over a reduced group: an entry stands with a kept one of its file or its
+/// declaration.
+fn per_file(group: Reduced, entries: &[Entry<'_>]) -> Reduced {
+    reduce(
+        group,
+        |group| one_per_file(group, entries),
+        |kept, other| {
+            entries[kept].path == entries[other].path
+                || entries[kept].declaration() == entries[other].declaration()
+        },
+    )
+}
+
 /// One physical declaration claim, with row identity only for the row rule and caller scope
 /// for file-local rules. Cross-file claims aggregate their matching callers instead.
 type DeclarationClaim<'a> = (&'a Path, u32, Option<usize>, &'a Path);
@@ -350,7 +415,7 @@ fn emit(
     rule: Rule,
     severity: Severity,
     entries: &[Entry<'_>],
-    groups: Vec<Vec<usize>>,
+    groups: Vec<Reduced>,
     message: fn(&[Entry<'_>]) -> String,
     budget: &mut PairBudget,
     findings: &mut Vec<Finding>,
@@ -373,7 +438,7 @@ fn emit_where<'a>(
     rule: Rule,
     severity: Severity,
     entries: &[Entry<'a>],
-    groups: Vec<Vec<usize>>,
+    groups: Vec<Reduced>,
     message: fn(&[Entry<'_>]) -> String,
     // A trait object, not a generic: one instantiation, so coverage counts every line it runs.
     keep: &dyn Fn(&[Entry<'_>]) -> bool,
@@ -417,32 +482,39 @@ fn emit_where<'a>(
     };
     let mut claimed: BTreeMap<_, (usize, Vec<BTreeSet<&Path>>)> = BTreeMap::new();
     let mut finished = true;
-    'groups: for group in &groups {
-        // Every case the match holds, before one per declaration stands for each table below.
-        let matched: Vec<_> = group.iter().map(|&index| entries[index]).collect();
-        let covered = |members: &[Entry<'_>]| -> Vec<GateCase> {
-            let declarations: BTreeSet<_> =
-                members.iter().map(|member| member.declaration()).collect();
-            matched
+    'groups: for group in groups {
+        // One per declaration, row by row for the row rule; what a dropped entry stood for stays
+        // with the entry kept in its place.
+        let key = |index: usize| {
+            let entry = entries[index];
+            (
+                entry.declaration(),
+                (rule == Rule::DuplicateEachRow)
+                    .then_some(entry.case.row)
+                    .flatten(),
+            )
+        };
+        let reduced = reduce(
+            group,
+            |group| {
+                let mut seen = BTreeSet::new();
+                group
+                    .iter()
+                    .copied()
+                    .filter(|&index| seen.insert(key(index)))
+                    .collect()
+            },
+            |kept, other| key(kept) == key(other),
+        );
+        let stands: BTreeMap<usize, Vec<usize>> = reduced.iter().cloned().collect();
+        let covered = |members: &[usize]| -> Vec<GateCase> {
+            members
                 .iter()
-                .filter(|entry| declarations.contains(&entry.declaration()))
-                .map(|entry| entry.gate_case())
+                .flat_map(|member| &stands[member])
+                .map(|&index| entries[index].gate_case())
                 .collect()
         };
-        let mut seen = BTreeSet::new();
-        let group: Vec<_> = group
-            .iter()
-            .copied()
-            .filter(|&index| {
-                let entry = entries[index];
-                seen.insert((
-                    entry.declaration(),
-                    (rule == Rule::DuplicateEachRow)
-                        .then_some(entry.case.row)
-                        .flatten(),
-                ))
-            })
-            .collect();
+        let group: Vec<usize> = reduced.iter().map(|(index, _)| *index).collect();
         if group.len() < 2 {
             continue;
         }
@@ -450,23 +522,21 @@ fn emit_where<'a>(
             GroupOutcome::Spanning(pairs) => (
                 pairs
                     .into_iter()
-                    .map(|(left, right)| vec![entries[left], entries[right]])
+                    .map(|(left, right)| vec![left, right])
                     .collect::<Vec<_>>(),
                 false,
             ),
-            GroupOutcome::Cluster(members) => (
-                vec![members.into_iter().map(|index| entries[index]).collect()],
-                true,
-            ),
+            GroupOutcome::Cluster(members) => (vec![members], true),
         };
         let mut pending = Vec::new();
-        for members in candidates {
+        for indices in candidates {
+            let members: Vec<_> = indices.iter().map(|&index| entries[index]).collect();
             if !keep(&members) {
                 continue;
             }
             let key = (declarations(rule, &members), name_claim(rule, &members));
             let owners = ownership(&members);
-            let cases = covered(&members);
+            let cases = covered(&indices);
             if let Some((index, known)) = claimed.get_mut(&key) {
                 for (known, more) in known.iter_mut().zip(owners) {
                     known.extend(more);

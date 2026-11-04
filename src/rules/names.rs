@@ -1,6 +1,6 @@
 //! Name collisions between distinct declarations in one file.
 
-use super::{emit, keyed, one_per_declaration, Entry, Files};
+use super::{emit, keyed, per_declaration, whole, Entry, Files};
 use crate::config::Config;
 use crate::model::{Finding, Rule, Severity};
 use crate::pairs::PairBudget;
@@ -24,7 +24,7 @@ pub(super) fn run(
     });
     let groups = groups
         .into_iter()
-        .map(|group| one_per_declaration(&group, &entries))
+        .map(|group| per_declaration(whole(&group), &entries))
         .filter(|group| group.len() >= 2)
         .collect();
     emit(

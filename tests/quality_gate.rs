@@ -328,3 +328,41 @@ test.todo('third')
     assert_eq!(gate(&run), (2, 2, Some(100.0)));
     assert_eq!(run.code, Some(1));
 }
+
+/// Every row of two tables whose rows all match counts, though one finding names one row of each.
+#[test]
+fn matching_tables_count_every_row_behind_their_representatives() {
+    let run = run(
+        &[(
+            "a.test.ts",
+            "import { test, expect } from 'vitest'
+test.each([[1], [1], [1]])('first %s', (v) => { expect(v).toBe(1) })
+test.each([[1], [1], [1]])('second %s', (v) => { expect(v).toBe(1) })
+",
+        )],
+        &["--threshold", "100"],
+    );
+    assert_eq!(gate(&run), (6, 6, Some(100.0)));
+}
+
+/// A new row pair counts its own rows, not the rows of a baselined pair beside it.
+#[test]
+fn a_new_row_pair_counts_only_its_own_rows() {
+    let directory = tempfile::tempdir().unwrap();
+    let rows = |values: &str| {
+        format!(
+            "import {{ test, expect }} from 'vitest'\ntest.each([{values}])('row %s', (v) => {{ expect(v).toBe(1) }})\n"
+        )
+    };
+    write(directory.path(), &[("a.test.ts", &rows("[1], [1]"))]);
+    let baseline = directory.path().join("baseline.json");
+    let baseline = baseline.to_str().unwrap();
+    let flags = ["--rule", "duplicate-each-row=error"];
+    let update = [&flags[..], &["--baseline", baseline, "--update-baseline"]].concat();
+    assert_eq!(run_on(directory.path(), &update).code, Some(0));
+    write(directory.path(), &[("a.test.ts", &rows("[1], [1], [1]"))]);
+    let gated = [&flags[..], &["--baseline", baseline, "--threshold", "70"]].concat();
+    let run = run_on(directory.path(), &gated);
+    assert_eq!(gate(&run), (2, 3, Some(2.0 / 3.0 * 100.0)));
+    assert_eq!(run.code, Some(0));
+}
