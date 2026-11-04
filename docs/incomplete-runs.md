@@ -125,7 +125,7 @@ alone. Past the cap the files with the fewest excluded tests are left out of the
 | `unreadable-callback` | A spread argument may hide the callback a test runs. |
 | `unsupported-benchmark` | A benchmark is counted but not compared. |
 | `incomplete-trace` | A test holds a branch or a shape the behavior trace does not model, so `near-duplicate-test`, `subsumed-test` and `parameterization-candidate` leave it out. The other rules still compare it, and the run stays complete. |
-| `registered-elsewhere` | A wrapper call, an import of a module that registers while it loads, or a registration function read as a value registers tests the file does not spell. One test is counted per such call, import or read. A call of a helper found to register only hooks is not counted: it registers no test, and its hooks are part of the context of the tests around it. |
+| `registered-elsewhere` | A wrapper call, a call through the `test` a suite callback receives (`describe('s', (test) => ...)`), an import of a module that registers while it loads, or a registration function read as a value registers tests the file does not spell. One test is counted per such call, import or read. A call of a helper found to register only hooks is not counted: it registers no test, and its hooks are part of the context of the tests around it. |
 | `unsupported-statement` | A statement form the walker does not enter, such as `with`, may hide declarations. |
 | `parse-error` | The parser reported errors. |
 | `unsupported-source` | The source type is unsupported. |

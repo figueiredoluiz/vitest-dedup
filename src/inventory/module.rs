@@ -942,6 +942,11 @@ impl<'s> Module<'s> {
         loop {
             let found = self.scan();
             let before = self.wrappers.clone();
+            // Vitest calls a suite factory with its `test` API, so a call through a parameter of a
+            // suite callback may register tests the inventory cannot attribute.
+            for symbol in self.suite_parameters(&found) {
+                self.wrappers.insert(symbol, Reach::Tasks);
+            }
             for (function, symbols) in self.functions() {
                 let Some(reach) = self.reach(self.tree.span(function), &found) else {
                     continue;
@@ -979,6 +984,30 @@ impl<'s> Module<'s> {
                 return self.scan();
             }
         }
+    }
+
+    /// The bindings the parameters of a suite's callback declare. A table's callback (`.each`,
+    /// `.for`) receives a row, not the API, so its parameters are not among them.
+    fn suite_parameters(&self, found: &[Found]) -> Vec<SymbolId> {
+        let tree = self.tree;
+        found
+            .iter()
+            .filter(|(_, _, kind, chain, _)| {
+                *kind == SiteKind::Registers(Registers::Suite)
+                    && !chain.iter().any(|step| {
+                        matches!(
+                            self.setting.dialect.chain_member(step),
+                            Some(Chain::Table(_))
+                        )
+                    })
+            })
+            .filter_map(|(node, ..)| {
+                let callback = tree.inner(tree.list(*node, "arguments").last().copied().flatten()?);
+                tree.is_function(callback).then_some(callback)
+            })
+            .flat_map(|callback| tree.list(callback, "params").into_iter().flatten())
+            .flat_map(|param| bound_symbols(tree, &self.parsed.scopes, param))
+            .collect()
     }
 
     /// Whether `symbol` may hold anything but what it was declared with: it is declared more than
