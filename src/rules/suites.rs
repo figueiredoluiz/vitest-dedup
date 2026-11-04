@@ -180,6 +180,7 @@ pub(super) fn carry(suite: &mut Finding, severity: Severity, cases: Vec<GateCase
 /// Emits each copied suite level and records its successfully reported groups.
 pub(super) fn run(
     files: &Files,
+    tests: &Files,
     config: &Config,
     suppressions: &[InlineSuppression],
     budget: &mut PairBudget,
@@ -219,6 +220,10 @@ pub(super) fn run(
         ) {
             return (twins, true);
         }
+        // A copy stands for the tests declared inside it, whether or not a child rule reports them.
+        for finding in &mut emitted {
+            finding.cases = descendants(finding, tests);
+        }
         let mut visible = emitted.clone();
         let removed = apply_inline_suppressions(&mut visible, suppressions);
         // A partially suppressed spanning group cannot stand for every relation in the group.
@@ -228,6 +233,41 @@ pub(super) fn run(
         findings.extend(emitted);
     }
     (twins, false)
+}
+
+/// The eligible tests declared inside the suite copies `finding` names: what it stands for.
+fn descendants(finding: &Finding, tests: &Files) -> Vec<GateCase> {
+    let mut cases: Vec<GateCase> = finding
+        .locations
+        .iter()
+        .flat_map(|copy| {
+            tests
+                .iter()
+                .filter(move |(path, _)| *path == copy.path)
+                .flat_map(move |(path, declared)| {
+                    declared
+                        .iter()
+                        .filter(move |case| {
+                            case.origin.is_none()
+                                && case.gate_eligible()
+                                && copy.span.start_byte <= case.span.start_byte
+                                && case.span.end_byte <= copy.span.end_byte
+                        })
+                        .map(move |case| {
+                            (
+                                Location {
+                                    path: path.clone(),
+                                    span: case.span,
+                                },
+                                case.row,
+                            )
+                        })
+                })
+        })
+        .collect();
+    cases.sort();
+    cases.dedup();
+    cases
 }
 
 /// Describes the complete block rather than repeating its test-level findings.

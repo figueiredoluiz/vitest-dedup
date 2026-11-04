@@ -366,3 +366,53 @@ fn a_new_row_pair_counts_only_its_own_rows() {
     assert_eq!(gate(&run), (2, 3, Some(2.0 / 3.0 * 100.0)));
     assert_eq!(run.code, Some(0));
 }
+
+/// A subsumed table pair counts every row pair, not only the first.
+#[test]
+fn a_subsumed_table_pair_counts_every_row() {
+    let run = run(
+        &[(
+            "a.test.ts",
+            "import { test, expect } from 'vitest'
+test.each([[1], [2], [3]])('smaller %s', (v) => { expect(v).toBeGreaterThan(0) })
+test.each([[1], [2], [3]])('larger %s', (v) => { expect(v).toBeGreaterThan(0); expect(v).toBeLessThan(9) })
+",
+        )],
+        &["--rule", "subsumed-test=error", "--threshold", "100"],
+    );
+    assert!(run.json["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|finding| finding["rule"] == "subsumed-test"));
+    assert_eq!(gate(&run), (6, 6, Some(100.0)));
+}
+
+/// A suite copy at error stands for the tests inside it when no child rule reports them.
+#[test]
+fn a_suite_copy_counts_its_tests_without_child_findings() {
+    let run = run(
+        &[(
+            "a.test.ts",
+            "import { describe, test, expect } from 'vitest'
+describe('copy', () => { test.each([[1], [2], [3]])('row %s', (v) => { expect(v).toBeGreaterThan(0) }) })
+describe('copy', () => { test.each([[1], [2], [3]])('row %s', (v) => { expect(v).toBeGreaterThan(0) }) })
+",
+        )],
+        &[
+            "--rule",
+            "duplicate-suite=error",
+            "--rule",
+            "duplicate-test=off",
+            "--rule",
+            "duplicate-test-name=off",
+            "--rule",
+            "parameterization-candidate=off",
+            "--threshold",
+            "100",
+        ],
+    );
+    assert_eq!(run.json["findings"][0]["rule"], "duplicate-suite");
+    assert!(run.json["findings"][0].get("covers").is_none());
+    assert_eq!(gate(&run), (6, 6, Some(100.0)));
+}

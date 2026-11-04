@@ -4,7 +4,7 @@ use super::{keyed, over, Files};
 use crate::config::Config;
 use crate::model::{Finding, Rule, Severity};
 use crate::pairs::PairBudget;
-use std::collections::BTreeSet;
+use std::collections::BTreeMap;
 
 /// Compares every eligible same-context row pair, charging candidate work rather than findings.
 /// Rows of one declaration never subsume each other; repeated directional declaration claims
@@ -24,7 +24,8 @@ pub(super) fn run(
         (case.exclusion.is_none() && case.trace_complete && case.ordinary_events != 0)
             .then_some((entry.path, case.subsumption_key?))
     });
-    let mut claimed = BTreeSet::new();
+    // Each declaration pair is one finding; later row pairs of the same two tables add their cases.
+    let mut claimed = BTreeMap::new();
     for group in groups {
         for left in 0..group.len() {
             for right in left + 1..group.len() {
@@ -47,13 +48,19 @@ pub(super) fn run(
                 } else {
                     continue;
                 };
-                if !claimed.insert((
+                let claim = (
                     members[0].path,
                     members[0].declaration(),
                     members[1].declaration(),
-                )) {
+                );
+                if let Some(&index) = claimed.get(&claim) {
+                    let finding: &mut Finding = &mut findings[index];
+                    finding
+                        .cases
+                        .extend(members.iter().map(|member| member.gate_case()));
                     continue;
                 }
+                claimed.insert(claim, findings.len());
                 let message = format!(
                     "one test's {} behavior events are a strict ordered subset of the other's {}; the \
                      smaller test may add no coverage, but only review can confirm the larger test's \
@@ -63,6 +70,10 @@ pub(super) fn run(
                 findings.push(over(Rule::SubsumedTest, severity, &members, message));
             }
         }
+    }
+    for &index in claimed.values() {
+        findings[index].cases.sort();
+        findings[index].cases.dedup();
     }
     true
 }

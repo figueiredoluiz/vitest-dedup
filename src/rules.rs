@@ -169,8 +169,14 @@ fn run_all(
 ) -> Outcome {
     let mut findings = Vec::new();
     let mut budget = PairBudget::new(max_pair_comparisons);
-    let (twins, mut budget_exhausted) =
-        suites::run(suites, config, suppressions, &mut budget, &mut findings);
+    let (twins, mut budget_exhausted) = suites::run(
+        suites,
+        files,
+        config,
+        suppressions,
+        &mut budget,
+        &mut findings,
+    );
 
     let duplicate_severity = config.severity(Rule::DuplicateTest);
     if duplicate_severity != Severity::Off {
@@ -326,22 +332,34 @@ fn whole(group: &[usize]) -> Reduced {
 }
 
 /// `group` reduced to the entries `keep` selects; each dropped entry stands with the first kept
-/// entry `same` relates it to, so no matched case is lost by the reduction.
-fn reduce(
+/// entry sharing one of its `keys`, so no matched case is lost by the reduction. Indexed, so the
+/// work is linear in the group before any budget is charged.
+fn reduce<K: Ord>(
     group: Reduced,
     keep: impl Fn(&[usize]) -> Vec<usize>,
-    same: impl Fn(usize, usize) -> bool,
+    keys: impl Fn(usize) -> Vec<K>,
 ) -> Reduced {
     let indices: Vec<usize> = group.iter().map(|(index, _)| *index).collect();
     let mut kept: Reduced = keep(&indices)
         .into_iter()
         .map(|index| (index, Vec::new()))
         .collect();
+    let own: BTreeMap<usize, usize> = kept
+        .iter()
+        .enumerate()
+        .map(|(slot, (index, _))| (*index, slot))
+        .collect();
+    let mut by_key: BTreeMap<K, usize> = BTreeMap::new();
+    for (slot, (index, _)) in kept.iter().enumerate() {
+        for key in keys(*index) {
+            by_key.entry(key).or_insert(slot);
+        }
+    }
     for (index, stands) in group {
-        let slot = kept
-            .iter()
-            .position(|(kept, _)| *kept == index)
-            .or_else(|| kept.iter().position(|(kept, _)| same(*kept, index)));
+        let slot = own
+            .get(&index)
+            .copied()
+            .or_else(|| keys(index).iter().find_map(|key| by_key.get(key).copied()));
         if let Some(slot) = slot {
             kept[slot].1.extend(stands);
         }
@@ -354,7 +372,7 @@ fn per_declaration(group: Reduced, entries: &[Entry<'_>]) -> Reduced {
     reduce(
         group,
         |group| one_per_declaration(group, entries),
-        |kept, other| entries[kept].declaration() == entries[other].declaration(),
+        |index| vec![entries[index].declaration()],
     )
 }
 
@@ -363,7 +381,7 @@ fn per_body(group: Reduced, entries: &[Entry<'_>]) -> Reduced {
     reduce(
         group,
         |group| one_per_body(group, entries),
-        |kept, other| entries[kept].case.body == entries[other].case.body,
+        |index| vec![entries[index].case.body],
     )
 }
 
@@ -373,9 +391,10 @@ fn per_file(group: Reduced, entries: &[Entry<'_>]) -> Reduced {
     reduce(
         group,
         |group| one_per_file(group, entries),
-        |kept, other| {
-            entries[kept].path == entries[other].path
-                || entries[kept].declaration() == entries[other].declaration()
+        // Two kinds of key, kept apart: a file, or a declaration.
+        |index| {
+            let entry = entries[index];
+            vec![(Some(entry.path), None), (None, Some(entry.declaration()))]
         },
     )
 }
@@ -504,7 +523,7 @@ fn emit_where<'a>(
                     .filter(|&index| seen.insert(key(index)))
                     .collect()
             },
-            |kept, other| key(kept) == key(other),
+            |index| vec![key(index)],
         );
         let stands: BTreeMap<usize, Vec<usize>> = reduced.iter().cloned().collect();
         let covered = |members: &[usize]| -> Vec<GateCase> {

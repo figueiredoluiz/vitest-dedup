@@ -43,7 +43,7 @@ pub(super) fn run<'a>(
             reduce(
                 whole(group),
                 |group| representatives(group, &entries),
-                |kept, other| entries[kept].declaration() == entries[other].declaration(),
+                |index| vec![entries[index].declaration()],
             )
         })
         .filter(|group| group.len() >= 2)
