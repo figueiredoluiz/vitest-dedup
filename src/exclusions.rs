@@ -4,11 +4,7 @@
 //! (up to [`MAX_EXCLUDED_FILES`]) and the histogram counts every one. Reasons are created where a
 //! refusal happens ([`ExclusionReason`]), never recovered from sentences.
 
-use crate::analysis::is_executable_declaration;
-use crate::model::{
-    ExcludedFile, ExclusionReason, ExclusionSummary, ExclusionTally, FixtureValue, MockFactory,
-    TestCase,
-};
+use crate::model::{ExcludedFile, ExclusionReason, ExclusionSummary, ExclusionTally};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
@@ -20,124 +16,6 @@ pub const MAX_EXCLUDED_FILES: usize = 10_000;
 /// Longest `detail` kept per file, in characters, applied when an entry is recorded and after the
 /// analysis root is removed; the full sentence stays on the terminal.
 const MAX_DETAIL_CHARS: usize = 500;
-
-/// Whether `reason` is recorded by a helper refusal, which taints every test in its scope and so
-/// already explains the file's excluded tests.
-fn explains_excluded_tests(reason: ExclusionReason) -> bool {
-    use ExclusionReason::*;
-    matches!(
-        reason,
-        HelperExportUnreadable
-            | HelperSetupEffects
-            | HelperEffectsUnproved
-            | HelperLimit
-            | HelperSourcesUnavailable
-            | PackageManifestUnreadable
-            | RunnerMocked
-            | UnsupportedExpression
-    )
-}
-
-/// Reasons the excluded executable tests of one file carry in their own context, first seen first.
-fn context_reasons(tests: &[TestCase]) -> Vec<ExclusionReason> {
-    let mut reasons = Vec::new();
-    for test in tests
-        .iter()
-        .filter(|test| is_executable_declaration(test.kind) && !test.context.is_comparable())
-    {
-        let mock = test
-            .context
-            .mocked_modules
-            .iter()
-            .any(|mock| mock.factory == MockFactory::Unresolved);
-        let fixture = test
-            .context
-            .fixtures
-            .iter()
-            .any(|fixture| fixture.body == FixtureValue::Unresolved);
-        // The explicit causes are independent: a test can have both. The fallback stands for
-        // "something else in the context", and only when neither explicit cause applies.
-        let own = [
-            (mock, ExclusionReason::MockFactoryUnreadable),
-            (fixture, ExclusionReason::FixtureUnreadable),
-        ];
-        let mut found: Vec<ExclusionReason> = own
-            .into_iter()
-            .filter_map(|(applies, reason)| applies.then_some(reason))
-            .collect();
-        if found.is_empty() {
-            found.push(ExclusionReason::UnresolvedContext);
-        }
-        for reason in found {
-            if !reasons.contains(&reason) {
-                reasons.push(reason);
-            }
-        }
-    }
-    reasons
-}
-
-/// Executable tests of one file and how many of them were excluded.
-pub fn count_excluded(tests: &[TestCase]) -> (usize, usize) {
-    let executable = tests
-        .iter()
-        .filter(|test| is_executable_declaration(test.kind));
-    executable.fold((0, 0), |(excluded, total), test| {
-        (
-            excluded + usize::from(!test.context.is_comparable()),
-            total + 1,
-        )
-    })
-}
-
-/// Builds the entry for a file that was parsed, or `None` when nothing was excluded or incomplete.
-///
-/// `extraction_reasons` pairs each frontend reason with its sentence, in the order recorded; they
-/// come first because they explain the taint. Reasons derived from the tests' own contexts follow,
-/// except where a helper refusal already accounts for the excluded tests.
-pub fn parsed_file(
-    path: PathBuf,
-    tests: &[TestCase],
-    extraction_reasons: Vec<(ExclusionReason, String)>,
-) -> Option<ExcludedFile> {
-    let (tests_excluded, tests_total) = count_excluded(tests);
-    let mut reasons = extraction_reasons;
-    // An import refused for leaving the analysis root is the cause of the helper refusal that
-    // follows it, so it leads. Stable: every other order is the order recorded.
-    reasons.sort_by_key(|(reason, _)| *reason != ExclusionReason::ImportOutsideRoot);
-    if tests_excluded > 0 {
-        // A helper refusal taints every test in its scope, which shows as the generic fallback;
-        // the explicit causes (an unreadable mock factory or fixture) are the tests' own and are
-        // listed regardless.
-        let explained = reasons.iter().any(|(r, _)| explains_excluded_tests(*r));
-        for reason in context_reasons(tests) {
-            if explained && reason == ExclusionReason::UnresolvedContext {
-                continue;
-            }
-            reasons.push((reason, derived_detail(reason).to_owned()));
-        }
-    }
-    let mut file = file_from_reasons(path, reasons)?;
-    file.tests_excluded = tests_excluded;
-    file.tests_total = tests_total;
-    Some(file)
-}
-
-/// The sentence for a reason derived from test contexts rather than recorded by the frontend.
-fn derived_detail(reason: ExclusionReason) -> &'static str {
-    match reason {
-        ExclusionReason::MockFactoryUnreadable => {
-            "a `vi.mock` factory could not be read, so the tests it governs were excluded"
-        }
-        ExclusionReason::FixtureUnreadable => {
-            "a `test.extend` fixture value could not be read, so the tests it governs were excluded"
-        }
-        _ => {
-            "an ambient fact of the tests (title, `.each` table, config, or a body too deep \
-               for the analyzer's recursion cap) could not be resolved"
-        }
-    }
-}
 
 /// `text` with the analysis root removed from every path it mentions, so a detail sentence never
 /// carries the checkout's absolute location: `<root>/a/b` reads `a/b`, a bare `<root>` reads `.`.
@@ -264,7 +142,7 @@ impl ExclusionCollector {
         }
     }
 
-    /// Records `file` when there is one; the form `parsed_file` returns.
+    /// Records `file` when there is one; the form `counted_file` returns.
     pub fn extend(&mut self, file: Option<ExcludedFile>) {
         if let Some(file) = file {
             self.record(file);
@@ -491,9 +369,9 @@ mod tests {
         let mut collector = ExclusionCollector::default();
         for (path, reason, tests) in [
             ("a", ExclusionReason::ParseError, 0),
-            ("b", ExclusionReason::HelperLimit, 5),
-            ("c", ExclusionReason::HelperLimit, 1),
-            ("d", ExclusionReason::RunnerMocked, 9),
+            ("b", ExclusionReason::HelperEffectsUnproved, 5),
+            ("c", ExclusionReason::HelperEffectsUnproved, 1),
+            ("d", ExclusionReason::RegisteredElsewhere, 9),
             ("e", ExclusionReason::Unreadable, 0),
         ] {
             collector.record(entry(path, reason, tests));
@@ -507,42 +385,38 @@ mod tests {
         assert_eq!(
             order,
             vec![
-                (ExclusionReason::HelperLimit, 2, 6),
-                (ExclusionReason::RunnerMocked, 1, 9),
+                (ExclusionReason::HelperEffectsUnproved, 2, 6),
+                (ExclusionReason::RegisteredElsewhere, 1, 9),
                 (ExclusionReason::ParseError, 1, 0),
                 (ExclusionReason::Unreadable, 1, 0),
             ]
         );
     }
 
-    /// The first reason is primary, the others are distinct and in code order, and an import that
-    /// left the root leads the helper refusal it caused.
+    /// The first reason is primary, and the others are distinct and in code order.
     #[test]
     fn primary_is_the_first_reason_and_the_others_are_sorted_and_distinct() {
         let reasons = vec![
-            (ExclusionReason::UnsupportedStatement, "with".to_owned()),
-            (ExclusionReason::HelperLimit, "limit".to_owned()),
+            (ExclusionReason::SourceLimit, "with".to_owned()),
+            (ExclusionReason::HelperEffectsUnproved, "limit".to_owned()),
             (ExclusionReason::ParseError, "parse".to_owned()),
-            (ExclusionReason::HelperLimit, "limit again".to_owned()),
+            (
+                ExclusionReason::HelperEffectsUnproved,
+                "limit again".to_owned(),
+            ),
         ];
-        let file = parsed_file(PathBuf::from("x.test.ts"), &[], reasons).unwrap();
-        assert_eq!(file.reason, ExclusionReason::UnsupportedStatement);
+        let file = counted_file(PathBuf::from("x.test.ts"), reasons, 1, 2).unwrap();
+        assert_eq!(file.reason, ExclusionReason::SourceLimit);
         assert_eq!(file.detail, "with");
+        assert_eq!((file.tests_excluded, file.tests_total), (1, 2));
         assert_eq!(
             file.other_reasons,
-            vec![ExclusionReason::HelperLimit, ExclusionReason::ParseError]
-        );
-        let led = parsed_file(
-            PathBuf::from("y.test.ts"),
-            &[],
             vec![
-                (ExclusionReason::HelperExportUnreadable, "helper".to_owned()),
-                (ExclusionReason::ImportOutsideRoot, "outside".to_owned()),
-            ],
-        )
-        .unwrap();
-        assert_eq!(led.reason, ExclusionReason::ImportOutsideRoot);
-        assert!(parsed_file(PathBuf::from("z.test.ts"), &[], Vec::new()).is_none());
+                ExclusionReason::HelperEffectsUnproved,
+                ExclusionReason::ParseError
+            ]
+        );
+        assert!(counted_file(PathBuf::from("z.test.ts"), Vec::new(), 0, 0).is_none());
     }
 
     /// A detail past the bound is cut, so a hostile sentence cannot grow a report without limit.

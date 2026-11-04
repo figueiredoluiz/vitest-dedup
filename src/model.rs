@@ -484,10 +484,9 @@ pub struct MockedModule {
     /// directories names two different modules. Review found this field storing the literal
     /// `vi.mock` argument verbatim, which made `cross-file-duplicate` compare `Context`s as
     /// equivalent across files that mocked unrelated modules -- the same "unique in one scope,
-    /// used in a wider one" defect `src/frontend/fingerprint.rs`'s free-import identity exists to
-    /// avoid, applied to the one field in this struct that was never routed through it.
-    /// `src/frontend/fingerprint.rs::specifier_identity` (the same scheme `import_origins` uses)
-    /// is what this field is built from: `resolved:<canonical path>` when the specifier resolves
+    /// used in a wider one" defect a free-import identity exists to avoid, applied to the one
+    /// field in this struct that was never routed through it. The specifier identity (the same
+    /// scheme `import_origins` uses) is what this field is built from: `resolved:<canonical path>` when the specifier resolves
     /// to a real file, `unresolved:<anchored specifier>` when it does not -- prefixed distinctly
     /// so the two can never collide -- and a bare/package specifier (`vitest`, `@scope/pkg`)
     /// stays file-independent either way, since it names the same thing regardless of which file
@@ -535,8 +534,7 @@ pub struct Context {
     /// Modules this file has mocked, sorted: the net effect of its module-top-level `vi.mock` and
     /// `vi.unmock` calls, folded last-in-source-order-wins per specifier, so a specifier that is
     /// mocked and then unmocked is absent here exactly as it is absent from Vitest's registry.
-    /// Never includes the non-hoisted `vi.doMock`/`vi.doUnmock`, which taint the file instead --
-    /// see `collect_mocked_modules` in `src/frontend/extract.rs`.
+    /// Never includes the non-hoisted `vi.doMock`/`vi.doUnmock`, which taint the file instead.
     pub mocked_modules: Vec<MockedModule>,
     /// Fixtures in scope from `test.extend`, sorted.
     pub fixtures: Vec<FixtureBinding>,
@@ -551,7 +549,7 @@ pub struct Context {
     /// decide a comparison the finer one had not already decided. A future context-only rule
     /// (comparing setup without also comparing bodies) would have made that exploitable, which is
     /// why it is fixed rather than left as a documented assumption: each entry here is now built
-    /// through the same `crate::frontend::fingerprint::specifier_identity` scheme
+    /// through the same specifier identity scheme
     /// `MockedModule::specifier` uses, `resolved:<canonical path>` when the specifier names a
     /// real file and `unresolved:<anchored specifier>` when it does not -- prefixed distinctly so
     /// the two families can never collide, and a bare/package specifier stays file-independent
@@ -1053,10 +1051,6 @@ pub struct Finding {
     /// Absent on every other finding. Not part of the fingerprint.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub covers: Option<Covers>,
-    /// Which engine's identity [`Finding::fingerprint`] renders. Not a report field: the
-    /// fingerprint's own label carries it.
-    #[serde(skip)]
-    pub identity: Identity,
 }
 
 /// What reporting a copied block once removed: the highest severity among the child findings it
@@ -1123,16 +1117,6 @@ impl Finding {
     /// Whether any participating test is inert.
     pub fn has_inert_participant(&self) -> bool {
         self.inert.iter().any(|inert| *inert)
-    }
-
-    /// Full titles of the inert participants, in the order they appear in `locations`.
-    pub fn inert_titles(&self) -> Vec<&str> {
-        self.titles
-            .iter()
-            .zip(&self.inert)
-            .filter(|(_, inert)| **inert)
-            .map(|(title, _)| title.as_str())
-            .collect()
     }
 
     /// A stable identity for this finding. Used as-is by the `sarif` reporter's
@@ -1226,7 +1210,7 @@ impl Finding {
             .collect();
         participants.sort_unstable();
 
-        let version = self.identity.version();
+        let version = FINGERPRINT_VERSION;
         let mut input = String::from(version);
         input.push('\u{0}');
         input.push_str(self.rule.id());
@@ -1239,36 +1223,12 @@ impl Finding {
     }
 }
 
-/// Which engine's identity a finding carries. The derivation is shared, and the label is not: the
-/// engines pair and title tests differently, so a baseline written by one only partly matches the
-/// other, and a labeled mismatch is a refusal rather than a burst of unexplained new findings.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
-pub enum Identity {
-    /// The default engine's: [`FINGERPRINT_VERSION`].
-    #[default]
-    Current,
-    /// The next engine's: [`NEXT_FINGERPRINT_VERSION`].
-    Next,
-}
-
-impl Identity {
-    /// The label this identity's fingerprints carry.
-    pub fn version(self) -> &'static str {
-        match self {
-            Self::Current => FINGERPRINT_VERSION,
-            Self::Next => NEXT_FINGERPRINT_VERSION,
-        }
-    }
-}
-
 /// The version segment embedded in every [`Finding::fingerprint`]. Bump only the trailing number
 /// -- never the rest of the spelling -- when [`Finding::fingerprint`]'s derivation changes, so a
 /// baseline computed against an older version reads as unmistakably stale rather than silently
-/// comparing hashes produced by two different schemes.
-pub const FINGERPRINT_VERSION: &str = "vitestDedupFingerprint/v1";
-
-/// The version segment of a next-engine [`Finding::fingerprint`].
-pub const NEXT_FINGERPRINT_VERSION: &str = "vitestDedupFingerprint/v2";
+/// comparing hashes produced by two different schemes. `v1` was the earlier engine's: it paired and
+/// titled tests differently, so its baselines are refused rather than half matched.
+pub const FINGERPRINT_VERSION: &str = "vitestDedupFingerprint/v2";
 
 /// Renders `path` with forward slashes regardless of host platform.
 ///
@@ -1545,8 +1505,7 @@ impl Sha256 {
     }
 }
 
-/// SHA-256 of `value`, truncated to 128 bits. The per-event digest [`BehaviorTrace`] stores, and
-/// the next engine's trace stores the same way.
+/// SHA-256 of `value`, truncated to 128 bits: the per-event digest a behavior trace stores.
 pub(crate) fn sha256_128(value: &str) -> u128 {
     let mut hasher = Sha256::new();
     hasher.update(value.as_bytes());
@@ -1596,12 +1555,6 @@ impl std::io::Write for DigestWriter {
     }
 }
 
-/// A fixed-width spelling of `text`'s identity: SHA-256 truncated to 128 bits, in hex. For setup
-/// facts whose full text would otherwise be held once per test in a file.
-pub fn identity_digest(text: &str) -> String {
-    format!("{:032x}", sha256_128(text))
-}
-
 impl BodyDigest {
     /// Digests one normalized view's serialized text.
     ///
@@ -1627,8 +1580,8 @@ impl BodyDigest {
 
 impl Default for BodyDigest {
     /// The digest of the empty text, matching what the previous `String` field's `Default` (an
-    /// empty `String`) hashed to. A declaration with no body (`crate::frontend::extract`'s
-    /// `Fingerprints::default()`) must keep comparing and publishing exactly as it did.
+    /// empty `String`) hashed to. A declaration with no body (`Fingerprints::default()`) must keep
+    /// comparing and publishing exactly as it did.
     fn default() -> Self {
         Self::of("")
     }
@@ -2020,38 +1973,6 @@ fn capitalize_first(text: &str) -> String {
         .unwrap_or_default()
 }
 
-/// An infrastructure failure of an installed-package scan, counted per uncached attempt.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum PackageWorkerFailure {
-    /// The executable or worker thread could not be started.
-    Start,
-    /// The complete response and successful exit were not observed before the deadline.
-    Timeout,
-    /// The worker exited unsuccessfully or was killed by a signal.
-    Exit,
-    /// The response was malformed, incomplete, or exceeded the output bound.
-    Output,
-    /// Process supervision or pipe I/O failed.
-    Io,
-    /// A process marked as a worker tried to start another worker.
-    Nested,
-}
-
-impl PackageWorkerFailure {
-    /// A fixed diagnostic label, independent of paths, OS errors and child output.
-    pub fn description(self) -> &'static str {
-        match self {
-            Self::Start => "could not start",
-            Self::Timeout => "exceeded the deadline",
-            Self::Exit => "exited unsuccessfully",
-            Self::Output => "returned invalid or oversized output",
-            Self::Io => "failed during process or pipe I/O",
-            Self::Nested => "was blocked from starting a nested worker",
-        }
-    }
-}
-
 /// Why a run could not compare every test, and how much each cause accounts for.
 ///
 /// `incomplete` used to be one `bool` aggregated from nine unrelated conditions, and the banner
@@ -2107,9 +2028,6 @@ pub struct IncompleteCauses {
     /// Files or directories the run needed to resolve imports and did not find.
     #[serde(default)]
     pub missing_prerequisites: Vec<MissingPrerequisite>,
-    /// Failed package-worker attempts by cause; cache hits do not count again.
-    #[serde(default)]
-    pub package_worker_failures: std::collections::BTreeMap<PackageWorkerFailure, usize>,
 }
 
 impl IncompleteCauses {
@@ -2135,12 +2053,10 @@ impl IncompleteCauses {
             findings_truncated,
             withheld_unchanged,
             missing_prerequisites,
-            package_worker_failures,
         } = self;
         *discovery_failed
             || *project_config_degraded
             || *nothing_read
-            || package_worker_failures.values().any(|count| *count > 0)
             || !missing_prerequisites.is_empty()
             || *pair_budget_exhausted
             || *hook_scan_exhausted
@@ -2187,12 +2103,10 @@ impl IncompleteCauses {
             findings_truncated: _findings_truncated,
             withheld_unchanged: _withheld_unchanged,
             missing_prerequisites,
-            package_worker_failures,
         } = self;
         *discovery_failed
             || *project_config_degraded
             || *nothing_read
-            || package_worker_failures.values().any(|count| *count > 0)
             || !missing_prerequisites.is_empty()
             || *files_too_large > 0
             || *files_unreadable > 0
@@ -2225,7 +2139,6 @@ impl IncompleteCauses {
             findings_truncated,
             withheld_unchanged: _withheld_unchanged,
             missing_prerequisites: _missing_prerequisites,
-            package_worker_failures: _package_worker_failures,
         } = self;
         *pair_budget_exhausted
             || *hook_scan_exhausted
@@ -2267,14 +2180,6 @@ impl IncompleteCauses {
                 .iter()
                 .map(MissingPrerequisite::sentence),
         );
-        for (cause, count) in &self.package_worker_failures {
-            if *count > 0 {
-                reasons.push(format!(
-                    "{count} package scan worker(s) {}; affected packages could not be compared",
-                    cause.description()
-                ));
-            }
-        }
         if self.pair_budget_exhausted {
             reasons.push(
                 "the pair-comparison budget ran out before every pair had been compared"
@@ -2367,18 +2272,8 @@ pub enum ExclusionReason {
     /// An imported runner's export, or a called local helper, could not be resolved, read, or
     /// proved to be the function that runs.
     HelperExportUnreadable,
-    /// An imported runner has module, setup or fixture effects that could not be proved inert.
-    HelperSetupEffects,
     /// A call, argument or parameter write inside an imported runner has unproved effects.
     HelperEffectsUnproved,
-    /// A helper-expansion budget, recursion or depth limit was reached.
-    HelperLimit,
-    /// Helper bodies are unavailable in a historical revision baseline.
-    HelperSourcesUnavailable,
-    /// The runner, or a module on its re-export chain, is mocked or mocking is unresolved.
-    RunnerMocked,
-    /// A title, callback, option or registration expression is outside the supported shapes.
-    UnsupportedExpression,
     /// A `vi.mock` factory could not be read.
     MockFactoryUnreadable,
     /// A `test.extend` fixture value could not be read.
@@ -2395,7 +2290,7 @@ pub enum ExclusionReason {
     NamedCallback,
     /// A spread argument, or a callee the analyzer cannot read, may hide a test's callback.
     UnreadableCallback,
-    /// A benchmark, which the next engine counts but does not compare yet.
+    /// A benchmark, which is counted but not compared yet.
     UnsupportedBenchmark,
     /// A test's behavior was not read to the end, so the rules that read its trace leave it out.
     /// The other rules still compare it, and the run stays complete.
@@ -2403,8 +2298,6 @@ pub enum ExclusionReason {
     /// A wrapper call, a module load or a registration function read as a value registers tests
     /// the file does not spell.
     RegisteredElsewhere,
-    /// A statement form the walker does not enter (`with`) may hide declarations.
-    UnsupportedStatement,
     /// The parser reported errors; the file was read as far as it parsed.
     ParseError,
     /// The source type is unsupported.
@@ -2413,8 +2306,6 @@ pub enum ExclusionReason {
     SourceLimit,
     /// Extraction could not run or panicked and was recovered.
     ExtractionFailed,
-    /// A per-file declaration or loop-unrolling budget was reached.
-    WalkLimit,
     /// Required package metadata was refused by the bounded regular-file reader.
     PackageManifestUnreadable,
     /// An import resolved outside the analysis root and was not read.
@@ -2434,14 +2325,9 @@ pub enum ExclusionReason {
 
 impl ExclusionReason {
     /// Every code, in the order that breaks ties between a file's reasons.
-    pub const ALL: [Self; 30] = [
+    pub const ALL: [Self; 23] = [
         Self::HelperExportUnreadable,
-        Self::HelperSetupEffects,
         Self::HelperEffectsUnproved,
-        Self::HelperLimit,
-        Self::HelperSourcesUnavailable,
-        Self::RunnerMocked,
-        Self::UnsupportedExpression,
         Self::MockFactoryUnreadable,
         Self::FixtureUnreadable,
         Self::UnresolvedContext,
@@ -2452,12 +2338,10 @@ impl ExclusionReason {
         Self::UnsupportedBenchmark,
         Self::IncompleteTrace,
         Self::RegisteredElsewhere,
-        Self::UnsupportedStatement,
         Self::ParseError,
         Self::UnsupportedSource,
         Self::SourceLimit,
         Self::ExtractionFailed,
-        Self::WalkLimit,
         Self::PackageManifestUnreadable,
         Self::ImportOutsideRoot,
         Self::GlobalsUndetermined,
@@ -2471,12 +2355,7 @@ impl ExclusionReason {
     pub fn code(self) -> &'static str {
         match self {
             Self::HelperExportUnreadable => "helper-export-unreadable",
-            Self::HelperSetupEffects => "helper-setup-effects",
             Self::HelperEffectsUnproved => "helper-effects-unproved",
-            Self::HelperLimit => "helper-limit",
-            Self::HelperSourcesUnavailable => "helper-sources-unavailable",
-            Self::RunnerMocked => "runner-mocked",
-            Self::UnsupportedExpression => "unsupported-expression",
             Self::MockFactoryUnreadable => "mock-factory-unreadable",
             Self::FixtureUnreadable => "fixture-unreadable",
             Self::UnresolvedContext => "unresolved-context",
@@ -2487,12 +2366,10 @@ impl ExclusionReason {
             Self::UnsupportedBenchmark => "unsupported-benchmark",
             Self::IncompleteTrace => "incomplete-trace",
             Self::RegisteredElsewhere => "registered-elsewhere",
-            Self::UnsupportedStatement => "unsupported-statement",
             Self::ParseError => "parse-error",
             Self::UnsupportedSource => "unsupported-source",
             Self::SourceLimit => "source-limit",
             Self::ExtractionFailed => "extraction-failed",
-            Self::WalkLimit => "walk-limit",
             Self::PackageManifestUnreadable => "package-manifest-unreadable",
             Self::ImportOutsideRoot => "import-outside-root",
             Self::GlobalsUndetermined => "globals-undetermined",
@@ -2666,7 +2543,6 @@ mod tests {
     /// baseline flag.
     fn finding(rule: Rule, participants: &[(&str, u32, &str)]) -> Finding {
         Finding {
-            identity: Default::default(),
             registration_files: Vec::new(),
             rule,
             severity: rule.default_severity(),
@@ -2830,6 +2706,30 @@ mod tests {
             in_a.fingerprint(),
             in_b.fingerprint(),
             "two files with an identically-titled duplicate pair must not collide"
+        );
+    }
+
+    /// A registering file whose path is not UTF-8 keeps its own identity, distinct from its lossy
+    /// spelling, and a native `\\` separator still folds to `/`.
+    #[cfg(unix)]
+    #[test]
+    fn a_non_utf8_registration_file_keeps_its_own_fingerprint() {
+        use std::os::unix::ffi::OsStrExt;
+        let registered = |caller: &[u8]| {
+            let mut finding = finding(
+                Rule::DuplicateTest,
+                &[("src/runner.ts", 10, "x"), ("src/runner.ts", 20, "y")],
+            );
+            let caller = std::path::PathBuf::from(std::ffi::OsStr::from_bytes(caller));
+            finding.set_registration_files(vec![vec![caller.clone()], vec![caller]]);
+            finding
+        };
+        let native = registered(b"src\\\xff.test.ts");
+        let lossy = registered("src\\\u{fffd}.test.ts".as_bytes());
+        assert_ne!(native.fingerprint(), lossy.fingerprint());
+        assert_eq!(
+            native.fingerprint(),
+            registered(b"src/\xff.test.ts").fingerprint()
         );
     }
 
@@ -3159,7 +3059,7 @@ mod tests {
     /// the struct and handled in `any()` but forgotten here fails this test instead of passing it.
     #[test]
     fn every_incomplete_cause_on_its_own_makes_the_run_incomplete() {
-        let flips: [(&str, CauseSetter); 15] = [
+        let flips: [(&str, CauseSetter); 14] = [
             ("discoveryFailed", |causes| causes.discovery_failed = true),
             ("projectConfigDegraded", |causes| {
                 causes.project_config_degraded = true;
@@ -3187,11 +3087,6 @@ mod tests {
             }),
             ("findingsTruncated", |causes| causes.findings_truncated = 1),
             ("withheldUnchanged", |causes| causes.withheld_unchanged = 1),
-            ("packageWorkerFailures", |causes| {
-                causes
-                    .package_worker_failures
-                    .insert(PackageWorkerFailure::Start, 1);
-            }),
             ("missingPrerequisites", |causes| {
                 causes.missing_prerequisites = vec![MissingPrerequisite {
                     kind: PrerequisiteKind::NodeModules,
@@ -3332,10 +3227,6 @@ mod tests {
             |c: &mut IncompleteCauses| c.files_partially_read = 1,
             |c: &mut IncompleteCauses| c.files_globals_undetermined = 1,
             |c: &mut IncompleteCauses| c.unresolved_contexts = 1,
-            |c: &mut IncompleteCauses| {
-                c.package_worker_failures
-                    .insert(PackageWorkerFailure::Timeout, 1);
-            },
         ] {
             assert_class(set, true);
         }
@@ -3378,10 +3269,6 @@ mod tests {
             files_over_memory_budget: 8,
             findings_truncated: 6,
             withheld_unchanged: 7,
-            package_worker_failures: std::collections::BTreeMap::from([(
-                PackageWorkerFailure::Start,
-                10,
-            )]),
             missing_prerequisites: vec![MissingPrerequisite {
                 kind: PrerequisiteKind::NodeModules,
                 path: "node_modules".to_string(),
@@ -3399,22 +3286,25 @@ mod tests {
                     .unwrap_or(reason)
             })
             .collect();
-        assert_eq!(reasons.len(), 15, "every cause fired, so all fifteen speak");
+        assert_eq!(
+            reasons.len(),
+            14,
+            "every cause fired, so all fourteen speak"
+        );
         assert!(reasons[0].starts_with("every discovered file failed to read"));
         assert!(reasons[1].starts_with("directory traversal failed"));
         assert!(reasons[2].starts_with("a Vitest project's configuration"));
         assert!(reasons[3].starts_with("`node_modules` is missing or empty"));
-        assert!(reasons[4].starts_with("10 package scan worker(s) could not start"));
-        assert!(reasons[5].starts_with("the pair-comparison budget ran out"));
-        assert!(reasons[6].starts_with("the `redundant-hook` scan budget"));
-        assert!(leads[7].starts_with("file(s) were not analyzed because the memory budget"));
-        assert!(leads[8].starts_with("finding(s) were dropped by the display cap"));
-        assert!(leads[9].starts_with("test(s) were excluded from comparison"));
-        assert!(leads[10].starts_with("file(s) could not be read in full"));
-        assert!(leads[11].starts_with("file(s) were skipped because reading them failed"));
-        assert!(leads[12].starts_with("file(s) were skipped for exceeding the source-size limit"));
-        assert!(leads[13].starts_with("file(s) had an undetermined `globals` setting"));
-        assert!(leads[14].starts_with("finding(s) lying entirely within unchanged files"));
+        assert!(reasons[4].starts_with("the pair-comparison budget ran out"));
+        assert!(reasons[5].starts_with("the `redundant-hook` scan budget"));
+        assert!(leads[6].starts_with("file(s) were not analyzed because the memory budget"));
+        assert!(leads[7].starts_with("finding(s) were dropped by the display cap"));
+        assert!(leads[8].starts_with("test(s) were excluded from comparison"));
+        assert!(leads[9].starts_with("file(s) could not be read in full"));
+        assert!(leads[10].starts_with("file(s) were skipped because reading them failed"));
+        assert!(leads[11].starts_with("file(s) were skipped for exceeding the source-size limit"));
+        assert!(leads[12].starts_with("file(s) had an undetermined `globals` setting"));
+        assert!(leads[13].starts_with("finding(s) lying entirely within unchanged files"));
     }
 
     // --- context equivalence -----------------------------------------------------------------

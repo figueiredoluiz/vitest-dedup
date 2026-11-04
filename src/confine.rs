@@ -40,11 +40,6 @@ pub fn confine(root: &Path, path: &Path) -> Confinement {
     }
 }
 
-/// Whether the existing `path` is under `root` after canonicalization.
-pub fn contains(root: &Path, path: &Path) -> bool {
-    matches!(confine(root, path), Confinement::Inside(_))
-}
-
 /// Canonicalizes the longest prefix of `path` that exists, `..` and symlinks included, then
 /// appends the remaining components lexically. Only the part that does not exist is folded
 /// textually, so a symlinked directory followed by `..` is resolved by the filesystem.
@@ -117,6 +112,11 @@ mod tests {
     use std::fs;
 
     /// Check path confinement: a dotted path that folds back inside stays inside.
+    /// Whether the existing `path` is under `root` after canonicalization.
+    fn contains(root: &Path, path: &Path) -> bool {
+        matches!(confine(root, path), Confinement::Inside(_))
+    }
+
     #[test]
     fn dotted_path_that_folds_back_inside_is_inside() {
         let directory = tempfile::tempdir().unwrap();

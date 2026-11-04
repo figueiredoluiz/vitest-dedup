@@ -1,4 +1,4 @@
-//! Next-engine shell modes preserve full analysis while narrowing only final findings.
+//! shell modes preserve full analysis while narrowing only final findings.
 #[path = "next_modes/revision.rs"]
 mod revision;
 use serde_json::Value;
@@ -12,7 +12,6 @@ fn run(root: &Path, flags: &[&str]) -> (i32, Vec<Value>, String) {
         .arg(root)
         .args(["--reporters", "jsonl", "--no-metrics", "--no-memory-cap"])
         .args(flags)
-        .env("VITEST_DEDUP_ENGINE", "next")
         .output()
         .unwrap();
     let records = String::from_utf8(output.stdout)
@@ -140,9 +139,9 @@ fn summary(records: &[Value], tests: u64) -> &Value {
     summaries[0]
 }
 
-/// New memory fields are exhaustive and the default engine keeps its previous record shape.
+/// The memory record's engine fields are exhaustive.
 #[test]
-fn debug_memory_accounts_for_next_populations() {
+fn debug_memory_accounts_for_engine_populations() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("a.test.ts"),"import {test,expect} from 'vitest';test('a',()=>expect(1).toBe(1));test('b',()=>expect(1).toBe(1));").unwrap();
     let (code, records, stderr) = run(dir.path(), &["--debug-memory"]);
@@ -232,7 +231,7 @@ fn changed_files_filter_findings_after_full_analysis() {
 
 /// Versioned file baselines compose with changed-file filtering and inline suppression in order.
 #[test]
-fn next_file_baselines_compose_with_changed_scope_and_suppression() {
+fn file_baselines_compose_with_changed_scope_and_suppression() {
     let dir = tempfile::tempdir().unwrap();
     let source = "import {test,expect} from 'vitest';\ntest('same',()=>expect(1).toBe(1));\n";
     for name in ["a.test.ts", "b.test.ts"] {

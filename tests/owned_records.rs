@@ -16,8 +16,7 @@ fn records_for_files(files: &[(&str, &str)], fingerprints: bool) -> Vec<Value> {
         fs::write(dir.path().join(path), source).unwrap();
     }
     let mut cmd = Command::cargo_bin("vitest-dedup").unwrap();
-    cmd.env("VITEST_DEDUP_ENGINE", "next")
-        .arg(dir.path())
+    cmd.arg(dir.path())
         .args(["--reporters", "jsonl", "--no-metrics"]);
     if fingerprints {
         cmd.arg("--emit-test-fingerprints");

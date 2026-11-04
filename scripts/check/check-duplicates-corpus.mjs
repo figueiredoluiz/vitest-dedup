@@ -35,6 +35,12 @@
 // default -- see `parseFixture` below. This is deliberate: it is what lets another agent drop a
 // new fixture into this directory without this gate quietly waving it through.
 //
+// Each directory is judged pairwise by `lib/next-duplicates.mjs`: every required pair linked by its
+// rule, every declared silence kept, and no other link. A delta is a failure unless
+// `next-duplicates-known.json` lists it with a reason; a listed delta that no longer occurs fails
+// too. Per-fixture extraction counts and solo-run eligibility are not judged yet: the headers
+// still state the earlier analyzer's facts, and their deltas are the known list's.
+//
 // ---------------------------------------------------------------------------------------------
 // Expectation block format
 // ---------------------------------------------------------------------------------------------
@@ -87,14 +93,13 @@
 // found different" is then false: the pair was never compared at all. A participant with no
 // resolvable record (a suite, resolved through its children) asserts nothing here, the same way
 // it asserts nothing in the isolation gate.
-import { copyFileSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { basename, join } from 'node:path'
+import { existsSync, readdirSync, readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { report as reportIsolation, run as runIsolation } from './check-fixture-isolation.mjs'
 import { enumerateFixtures, FIXTURE_NAME, parseFixture } from './lib/fixture-directives.mjs'
-import { findCallback, tokenize } from './lib/js-tokens.mjs'
 import { blindRecallFiles } from './lib/corpus-labels.mjs'
 import { blindCaseFiles, readCases } from './lib/oracle-cases.mjs'
+import { expectationEdges, judge, knownProblems, pairEdges, pairClaims, strayFindings } from './lib/next-duplicates.mjs'
 import { defaultBinary, runAnalyzerJsonl } from './lib/run-analyzer.mjs'
 
 const binary = process.argv[2] ?? defaultBinary()
@@ -108,9 +113,8 @@ const binary = process.argv[2] ?? defaultBinary()
 // pinned by fixtures this repository owns and can run offline -- which is worth nothing unless a
 // gate reads them, hence this list rather than a second script.
 //
-// Both directories are analyzed with the same assertions (`parseFixture`, per-fixture extraction
-// counts, solo-run eligibility, the unclaimed-finding sweep, and the isolation gate at the end),
-// and now under the same `rules` as well.
+// Every directory is analyzed with the same judgment and the isolation gate at the end, under the
+// same `rules`.
 //
 // `subsumed-test` is enabled everywhere, and is the only override left. It ships Off on measured
 // precision, and this gate pins rule *behavior* (which participants, which verdict, which severity
@@ -138,314 +142,48 @@ const TARGETS = [
   { dir: 'fixtures/mixed', rules: ['subsumed-test=warning'] },
 ]
 
-/** `{file, line}` -> a stable string key, so location sets can be compared with `Set`/`Map`. */
-const locKey = ({ file, line }) => `${file}:${line}`
-
-/** Builds a `Map<locKey, {title, inert}>` from an expectation's or a finding's participants. */
-function participantMap(participants) {
-  const map = new Map()
-  for (const p of participants) map.set(locKey(p), { title: p.title, inert: p.inert })
-  return map
-}
-
-/** Whether two participant maps have exactly the same keys and, per key, the same title/inert. */
-function mapsEqual(a, b) {
-  if (a.size !== b.size) return false
-  for (const [key, value] of a) {
-    const other = b.get(key)
-    if (!other || other.title !== value.title || other.inert !== value.inert) return false
-  }
-  return true
-}
-
-// Exit 0 (clean run) and exit 1 (error-severity findings exist, the expected case for this
-// corpus) are both legitimate; anything else is an operational failure. See
-// `lib/run-analyzer.mjs` for why this is a shared helper rather than a copy in each gate.
-//
-// The rule overrides come from the target being analyzed; see `TARGETS` above for which rules each
-// directory enables and why they differ.
-/**
- * Run the analyzer with the target-specific rule overrides and return its parsed JSONL
- * records.
- */
-function runJsonl(target, args) {
-  const rules = target.rules.flatMap((rule) => ['--rule', rule])
-  return runAnalyzerJsonl(binary, [...args, ...rules]).records
-}
+/** Known deltas between the fixture headers and the analyzer's output, each with its reason. */
+const KNOWN_PATH = 'scripts/check/next-duplicates-known.json'
 
 /**
- * Runs every check this gate owns against one fixture directory, appending to `failures`.
+ * One whole-directory run of `target`, judged pairwise against its fixtures' expectation blocks:
+ * every required pair linked, every declared silence kept, every other delta listed in
+ * `next-duplicates-known.json`. Appends to `failures` and `held`; records consumed known entries.
  *
  * @returns {number} how many fixtures the directory holds, for the summary line.
  */
-function checkTarget(target, failures, pendingHeld) {
+function checkTarget(target, known, { failures, held, consumed }) {
   const { dir } = target
+  // A participant may name any analyzable sibling, but only files named like tests carry a block.
   const { fixtureNames, knownFiles } = enumerateFixtures(dir)
-  // `knownFiles` is wider than `fixtureNames` on purpose: a participant may name any analyzable
-  // sibling, but only files named like tests carry a block, so a helper is never parsed as one.
-
-  // Parse every fixture's expectation block up front. A fixture that fails to parse still counts
-  // toward the total and is reported, but is excluded from the finding/extraction checks below --
-  // there is nothing well-formed left to check it against.
   const parsed = new Map()
   for (const name of fixtureNames) {
-    const source = readFileSync(join(dir, name), 'utf8')
-    const result = parseFixture(source, name, knownFiles)
-    if (result.error) {
-      failures.push(`FAIL ${join(dir, name)}: ${result.error}`)
-    } else {
-      parsed.set(name, result)
-    }
+    const result = parseFixture(readFileSync(join(dir, name), 'utf8'), name, knownFiles)
+    if (result.error) failures.push(`FAIL ${join(dir, name)}: ${result.error}`)
+    else parsed.set(name, result)
   }
-
-  // One whole-directory run: verdicts (especially the cross-file `-a`/`-b` pairs) depend on every
-  // fixture being visible to the analyzer at once.
-  const records = runJsonl(target, [dir])
-  const findings = records.filter((r) => r.type === 'finding')
-  const dirSummary = records.find((r) => r.type === 'summary')
-  if (!dirSummary) {
-    console.error(`FAIL ${dir}: whole-directory run produced no summary record`)
-    process.exit(1)
+  // One whole-directory run: cross-file verdicts need every fixture visible at once.
+  const rules = target.rules.flatMap((rule) => ['--rule', rule])
+  const { records } = runAnalyzerJsonl(binary, [dir, ...rules])
+  const summary = records.find((record) => record.type === 'summary')
+  if (!summary) {
+    failures.push(`FAIL ${dir}: the run produced no summary record`)
+    return fixtureNames.length
   }
-
-  // The triviality half of the eligibility check below, read off the fingerprint stream (one
-  // extra run per directory, the same one `check-fixture-isolation.mjs` makes for itself). Only
-  // hooks and tests get records; a participant naming a suite resolves nothing here, exactly as
-  // in the isolation gate, and asserts nothing about triviality.
-  const fingerprintRecords = runJsonl(target, [dir, '--emit-test-fingerprints'])
-  const hooksByLine = new Map()
-  const testsByTitle = new Map()
-  for (const record of fingerprintRecords) {
-    if (record.type === 'hook') {
-      const key = `${basename(record.path)}\n${record.line}`
-      if (!hooksByLine.has(key)) hooksByLine.set(key, [])
-      hooksByLine.get(key).push(record)
-    } else if (record.type === 'test') {
-      const key = `${basename(record.path)}\n${record.title}`
-      if (!testsByTitle.has(key)) testsByTitle.set(key, [])
-      testsByTitle.get(key).push(record)
-    }
+  if (!(summary.testsAnalyzed > 0)) {
+    failures.push(`FAIL ${dir}: ${summary.testsAnalyzed} test(s) analyzed; a run that measured nothing cannot pass`)
   }
-  const recordsFor = (participant) =>
-    hooksByLine.get(`${participant.file}\n${participant.line}`) ??
-    testsByTitle.get(`${participant.file}\n${participant.title}`) ??
-    []
-  const anyParticipantTrivial = (exp) =>
-    exp.participants.some((p) => recordsFor(p).some((record) => record.trivial === true))
-
-  // Normalize each finding to the same shape as a parsed expectation, so they can be compared with
-  // `mapsEqual`. `path` in the report is forward-slash and directory-relative; only the basename
-  // matters here since every fixture lives directly in `dir`.
-  const normalizedFindings = findings.map((finding) => {
-    const participants = finding.locations.map((loc, i) => ({
-      file: basename(loc.path),
-      line: loc.line,
-      title: finding.titles[i],
-      inert: finding.inert[i],
-    }))
-    return {
-      rule: finding.rule,
-      severity: finding.severity,
-      participants,
-      map: participantMap(participants),
-    }
-  })
-  const claimed = new Set()
-
-  // Per-fixture: extraction count and eligibility (via solo-run `incomplete`), then every declared
-  // expectation against the whole-directory findings.
-  for (const name of fixtureNames) {
-    const fixture = parsed.get(name)
-    if (!fixture) continue // already recorded as a parse failure above
-    const path = join(dir, name)
-
-    const solo = mkdtempSync(join(tmpdir(), 'vd-corpus-'))
-    let soloSummary
-    try {
-      copyFileSync(join(dir, name), join(solo, name))
-      soloSummary = runJsonl(target, [solo]).find((r) => r.type === 'summary')
-    } finally {
-      rmSync(solo, { recursive: true, force: true })
-    }
-    if (!soloSummary) {
-      failures.push(`FAIL ${path}: solo run produced no summary record`)
-      continue
-    }
-    if (soloSummary.testsAnalyzed !== fixture.extracted) {
-      failures.push(
-        `FAIL ${path}: expected ${fixture.extracted} extracted test(s), got ${soloSummary.testsAnalyzed}`,
-      )
-    }
-
-    for (const exp of fixture.expectations) {
-      const expectedMap = participantMap(exp.participants)
-      const describeParticipants = () =>
-        exp.participants.map((p) => `${p.file}:L${p.line} "${p.title}"`).join(', ')
-
-      // A pending expectation is a one-way ratchet, the same shape as the isolation gate's
-      // `isolation-violation`: it must NOT be satisfied today, and the gate fails the moment it
-      // starts being satisfied, demanding the marker's removal so the expectation becomes a hard
-      // assertion. This is what lets a spec-first fixture pin a KNOWN DEFECT (an extra finding the
-      // analyzer should not produce, or a true finding it cannot produce yet) inside the corpus
-      // instead of in a directory nothing asserts: while the defect is present the marker holds,
-      // counted and printed below; the day the fix lands the gate goes red on purpose, because a
-      // marker that outlives its fix is how "pending" decays into "unasserted".
-      //
-      // The distinct/not-compared eligibility assertions are skipped for pending expectations:
-      // they describe the intended state, and until the fix lands only the finding-state drives
-      // the ratchet. They come alive with the marker's removal, which the ratchet itself forces.
-      if (exp.pending) {
-        if (exp.rule !== 'none') {
-          const matches = normalizedFindings.flatMap((f, index) =>
-            f.rule === exp.rule && f.severity === exp.severity && mapsEqual(f.map, expectedMap)
-              ? [index]
-              : [],
-          )
-          if (matches.length > 0) {
-            for (const index of matches) claimed.add(index)
-            failures.push(
-              `FAIL ${path}: pending expectation ${exp.rule} (${exp.verdict}, ${exp.severity}) ` +
-                `between ${describeParticipants()} is already satisfied today -- remove the ` +
-                `@vitest-dedup:pending marker so the finding becomes a hard expectation`,
-            )
-          } else {
-            pendingHeld.push(`${join(dir, name)}: ${exp.rule} (${exp.verdict}) -- ${exp.pending}`)
-          }
-        } else {
-          // Every finding linking these participants is this expectation's defect, not just the
-          // first: an unrendered-title cluster can emit several findings whose participants are
-          // indistinguishable by (line, title), and each must be claimed here or the
-          // unclaimed-finding sweep below reports one this marker already accounts for.
-          const offenders = normalizedFindings.flatMap((f, index) =>
-            exp.participants.every((p) => {
-              const found = f.map.get(locKey(p))
-              return found && found.title === p.title
-            })
-              ? [index]
-              : [],
-          )
-          if (offenders.length === 0) {
-            failures.push(
-              `FAIL ${path}: pending rule=none expectation (${exp.verdict}) between ` +
-                `${describeParticipants()} is already satisfied today -- no finding links them, ` +
-                `so the intended silence already holds. Remove the @vitest-dedup:pending marker ` +
-                `so the silence becomes an assertion`,
-            )
-          } else {
-            for (const index of offenders) claimed.add(index)
-            pendingHeld.push(
-              `${join(dir, name)}: ${offenders.length} ${normalizedFindings[offenders[0]].rule} ` +
-                `finding(s) still link ${describeParticipants()} -- ${exp.pending}`,
-            )
-          }
-        }
-        continue
-      }
-
-      if (exp.rule !== 'none') {
-        const matchIndex = normalizedFindings.findIndex(
-          (f) => f.rule === exp.rule && f.severity === exp.severity && mapsEqual(f.map, expectedMap),
-        )
-        if (matchIndex === -1) {
-          // Look for a finding between exactly these participants under a *different* rule or
-          // severity, so the failure message says what actually happened rather than just "no".
-          const sameParticipants = normalizedFindings.find((f) => mapsEqual(f.map, expectedMap))
-          const actual = sameParticipants
-            ? `${sameParticipants.rule} at ${sameParticipants.severity}`
-            : 'no finding at all'
-          failures.push(
-            `FAIL ${path}: expected ${exp.rule} (${exp.verdict}, ${exp.severity}) between ` +
-              `${describeParticipants()}; got ${actual}`,
-          )
-        } else {
-          claimed.add(matchIndex)
-        }
-      } else {
-        // distinct / not-compared: no finding may link these participants together.
-        const offender = normalizedFindings.find((f) =>
-          exp.participants.every((p) => {
-            const found = f.map.get(locKey(p))
-            return found && found.title === p.title
-          }),
-        )
-        if (offender) {
-          failures.push(
-            `FAIL ${path}: expected no finding (${exp.verdict}) between ${describeParticipants()}; ` +
-              `got ${offender.rule} at ${offender.severity}`,
-          )
-        }
-
-        if (exp.verdict === 'not-compared' && !soloSummary.incomplete && !anyParticipantTrivial(exp)) {
-          failures.push(
-            `FAIL ${path}: verdict not-compared between ${describeParticipants()} requires the ` +
-              `solo run to be incomplete (an unresolved context proving these were never eligible ` +
-              `for comparison) or a participant judged trivial (excluded from comparison for that ` +
-              `reason), but the solo run completed cleanly and every participant's record is ` +
-              `non-trivial`,
-          )
-        }
-        if (exp.verdict === 'distinct' && (soloSummary.incomplete || anyParticipantTrivial(exp))) {
-          const why = soloSummary.incomplete
-            ? 'the solo run was incomplete (something was excluded from comparison on unresolved-context grounds)'
-            : 'a participant is judged trivial on the fingerprint stream -- a trivial body is never compared, so this silence is not-compared, not distinct'
-          failures.push(
-            `FAIL ${path}: verdict distinct between ${describeParticipants()} requires the solo ` +
-              `run to complete without an unresolved context and every participant to have been ` +
-              `eligible for comparison, but ${why}`,
-          )
-        }
-      }
-    }
+  for (const finding of strayFindings(records)) {
+    failures.push(`FAIL ${dir}: ${finding.rule} reported a finding, and the judge reads no such rule`)
   }
-
-  // The tool-agnostic form of "a copy-paste detector would not flag these". The claim was
-  // originally made about a named tool with no way to check it; pinning someone else's product
-  // into this gate was refused, and what survives is the half this repository can actually
-  // verify: every positive near-duplicate-test / subsumed-test expectation must link participants
-  // whose RAW token streams differ. If the analyzer ever regressed to linking only what
-  // token-level comparison could link, these expectations would fail here first -- the corpus,
-  // not a slogan, carries the claim.
-  const sources = new Map(fixtureNames.map((name) => [name, readFileSync(join(dir, name), 'utf8')]))
-  for (const name of fixtureNames) {
-    const fixture = parsed.get(name)
-    if (!fixture) continue
-    for (const exp of fixture.expectations) {
-      // A pending expectation is not an asserted finding yet; its textual distinctness becomes a
-      // claim worth checking the moment its marker comes off.
-      if (exp.pending) continue
-      if (exp.rule !== 'near-duplicate-test' && exp.rule !== 'subsumed-test') continue
-      const streams = exp.participants.map((participant) => {
-        const callback = findCallback(tokenize(sources.get(participant.file)), participant.line)
-        if (callback.error) {
-          throw new Error(`${name}: textual-distinctness check could not read a participant: ${callback.error}`)
-        }
-        return [...callback.header, ...callback.body].map((token) => token.value).join(' ')
-      })
-      const unique = new Set(streams)
-      if (unique.size !== streams.length) {
-        failures.push(
-          `FAIL ${join(dir, name)}: a ${exp.rule} positive links token-identical participants -- ` +
-          'if a token-level comparison would link them, this fixture proves nothing beyond it',
-        )
-      }
-    }
+  const { required, declared, forbidden } = expectationEdges(parsed)
+  if (required.length === 0) {
+    failures.push(`FAIL ${dir}: no duplicate-rule expectation was asserted; a directory that judges nothing is a silent success`)
   }
-
-  // Every finding the analyzer produced must have been claimed by some fixture's expectation.
-  // An unclaimed finding is either the wrong rule firing between a declared pair (already reported
-  // above as a mismatch) or a genuinely new relationship no fixture accounts for -- both are
-  // exactly the "a duplicate-test-name warning satisfies a near-duplication positive" class of
-  // defect this gate exists to close.
-  normalizedFindings.forEach((finding, index) => {
-    if (claimed.has(index)) return
-    const where = [...new Set(finding.participants.map((p) => p.file))].join(', ')
-    failures.push(
-      `FAIL ${where}: unexpected ${finding.rule} finding at ${finding.severity} between ` +
-        `${finding.participants.map((p) => `${p.file}:L${p.line} "${p.title}"`).join(', ')} ` +
-        `(not declared by any fixture's expectation block)`,
-    )
-  })
-
+  const outcome = judge({ required, declared, forbidden, linked: pairEdges(records), claims: pairClaims(records), known, scope: dir })
+  failures.push(...outcome.failures.map((failure) => failure.message))
+  held.push(...outcome.held)
+  for (const id of outcome.consumed) consumed.add(id)
   return fixtureNames.length
 }
 
@@ -469,51 +207,71 @@ function checkTarget(target, failures, pendingHeld) {
 // The set is pinned in BOTH directions: a deliberate change (a fixture written to be blind, or
 // one deliberately recovered) edits this list, or the `blindUnderCurrent` of its oracle or recall
 // case, in the same commit; anything else fails with the path-level diff.
+/** Record exclusions that mean a test has nothing to compare, which `summary.blindFiles` skips. */
+const NOTHING_TO_COMPARE = new Set(['no-callback', 'empty-body'])
+
 const DELIBERATE_BLIND_FILES = new Set([
-  'declarations/template-literal-title-dynamic.test.ts',
-  'duplicates/each-computed-key-row.test.ts',
-  'duplicates/each-unresolved-table.test.ts',
+  // Benchmarks are counted, not compared.
+  'declarations/bench-legacy-toplevel.bench.ts',
+  'oracle/benchmarks/speed.bench.ts',
+  'recall/duplicate-test-bench/perf.bench.ts',
+  'recall/duplicate-test-bench/perf.test.ts',
+  // A context the analyzer cannot resolve: a title folded from a runtime value, a scoped
+  // `vi.doMock`, a body cut short at the depth cap, a guard that `eval` can rebind.
+  'declarations/template-literal-title-const-fold.test.ts',
   'duplicates/not-duplicate-each-row-loop-template-title.test.ts',
-  'each/each-dollar-indexed.test.ts',
-  'each/each-nonliteral-table.test.ts',
-  'each/each-printf-directives.test.ts',
   'edge/vi-domock-scoped.test.ts',
   'edge/vi-dounmock-scoped.test.ts',
-  // API identity does not prove hoisting through renamed or namespace mock calls.
   'mixed/mixed-loop-each-in-non-idempotent-hook-scope.test.ts',
-  // Anonymous and binding-inferred function titles remain deliberately unresolved.
-  // Framework-application shapes the analyzer cannot read yet: each file is blind on purpose until the
-  // row that supports its shape lands, and leaves this list in the same change.
-  // Required generated metadata beyond the nesting budget must leave its callers unproved.
-  // `mockNuxtImport` factories that must stay refused: a redeclared `var` whose later value registers,
-  // and a counter a hook increments (identical tests that observe different values).
-  // Deliberately dynamic spy options remain unreadable; the recall case pins both excluded tests.
-  // A local overloaded helper reassigned before the call: refused on purpose.
-  // Hooks registered under control flow make their scope's contexts incomparable by design
-  // (the runtime registration depends on control flow and values the analyzer does not
-  // evaluate), so these files are blind for as long as their hook registrations are guarded.
-  // A local helper reassigned with no overload signature: refused for the reassignment alone.
-  // A generator helper, whose body a call does not run: refused, so the tests it declares are
-  // neither invented nor dropped silently.
-  // An inline `forEach` callback that registers tests, directly or through the parameter it is
-  // handed, is not read: refused so the remaining test is unresolved.
-  // A helper whose destructuring parameter cannot bind its argument: the call throws before the
-  // body runs, so it is refused and the remaining test is unresolved.
-  // A called parameter, a `const` generator, and `const` helpers reached in their temporal dead
-  // zone (through a hoisted function, or from another `switch` case): refused so the tests they
-  // may declare are not dropped silently.
-  // Default exports a runner must keep refusing (a `let`, a reassigned declaration, an imported
-  // binding): blind on purpose, permanently, as the controls for the default-identifier support.
-  // A runner module whose non-`declare` namespace registers a hook at import: blind on purpose,
-  // permanently, as the control for admitting ambient declarations on a runner's chain.
-  // A runner module that switches to fake timers at import: blind on purpose, permanently, as the
-  // control for admitting module-local values on a runner's chain.
-  // A runner module whose destructured getter registers a test at import: blind on purpose.
-  // A runner whose imported module mocks a module at load: blind on purpose, permanently.
-  // The unproved-runner recall case's unsafe half: the default engine refuses the imported
-  // runner, so the file spells no comparable test here; the next-engine recall loop pins what
-  // that engine does with it instead.
+  'oracle/truncated-body/truncated.test.ts',
+  'recall/runner-eval-binding-guard/rows-unsafe.test.ts',
+  // Tests that read state a hook or another test accumulates.
+  'duplicates/not-redundant-hook-accumulator.test.ts',
+  'recall/suite-registration-state/a.test.ts',
+  // Registrations through imported or local runners whose effects are unproved: the calling
+  // scope is excluded.
+  'observed/observed-module-scope-helper-declares-tests.test.ts',
+  'oracle/binding-stability/namespace-export-const.test.ts',
+  'oracle/binding-stability/namespace-export-runtime.test.ts',
+  'oracle/binding-stability/namespace-export-shadow.test.ts',
+  'oracle/binding-stability/namespace-export-stars.test.ts',
+  'oracle/binding-stability/rewritten-namespace-call.test.ts',
+  'oracle/binding-stability/rewritten-namespace-export.test.ts',
+  'oracle/collection-scope-calls/optional-call.test.ts',
+  'oracle/hooks-only-control/control.test.ts',
+  'oracle/hooks-only-cycle-head-direct/case.test.ts',
+  'oracle/hooks-only-cycle-head-local/case.test.ts',
+  'oracle/hooks-only-cycle-head-third/case.test.ts',
+  'oracle/wrapper-inlining/wrapped.test.ts',
+  'recall/framework-runner-module-values/slugs.test.ts',
+  'recall/framework-runner-plain-import-control/slugs.test.ts',
+  'recall/helper-in-source-bindings/run.test.ts',
+  'recall/helper-initializer-factories/run.test.ts',
+  'recall/helper-initializer-test/run.test.ts',
+  'recall/local-helper-const-arrow/run.test.ts',
+  'recall/local-helper-const-concise/run.test.ts',
+  'recall/local-helper-const-later-call/run.test.ts',
+  'recall/local-helper-finally-local-break/run.test.ts',
+  'recall/local-helper-member-write/run.test.ts',
+  'recall/local-helper-overloaded/run.test.ts',
+  'recall/local-helper-return-describe/run.test.ts',
+  'recall/local-helper-return-tail/run.test.ts',
+  'recall/local-helper-return-test/run.test.ts',
+  'recall/local-helper-unused-default/run.test.ts',
   'recall/runner-unproved-scope-retention/unsafe.test.ts',
+  'recall/suite-user-wrapper-withheld/a.test.ts',
+  // Registrations a wrapper call, star re-export or namespace export makes where the file does
+  // not spell them.
+  'oracle/api-reexports/star-package.test.ts',
+  'oracle/api-reexports/star-second.test.ts',
+  'oracle/binding-stability/namespace-export-declared.test.ts',
+  'oracle/binding-stability/namespace-export-type.test.ts',
+  'recall/runner-arguments-receiver/caller.test.ts',
+  'recall/runner-eval-binding-guard/unsafe.test.ts',
+  // A suite-local helper that registers inside a function its caller decides.
+  'recall/concise-suite-hook-retention/run.test.ts',
+  // A local helper called with computed arguments.
+  'recall/local-helper-computed-arguments/run.test.ts',
 ])
 
 /**
@@ -543,6 +301,8 @@ function checkBlindFiles(binary, failures) {
   const comparableByPath = new Map()
   for (const record of records) {
     if (record.type !== 'test' || typeof record.path !== 'string') continue
+    // A todo or empty-bodied test has nothing to compare; it neither blinds nor clears a file.
+    if (NOTHING_TO_COMPARE.has(record.exclusion)) continue
     const entry = comparableByPath.get(record.path) ?? { any: false, anyComparable: false }
     entry.any = true
     if (record.comparable === true) entry.anyComparable = true
@@ -594,19 +354,19 @@ function checkBlindFiles(binary, failures) {
 }
 
 /**
- * Check each owned fixture target and blind-file expectations, report held cases, and exit
- * nonzero when assertions fail.
+ * Judge each owned fixture target and the blind-file pin, run the isolation gate, and exit nonzero
+ * when an assertion fails.
  */
 function main() {
-  const failures = []
-  const pendingHeld = []
+  // Recall deltas belong to `check-recall.mjs`, which consumes them.
+  const known = JSON.parse(readFileSync(KNOWN_PATH, 'utf8')).cases.filter(({ id }) => !id.startsWith('recall-'))
+  const failures = knownProblems(known).map((message) => `FAIL ${message}`)
+  const held = []
+  const consumed = new Set()
   let total = 0
-  // A floor on work performed: a directory that silently holds no fixtures would otherwise
-  // contribute a clean pass over nothing, which is the
-  // exact shape this corpus keeps re-learning. An empty (or renamed, or misspelled) target fails
-  // here instead.
   for (const target of TARGETS) {
-    const count = checkTarget(target, failures, pendingHeld)
+    const count = checkTarget(target, known, { failures, held, consumed })
+    // A directory that silently holds no fixtures would pass over nothing.
     if (count === 0) {
       failures.push(
         `FAIL ${target.dir}: the directory holds no test-named fixtures. A scanned directory that ` +
@@ -615,10 +375,12 @@ function main() {
     }
     total += count
   }
-
-  // The whole-tree blindness ratchet runs BEFORE the failure-reporting block below, so a blind
-  // drift is PRINTED, not just counted: wiring it in after the printer produced a silent exit 1
-  // with no failure line -- a red that says nothing, caught by the revert-check.
+  for (const entry of known) {
+    if (!consumed.has(entry.id)) {
+      failures.push(`FAIL known entry "${entry.id}" no longer applies: its delta is gone or changed. Remove it -- ${entry.reason}`)
+    }
+  }
+  // Before the printer, so a blind drift is printed rather than only counted.
   checkBlindFiles(binary, failures)
 
   let failed = false
@@ -628,33 +390,15 @@ function main() {
     failed = true
   } else {
     console.log(
-      `ok: ${total} fixtures across ${TARGETS.map((t) => `${t.dir}/`).join(' and ')} matched their ` +
-        `declared expectations (rule, verdict, participants, severity, extraction count).`,
+      `ok: ${total} fixtures across ${TARGETS.map((t) => `${t.dir}/`).join(', ')} matched their ` +
+        `declared pairwise expectations, ${held.length} known delta(s) held.`,
     )
   }
-  // Pending expectations are counted and printed on every run, not buried in fixture headers: each
-  // one names a defect this corpus is holding open, and the count is what makes the ratchet above
-  // observable. Unlike `fixtures/near/` below, these live inside asserted directories and their
-  // expectation blocks are checked -- one gate failure away from becoming hard assertions.
-  if (pendingHeld.length > 0) {
-    console.log(
-      `note: ${pendingHeld.length} pending expectation(s) held -- the defect each waits on is ` +
-        'still present, and the gate fails the moment one starts being satisfied:',
-    )
-    for (const line of pendingHeld.sort()) console.log(`  ${line}`)
-  }
+  for (const line of held.sort()) console.log(`  ${line}`)
 
-  // The isolation gate runs here rather than as its own CI step, so that adding a fixture can never
-  // satisfy one check while escaping the other. It answers the question this gate structurally
-  // cannot: were the participants of a `rule=none` expectation ever close enough for the silence to
-  // mean anything. Both run even when the first fails, because "the expectation block is wrong" and
-  // "the fixture does not isolate what it claims" are independent defects and seeing only one of
-  // them per CI run is how a second round of review finds the other.
-  //
-  // It takes the same binary this gate uses. It used to need none -- it compared fixture sources to
-  // each other -- but it now reads the analyzer's own per-test fingerprints off
-  // `--emit-test-fingerprints`, which is what made its translations exact rather than
-  // approximations of them.
+  // Here rather than its own CI step, so a new fixture cannot satisfy one check and escape the
+  // other: were the participants of a `rule=none` expectation ever close enough for the silence to
+  // mean anything. Both run even when the first fails; they are independent defects.
   if (reportIsolation(runIsolation(binary)) !== 0) failed = true
 
   if (failed) process.exit(1)

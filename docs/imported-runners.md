@@ -1,250 +1,87 @@
 # Imported runners
 
-A runner is a first-party function that registers tests when called. VitestDedup expands a call to
-one as if its tests were written at the call site, so wrapper helpers do not hide duplicates.
+A runner is a first-party function that registers tests when called. When VitestDedup can prove
+what a call registers, it expands the call into those tests, as if they were written at the call
+site, so a wrapper helper does not hide duplicates. When it cannot, the call is counted and the
+tests around it are left out of comparison rather than guessed at.
 
-## What is extracted
+## What an expansion keeps
 
-The frontend extracts static declarations from called first-party function exports, including named
-re-export chains.
+- Source locations come from the runner; the registering file, governing globals and configuration
+  come from the caller.
+- Each call registers its own tests, titled from its own arguments. Repeated calls of one runner
+  keep the runner's declaration identity, so they are not reported as duplicates of each other.
+- An expanded test is compared with every other test, including the caller's own.
+- Type-only imports, interfaces and type aliases are erased and add no effects.
 
-- Source locations and fingerprints come from the helper.
-- Registration ownership, governing globals and configuration, and surrounding hooks come from the
-  caller.
-- Repeated calls count as registrations but retain their shared declaration identity.
-- Type-only imports, interfaces and type aliases are erased. They neither add module effects nor
-  supply runtime runner or Vitest bindings, and type-only re-exports cannot expose a runtime runner.
+## When a call is expanded
 
-## Accepted shapes
+The calling file qualifies when it parses cleanly and its top level holds only imports, inert
+declarations (functions, types, literal constants), plain `test(title, callback)` calls with a
+static title and an inline callback, and statement-level calls of imported runners. A `describe`,
+a hook, a label, a module load the file does not import by name, or a registration function read as
+a value refuses the whole file's expansion. Every value it imports from a project module must be a
+runner the proof read.
 
-A runner is one of:
+A runner qualifies when:
 
-- a synchronous function declaration
-- a `const` arrow or function-expression export (the first declarator of its statement), with a block or concise body
-- a default export of a function or arrow
-- `export default name`, where `name` is one of the above declared in the same file (a `const`
-  must precede the export statement; a function declaration may follow it)
-- an `export { local as name }` alias of those, whether or not the target is itself exported
+- it is a named or default export, reached directly or through re-export hops, whose binding is
+  never reassigned;
+- it is a synchronous, non-generator function with a body that does not read `this` or `arguments`,
+  with plain, immutable positional parameters and no direct `eval`;
+- importing its module, and every project module that loads with it, runs nothing that is not
+  inert;
+- its body is a sequence of `test(title, callback)` calls with an inline callback, hook
+  registrations, and calls of other runners, local or imported, that qualify in turn. A `describe`
+  inside a runner is not expanded yet. Statements after an unconditional `return` do not run.
 
-It has plain positional parameters, static `test` and `describe` titles, and inline callbacks.
-Suite callbacks must be synchronous with no parameters. Extra inert arguments at the call site are
-ignored.
+A title may read the call's arguments when they are literals or constants the proof can evaluate.
 
-### Titles
+## Hooks-only helpers
 
-A title may read a parameter when the call site's argument is one of:
+A call of a helper whose body registers only hooks is a `hook-wrapper` site: it registers no test,
+and its hooks join the context of the tests in its scope. A body counts as hooks-only only when it is
+closed: plain parameters, and statements that are hook registrations, calls of other hooks-only
+helpers, declarations of plain names, `return`, blocks and `if` over values that run nothing. Proven
+lexical `beforeEach` setup an imported helper installs takes part in `redundant-hook`; see
+[Hook scheduling](rules.md#hook-scheduling).
 
-- a literal or constant expression
-- a loop variable of an unrolled `for...of`
-- a value forwarded from a local helper
+## Setup calls and packages
 
-Each call renders its own title.
+A call that registers nothing, of a first-party function or of an installed package, is setup: it
+joins the context of every test in its scope, so files that call it pair only with files that make
+the same call. Installed-package code is not read. A package that registers tests when called is not
+seen: its tests are missing from the count.
 
-### Hooks
+## What a refusal does
 
-Hooks the runner registers (`beforeAll`, `beforeEach`, `afterEach`, `afterAll`, with an inline
-callback and at most a literal timeout) attach to the calling scope as if written at the call site.
-They keep the runner's source location and fingerprint, and apply to tests declared before or after
-the call. A hook inside the runner's own `describe` stays in that suite.
-
-### Fixtures
-
-A `const t = test.extend({...})` at the top level of the runner, with static fixture values,
-supplies fixtures to `t(...)` declarations. It accepts scoped `t.beforeEach(...)`-style hooks like
-the bare ones. One declared inside a nested suite callback is refused.
-
-### Nested calls
-
-A runner may call another first-party runner, a function declared in its own file, or a `const` arrow or function expression its file initializes before the call. The nested call
-is expanded the same way, under the same depth, admission and source budgets, and a refusal inside
-it refuses the outer runner. Recursion through modules or local helpers is refused.
-
-## Refused
-
-- A missing, spread or unprovable argument that a title reads.
-- Default, rest or destructured parameters, and a parameter the runner writes.
-- Registration modifiers, control flow and registration options.
-- `let` or `var` exports, reassigned exports, async and generator functions, opaque initializers,
-  and bodyless or overload signatures.
-- A default export of a name that is not a readable runner in the same file: an imported binding
-  (a further hop), a class or other value, a `const` declared after the export statement, or a function declaration
-  the module reassigns.
-- Module setup effects. TypeScript ambient declarations (`declare module`, `declare global`,
-  `declare namespace`, `declare enum`) are erased before the module runs and are not effects.
-  Creating a module-local value is not an effect either: literals, functions, object literals
-  without getters, setters or `__proto__`, array literals, and classes whose static fields hold
-  such values, bound to a plain name. Creating these calls no function. Any call or `new` at
-  import refuses the runner, including `vi.fn()` and `new Set()`: a setup file may have replaced
-  the function, and calls such as `vi.stubEnv`, `vi.mock`, `vi.useFakeTimers` or `expect.extend`
-  change what the importing file's own tests observe.
-- Called opaque imports at registration time. Uncalled imports and calls inside test callbacks are
-  not registration candidates.
-- Named or default object method calls as runner candidates, and function `.call()` / `.apply()`
-  invocations.
-- Mocked runners and mocked re-export hops: they cannot contribute their real bodies.
-- Installed-package bodies that are runners. A package whose manifests name no test runner can be
-  part of a setup helper (see below); a package that registers tests is refused.
-
-Proved ordinary utilities and shadowed inert callbacks contribute no declarations.
-
-### Setup helpers
-
-A call to an imported function that registers no test or hook is setup, not a runner. The call is
-proved harmless when nothing it can run reaches Vitest's registration API (`test`, `it`, `describe`,
-`suite`, `bench`, `beforeAll`, `beforeEach`, `afterAll`, `afterEach`, `onTestFinished`,
-`onTestFailed`, `aroundEach`, `aroundAll`) and its arguments carry none either. The proof follows
-what the code reads:
-
-- Importing a module runs its top-level initializers (enum members included), never the bodies of
-  functions it merely declares; calling an export runs that export. Everything the walk reads joins
-  it: local declarations, imports by module and export, globals.
-- A top level that is not declarations (a bare call, `if`, a loop) is refused. `vi.mock(...)`,
-  `vi.fn()` and other `vi` or `expect` calls are setup, not registration.
-- A name taken from `vitest` is judged by what it is, however it is re-exported: `test`, `it`,
-  `describe`, `suite`, `bench`, `beforeAll`, `beforeEach`, `afterAll`, `afterEach`,
-  `onTestFinished`, `onTestFailed`, `aroundEach` and `aroundAll` register; the namespace import does.
-- A name the host does not define is unknown unless the project's `.nuxt/imports.d.ts` lists it;
-  see [Nuxt projects](#nuxt-projects). `#imports` is that list under another spelling. `globalThis`,
-  `eval`, `require`, a computed `import()`, `import.meta.glob` and `import.meta.vitest` reach code by name and are
-  refused, except one named property of the global object (`globalThis.ready = true`). Node's `vm`,
-  `child_process`, `worker_threads`, `module`, `repl`, `cluster` and `inspector` run code from text
-  or elsewhere and are refused.
-- The arguments of the call are held to the same rule, and a binding they read must not be written
-  after it is declared: a callback reassigned, or a config changed through a member (`config.mode =
-  2`, `items[0]++`, `delete config.mode`), is refused. Calls that change a value through a method
-  (`items.push(1)`) are not tracked. A name is read from the one declaration that runs: an overload
-  set from its implementation (a local overload set the file reassigns is refused), a function or class merged with a `namespace` together with the
-  namespace's members (also through an alias or a default export). An `interface`, a type alias,
-  overload signatures, `declare` declarations and namespaces of types only are erased. A name with
-  two declarations that run (`var run = a; var run = b`) is refused, as is an imported runner
-  declared twice.
-- Installed packages are judged by their manifests: one whose whole dependency closure names no
-  test runner (`vitest`, `vitest-*`, `@vitest/*`, `jest`, `@jest/*`, `mocha`, `jasmine`,
-  `playwright`, `playwright-core`, `@playwright/*`), and whose imported file and the scripts it loads
-  by relative path (`require('./x')`, `from './x'`, `import('./x')`, up to 1,024 files and 32 MiB)
-  do not mention `vitest`, cannot register a test. When the project enables Vitest globals those
-  files must also not read a registration global as a free name, that is one no declaration in the
-  file binds: a local `function test`, a parameter, a property or a method of the same name is not
-  one. Any read counts (a call however it is spelled, a tagged template, `name.each`, a parenthesised
-  or indexed use, a value stored for later) except `typeof name`; so does a property of `globalThis`,
-  `global`, `window` or `self` that names one, when the file does not bind that object. A `with`
-  statement, or a TypeScript `declare` of such a name (which binds nothing at run time), refuses the
-  package. Setting such a property (`globalThis.test = handler`) is not a read. This check does not
-  follow a registration name taken from the global object by destructuring
-  (`const { test } = globalThis`) or reached through `eval`, `Function` or other reflection. A package
-  imported as a data file or asset (`.json`,
-  a stylesheet, an image) is judged by its manifest and by the word `vitest`, and is not parsed or
-  followed, as the bundler treats it, including when a script loads it by a relative
-  path; a native addon or a WebAssembly module is refused. The loads are read from each
-  script's syntax tree. A name that could be several files (`./x` as `x.js`, `x.mjs` or `x.ts`, or
-  a directory) is checked against every one of them, and directories are followed through their
-  `package.json` `main`, `module` and index. A package is refused when it is past those bounds, when a script
-  cannot be parsed, when a load cannot be read (a computed or template specifier, `require` used as
-  a value or through `.call`/`.apply`, `createRequire`, a load of the `module` builtin, `require.main.require(...)` and other receivers of `.require` than `module`, `import.meta.glob`, a load of the package's own name, a
-  relative load that names nothing on disk, a manifest with `exports` or `browser`, a `main` that is a
-  directory with its own manifest), or when a load leaves the package, needs a manifest that cannot be read, or is spelled in a
-  way that cannot be followed (`#internal` and absolute specifiers, `?` or `#` suffixes, escapes). An
-  unreadable manifest or a missing dependency is
-  refused. `mountSuspended`, `renderSuspended`, `registerEndpoint`, `mockNuxtImport` and
-  `mockComponent` from `@nuxt/test-utils/runtime` are known by name.
-- An `import` whose bindings are never read as values and that names no module on disk (a package
-  that ships only types) is ignored, as TypeScript erases it; a project that keeps such imports
-  (`verbatimModuleSyntax`) is not covered by that assumption.
-- Single-file components contribute their script blocks; `<script setup>` runs when mounted, not
-  when imported. Styles, images, fonts and JSON carry no code.
-
-The in-file helper proof is lexical and aimed at code that is not written to evade it. It does not follow a value
-through an alias (`const alias = config; alias.mode = 2`), a method that mutates (`items.push(1)`), a
-registration global reached by another name (`const register = test`), a package that registers
-tests from another installed package's files without either declaring Vitest, reflection
-(`process.getBuiltinModule('vm')`, `({}).constructor.constructor(...)`) or a mock of a package that
-the helper imports several modules away. Those cases can make a helper that registers read as setup.
-
-A setup call changes what every test in the file runs under, so it joins each test's context, in
-call order and once per call: the helper's module and export, how many framework setup statements
-(`vi.stubGlobal(...)`, awaited calls) precede it, the call's text, the text of every local
-declaration the arguments read, the module and export each imported name stands for, and the file
-`import.meta` stands for. Files that call different helpers, with different arguments, in a
-different order or a different number of times do not compare equal; files that set up the same way
-do. A mocked helper, an argument the proof cannot place,
-and a helper that registers anything are refused as before.
-
-### Module dependencies
-
-Importing a module runs it, called or not. Module dependencies must be Vitest, the validated named
-re-export chain, or first-party modules that are inert or that provably register nothing (see
-[Setup helpers](#setup-helpers)); effects other than registration at import time are accepted and
-are attributed through the runner's identity. A module that uses `vi` or `expect` while it loads
-(`vi.mock`, `vi.stubEnv`, `vi.fn()`, `expect.extend`, ...) is not: that effect reaches every test in
-the calling file, not only the runner's. Unknown dependency or setup effects, and helper
-mocking effects, mark the entire calling file unresolved.
-
-### What a refusal does
-
-A refusal marks the file incomplete and the affected calling scope unresolved, including earlier
-tests and its suite record. Those records are excluded from comparison. The `json` and `jsonl`
-reports list the file with a reason code naming the refusal; see
-[Excluded files](incomplete-runs.md#excluded-files).
+Each call that may register tests and is not expanded counts as one test excluded as
+`registered-elsewhere`, and the scope around it (its suite, or the file) is excluded as
+`helper-effects-unproved`. The run is marked incomplete, and the `json` and `jsonl` reports list the
+file with its reason; see [Excluded files](incomplete-runs.md#excluded-files).
 
 ## Nuxt projects
 
-A Nuxt project is supported where the generated files are present: run `nuxt prepare` (the
-[missing-prerequisite notice](incomplete-runs.md#missing-prerequisites) names it when they are not).
-
-- Unimported names in helpers resolve from the nearest `.nuxt/imports.d.ts`: a first-party export
-  joins the proof, a library entry must pass the package check. Without the file, or for a name it
-  does not list, the name is unknown and the helper is refused.
-- `mockNuxtImport(name, factory)` from `@nuxt/test-utils/runtime` at the top level of a test file is
-  a hoisted mock of that auto-imported binding, keyed `nuxt-import:<name>`; its factory must be
-  inline and must not itself reach a registration API. Anywhere else, or with an unreadable
-  factory, the file is unresolved, as for `vi.mock`.
-- Aliases such as `~/` resolve through `.nuxt/tsconfig.json`.
-
-Component auto-imports, `nuxt.config` settings and auto-imports a module registers outside the
-generated list are not read.
+Aliases such as `~/` resolve through `.nuxt/tsconfig.json`; run `nuxt prepare` when the
+[missing-prerequisite notice](incomplete-runs.md#missing-prerequisites) names it. The generated
+auto-import tables (`.nuxt/imports.d.ts`) are not read: an auto-imported call is setup like any
+other call that registers nothing.
 
 ## Budgets
 
-- Local and imported expansion share a depth of 8 and 2,000 body admissions across both passes.
-- Generated Nuxt auto-import tables use the source limits: 8 MiB, 36,864 raw syntax units and
-  lexical nesting depth 256. A table past any limit is refused. Helpers that need its bindings
-  then remain unproved, and their calling scopes are excluded with an incomplete result;
-  tests that do not need the table remain eligible for comparison.
-- One setup-helper proof visits at most 64 modules, and reads at most 256 manifests for each
-  installed package it reaches. Each manifest must be a UTF-8 regular file of at most 1 MiB.
-  Links to regular manifests remain supported; special files and oversized manifests are refused.
-  The same bound applies during module resolution and when reading prerequisite advice.
-  Unreadable advice does not invent a missing prerequisite or borrow an ancestor manifest.
-- The text check of an installed package follows relative `require`, `from` and `import()` to at
-  most 1,024 scripts and 32 MiB (8 MiB each); a package past that is refused.
-- The command-line tool reads an installed package in a separate worker process with a 20 s deadline
-  and a 64 MiB parser stack, so a large bundle is read and a script that crashes or hangs the parser
-  refuses only its package; a worker that cannot be started, times out, crashes or answers anything but
-  a complete verdict refuses it too. A program that embeds the library gets an in-process scan instead,
-  which refuses a script past the parser's syntax size budget (36,864 units) unread, unless it calls
-  `frontend::use_package_worker` and runs `frontend::run_package_worker` first in `main`.
-- Worker stdout is read within the same deadline as its exit, with at most 256 bytes accepted.
-  A descendant holding stdout open cannot extend that deadline. On Unix a failed read kills the
-  worker's process group before reaping it; Windows cancels pipe I/O and terminates the worker.
-  Failures are counted in the [run notice](incomplete-runs.md#package-worker-failures).
-- Helper files share the source byte limit (8 MiB), the bracket nesting limit (256) and the
-  export-hop limit (8).
-- Exact helper sources retained for one caller share an additional 8 MiB budget; repeated calls
-  retain each source once.
-- Refusals produce at most one helper diagnostic per calling file.
+- Expansion follows runner calls to a depth of 8 and at most 2,000 calls per file, each with at most
+  2,000 arguments.
+- The helper sources one file's expansion reads share 8 MiB, and its proof work is bounded at
+  8 MiB.
+- Helper files share the source limits: 8 MiB, 36,864 raw syntax units and lexical nesting depth
+  256.
 
-Helper source bytes also serve inline suppressions and HTML snippets.
+A file past a budget is refused as a whole, with the outcome above.
 
 ## Baselines
 
-The default engine's `--baseline-from-ref` refuses imported runners: historical helper blobs are
-unavailable to that engine, so using present-day bodies would produce a false baseline. Its base
-analysis is reported as partial. File baselines from complete current analyses retain imported
-source and caller identity normally.
-
-The experimental next engine resolves project imports against committed source and resolver
-configuration. It retains its own import-classification boundaries: this does not add support for
-additional runner wrappers. It never substitutes current helpers for historical dependencies.
+`--baseline-from-ref` resolves project imports against committed source and resolver
+configuration, with the same import-classification boundaries as a working-tree run. It never substitutes current helpers for historical dependencies.
 Historical symlinks and actual source/configuration access failures refuse the baseline. A
 missing package-based tsconfig extension or unresolved linkage to a committed project package makes
 the historical pass incomplete with no allowance. Private `#`-mapped tsconfig extensions remain

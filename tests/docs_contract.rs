@@ -322,7 +322,7 @@ test.each([[2], [2]])('doubles %i', (input) => {
 
 /// The hook body overwrites a module binding with a constant, a body both engines prove
 /// idempotent. `redundant-hook` does not report an ordinary call such as `connect('primary')`,
-/// and the next engine refuses a framework reset; this fixture must emit ONE finding so the
+/// and the analyzer refuses a framework reset; this fixture must emit ONE finding so the
 /// documented default severity can be read off a real report.
 fn write_redundant_hook_fixture(dir: &Path) {
     fs::write(
@@ -377,10 +377,9 @@ test('does something important', () => {
     .unwrap();
 }
 
-/// A `with` statement is a construct the extractor deliberately never recurses into --
-/// `src/frontend/extract.rs`'s `defect1_with_statement_is_reported_incomplete_not_silently_skipped`
-/// pins the same fact -- making it a reliable, minimal way to produce a degraded (`incomplete`)
-/// run without touching the shared `fixtures/` tree.
+/// A test registered inside `with (globalThis)` cannot be resolved, which makes it a reliable,
+/// minimal way to produce a degraded (`incomplete`) run without touching the shared `fixtures/`
+/// tree.
 fn write_degraded_fixture(dir: &Path) {
     fs::write(
         dir.join("degraded.test.ts"),
@@ -985,7 +984,6 @@ fn sample_analysis_result() -> AnalysisResult {
     };
     AnalysisResult {
         findings: vec![Finding {
-            identity: Default::default(),
             registration_files: Vec::new(),
             rule: Rule::DuplicateTest,
             severity: Severity::Error,

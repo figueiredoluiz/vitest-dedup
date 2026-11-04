@@ -1,1 +1,39 @@
-{"files":{"cases.test.ts":{"tasks":75,"wrapperSites":[],"next":{}}}}
+{
+  "files": {
+    "cases.test.ts": {
+      "tasks": 75,
+      "wrapperSites": [],
+      "next": {}
+    }
+  },
+  "knownTitles": [
+    {
+      "path": "cases.test.ts",
+      "kind": "missing-test",
+      "item": "encoded title \ud800",
+      "reason": "A lone surrogate in a title renders as U+FFFD, not as Vitest renders it.",
+      "waitsOn": "the analyzer reading this shape"
+    },
+    {
+      "path": "cases.test.ts",
+      "kind": "missing-test",
+      "item": "encoded title \ud800",
+      "reason": "A lone surrogate in a title renders as U+FFFD, not as Vitest renders it.",
+      "waitsOn": "the analyzer reading this shape"
+    },
+    {
+      "path": "cases.test.ts",
+      "kind": "extra-test",
+      "item": "encoded title �d800",
+      "reason": "A lone surrogate in a title renders as U+FFFD, not as Vitest renders it.",
+      "waitsOn": "the analyzer reading this shape"
+    },
+    {
+      "path": "cases.test.ts",
+      "kind": "extra-test",
+      "item": "encoded title �d800",
+      "reason": "A lone surrogate in a title renders as U+FFFD, not as Vitest renders it.",
+      "waitsOn": "the analyzer reading this shape"
+    }
+  ]
+}

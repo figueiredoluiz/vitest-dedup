@@ -254,10 +254,11 @@ function fakeRead(files) {
 
 /** A report shaped like a real one: enough scored mutants to clear MINIMUM_SCORED. */
 function fullReport(overrides = {}) {
-  const caught = overrides.caught ?? 395
-  const missed = overrides.missed ?? 746
+  // The next-core scope's measured run (2026-10-29): 267/351 = 76.07%.
+  const caught = overrides.caught ?? 267
+  const missed = overrides.missed ?? 84
   const timeout = overrides.timeout ?? 0
-  const unviable = overrides.unviable ?? 30
+  const unviable = overrides.unviable ?? 12
   const success = overrides.success ?? 0
   const total = caught + missed + timeout + unviable + success
   return {
@@ -289,8 +290,8 @@ function cli(reportOverrides, { path = 'mutants.out/outcomes.json', argv = [path
 test('the CLI accepts a real-shaped report above the floor', () => {
   const { status, out, err } = cli({})
   assert.equal(status, 0, err.join('\n'))
-  assert.match(out[0], /^ok: mutation score 34\.6% >= 34\.6%/)
-  assert.match(out[0], /395\/1141 viable mutants caught, 30 unviable, 746 survived/)
+  assert.match(out[0], /^ok: mutation score 76\.1% >= 76\.0%/)
+  assert.match(out[0], /267\/351 viable mutants caught, 12 unviable, 84 survived/)
   assert.match(out[0], /Target 90\.0%/)
 })
 
@@ -313,9 +314,9 @@ test('the CLI rejects a report with no viable mutants', () => {
 })
 
 test('the CLI rejects a report scoring below the floor', () => {
-  const { status, err } = cli({ caught: 295, missed: 846 })
+  const { status, err } = cli({ caught: 250, missed: 101 })
   assert.equal(status, 1)
-  assert.match(err.join('\n'), /mutation score 25\.9% is below 34\.6%/)
+  assert.match(err.join('\n'), /mutation score 71\.2% is below 76\.0%/)
 })
 
 test('the CLI rejects a missing report instead of reading it as a pass', () => {
@@ -327,11 +328,11 @@ test('the CLI rejects a missing report instead of reading it as a pass', () => {
 test('the CLI rejects a report whose mutants do not match the declared scope', () => {
   const files = {
     'r/outcomes.json': JSON.stringify(fullReport({})),
-    'r/mutants.json': JSON.stringify(mutants({ 'src/analysis.rs': 265 })),
+    'r/mutants.json': JSON.stringify(mutants({ 'src/normal.rs': 80 })),
   }
   const { status, err } = runCli(['r/outcomes.json'], { read: fakeRead(files) })
   assert.equal(status, 1)
-  assert.match(err.join('\n'), /fingerprint\.rs generated 0 mutants/)
+  assert.match(err.join('\n'), /form\.rs generated 0 mutants/)
 })
 
 test('the CLI honours an explicit threshold argument', () => {
@@ -435,7 +436,6 @@ test('the weekly mutation workflow omits the manual trace scope', () => {
     .join('\n')
   const scheduled = [...activeWorkflow.matchAll(/^\s*script:\s*['"]?(mutants(?::[a-z-]+)?)['"]?\s*$/gm)]
     .map((match) => match[1])
-  assert.ok(scheduled.includes('mutants'))
-  assert.ok(scheduled.includes('mutants:next-core'))
+  assert.deepEqual(scheduled, ['mutants:next-core'])
   assert.doesNotMatch(activeWorkflow, /mutants:trace|--scope=trace/)
 })

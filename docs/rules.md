@@ -30,16 +30,16 @@ Each finding carries a verdict naming its remedy, because the remedies differ.
 `cross-file-duplicate` reports at Warning rather than Error because duplication across unit and
 integration layers is sometimes deliberate.
 
-With the experimental next engine, behavior comparisons retain destructuring evaluation,
+Behavior comparisons retain destructuring evaluation,
 including unused properties and iterator steps. A single-property binding can still match
 a direct member read when its sole use safely accounts for the whole pattern. Destructuring
 alone does not make a body eligible for a behavior finding, and an extra binding alone does
 not establish strict subsumption. These comparisons remain review prompts.
 
-## Hook scheduling in the next engine
+## Hook scheduling
 
 Identical lexical writes alone do not prove a hook removable: Vitest can yield between hooks,
-so removing one may change when queued work becomes observable. The next engine withholds
+so removing one may change when queued work becomes observable. The analyzer withholds
 `redundant-hook` claims when callbacks in the affected lifecycle scope contain potentially
 deferred or opaque work, including async callbacks, nested callbacks, unknown calls or
 non-assertion property access. Ordinary synchronous assertions and proven lexical writes remain

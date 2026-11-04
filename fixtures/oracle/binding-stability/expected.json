@@ -413,53 +413,8 @@
       }
     }
   },
-  "knownTitles": [
-    {
-      "path": "rewritten-namespace-call.test.ts",
-      "kind": "missing-test",
-      "item": "registered by the rewrite",
-      "reason": "The default engine does not read a namespace alias.",
-      "waitsOn": "the next engine becoming the default"
-    },
-    {
-      "path": "rewritten-namespace-export.test.ts",
-      "kind": "missing-test",
-      "item": "registered by the rewrite",
-      "reason": "The default engine does not read a namespace alias.",
-      "waitsOn": "the next engine becoming the default"
-    },
-    {
-      "path": "rewritten-namespace-call.test.ts",
-      "kind": "missing-hook",
-      "item": "beforeEach@rewritten-namespace-call.test.ts:9",
-      "reason": "The default engine does not read a namespace alias.",
-      "waitsOn": "the next engine becoming the default"
-    },
-    {
-      "path": "rewritten-namespace-export.test.ts",
-      "kind": "missing-hook",
-      "item": "beforeEach@rewritten-namespace-export.test.ts:5",
-      "reason": "The default engine does not read a namespace alias.",
-      "waitsOn": "the next engine becoming the default"
-    },
-    {
-      "path": "parameter-property.test.ts",
-      "kind": "missing-test",
-      "item": "registered by the rewrite",
-      "reason": "The default engine reads the `var` as the hook the parameter holds.",
-      "waitsOn": "the next engine becoming the default"
-    },
-    {
-      "path": "rewritten-namespace-call.test.ts",
-      "kind": "missing-test",
-      "item": "registered by the rewrite",
-      "reason": "The default engine does not read a namespace alias.",
-      "waitsOn": "the next engine becoming the default"
-    }
-  ],
   "blindUnderCurrent": [
     "alias-of-reassigned.test.ts",
-    "annotated-binding.test.ts",
     "array-redeclaration.test.ts",
     "catch-redeclaration.test.ts",
     "compound-assignment.test.ts",
@@ -479,5 +434,21 @@
     "reassigned-local.test.ts",
     "reassigned-namespace.test.ts",
     "var-redeclaration.test.ts"
+  ],
+  "knownTitles": [
+    {
+      "path": "annotated-binding.ts",
+      "kind": "missing-hook",
+      "item": "beforeEach@annotated-binding.ts:7",
+      "reason": "A helper that registers only hooks is a `hook-wrapper` site at its call; the hooks it registers are not recorded in the helper.",
+      "waitsOn": "the analyzer reading this shape"
+    },
+    {
+      "path": "annotated-binding.ts",
+      "kind": "missing-hook",
+      "item": "beforeEach@annotated-binding.ts:12",
+      "reason": "A helper that registers only hooks is a `hook-wrapper` site at its call; the hooks it registers are not recorded in the helper.",
+      "waitsOn": "the analyzer reading this shape"
+    }
   ]
 }

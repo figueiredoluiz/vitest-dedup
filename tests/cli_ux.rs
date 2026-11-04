@@ -139,52 +139,39 @@ fn config_resolution_retains_analysis_root_and_upward_boundary() {
     assert_eq!(explicit.threshold, 81);
 }
 
-/// Every opt-in value preserves machine output; the owned engine explicitly retires the census.
+/// The retired census variable changes nothing, whatever its value.
 #[test]
-fn census_presence_has_consistent_cli_and_registry_semantics() {
+fn the_retired_census_variable_is_inert() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(
         dir.path().join("a.test.ts"),
         "import { test } from 'vitest'; const N = mk(); test.each([[N], [2]])('n %s', () => {});",
     )
     .unwrap();
-    for owned in [false, true] {
-        let mut ordinary = None;
-        for value in [None, Some(""), Some("0"), Some("1"), Some("invalid")] {
-            let mut command = assert_cmd::Command::cargo_bin("vitest-dedup").unwrap();
-            command
-                .arg(dir.path())
-                .args(["--reporters", "jsonl", "--threshold", "100"])
-                .env_remove("VD_CELL_CENSUS")
-                .env_remove("VITEST_DEDUP_ENGINE");
-            if owned {
-                command.env("VITEST_DEDUP_ENGINE", "next");
-            }
-            if let Some(value) = value {
-                command.env("VD_CELL_CENSUS", value);
-            }
-            let output = command.output().unwrap();
-            assert!(output.status.success());
-            let records: Vec<serde_json::Value> = String::from_utf8_lossy(&output.stdout)
-                .lines()
-                .map(|line| serde_json::from_str(line).unwrap())
-                .collect();
-            let summary = records.iter().find(|r| r["type"] == "summary").unwrap();
-            assert_eq!(summary["testsAnalyzed"], 2);
-            assert_eq!(summary["filesAnalyzed"], 1);
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            assert_eq!(stderr.contains("cell census"), !owned && value.is_some());
-            assert_eq!(
-                stderr
-                    .matches("VD_CELL_CENSUS is retired for the owned engine")
-                    .count(),
-                usize::from(owned && value.is_some())
-            );
-            if let Some(ordinary) = &ordinary {
-                assert_eq!(&output.stdout, ordinary);
-            } else {
-                ordinary = Some(output.stdout);
-            }
+    let mut ordinary = None;
+    for value in [None, Some(""), Some("0"), Some("1"), Some("invalid")] {
+        let mut command = assert_cmd::Command::cargo_bin("vitest-dedup").unwrap();
+        command
+            .arg(dir.path())
+            .args(["--reporters", "jsonl", "--threshold", "100"])
+            .env_remove("VD_CELL_CENSUS");
+        if let Some(value) = value {
+            command.env("VD_CELL_CENSUS", value);
+        }
+        let output = command.output().unwrap();
+        assert!(output.status.success());
+        let records: Vec<serde_json::Value> = String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        let summary = records.iter().find(|r| r["type"] == "summary").unwrap();
+        assert_eq!(summary["testsAnalyzed"], 2);
+        assert_eq!(summary["filesAnalyzed"], 1);
+        assert!(!String::from_utf8_lossy(&output.stderr).contains("census"));
+        if let Some(ordinary) = &ordinary {
+            assert_eq!(&output.stdout, ordinary);
+        } else {
+            ordinary = Some(output.stdout);
         }
     }
 }

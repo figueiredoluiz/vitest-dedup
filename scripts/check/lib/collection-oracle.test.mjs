@@ -24,10 +24,11 @@ const collected = (over = {}) => ({
 })
 
 /** The analyzer's side, from plain objects keyed by declaring file. */
-const analyzed = ({ tests = {}, hooks = {}, excluded = [] } = {}) => ({
+const analyzed = ({ tests = {}, hooks = {}, excluded = [], unproven = {} } = {}) => ({
   tests: new Map(Object.entries(tests)),
   hooks: new Map(Object.entries(hooks)),
   excluded: new Set(excluded),
+  unproven: new Map(Object.entries(unproven)),
 })
 
 const kinds = (result) => result.disagreements.map((d) => `${d.kind} ${d.path} ${d.item}`)
@@ -54,6 +55,33 @@ test('titles on one side only are missing or extra tests, one per copy', () => {
   const vitest = new Map([['a.test.ts', collected({ tests: ['only vitest', 'twice', 'twice'] })]])
   const result = compareDirectory(vitest, analyzed({ tests: { 'a.test.ts': ['twice', 'only analyzer'] } }))
   assert.deepEqual(kinds(result), ['missing-test a.test.ts only vitest', 'missing-test a.test.ts twice', 'extra-test a.test.ts only analyzer'])
+})
+
+test('an unproven title stands for one unmatched collected test, and an unproven record past them is extra', () => {
+  const vitest = new Map([['a.test.ts', collected({ tests: ['real', 'row 1'] })]])
+  const absorbed = compareDirectory(vitest, analyzed({ tests: { 'a.test.ts': ['real'] }, unproven: { 'a.test.ts': ['row %s'] } }))
+  assert.deepEqual(kinds(absorbed), [])
+  assert.equal(absorbed.testsUnproven, 1)
+  assert.equal(absorbed.testsCompared, 1)
+  const excess = compareDirectory(
+    new Map([['a.test.ts', collected({ tests: ['real'] })]]),
+    analyzed({ tests: { 'a.test.ts': ['real'] }, unproven: { 'a.test.ts': ['row %s'] } }),
+  )
+  assert.deepEqual(kinds(excess), ['extra-test a.test.ts row %s'])
+})
+
+test('an unproven record in a file Vitest never collected is an extra test', () => {
+  const result = compareDirectory(new Map(), analyzed({ unproven: { 'uncollected.test.ts': ['row %s'] } }))
+  assert.deepEqual(kinds(result), ['extra-test uncollected.test.ts row %s'])
+})
+
+test('an unproven title record is read from the comparison key', () => {
+  const view = analyzerView([
+    { type: 'test', path: 'a.test.ts', title: 'proven', comparisonKeys: { name: 'aa' } },
+    { type: 'test', path: 'a.test.ts', title: 'row %s', comparisonKeys: { name: null } },
+  ])
+  assert.deepEqual(view.tests.get('a.test.ts'), ['proven'])
+  assert.deepEqual(view.unproven.get('a.test.ts'), ['row %s'])
 })
 
 test('a test an imported runner declares is keyed by the file that registered it', () => {

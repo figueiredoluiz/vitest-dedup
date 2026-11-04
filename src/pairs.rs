@@ -46,7 +46,7 @@ pub(crate) fn group_outcome(group: &[usize]) -> GroupOutcome {
 /// order that depends only on the *content* of `items` -- never on the order the caller happened
 /// to supply them in.
 ///
-/// This is what makes [`crate::analysis::analyze`] deterministic under a shuffled input: grouping itself
+/// This is what makes the rules deterministic under a shuffled input: grouping itself
 /// uses a `BTreeMap` (ordered by `K`, not by insertion/hash order), each group's members are then
 /// sorted by `T`'s own `Ord`, and the groups themselves are finally ordered by their first
 /// (smallest) member. For every `TestCase` key used in this module, `T::cmp` sorts by location

@@ -85,7 +85,7 @@
 //!
 //! # Why this module has no dependency on the rest of the crate
 //!
-//! `src/frontend/` and `src/lang/` are the only module trees permitted to import an `oxc_*` crate
+//! `src/lang/` is the only module tree permitted to import an `oxc_*` crate
 //! (a test in `src/lang/tests.rs` enforces it); this module does not need one, since it never builds an
 //! AST -- a disciplined textual scan is sufficient for the narrow question it answers, and staying
 //! off `oxc_*` avoids even raising the containment question. It also does not import
@@ -443,7 +443,7 @@ pub(crate) fn find_workspace_file(root: &Path) -> Option<PathBuf> {
 ///   delivered the formatting-independence that justified it.
 ///
 /// Normalizing formatting without changing meaning requires a JavaScript lexer. Parser
-/// containment confines every `oxc_*` crate to `src/frontend/` and `src/lang/`, so this module
+/// containment confines every `oxc_*` crate to `src/lang/`, so this module
 /// cannot have one, and a
 /// hand-rolled approximation is unsound in the direction that COSTS: collapsing something
 /// significant merges two differently-configured directories into one `cross-file-duplicate`
@@ -634,7 +634,7 @@ pub(crate) fn mask_non_code(source: &str) -> Option<Vec<char>> {
                 // `Disabled` rather than `Enabled`. Both measured before this arm existed.
                 //
                 // Telling regex from division needs the previous significant token, i.e. a real
-                // JavaScript lexer, which `AGENTS.md` keeps in `src/frontend/`. So this DETECTS
+                // JavaScript lexer, which parser containment keeps in `src/lang/`. So this DETECTS
                 // without CONSUMING: it looks ahead for a closing `/` on the same line and refuses
                 // the whole file if anything between them could corrupt bracket matching. Guessing
                 // the end of a regex and blanking it would risk blanking real code, which is the
@@ -779,7 +779,7 @@ enum SlashRun {
 /// `()` out was measured to return `Disabled` for a config declaring `globals: true`.
 ///
 /// Telling a regex from a division needs the previous significant token, i.e. a JavaScript lexer,
-/// which `AGENTS.md` keeps in `src/frontend/`. So this never blanks anything: a balanced run is
+/// which parser containment keeps in `src/lang/`. So this never blanks anything: a balanced run is
 /// reported with its end so the caller can step over it, and everything else is refused outright.
 /// Guessing a run's extent and blanking it could blank real code, which is how a confident wrong
 /// answer gets invented; refusing only ever yields `Unknown`, which suppresses a finding.

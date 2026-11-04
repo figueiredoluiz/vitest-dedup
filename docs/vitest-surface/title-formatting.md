@@ -63,13 +63,11 @@ Four rows are worth naming because they are the ones a reimplementation gets wro
   is *never* `Number(value)`: `%d`/`%i` special-case it to print the literal's own `10n`, while
   `%f` has no such case and prints `parseFloat('10')` = `10`.
 
-**What this analyzer renders, and where it refuses.** The coercions above that yield a real
-number are rendered exactly (`null`→`0` and `true`→`1` under `%d`; `'12abc'`→`12` and `[2,3]`→`2`
-under `%i`/`%f`; `Infinity` under `%d`/`%f`; `-0` under `%f`). Every coercion that yields `NaN` is
-**refused**, the title stays unrendered and the declaration opts out of title comparison,
-because `NaN` is a title that does not discriminate between rows, and rendering it would report
-rows that differ as the same case. The refusal lives in `numeric_directive`
-(`src/frontend/extract.rs`).
+**What this analyzer renders, and where it refuses.** The title renderer (`src/normal/titles.rs`)
+proves `%s` and `$field` over string and number literals. The numeric directives over non-finite
+values, global `undefined`, `NaN` and `Infinity`, `%o`, `%j` and composites are not proven: the
+title stays unrendered and the declaration opts out of title comparison, because a rendering the
+analyzer cannot prove is not a title it may compare.
 
 `%s` is `String(value)` except for plain objects, which get `pretty-format` (`{ k: 1 }`, not
 `[object Object]`). `%o` is the inspect form throughout (`'a'`, `[ 2, 3 ]`).
@@ -144,34 +142,13 @@ a string or an array is not truncated at all.
 | `[ '😀'×10, '😀'×10, 1 ]` under `%o` (33 characters, 53 units) | `[ '😀😀😀😀😀😀😀😀😀😀', …(2) ]` |
 | `{ aaaaaaaaaaaaaaa: 1, bbbbbbbbbbbbbbbbbb: 2, ccccccccccccccc: 3 }` under `%s` | `{ aaaaaaaaaaaaaaa: 1, …(2) }` |
 
-**What this analyzer does with that:** the budget is mirrored for the mechanisms this section
-measures, and the depth refusal stays separate:
+**What this analyzer does with that:** a string within the budget
+(`taskTitleValueFormatTruncate`, 40 by default) renders in full, as the measured `×38` to `×40` and
+`'😀'×20` rows do; a string past it is not proven and stays unrendered, as are composites under
+`%o`, `%s` of a plain object and the tagged-template row's assembled object.
 
-- **Depth: still a refusal, not a rendering difference.** `render_inspect`
-  (`src/frontend/registry.rs`) renders composites only down to `MAX_CELL_DEPTH` (8), a bound
-  against unbounded recursion over repository content. A composite nested past that bound is
-  *refused outright*: the cell is unreadable, its row keeps the unrendered pattern, and the
-  declaration opts out of title comparison (`not-compared`). No partially-rendered title is
-  produced, and the budget mirror does not change this: a value that refuses the full render
-  refuses everything (Vitest's own halving starts at `maxDepth: 10`; ours would start from a
-  render this analyzer cannot prove).
-- **Width: mirrored, within the depth bound.** Below the refusal bound, `inspect_within_budget`
-  reproduces the algorithm above in UTF-16 units: the full rendering, then `maxDepth` halved
-  5 → 2 → 1 with composites at the limit printing `[Array]`/`[Object]`, then, still over, a
-  quoted string cut to 38 units plus `…` (41 with the quotes, exactly as the measured rows land),
-  a bare `$field` string cut to 39, and an array or object re-rendered at `maxDepth: 1` showing
-  the largest item count that fits, marked `…(k)`. The mirror reproduces every row of the
-  measured table within the depth bound byte-for-byte; the two rows nested 9 and 10 deep are
-  past `MAX_CELL_DEPTH` and are refused, as the previous point says. A rendering of exactly 40
-  units is returned as the `maxDepth: 1` render without the search (the algorithm's threshold
-  is strictly over). The covered mechanisms are the measured ones: `%o`/inspect, `$field`, `%s`
-  of a plain object, and the tagged-template row's assembled object. `%s` on a scalar or array,
-  `%j`, and the numeric directives are not truncated by Vitest either, and stay full here.
-
-Mirroring the budget makes a rendered title a claim about the runtime string: two distinct values
-that Vitest titles identically (the same `…(k)` elision) now render alike here too. That is the
-point, and it is precision-safe because title comparison never decides a finding on its own,
-the body and context fingerprints still see the full, injective renderings.
+A rendered title is therefore a claim about the runtime string, and title comparison never decides
+a finding on its own: the body and context still see the full values.
 
 `[v5 CHANGE]` "Test Titles and Inspected Values Use `pretty-format`", in v5, interpolated string
 values are **no longer wrapped in quotes** in the rendered title, and a `taskTitleValueFormatTruncate`

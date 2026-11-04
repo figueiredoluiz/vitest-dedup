@@ -1,4 +1,4 @@
-// Unit tests for the next-engine duplicate rules' pairwise judgment, over fabricated
+// Unit tests for the duplicate rules' pairwise judgment, over fabricated
 // observations: a required pair missed, held by a known entry, gone stale; a declared silence
 // linked; an undeclared pair linked; a cluster's pair expansion; and the floors.
 import assert from 'node:assert/strict'
@@ -11,6 +11,7 @@ import {
   judgeRecall,
   knownProblems,
   pairEdges,
+  pairClaims,
   pendingByRule,
   PORTED_RULES,
   strayFindings,
@@ -60,7 +61,7 @@ test('a cluster finding covers every member pair', () => {
   assert.equal(linked.size, 10, '5 members: 5*4/2 pairs')
 })
 
-test('a rule the next engine does not port links nothing here', () => {
+test('a rule the analyzer does not port links nothing here', () => {
   const linked = pairEdges([
     finding('future-rule', [
       ['a.test.ts', 1],
@@ -187,7 +188,7 @@ test('an unlisted miss fails naming what was linked instead', () => {
   assert.match(outcome.failures[0].message, /cross-file-duplicate/)
 })
 
-test('a declared silence the next engine links fails unless a known entry holds it', () => {
+test('a declared silence the analyzer links fails unless a known entry holds it', () => {
   const forbidden = [{ edge: edgeKey('a.test.ts:5', 'a.test.ts:9'), from: 'nc.test.ts' }]
   const edge = edgeKey('a.test.ts:5', 'a.test.ts:9')
   const unlisted = judge({
@@ -281,7 +282,7 @@ test('a pair an expectation names fails when the other rule links it too', () =>
   assert.deepEqual(judge({ required, declared, forbidden, linked: pairEdges([expected, other]), known: held, scope: 'd' }).failures, [])
 })
 
-/** A recall finding of `rule` at `lines` of `a.test.ts`, with the title the next engine renders. */
+/** A recall finding of `rule` at `lines` of `a.test.ts`, with the title the analyzer renders. */
 const located = (rule, lines) => ({ type: 'finding', rule, severity: 'error', titles: ['row %i'], locations: lines.map((line) => ({ path: 'a.test.ts', line })) })
 
 /** The summary record of a run that analyzed `testsAnalyzed` tests. */
@@ -305,7 +306,7 @@ test('every case declares its completeness and unresolved counts beside the find
   assert.deepEqual(unresolved.failures.map((f) => f.id), ['recall-unresolved|c|all|1'])
   // A case that does not declare `expectedUnresolved` asserts nothing about it.
   assert.deepEqual(judgeRecall({ name: 'c', expectedTests: 2, expectedIncomplete: false }, [whole]).failures, [])
-  // The next engine's differing facts override the shared ones, whichever engine marker the
+  // The analyzer's differing facts override the shared ones, whichever engine marker the
   // case carries.
   const divergent = { ...whole, incomplete: true, unresolvedTests: 2 }
   assert.deepEqual(
@@ -326,7 +327,7 @@ test('every case declares its completeness and unresolved counts beside the find
   )
 })
 
-test('a recall expectation is met by rule and locations, whatever title the next engine renders', () => {
+test('a recall expectation is met by rule and locations, whatever title the analyzer renders', () => {
   const matcher = { rule: 'duplicate-test', titles: ['row 1'], locations: ['a.test.ts:3', 'a.test.ts:6'] }
   const outcome = judgeRecall({ name: 'c', expectedTests: 2, expectedFindings: [matcher] }, [summary(2), located('duplicate-test', [6, 3])])
   assert.deepEqual(outcome, { failures: [], judged: 1 })
@@ -349,7 +350,7 @@ test('a missing, a forbidden and an unexpected finding each carry their own stab
   assert.deepEqual(absent.failures.map((f) => f.id), ['recall-absent|c|duplicate-test|a.test.ts:3,a.test.ts:6'])
   const extra = judgeRecall({ name: 'c', expectedTests: 2 }, [summary(2), located('cross-file-duplicate', [9, 12])])
   assert.deepEqual(extra.failures.map((f) => f.id), ['recall-extra|c|cross-file-duplicate|a.test.ts:12,a.test.ts:9'])
-  assert.match(extra.failures[0].message, /FAIL recall c: the next engine reported cross-file-duplicate/)
+  assert.match(extra.failures[0].message, /FAIL recall c: the analyzer reported cross-file-duplicate/)
 })
 
 test('a known miss is not required, and consumes the finding that meets it', () => {
@@ -391,3 +392,32 @@ for (const rule of ['duplicate-test-name', 'duplicate-each-row']) {
     assert.equal(new Set(extra.failures.map(failure => failure.id)).size, 2)
   })
 }
+
+test('a required link must state the declared severity, inert flags and rendered titles', () => {
+  const finding = ({ rule = 'duplicate-each-row', severity = 'error', titles = ['doubles 2', 'doubles 2'], inert = [false, false] } = {}) => ({
+    type: 'finding', rule, severity, titles, inert,
+    locations: [{ path: 'a.test.ts', line: 1 }, { path: 'a.test.ts', line: 2 }],
+  })
+  const required = (rule = 'duplicate-each-row', inert = false) => [{
+    edge: 'a.test.ts:1|a.test.ts:2', rule, severity: 'error', from: 'a.test.ts',
+    ends: [{ point: 'a.test.ts:1', title: 'doubles 2', inert }, { point: 'a.test.ts:2', title: 'doubles 2', inert: false }],
+  }]
+  const judged = (records, expected = required()) => judge({
+    required: expected, forbidden: [], linked: pairEdges(records), claims: pairClaims(records), known: [], scope: 'fixtures/d',
+  }).failures
+  assert.deepEqual(judged([finding()]), [])
+  const downgraded = judged([finding({ severity: 'warning' })])
+  assert.equal(downgraded.length, 1)
+  assert.equal(downgraded[0].id, 'claim|fixtures/d|a.test.ts:1|a.test.ts:2|duplicate-each-row')
+  assert.match(downgraded[0].message, /expected duplicate-each-row at error .* reported warning/)
+  assert.equal(judged([finding({ titles: ['doubles 999', 'doubles 999'] })]).length, 1, 'another row')
+  assert.equal(judged([finding({ inert: [true, false] })]).length, 1, 'a participant reported inert')
+  assert.deepEqual(judged([finding({ inert: [true, false] })], required('duplicate-each-row', true)), [])
+  // A second title group at the expected pair is a claim nothing made, beside the expected one.
+  const extra = judged([finding(), finding({ titles: ['doubles 5', 'doubles 5'] })])
+  assert.equal(extra.length, 1)
+  assert.match(extra[0].id, /^unclaimed\|fixtures\/d\|a\.test\.ts:1\|a\.test\.ts:2\|duplicate-each-row\|error\|/)
+  // A body rule's titles keep their source pattern, so only its severity and inert flags count.
+  const body = finding({ rule: 'duplicate-test', titles: ['t %s', 't %s'] })
+  assert.deepEqual(judged([body], required('duplicate-test')), [])
+})

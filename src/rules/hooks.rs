@@ -118,7 +118,6 @@ pub(super) fn run(
             inert: vec![false, false],
             baselined: false,
             covers: None,
-            identity: Default::default(),
         });
     }
     (exhausted, false)

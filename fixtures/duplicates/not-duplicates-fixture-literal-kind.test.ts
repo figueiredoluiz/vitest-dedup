@@ -12,7 +12,7 @@
 // comparison needs the TAGGED form. One function could not serve both.
 // @vitest-dedup:extracted 2
 // @vitest-dedup:expect rule=none verdict=distinct severity=none
-// @vitest-dedup:isolates context
+// @vitest-dedup:isolates fixture
 // @vitest-dedup:participant L31 "reads a numeric mode"
 // @vitest-dedup:participant L35 "reads a string mode"
 // CROSS-FILE COLLISION (declared, not dodged): the NUMERIC half below shares its body and its

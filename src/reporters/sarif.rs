@@ -13,7 +13,7 @@
 //!       "message": { "text": "2 tests have identical bodies under an equivalent context" },
 //!       "locations": [{ "physicalLocation": { ... }, "message": { "text": "suite > a" } }],
 //!       "relatedLocations": [{ "physicalLocation": { ... }, "message": { "text": "suite > b" } }],
-//!       "partialFingerprints": { "vitestDedupFingerprint/v1": "vitestDedupFingerprint/v1:0123456789abcdef" },
+//!       "partialFingerprints": { "vitestDedupFingerprint/v2": "vitestDedupFingerprint/v2:0123456789abcdef" },
 //!       "properties": { "verdict": "redundant", "inert": [false, false], "baselined": false }
 //!     }]
 //!   }]
@@ -52,7 +52,7 @@
 //!
 //! # `partialFingerprints` and its collision behavior
 //!
-//! Keyed by the finding's own [`crate::model::Identity::version`] rather than CukeDedup's
+//! Keyed by [`crate::model::FINGERPRINT_VERSION`] rather than CukeDedup's
 //! `cukeDedupFingerprint/v2` -- a distinct name for a distinct derivation, so the two tools'
 //! fingerprints can never be mistaken for each other if their reports are ever merged. The value
 //! is exactly [`Finding::fingerprint`]'s output, unmodified: that method's doc comment is explicit
@@ -284,7 +284,7 @@ fn sarif_result(finding: &Finding) -> Value {
         "message": { "text": report_safe(&finding.message) },
         "locations": [primary],
         "relatedLocations": related,
-        "partialFingerprints": { (finding.identity.version()): finding.fingerprint() },
+        "partialFingerprints": { (crate::model::FINGERPRINT_VERSION): finding.fingerprint() },
         "suppressions": suppressions,
         "properties": {
             "verdict": verdict_id(finding.rule.verdict()),
@@ -377,6 +377,23 @@ mod tests {
     /// Build a cross-file finding fixture for SARIF rule, result and location assertions.
     fn sample_result() -> AnalysisResult {
         cross_file_result("identical bodies under an equivalent context")
+    }
+
+    /// A baselined finding names the baseline as its external suppression; an ordinary one carries
+    /// an empty array, which SARIF reads as "not suppressed".
+    #[test]
+    fn a_baselined_finding_is_suppressed_externally() {
+        let mut result = sample_result();
+        result.findings[0].baselined = true;
+        let value = render_value(&result);
+        let finding = &value["runs"][0]["results"][0];
+        assert_eq!(finding["suppressions"][0]["kind"], "external");
+        assert_eq!(finding["properties"]["baselined"], true);
+        let plain = render_value(&sample_result());
+        assert_eq!(
+            plain["runs"][0]["results"][0]["suppressions"],
+            serde_json::json!([])
+        );
     }
 
     /// `properties.covers` appears only on a result that carries it.
@@ -517,20 +534,6 @@ mod tests {
                 "rule {rule:?} did not surface its verdict in properties"
             );
         }
-    }
-
-    /// The key names the identity the value was computed under, on either engine.
-    #[test]
-    fn a_next_engine_fingerprint_is_keyed_by_its_own_version() {
-        let mut result = sample_result();
-        result.findings[0].identity = crate::model::Identity::Next;
-        let value = render_value(&result);
-        let fingerprints = &value["runs"][0]["results"][0]["partialFingerprints"];
-        assert_eq!(
-            fingerprints[crate::model::NEXT_FINGERPRINT_VERSION],
-            result.findings[0].fingerprint()
-        );
-        assert!(fingerprints[FINGERPRINT_VERSION].is_null());
     }
 
     /// Check SARIF output: fingerprint is keyed by the versioned label and matches the model

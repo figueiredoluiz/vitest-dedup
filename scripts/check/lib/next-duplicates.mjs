@@ -1,25 +1,21 @@
-// The next engine's duplicate rules, evaluated pairwise against the owned corpus: a gate over
-// `fixtures/duplicates`, `fixtures/observed` and `fixtures/mixed`.
+// The analyzer's duplicate rules, evaluated pairwise against the owned corpus: the judgment
+// `check-duplicates-corpus.mjs` applies to `fixtures/duplicates`, `fixtures/observed` and
+// `fixtures/mixed`, and `check-recall.mjs` to every recall case.
 //
-// The shared fixture headers pin the default engine -- nine rules, one verdict vocabulary -- so
-// they cannot say what the next engine, whose ported rules are listed below, should do. This gate reads the
-// same headers and judges only the ported rules' pairwise claims, the way the spike evaluator
-// did: a positive expectation for any ported rule requires its
-// participants connected by that rule, in the spanning pairs it reports; a `rule=none` expectation forbids any ported rule from
-// linking its pairs; anything else the next engine links is a delta someone must adjudicate --
-// a fixture to fix, or an entry in `next-duplicates-known.json` with a reason. A known entry
-// whose delta stops being observed fails the gate, so an entry dies the moment the header or
-// the behavior moves.
-//
-// A rule outside the ported set emitting under the next engine is a failure outright: its
-// expectations must move through the corpus gate's engine axis, never be satisfied silently.
+// The fixture headers and recall manifest still state some facts of the earlier analyzer, so the
+// judgment reads only their pairwise claims: a positive expectation requires its participants
+// connected by its rule, in the spanning pairs it reports; a `rule=none` expectation forbids any
+// rule from linking its pairs; anything else the analyzer links is a delta someone must adjudicate
+// -- a fixture to fix, or an entry in `next-duplicates-known.json` with a reason. A known entry
+// whose delta stops being observed fails the gate, so an entry dies the moment the header or the
+// behavior moves. A finding under a rule outside `PORTED_RULES` fails outright.
 //
 // Nothing here judges a run pass or fail except the floors the caller asserts on top: a
 // contract violation is data, a measurement that did not measure is an error.
 
 import { describeMatcher, findingMatches } from './recall-runner.mjs'
 
-/** The rules the next engine runs. */
+/** The rules the analyzer runs. */
 export const PORTED_RULES = new Set(['duplicate-test', 'duplicate-test-name', 'duplicate-each-row', 'duplicate-suite', 'parameterization-candidate', 'near-duplicate-test', 'subsumed-test', 'redundant-hook', 'cross-file-duplicate'])
 
 /** The identity one participant is matched by, the way the spike evaluator matched: file:line. */
@@ -33,7 +29,7 @@ export function edgeKey(left, right) {
 }
 
 /**
- * The pairs of participants the next engine's ported rules linked, from one run's JSONL records.
+ * The pairs of participants the analyzer's ported rules linked, from one run's JSONL records.
  *
  * Every pair of locations a finding carries becomes an edge, so a cluster finding covers all of
  * its member pairs at once -- the same expansion the spike evaluator did.
@@ -55,6 +51,45 @@ export function pairEdges(records) {
   return linked
 }
 
+/**
+ * What each rule reported about each pair, from one run's JSONL records: the finding's severity
+ * and, per endpoint, the participant's title and inert flag.
+ *
+ * @param {object[]} records The parsed jsonl records of one run.
+ * @returns {Map<string, {severity: string, ends: Map<string, {title: string, inert: boolean}>}[]>}
+ *   `edge|rule` -> one claim per finding that linked the pair.
+ */
+export function pairClaims(records) {
+  const claims = new Map()
+  for (const record of records) {
+    if (record?.type !== 'finding' || !PORTED_RULES.has(record.rule)) continue
+    const ends = (record.locations ?? []).map((location, index) => ({
+      point: endpoint({ file: basenameOf(location.path), line: location.line }),
+      title: record.titles?.[index],
+      inert: record.inert?.[index] === true,
+    }))
+    for (const [left, right] of combinations(ends)) {
+      const key = `${edgeKey(left.point, right.point)}|${record.rule}`
+      if (!claims.has(key)) claims.set(key, [])
+      claims.get(key).push({ severity: record.severity, ends: new Map([left, right].map((end) => [end.point, end])) })
+    }
+  }
+  return claims
+}
+
+/**
+ * Whether one reported claim states what a required expectation declares: the severity, every
+ * participant's inert flag, and, for the rules whose findings carry rendered titles, the titles.
+ */
+function claimMatches(claim, expected) {
+  if (expected.severity !== undefined && claim.severity !== expected.severity) return false
+  return expected.ends.every((end) => {
+    const reported = claim.ends.get(end.point)
+    if (!reported || reported.inert !== end.inert) return false
+    return !renderedRule(expected.rule) || reported.title === end.title
+  })
+}
+
 /** Basename of a report path, forward-slash or platform-native, the way the corpus gate matches. */
 function basenameOf(path) {
   return String(path).split(/[\\/]/).pop()
@@ -70,7 +105,7 @@ function* combinations(items) {
 }
 
 /**
- * The findings the next engine reported under a rule it does not port. One of these is a
+ * The findings the analyzer reported under a rule it does not port. One of these is a
  * pending-by-rule expectation being satisfied silently, which is exactly what must fail.
  *
  * @param {object[]} records The parsed jsonl records of one run.
@@ -87,11 +122,11 @@ export function strayFindings(records) {
  * rule. A `rule=none` expectation (distinct or not-compared) forbids every ported rule from
  * linking its pairs, except the pairs another expectation already requires -- a pair may carry
  * two rules' expectations, and the required half wins. Pending expectations and expectations of
- * rules the next engine does not port are skipped: the first are the corpus gate's ratchet, the
+ * rules the analyzer does not port are skipped: the first are the corpus gate's ratchet, the
  * second are silent under next by design.
  *
  * @param {Map<string, object>} fixtures Parsed fixtures by file name (`parseFixture` results).
- * @returns {{required: {edge: string, rule: string, from: string}[], declared: {edge: string, rule: string}[], forbidden: {edge: string, from: string}[]}}
+ * @returns {{required: {edge: string, rule: string, severity: string, ends: object[], from: string}[], declared: {edge: string, rule: string}[], forbidden: {edge: string, from: string}[]}}
  */
 export function expectationEdges(fixtures) {
   const required = []
@@ -102,16 +137,25 @@ export function expectationEdges(fixtures) {
       if (expectation.pending) continue
       // In the engine's group order: files by bytes, lines by number. The serialized form sorts
       // line 9 last, and a locale puts `a.test.ts` before `B.test.ts`.
-      const points = [...(expectation.participants ?? [])]
+      const participants = [...(expectation.participants ?? [])]
         .sort((a, b) => Buffer.compare(Buffer.from(a.file), Buffer.from(b.file)) || a.line - b.line)
-        .map(endpoint)
+      const points = participants.map(endpoint)
+      const end = (i) => ({ point: points[i], title: participants[i].title, inert: participants[i].inert === true })
       if (points.length < 2) continue
       if (PORTED_RULES.has(expectation.rule)) {
         // A group of up to four is reported as a chain of neighbouring pairs, so only neighbours
         // are required; every other pair is declared, and a cluster finding may link it.
-        for (const [left, right] of combinations(points)) declared.push({ edge: edgeKey(left, right), rule: expectation.rule })
+        for (const [i, j] of combinations(points.map((_, index) => index))) {
+          declared.push({ edge: edgeKey(points[i], points[j]), rule: expectation.rule, severity: expectation.severity, ends: [end(i), end(j)] })
+        }
         for (let i = 1; i < points.length; i += 1) {
-          required.push({ edge: edgeKey(points[i - 1], points[i]), rule: expectation.rule, from: `${name}` })
+          required.push({
+            edge: edgeKey(points[i - 1], points[i]),
+            rule: expectation.rule,
+            severity: expectation.severity,
+            ends: [end(i - 1), end(i)],
+            from: `${name}`,
+          })
         }
       } else if (expectation.rule === 'none') {
         for (const [left, right] of combinations(points)) {
@@ -143,7 +187,7 @@ const findingIdentity = (finding) => locationsOf(finding).join(',') + (renderedR
 const matcherIdentity = (expected) => (expected.locations ?? expected.titles ?? []).join(',') + (renderedRule(expected.rule) && expected.locations && expected.titles ? `|${JSON.stringify(expected.titles)}` : '')
 
 /**
- * Judges one recall case: its ported expectations against what the next engine reported.
+ * Judges one recall case: its ported expectations against what the analyzer reported.
  *
  * @param {object} testCase A manifest case.
  * @param {object[]} records The run's jsonl records.
@@ -167,27 +211,27 @@ export function judgeRecall(testCase, records) {
   const summary = records.find((record) => record?.type === 'summary')
   const analyzed = summary?.testsAnalyzed
   if (analyzed !== testCase.expectedTests) {
-    delta('tests', 'all', String(analyzed), `the next engine analyzed ${analyzed} test(s), and the case expects ${testCase.expectedTests}`)
+    delta('tests', 'all', String(analyzed), `the analyzer analyzed ${analyzed} test(s), and the case expects ${testCase.expectedTests}`)
   }
   // A case's declared silence is evidence only when the run's completeness and unresolved counts
   // are the ones it declares for the engine being judged (`distinct` vs `not-compared`): a run
   // flipping either without moving the findings must fail here, or the silence proves nothing.
-  // `expectedIncompleteNext`/`expectedUnresolvedNext` carry the next engine's differing facts;
+  // `expectedIncompleteNext`/`expectedUnresolvedNext` carry the analyzer's differing facts;
   // absent them, both engines are held to the shared fields.
   const wantIncomplete = testCase.expectedIncompleteNext ?? testCase.expectedIncomplete
   const wantUnresolved = testCase.expectedUnresolvedNext ?? testCase.expectedUnresolved
   if (summary) {
     if (summary.incomplete !== wantIncomplete) {
-      delta('incomplete', 'all', String(summary.incomplete), `the next engine reported incomplete=${summary.incomplete}, and the case expects ${wantIncomplete}`)
+      delta('incomplete', 'all', String(summary.incomplete), `the analyzer reported incomplete=${summary.incomplete}, and the case expects ${wantIncomplete}`)
     }
     if (wantUnresolved !== undefined && summary.unresolvedTests !== wantUnresolved) {
-      delta('unresolved', 'all', String(summary.unresolvedTests), `the next engine left ${summary.unresolvedTests} test(s) unresolved, and the case expects ${wantUnresolved}`)
+      delta('unresolved', 'all', String(summary.unresolvedTests), `the analyzer left ${summary.unresolvedTests} test(s) unresolved, and the case expects ${wantUnresolved}`)
     }
   }
   const expected = ported(testCase.expectedFindings)
   for (const matcher of expected) {
     if (!take(matcher)) {
-      delta('miss', matcher.rule, matcherIdentity(matcher), `expected ${describeMatcher(matcher)}, which the next engine did not report`)
+      delta('miss', matcher.rule, matcherIdentity(matcher), `expected ${describeMatcher(matcher)}, which the analyzer did not report`)
     }
   }
   for (const matcher of ported(testCase.knownMisses)) take(matcher)
@@ -195,17 +239,17 @@ export function judgeRecall(testCase, records) {
     const found = findings.find((finding) => findingMatches(finding, readable(matcher)))
     if (found) {
       matched.add(found)
-      delta('absent', matcher.rule, findingIdentity(found), `${describeMatcher(matcher)} must stay absent, and the next engine reported it`)
+      delta('absent', matcher.rule, findingIdentity(found), `${describeMatcher(matcher)} must stay absent, and the analyzer reported it`)
     }
   }
   for (const finding of findings.filter((candidate) => !matched.has(candidate))) {
-    delta('extra', finding.rule, findingIdentity(finding), `the next engine reported ${finding.rule} at ${locationsOf(finding).join(', ')}, which the case does not expect`)
+    delta('extra', finding.rule, findingIdentity(finding), `the analyzer reported ${finding.rule} at ${locationsOf(finding).join(', ')}, which the case does not expect`)
   }
   return { failures, judged: expected.length }
 }
 
 /**
- * How many expectations each rule the next engine does not port still holds.
+ * How many expectations each rule the analyzer does not port still holds.
  *
  * @param {{rule: string}[]} expectations Expectations of the fixture headers and recall cases.
  * @returns {Record<string, number>} Count per rule.
@@ -250,7 +294,7 @@ export function knownProblems(known) {
  * @param {string} input.scope The directory the run covered, part of every id.
  * @returns {{failures: {id: string, message: string}[], held: string[], consumed: Set<string>}}
  */
-export function judge({ required, declared = [], forbidden, linked, known, scope }) {
+export function judge({ required, declared = [], forbidden, linked, claims: reports, known, scope }) {
   const failures = []
   const fired = new Set()
   const missed = new Set()
@@ -260,13 +304,29 @@ export function judge({ required, declared = [], forbidden, linked, known, scope
     missed.add(edge)
     failures.push({
       id,
-      message: `FAIL ${from}: expected ${rule} to link ${edge.replaceAll('|', ' <-> ')}; the next engine linked ${
+      message: `FAIL ${from}: expected ${rule} to link ${edge.replaceAll('|', ' <-> ')}; the analyzer linked ${
         [...(linked.get(edge) ?? [])].join(', ') || 'nothing'
       }`,
     })
   }
-  for (const { edge, rule, from } of required) {
-    if (!linked.get(edge)?.has(rule)) miss(edge, rule, from)
+  for (const expected of required) {
+    const { edge, rule, severity, from } = expected
+    if (!linked.get(edge)?.has(rule)) {
+      miss(edge, rule, from)
+      continue
+    }
+    // A link that states another severity, a participant's inert flag, or another rendered title
+    // is not the claim: a downgraded finding, or one about other rows, must not satisfy it.
+    const reported = reports?.get(`${edge}|${rule}`)
+    if (reports !== undefined && expected.ends !== undefined && !reported?.some((claim) => claimMatches(claim, expected))) {
+      const id = `claim|${scope}|${edge}|${rule}`
+      fired.add(id)
+      const said = (reported ?? []).map((claim) => `${claim.severity} ${JSON.stringify([...claim.ends.values()].map(({ title, inert }) => (inert ? `${title} [inert]` : title)))}`)
+      failures.push({
+        id,
+        message: `FAIL ${from}: expected ${rule} at ${severity} between ${JSON.stringify(expected.ends.map(({ title, inert }) => (inert ? `${title} [inert]` : title)))}; the analyzer reported ${said.join('; ') || 'nothing'}`,
+      })
+    }
   }
   for (const { edge, from } of forbidden) {
     const rules = linked.get(edge)
@@ -275,12 +335,36 @@ export function judge({ required, declared = [], forbidden, linked, known, scope
       fired.add(id)
       failures.push({
         id,
-        message: `FAIL ${from}: expected silence between ${edge.replaceAll('|', ' <-> ')}; the next engine linked them (${[...rules].join(', ')})`,
+        message: `FAIL ${from}: expected silence between ${edge.replaceAll('|', ' <-> ')}; the analyzer linked them (${[...rules].join(', ')})`,
       })
     }
   }
   const claims = [...required, ...declared]
   const claimed = new Set(claims.map(({ edge, rule }) => `${edge}|${rule}`))
+  // Every finding at a pair an expectation names must be one an expectation states: a second
+  // title group, or a finding at another severity beside the expected one, is a claim nothing made.
+  if (reports !== undefined) {
+    const expectedAt = new Map()
+    for (const expected of claims.filter(({ ends }) => ends !== undefined)) {
+      const key = `${expected.edge}|${expected.rule}`
+      if (!expectedAt.has(key)) expectedAt.set(key, [])
+      expectedAt.get(key).push(expected)
+    }
+    for (const [key, expectations] of expectedAt) {
+      // A required link no claim matched has already failed as `claim|`.
+      if (fired.has(`claim|${scope}|${key}`)) continue
+      for (const claim of reports.get(key) ?? []) {
+        if (expectations.some((expected) => claimMatches(claim, expected))) continue
+        const titles = [...claim.ends.values()].map(({ title }) => title)
+        const id = `unclaimed|${scope}|${key}|${claim.severity}|${JSON.stringify(titles)}`
+        fired.add(id)
+        failures.push({
+          id,
+          message: `FAIL ${scope}: ${key.split('|').pop()} reported ${JSON.stringify(titles)} at ${claim.severity} between ${expectations[0].edge.replaceAll('|', ' <-> ')}, which no expectation there states`,
+        })
+      }
+    }
+  }
   const named = new Set(claims.map(({ edge }) => edge))
   const silenced = new Set(forbidden.map(({ edge }) => edge))
   for (const [edge, rules] of linked) {
@@ -302,7 +386,7 @@ export function judge({ required, declared = [], forbidden, linked, known, scope
     fired.add(id)
     failures.push({
       id,
-      message: `FAIL ${scope}: the next engine linked ${edge.replaceAll('|', ' <-> ')} (${[...rules].join(', ')}), which no fixture expectation declares -- adjudicate it into a fixture header or a known entry`,
+      message: `FAIL ${scope}: the analyzer linked ${edge.replaceAll('|', ' <-> ')} (${[...rules].join(', ')}), which no fixture expectation declares -- adjudicate it into a fixture header or a known entry`,
     })
   }
   const consumed = new Set(known.filter((entry) => fired.has(entry.id)).map((entry) => entry.id))

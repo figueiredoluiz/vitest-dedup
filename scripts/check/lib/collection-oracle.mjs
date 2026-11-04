@@ -236,6 +236,9 @@ export function analyzerView(records, absoluteDir) {
   const tests = new Map()
   const hooks = new Map()
   const excluded = new Set()
+  // Per file, the titles of tests the analyzer did not prove (`comparisonKeys.name` is null: an
+  // unrendered template, a dynamic value). Each record carries the template, not a title.
+  const unproven = new Map()
   const push = (map, key, value) => {
     if (!map.has(key)) map.set(key, [])
     map.get(key).push(value)
@@ -243,11 +246,14 @@ export function analyzerView(records, absoluteDir) {
   for (const record of records) {
     const path = record.path === undefined ? undefined : local(record.path)
     // A test an imported runner declares belongs to the test file that registered it.
-    if (record.type === 'test') push(tests, local(record.registrationFile ?? record.path), record.title)
-    else if (record.type === 'hook') push(hooks, path, hookSite({ ...record, path }))
+    if (record.type === 'test') {
+      const file = local(record.registrationFile ?? record.path)
+      if (record.comparisonKeys?.name === null) push(unproven, file, record.title)
+      else push(tests, file, record.title)
+    } else if (record.type === 'hook') push(hooks, path, hookSite({ ...record, path }))
     else if (record.type === 'excluded-file') excluded.add(path)
   }
-  return { tests, hooks, excluded }
+  return { tests, hooks, excluded, unproven }
 }
 
 /**
@@ -259,13 +265,20 @@ export function analyzerView(records, absoluteDir) {
  *   every file with an `excluded-file` record, whose tests the analyzer makes no claim about.
  */
 export function collectWithAnalyzer(binary, root, dir) {
-  return analyzerView(analyzerRecords(binary, root, dir), resolve(root, dir))
+  return collectAnalyzer(binary, root, dir).titles
 }
 
 /**
- * The analyzer's JSONL records for `dir` with `--emit-test-fingerprints`, under `env` (the next
- * engine is selected by `VITEST_DEDUP_ENGINE=next`). A directory of lookalikes yields none.
+ * One analyzer run over `dir`, read three ways: tests and hooks by title (`analyzerView`),
+ * registration sites (`siteView`) and exclusions (`exclusionView`).
  */
+export function collectAnalyzer(binary, root, dir) {
+  const records = analyzerRecords(binary, root, dir)
+  const absolute = resolve(root, dir)
+  return { titles: analyzerView(records, absolute), sites: siteView(records, absolute), exclusions: exclusionView(records, absolute) }
+}
+
+/** The analyzer's JSONL records for `dir` with `--emit-test-fingerprints`; a directory of lookalikes yields none. */
 function analyzerRecords(binary, root, dir, env = {}) {
   return analyzerRecordsOf(binary, [resolve(root, dir), '--emit-test-fingerprints'], env)
 }
@@ -287,22 +300,22 @@ export function analyzerRecordsOf(binary, args, env = {}) {
 }
 
 /**
- * The next engine's registration sites for `dir`, per file relative to it: `{kind, line,
+ * The analyzer's registration sites for `dir`, per file relative to it: `{kind, line,
  * lineFrom}`, where `kind` is the dialect's name (`test`, `describe`, a hook), `wrapper`,
  * `hook-wrapper` (registers only hooks, so no task) or `module-load`.
  */
 export function collectSites(binary, root, dir) {
-  return collectNextEngine(binary, root, dir).sites
+  return collectInventory(binary, root, dir).sites
 }
 
 /**
- * The next engine's view of `dir`: its registration sites, and its exclusions per file.
+ * The analyzer's inventory of `dir`: its registration sites, and its exclusions per file.
  *
  * @returns {{sites: Map<string, object[]>, exclusions: Map<string, {reasons: string[], testsExcluded: number}>}}
  */
-export function collectNextEngine(binary, root, dir) {
-  const records = analyzerRecords(binary, root, dir, { VITEST_DEDUP_ENGINE: 'next' })
-  return { sites: siteView(records, resolve(root, dir)), exclusions: exclusionView(records, resolve(root, dir)) }
+export function collectInventory(binary, root, dir) {
+  const { sites, exclusions } = collectAnalyzer(binary, root, dir)
+  return { sites, exclusions }
 }
 
 /** The `excluded-file` records among `records` as `{reasons, testsExcluded}`, per file relative to `absoluteDir`. */
@@ -440,16 +453,29 @@ export function compareDirectory(vitestFiles, analyzer) {
   const disagreements = []
 
   let testsCompared = 0
+  let testsUnproven = 0
   for (const path of compared) {
     const vitest = vitestFiles.get(path)
     const extracted = analyzer.tests.get(path) ?? []
-    testsCompared += vitest.tests.length
-    for (const item of minus(vitest.tests, extracted)) disagreements.push({ path, kind: 'missing-test', item })
-    for (const item of minus(extracted, vitest.tests)) disagreements.push({ path, kind: 'extra-test', item })
+    // A test whose title is not proven may be any collected test its proven siblings leave over,
+    // so as many of those as it has unproven records are not compared; an unproven record with
+    // no collected test left to stand for is an extra test.
+    const missing = minus(vitest.tests, extracted)
+    const unprovenTitles = analyzer.unproven?.get(path) ?? []
+    const absorbed = Math.min(missing.length, unprovenTitles.length)
+    testsUnproven += absorbed
+    testsCompared += vitest.tests.length - absorbed
+    for (const item of missing.slice(absorbed)) disagreements.push({ path, kind: 'missing-test', item })
+    for (const item of [...minus(extracted, vitest.tests), ...unprovenTitles.slice(absorbed)]) {
+      disagreements.push({ path, kind: 'extra-test', item })
+    }
   }
   // Tests registered by a file Vitest never collected: a test file outside Vitest's include, or one
   // a config leaves out. Benchmarks and type tests are collected by other commands.
-  for (const [path, titles] of analyzer.tests) {
+  // Unproven-title records too: no collected test is left for them to stand for.
+  const uncollected = new Map(analyzer.tests)
+  for (const [path, titles] of analyzer.unproven ?? []) uncollected.set(path, [...(uncollected.get(path) ?? []), ...titles])
+  for (const [path, titles] of uncollected) {
     if (!isModule(path)) continue
     if (BENCH_FILE.test(path)) skipped.get('bench').push({ path, detail: `${titles.length} benchmarks` })
     else if (TYPE_TEST_FILE.test(path)) skipped.get('type-test').push({ path, detail: `${titles.length} type tests` })
@@ -482,7 +508,7 @@ export function compareDirectory(vitestFiles, analyzer) {
   for (const site of recorded) {
     if (!registered.has(site)) disagreements.push({ path: pathOf(site), kind: 'extra-hook', item: site })
   }
-  return { compared, testsCompared, hooksCompared: registered.size, skipped, disagreements }
+  return { compared, testsCompared, testsUnproven, hooksCompared: registered.size, skipped, disagreements }
 }
 
 /**

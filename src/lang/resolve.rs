@@ -85,7 +85,7 @@ thread_local! {
 static PACKAGE_GAPS: Mutex<BTreeMap<PathBuf, usize>> = Mutex::new(BTreeMap::new());
 
 /// The imports a gap was recorded for, by importing module and specifier: several readers resolve
-/// one import, and the report counts imports, as the current core's per-import cache does.
+/// one import, and the report counts imports.
 static RECORDED: Mutex<std::collections::BTreeSet<(PathBuf, String)>> =
     Mutex::new(std::collections::BTreeSet::new());
 
@@ -145,7 +145,7 @@ fn record_manifest_refusal(_path: &Path) {
 }
 
 /// Takes whether the calling thread needed a package manifest the bounded reader refused since the
-/// last take. The corpus drains it per file, as the current core drains its manifest refusals.
+/// last take. The corpus drains it per file.
 pub fn take_manifest_refusal() -> bool {
     MANIFEST_REFUSED.with(|refused| refused.replace(0)) > 0
 }
@@ -168,7 +168,7 @@ pub fn confinement_refusals() -> usize {
 }
 
 /// Takes the calling thread's confinement refusals, recorded by [`resolve_file`]. The corpus
-/// drains them per file to mark the read partial, as the current core's confinement does.
+/// drains them per file to mark the read partial.
 pub fn take_confinement_refusal() -> bool {
     CONFINEMENT_REFUSED.with(|flag| flag.replace(0)) > 0
 }
@@ -194,7 +194,7 @@ fn flag_confinement(from: &Path, specifier: &str, file: &Path) {
 
 /// A tsconfig the resolver could not use, as the resolver itself reported it. A project whose
 /// tsconfig is in this state is config-degraded: the shell names the file and marks the run
-/// incomplete, exactly as the current core's resolution gaps do.
+/// incomplete.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum TsconfigGap {
     /// The file does not exist.
@@ -204,8 +204,20 @@ pub enum TsconfigGap {
 }
 
 /// Process-wide on purpose: resolution runs on the extraction's scoped threads and the shell
-/// drains the total once per run, as the current core's gap registry does.
+/// drains the total once per run.
 static TSCONFIG_GAPS: Mutex<BTreeMap<TsconfigGap, usize>> = Mutex::new(BTreeMap::new());
+
+/// Resolutions that failed because something the run needs is absent, drained once per run.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ResolutionGaps {
+    /// Failed resolutions per unusable tsconfig. A tsconfig that cannot be loaded fails every
+    /// resolution under it, relative specifiers included.
+    pub tsconfig: BTreeMap<TsconfigGap, usize>,
+    /// Package-style specifiers that were not found, per directory of the importing file: the
+    /// manifest that governs a file is its directory's business, so the count is kept where it can
+    /// be attributed.
+    pub packages_not_found: BTreeMap<PathBuf, usize>,
+}
 
 /// Takes and clears the tsconfig gaps recorded since the last call.
 pub fn take_tsconfig_gaps() -> BTreeMap<TsconfigGap, usize> {
@@ -217,9 +229,8 @@ pub fn take_tsconfig_gaps() -> BTreeMap<TsconfigGap, usize> {
     )
 }
 
-/// Classifies why a resolution failed when the cause is an unusable tsconfig. The one
-/// classification both engines share, so a broken project configuration is reported alike
-/// whatever engine read it.
+/// Classifies why a resolution failed when the cause is an unusable tsconfig, so a broken project
+/// configuration is reported once, by one classification.
 pub fn classify_tsconfig_gap(error: &oxc_resolver::ResolveError) -> Option<TsconfigGap> {
     use oxc_resolver::ResolveError;
     match error {
@@ -256,8 +267,8 @@ fn inside_root(
     }
 }
 
-/// Whether the file lives under a `node_modules` component: a package dependency, opaque to
-/// both engines.
+/// Whether the file lives under a `node_modules` component: a package dependency, opaque to the
+/// analyzer.
 fn in_packages(file: &Path) -> bool {
     file.components()
         .any(|component| component.as_os_str() == "node_modules")
@@ -364,7 +375,7 @@ mod tests {
         assert!(resolve_file(&test, "~/types", &project).is_none());
         assert!(!take_confinement_refusal());
         // A package outside the root is still the configuration reaching past the root: refused
-        // AND confined, as the current core's confinement does.
+        // AND confined.
         std::fs::create_dir_all(outside.join("node_modules/dep")).unwrap();
         std::fs::write(
             outside.join("node_modules/dep/index.ts"),

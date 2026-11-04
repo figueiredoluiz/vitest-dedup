@@ -113,7 +113,35 @@ const DIRS = ['fixtures/duplicates', 'fixtures/observed', 'fixtures/near', 'fixt
 // Ratcheted 44 -> 77, which is what the corpus checks: the floor had trailed the real count by 32,
 // so a regression that dropped up to 32 checks still passed. 77 includes
 // `not-duplicates-literal-kind-spec-extension.spec.ts`; enumerating only `.test.ts` leaves 76.
-const MIN_CHECKED_EXPECTATIONS = 77
+// Ratcheted 77 -> 82 when the owned views became the only stream: the `context`, `fixture` and
+// `for-await` relations restated over them check five more expectations.
+// Expectations an analyzer gap keeps from holding, keyed by fixture and first participant line,
+// each with the gap. Listed here rather than as `@vitest-dedup:isolation-violation` because some
+// fail participant resolution, which a marker cannot excuse, and a header line would move every
+// line the fixtures and the known-delta ids cite. One-way: an entry whose expectation holds fails.
+export const KNOWN_GAPS = new Map([
+  ['fixtures/duplicates/not-duplicate-each-row-loop-unroll.test.ts:L16', 'a registration inside a loop is one record, so its two iterations do not resolve to two participants'],
+  ['fixtures/observed/observed-loop-unrolled-declarations.test.ts:L33', 'a registration inside a loop is one record, so its two iterations do not resolve to two participants'],
+  ['fixtures/observed/observed-module-scope-helper-declares-tests.test.ts:L43', 'a helper\'s `it` reached from three call sites registers elsewhere; no record carries the instance titles'],
+  ['fixtures/mixed/mixed-template-title-with-one-real-duplicate-row.test.ts:L42', 'a row whose template title is not rendered has no record under the rendered title'],
+  ['fixtures/duplicates/near-reordered-setup-dependent-twin.test.ts:L16', 'the twin that multiplies before resetting reads state another statement writes, so it is order-dependent and not compared'],
+  ['fixtures/duplicates/not-redundant-hook-different-body.test.ts:L27', 'the hook planner proves no redundancy for these bodies, so there is no hook proof to relate'],
+  ['fixtures/duplicates/parameterization-computed-keys.test.ts:L28', 'a lone-surrogate key and U+FFFD render to the same shape'],
+])
+
+/**
+ * `result` under a known gap: a failure is held as a violation naming the gap, and a pass fails
+ * so the entry is removed.
+ */
+function withKnownGap(key, result, seen) {
+  const gap = KNOWN_GAPS.get(key)
+  if (gap === undefined) return result
+  seen.add(key)
+  if (result.status === 'fail') return { status: 'violation', message: `${gap} -- ${result.message}` }
+  return { status: 'fail', message: `is a known gap ("${gap}") but now holds (${result.status}); remove it from KNOWN_GAPS` }
+}
+
+const MIN_CHECKED_EXPECTATIONS = 82
 
 // A ceiling on the debt bucket, which ratchets the other way. `unchecked` means "an isolation claim
 // with no mechanism yet"; it went 16 -> 22 -> 29 over three PRs under the source-level checker,
@@ -163,6 +191,7 @@ export function run(binary = DEFAULT_BINARY) {
   const notIsolable = []
   const violations = []
   const tally = { failures, unchecked, unstateable, notIsolable, violations, checked: 0 }
+  const seenGaps = new Set()
   let negatives = 0
 
   for (const dir of DIRS) {
@@ -196,12 +225,17 @@ export function run(binary = DEFAULT_BINARY) {
       for (const expectation of parsed.expectations) {
         if (expectation.rule !== 'none') continue
         negatives += 1
-        const result = checkExpectation(expectation, index, readSource)
+        // KNOWN_GAPS keys are forward-slash paths on every platform.
+        const key = `${join(dir, name).replaceAll('\\', '/')}:L${expectation.participants[0]?.line}`
+        const result = withKnownGap(key, checkExpectation(expectation, index, readSource), seenGaps)
         tallyExpectation(tally, join(dir, name), result)
       }
     }
   }
 
+  for (const key of KNOWN_GAPS.keys()) {
+    if (!seenGaps.has(key)) failures.push(`FAIL (gate): known gap ${key} names no expectation; remove it`)
+  }
   const { checked } = tally
   if (checked < MIN_CHECKED_EXPECTATIONS) {
     failures.push(

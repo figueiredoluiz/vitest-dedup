@@ -1,50 +1,33 @@
-//! Function declaration ownership through extraction and final duplicate findings.
+//! Function declaration ownership through to the final duplicate findings.
 
-use vitest_dedup::analysis::analyze;
-use vitest_dedup::config::{Config, ConfigOverrides};
-use vitest_dedup::discovery::{ModuleFlavor, SourceFile, SourceLanguage};
-use vitest_dedup::frontend::{extract, Globals};
-use vitest_dedup::model::{IncompleteCauses, Rule};
+#[path = "support/report.rs"]
+mod report;
+use report::{findings, report};
 
-/// Compare two complete bodies through the real frontend and finding rules.
+/// Compare two complete bodies through the analyzer: one duplicate-test exactly when they are
+/// equivalent, and never a literal-only consolidation of different binding targets.
 fn assert_pair(source: &str, equivalent: bool, label: &str) {
-    let directory = tempfile::tempdir().unwrap();
-    let file = SourceFile::without_project_context(
-        directory.path().join("case.test.ts"),
-        SourceLanguage::TypeScript,
-        ModuleFlavor::Ambiguous,
+    let result = report(&[("case.test.ts", source)], &[]);
+    assert_eq!(
+        result["testsAnalyzed"], 2,
+        "{label}: analyzed count: {result}"
     );
-    let extracted = extract(source, &file, Globals::Disabled);
-    assert_eq!(extracted.tests.len(), 2, "{label}: extraction count");
-    assert!(
-        !extracted.incomplete,
-        "{label}: {:?}",
-        extracted.diagnostics
-    );
-    let bodies = [&extracted.tests[0].body, &extracted.tests[1].body];
-    let alpha_equal = bodies[0].alpha == bodies[1].alpha;
-    let structural_equal = bodies[0].structural == bodies[1].structural;
-    let config = Config::load(directory.path(), ConfigOverrides::default()).unwrap();
-    let result = analyze(extracted.tests, &config, 1, IncompleteCauses::default()).unwrap();
-    assert_eq!(result.tests_analyzed, 2, "{label}: analyzed count");
-    let count = result
-        .findings
+    assert_eq!(result["incomplete"], false, "{label}: {result}");
+    let findings = findings(&result);
+    let count = findings
         .iter()
-        .filter(|f| f.rule == Rule::DuplicateTest)
+        .filter(|finding| finding["rule"] == "duplicate-test")
         .count();
     assert_eq!(
         count,
         usize::from(equivalent),
         "{label}: final duplicate findings"
     );
-    assert_eq!(alpha_equal, equivalent, "{label}: alpha");
-    assert_eq!(structural_equal, equivalent, "{label}: structural");
     if !equivalent {
         assert!(
-            !result
-                .findings
+            !findings
                 .iter()
-                .any(|f| f.rule == Rule::ParameterizationCandidate),
+                .any(|finding| finding["rule"] == "parameterization-candidate"),
             "{label}: different binding targets cannot be literal-only variants"
         );
     }

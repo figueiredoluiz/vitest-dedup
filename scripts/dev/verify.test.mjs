@@ -813,7 +813,7 @@ test('documentation runs static checks only, at both hooks', () => {
 test('a gate script runs the corpus gates and no Rust suite', () => {
   assert.deepEqual(hookScope(['scripts/check/lib/collection-oracle.mjs']), ['gates'])
   const steps = prePush(['scripts/check/lib/collection-oracle.mjs'])
-  for (const gate of ['check:corpus', 'check:recall', 'check:oracle', 'check:next-duplicates', 'check:coverage:js']) assert.ok(steps.includes(`npm run ${gate}`), gate)
+  for (const gate of ['check:corpus', 'check:recall', 'check:oracle', 'check:coverage:js']) assert.ok(steps.includes(`npm run ${gate}`), gate)
   assert.ok(steps.includes('cargo build --release --locked'))
   assert.equal(steps.some(step => /^cargo (?:test|clippy|doc)/.test(step)), false, steps.join())
   assert.equal(steps.includes('npm run check:coverage:rust'), false)
@@ -822,7 +822,7 @@ test('a gate script runs the corpus gates and no Rust suite', () => {
 test('a fixture runs the corpus gates and the Rust tests that read it, and no lints or coverage', () => {
   assert.deepEqual(hookScope(['fixtures/recall/sample.test.ts']), ['fixtures'])
   const steps = prePush(['fixtures/recall/sample.test.ts'])
-  for (const gate of ['check:corpus', 'check:recall', 'check:oracle', 'check:next-duplicates']) assert.ok(steps.includes(`npm run ${gate}`), gate)
+  for (const gate of ['check:corpus', 'check:recall', 'check:oracle']) assert.ok(steps.includes(`npm run ${gate}`), gate)
   assert.ok(steps.includes('cargo test --all-targets --all-features --locked'))
   assert.equal(steps.some(step => /^cargo (?:clippy|doc)/.test(step)), false, steps.join())
   assert.equal(steps.includes('npm run check:coverage:rust'), false)
@@ -843,7 +843,7 @@ test('Rust runs its lints, tests, corpus gates and coverage, not the packaging a
   for (const path of ['src/model.rs', 'tests/example.rs', 'examples/depth.rs', 'Cargo.toml', 'Cargo.lock']) {
     assert.deepEqual(hookScope([path]), ['rust'])
     const steps = prePush([path])
-    for (const step of ['cargo fmt --all --check', 'cargo clippy --all-targets --all-features --locked', 'cargo doc --no-deps --document-private-items --locked', 'cargo test --all-targets --all-features --locked', 'cargo build --release --locked', 'npm run check:corpus', 'npm run check:recall', 'npm run verify:titles', 'npm run check:oracle', 'npm run check:behavior-runtime', 'npm run check:hooks-differential', 'npm run check:next-duplicates', 'npm run check:duplication', 'npm run check:coverage:rust']) assert.ok(steps.includes(step), step)
+    for (const step of ['cargo fmt --all --check', 'cargo clippy --all-targets --all-features --locked', 'cargo doc --no-deps --document-private-items --locked', 'cargo test --all-targets --all-features --locked', 'cargo build --release --locked', 'npm run check:corpus', 'npm run check:recall', 'npm run verify:titles', 'npm run check:oracle', 'npm run check:behavior-runtime', 'npm run check:hooks-differential', 'npm run check:duplication', 'npm run check:coverage:rust']) assert.ok(steps.includes(step), step)
     for (const step of ['npm test', 'npm run test:action', 'npm run test:dev-checks', 'npm run test:check-lib', 'npm run pack:check', 'npm run check:coverage:js', 'npm run check']) assert.equal(steps.includes(step), false, step)
     assert.equal(hookCommands('pre-commit', [path]).some(step => /^cargo (?:clippy|test|build)/.test(step.join(' '))), false)
   }

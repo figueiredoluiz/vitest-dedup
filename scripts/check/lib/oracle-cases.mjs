@@ -13,7 +13,7 @@
 //   blindUnderCurrent?: [path]
 // `tasks` is the exact number of tests and suites Vitest collects from the file. `wrapperSites` is
 // its exact list of `wrapper@L` and `hook-wrapper@L`, which the site comparison cannot pin: it only
-// sees a task with no site. `next` is the next engine's `{reasons, testsExcluded}` for the file,
+// sees a task with no site. `next` is the analyzer's `{reasons, testsExcluded}` for the file,
 // `{}` for no record, with the file's primary reason first. `waitsOn` says in plain words what the
 // held value waits on.
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
@@ -40,7 +40,7 @@ function unknownKeys(object, allowed, where) {
   return Object.keys(object).filter((key) => !allowed.has(key)).map((key) => `${where}: unknown key ${JSON.stringify(key)}`)
 }
 
-/** Why `ledger` is not a next-engine pin: `{}`, or the reasons, primary first, with the tests they exclude. */
+/** Why `ledger` is not an exclusion pin: `{}`, or the reasons, primary first, with the tests they exclude. */
 function ledgerProblems(ledger, where) {
   if (!isObject(ledger)) return [`${where}: must be an object`]
   const problems = unknownKeys(ledger, LEDGER_KEYS, where)
@@ -220,7 +220,7 @@ function judgeKnown(check, found, known, dir, out) {
  * @param {Map<string, {tasks: object[]}>} view.vitest `collectWithVitest`'s result.
  * @param {{compared: string[], disagreements: object[]}} view.located `compareSites`'s result.
  * @param {{disagreements: object[]}} view.titles `compareDirectory`'s result.
- * @param {Map<string, {kind: string, line: number}[]>} view.sites The next engine's sites by file.
+ * @param {Map<string, {kind: string, line: number}[]>} view.sites The analyzer's sites by file.
  * @param {Map<string, {reasons: string[], testsExcluded: number}>} view.exclusions The next
  *   engine's excluded-file records by file.
  * @returns {{failures: string[], held: string[], files: number}} Failure lines, what is held and

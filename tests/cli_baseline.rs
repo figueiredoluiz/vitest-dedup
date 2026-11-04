@@ -1,10 +1,6 @@
 //! CLI baseline output-path and positional-path contracts.
 
-use vitest_dedup::modes::load_baseline_as;
-
-#[path = "support/engine.rs"]
-mod engine;
-use engine::selected_version;
+use vitest_dedup::modes::load_baseline;
 
 /// A bare baseline filename uses the caller's working directory without changing global cwd.
 #[test]
@@ -28,7 +24,7 @@ fn a_bare_baseline_filename_is_written_in_the_cli_working_directory() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert_eq!(
-        load_baseline_as(&directory.path().join("baseline.json"), selected_version())
+        load_baseline(&directory.path().join("baseline.json"))
             .unwrap()
             .total(),
         0
@@ -101,21 +97,14 @@ fn check_after_the_delimiter_is_a_directory() {
     assert_eq!(report["filesAnalyzed"], 1);
 }
 
-/// A run of the analyzer over `directory` under `engine`, with `args`, as `(exit, stdout, stderr)`.
-fn analyze(
-    directory: &std::path::Path,
-    engine: Option<&str>,
-    args: &[&str],
-) -> (i32, String, String) {
-    let mut command = assert_cmd::Command::cargo_bin("vitest-dedup").unwrap();
-    command
+/// A run of the analyzer over `directory` with `args`, as `(exit, stdout, stderr)`.
+fn analyze(directory: &std::path::Path, args: &[&str]) -> (i32, String, String) {
+    let output = assert_cmd::Command::cargo_bin("vitest-dedup")
+        .unwrap()
         .arg(directory)
         .args(args)
-        .env_remove("VITEST_DEDUP_ENGINE");
-    if let Some(engine) = engine {
-        command.env("VITEST_DEDUP_ENGINE", engine);
-    }
-    let output = command.output().unwrap();
+        .output()
+        .unwrap();
     (
         output.status.code().unwrap(),
         String::from_utf8(output.stdout).unwrap(),
@@ -145,10 +134,9 @@ fn duplicates(stdout: &str) -> (usize, usize) {
     (records.len(), baselined.count())
 }
 
-/// Recorded findings stop counting under the next engine, a new one still does, and each carries
-/// the next engine's identity.
+/// Recorded findings stop counting, a new one still does, and each carries the `v2` identity.
 #[test]
-fn the_next_engine_records_and_applies_a_baseline() {
+fn a_baseline_is_recorded_and_applied() {
     let directory = tempfile::tempdir().unwrap();
     let test_file = directory.path().join("a.test.ts");
     std::fs::write(&test_file, source(&["one", "two"])).unwrap();
@@ -157,26 +145,25 @@ fn the_next_engine_records_and_applies_a_baseline() {
     let args = ["--reporters", "jsonl", "--baseline", path];
     let (exit, _, stderr) = analyze(
         directory.path(),
-        Some("next"),
         &[&args[..], &["--update-baseline"]].concat(),
     );
     assert_eq!(exit, 0, "{stderr}");
     let written: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
     assert_eq!(written["fingerprintVersion"], "vitestDedupFingerprint/v2");
-    let (exit, stdout, stderr) = analyze(directory.path(), Some("next"), &args);
+    let (exit, stdout, stderr) = analyze(directory.path(), &args);
     assert_eq!(exit, 0, "{stderr}");
     assert_eq!(duplicates(&stdout), (1, 1));
     assert!(stdout.contains("vitestDedupFingerprint/v2:"), "{stdout}");
     std::fs::write(&test_file, source(&["one", "two", "three"])).unwrap();
-    let (exit, stdout, _) = analyze(directory.path(), Some("next"), &args);
+    let (exit, stdout, _) = analyze(directory.path(), &args);
     assert_eq!(exit, 1);
     assert_eq!(duplicates(&stdout), (2, 1));
 }
 
 /// Equal fingerprints are counted: accepting one of two copies still reports the other.
 #[test]
-fn a_collision_under_the_next_engine_is_counted() {
+fn a_baseline_collision_is_counted() {
     let directory = tempfile::tempdir().unwrap();
     let test_file = directory.path().join("a.test.ts");
     std::fs::write(&test_file, source(&["same", "same"])).unwrap();
@@ -185,51 +172,43 @@ fn a_collision_under_the_next_engine_is_counted() {
     let args = ["--reporters", "jsonl", "--baseline", path];
     analyze(
         directory.path(),
-        Some("next"),
         &[&args[..], &["--update-baseline"]].concat(),
     );
     std::fs::write(&test_file, source(&["same", "same", "same"])).unwrap();
-    let (exit, stdout, _) = analyze(directory.path(), Some("next"), &args);
+    let (exit, stdout, _) = analyze(directory.path(), &args);
     assert_eq!(exit, 1);
     assert_eq!(duplicates(&stdout), (2, 1));
 }
 
-/// Each engine refuses the other's file and names the way out, which also works: a half-matching
-/// baseline would read as unexplained new findings.
+/// A baseline an earlier release wrote (`vitestDedupFingerprint/v1`) is refused, naming both
+/// versions and the way out, which also works: a half-matching baseline would read as unexplained
+/// new findings.
 #[test]
-fn each_engine_refuses_the_other_engines_baseline() {
+fn an_earlier_release_baseline_is_refused_with_the_way_out() {
     let directory = tempfile::tempdir().unwrap();
     std::fs::write(directory.path().join("a.test.ts"), source(&["one", "two"])).unwrap();
     let path = directory.path().join("baseline.json");
+    std::fs::write(
+        &path,
+        r#"{"schemaVersion":1,"fingerprintVersion":"vitestDedupFingerprint/v1","findings":[]}"#,
+    )
+    .unwrap();
     let path = path.to_str().unwrap();
     let args = ["--baseline", path];
+    let (exit, _, stderr) = analyze(directory.path(), &args);
+    assert_eq!(exit, 2, "{stderr}");
+    assert!(stderr.contains("vitestDedupFingerprint/v1"), "{stderr}");
+    assert!(stderr.contains("vitestDedupFingerprint/v2"), "{stderr}");
+    assert!(stderr.contains("--update-baseline"), "{stderr}");
     let update = [&args[..], &["--update-baseline"]].concat();
-    for (writer, reader, written, wanted) in [
-        (None, Some("next"), "v1", "v2"),
-        (Some("next"), None, "v2", "v1"),
-    ] {
-        assert_eq!(analyze(directory.path(), writer, &update).0, 0);
-        let (exit, _, stderr) = analyze(directory.path(), reader, &args);
-        assert_eq!(exit, 2, "{stderr}");
-        assert!(
-            stderr.contains(&format!("vitestDedupFingerprint/{written}")),
-            "{stderr}"
-        );
-        assert!(
-            stderr.contains(&format!("vitestDedupFingerprint/{wanted}")),
-            "{stderr}"
-        );
-        assert!(stderr.contains("--update-baseline"), "{stderr}");
-        assert_eq!(analyze(directory.path(), reader, &update).0, 0);
-        assert_eq!(analyze(directory.path(), reader, &args).0, 0);
-        assert_eq!(analyze(directory.path(), writer, &update).0, 0);
-    }
+    assert_eq!(analyze(directory.path(), &update).0, 0);
+    assert_eq!(analyze(directory.path(), &args).0, 0);
 }
 
-/// A file whose header claims the next engine's identity must hold only its entries, and malformed
+/// A file whose header claims the `v2` identity must hold only its entries, and malformed
 /// input stays a refusal, never a pass.
 #[test]
-fn the_next_engine_refuses_a_malformed_baseline() {
+fn a_malformed_baseline_is_refused() {
     let directory = tempfile::tempdir().unwrap();
     std::fs::write(directory.path().join("a.test.ts"), source(&["one", "two"])).unwrap();
     let path = directory.path().join("baseline.json");
@@ -254,11 +233,7 @@ fn the_next_engine_refuses_a_malformed_baseline() {
         ("{".to_owned(), "failed to parse"),
     ] {
         std::fs::write(&path, body).unwrap();
-        let (exit, _, stderr) = analyze(
-            directory.path(),
-            Some("next"),
-            &["--baseline", path.to_str().unwrap()],
-        );
+        let (exit, _, stderr) = analyze(directory.path(), &["--baseline", path.to_str().unwrap()]);
         assert_eq!(exit, 2, "{stderr}");
         assert!(stderr.contains(reason), "{stderr}");
     }
@@ -266,14 +241,10 @@ fn the_next_engine_refuses_a_malformed_baseline() {
 
 /// Reference mode reports its Git prerequisite rather than an obsolete engine refusal.
 #[test]
-fn the_next_engine_requires_git_for_a_base_revision() {
+fn a_base_revision_requires_git() {
     let directory = tempfile::tempdir().unwrap();
     std::fs::write(directory.path().join("a.test.ts"), source(&["one"])).unwrap();
-    let (exit, _, stderr) = analyze(
-        directory.path(),
-        Some("next"),
-        &["--baseline-from-ref", "HEAD"],
-    );
+    let (exit, _, stderr) = analyze(directory.path(), &["--baseline-from-ref", "HEAD"]);
     assert_eq!(exit, 2, "{stderr}");
     assert!(stderr.contains("requires a Git repository"), "{stderr}");
 }

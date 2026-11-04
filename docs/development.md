@@ -29,13 +29,13 @@ means (a test, a hook, a table member) instead of spelling the name. Modules lis
 `src/framework/tests.rs` may not contain any name the dialect declares as a string literal; the
 test names the file and literal it rejects.
 
-### The next core
+### The analysis core
 
-A second analysis core is being built beside the current one, in layers that each read only the
-layer below: `lang` (parsing, scopes, resolution; with `frontend`, the only importer of `oxc_*`),
-`inventory` (registration sites by provenance), `normal` (normal forms and identities) and
-`corpus` (each test keyed for comparison, or excluded with a reason). No run reaches it yet; unit tests
-check every layer, and `normal` has its own mutation scope (`npm run mutants:next-core`).
+The analyzer is built in layers that each read only the layer below: `lang` (parsing, scopes,
+resolution; the only importer of `oxc_*`), `inventory` (registration sites by provenance), `normal`
+(normal forms and identities), `corpus` (each test keyed for comparison, or excluded with a reason)
+and `rules` (findings). Unit tests check every layer, and `normal` has its own mutation scope
+(`npm run mutants:next-core`).
 
 ### Gates `npm run check` does not run
 
@@ -58,10 +58,11 @@ run and test and hook bodies do not. An import of a module that does not exist l
 a file whose collection reads a stub, or that imports one only for its side effects, is not
 compared. The gate assumes a missing module registers no tests or hooks when it loads.
 
-The same collection checks the next engine's inventory (`VITEST_DEDUP_ENGINE=next`): every test and
-suite Vitest collects must have a registration site of its kind on the line Vitest places it on, or
-a wrapper call or module load that accounts for it. Sites that register nothing Vitest collected are
-counted, not failed. Floors on the files and tasks compared keep a shrunken comparison from passing.
+The same collection checks the registration sites: every test and suite Vitest collects must have a
+site of its kind on the line Vitest places it on, or a wrapper call or module load that accounts for
+it. Sites that register nothing Vitest collected are counted, not failed. A test whose title the
+analyzer did not prove is counted rather than compared by title. Floors on the files and tasks compared keep a
+shrunken comparison from passing.
 
 Known disagreements are listed with their
 reasons in `scripts/check/collection-oracle-known.json`; the gate fails on a disagreement that is not
@@ -69,7 +70,7 @@ listed and on a listed one that no longer occurs, so a fix deletes its entry.
 
 The gate also runs the owned cases in `fixtures/oracle/<dir>/`, each with an `expected.json` that
 pins, per file, the tasks Vitest collects, the file's `wrapper` and `hook-wrapper` sites, and what
-the next engine excludes. A pin the analyzer does not meet yet is held: `wrapperSitesToday` or
+the analyzer excludes. A pin the analyzer does not meet yet is held: `wrapperSitesToday` or
 `nextToday` records today's value and `waitsOn` says in plain words what it waits on. A held value
 fails the gate the moment the target is met, so the expectation changes with the support; the
 `knownSites` and `knownTitles` lists work the same way as the central list. A directory with no
@@ -78,7 +79,7 @@ fail, and at least one case file must be compared.
 
 ### Hooks-only differential check
 
-`npm run check:hooks-differential` tests the next engine's `hook-wrapper` claim (a helper call that
+`npm run check:hooks-differential` tests the `hook-wrapper` claim (a helper call that
 registers only hooks) against Vitest on generated cases: each known way a helper's call can run a
 hidden test, in each way a helper is declared and reached, plus bodies the claim admits. A hidden test
 Vitest collects with no site fails, as does an admitted body not read as `hook-wrapper`, a route
@@ -86,42 +87,37 @@ Vitest collects nothing from, and a case Vitest cannot collect. Cases the analyz
 are listed with reasons in `scripts/check/hooks-differential-known.json`; one that starts passing
 fails, so its entry goes when support lands.
 
-### Next-engine run modes
+### Run modes
 
-`VITEST_DEDUP_ENGINE=next` supports `--changed-since`: all files are analyzed so an unchanged
-cross-file twin remains available, then findings without a changed participant are withheld.
-Withholding findings marks the run incomplete, as with the default engine.
+`--changed-since` analyzes all files so an unchanged cross-file twin remains available, then
+withholds findings without a changed participant. Withholding findings marks the run incomplete.
 
-`--debug-memory --reporters jsonl` reports next-engine retained storage under `fields.engine`,
-further split into `engineFields` cases, suites, hooks, sites, blind files and the two export
-caches. These buckets sum to `retainedBytes`. `engineMemoryNotice` states which private
-hash-table and allocator overhead is outside the estimate; RSS is a separate measurement.
-The default engine's memory record shape is unchanged.
+`--debug-memory --reporters jsonl` reports retained storage under `fields.engine`, further split into
+`engineFields` cases, suites, hooks, sites, blind files and the two export caches. These buckets sum
+to `retainedBytes`. `engineMemoryNotice` states which private hash-table and allocator overhead is
+outside the estimate; RSS is a separate measurement.
 
-### Next-engine duplicate rules
+### Duplicate rules
 
-`npm run check:next-duplicates` runs the analyzer under `VITEST_DEDUP_ENGINE=next` over
-`fixtures/duplicates/`, `fixtures/observed/` and `fixtures/mixed/` and judges the rules the
-next engine ports (`duplicate-test`, `duplicate-test-name`, `duplicate-each-row`, `duplicate-suite`, `parameterization-candidate`, `near-duplicate-test`, `subsumed-test`, `redundant-hook`, `cross-file-duplicate`) pairwise against the fixture
-headers: every pair a positive expectation declares must be linked by its rule, no pair declared
-silent may be linked, and any other linked pair is a failure until it is adjudicated into a
-header or into `scripts/check/next-duplicates-known.json` with a reason. A listed delta that
-stops being observed fails, so its entry goes when the header or the engine moves; a rule the
-next engine does not port reporting a finding fails outright. Every recall case then runs under
-the next engine, and the ported rules' findings are judged against the manifest: a missing, forbidden
-or unexpected finding fails until adjudicated. The gate prints how many expectations each rule not
-yet ported still holds. Floors on fixtures, cases, tests analyzed and required pairs keep an empty
-read from passing.
+`npm run check:corpus` runs the analyzer over `fixtures/duplicates/`, `fixtures/observed/` and
+`fixtures/mixed/` and judges every rule pairwise against the fixture headers: every pair a positive
+expectation declares must be linked by its rule, no pair declared silent may be linked, and any other
+linked pair is a failure until it is adjudicated into a header or into
+`scripts/check/next-duplicates-known.json` with a reason. `npm run check:recall` judges every recall
+case against the manifest the same way. A listed delta that stops being observed fails, so its entry
+goes when the header or the analyzer moves. The headers and manifest still state some facts of the
+earlier analyzer; the known list holds those deltas until they are rewritten. Floors on fixtures,
+cases, tests analyzed, required pairs and recall keep an empty read from passing.
 
 `npm run check:parameterization-runtime` also executes the owned consolidation and inline-snapshot cases under Vitest;
 the same source supplies the corpus expectations. CI runs both checks.
 
-The experimental name rule compares proven title segments in one file and renders supported
+The name rule compares proven title segments in one file and renders supported
 literal table titles. It preserves the corpus's existing exclusions, including empty callbacks and
 todos. Unknown title values, unsupported formatting and suite-table titles do not anchor name
 findings. Distinct rendered titles across copied tables remain separate findings.
 
-The experimental suite rule compares complete inline blocks with matching literal title paths,
+The suite rule compares complete inline blocks with matching literal title paths,
 modifiers, options and enclosing setup. It reports a block only when every run condition is a
 literal that keeps it active (`skipIf(false)`, `runIf(true)`): an inactive or unknown condition is
 treated like `describe.skip`, so the copies' children are compared one by one. It also excludes
@@ -133,7 +129,7 @@ written out. A child suppressed inline is not carried. Within-copy and unrelated
 remain visible. Nested suite copies remain independent suite findings. Mixed child clusters stay
 visible when they also contain unrelated or within-copy evidence.
 
-The experimental row rule compares rows within one declaration using proven inputs, rendered
+The row rule compares rows within one declaration using proven inputs, rendered
 names and equivalent callback/context keys. It supports directly written tables of primitive
 values and shallow literal rows. Fixed-parameter arrow callbacks may ignore trailing cells;
 rest parameters, destructuring and ordinary functions retain the whole row. Unknown/effectful
@@ -142,7 +138,7 @@ formatting remain unsupported. In particular, dollar substitutions, string `%i` 
 whole null rows cannot anchor row findings yet. Strings and keys containing the replacement
 character are also refused until the owned tree exposes lossless JavaScript code-unit identity. Existing corpus exclusions still apply.
 
-The experimental parameterization rule groups same-file callbacks with the same literal shape,
+The parameterization rule groups same-file callbacks with the same literal shape,
 exact setup and modifiers, and different normalized bodies. It accounts for every row, visits
 declarations in a stable order by their distinct body sets, and retains a representative only
 when that declaration adds a body. Larger sets precede covered subsets; rows and declarations
@@ -156,18 +152,17 @@ imports with options are also refused until their module identities are proved. 
 named custom inline-snapshot matchers; arbitrary custom matcher semantics are not modeled.
 Replacement-character text in callbacks and their local dependencies is also refused until the
 owned tree preserves JavaScript code units without display encoding.
-Row binding uses the existing proof; unsupported row values and observed class names still limit
-parity with the default engine.
+Row binding uses the existing proof; unsupported row values and observed class names are refused.
 
-The experimental near-duplicate rule compares same-file tests under the same context whose behavior
+The near-duplicate rule compares same-file tests under the same context whose behavior
 events form an exact multiset and whose bodies differ. A body whose trace is incomplete, such as one
 with a branch, is left out under `incomplete-trace`, as it is by parameterization and subsumption; the other rules still read it. A pair a
 parameterization group already reports is not claimed twice. Tests with fewer than two events have
 nothing to compare.
 
-Baselines under the next engine carry `vitestDedupFingerprint/v2`: the same derivation, but the engines pair
-and title tests differently, so each refuses the other's file rather than half matching it.
-`--baseline-from-ref` also uses v2 under the next engine. Historical source files, project helpers,
+Baselines carry `vitestDedupFingerprint/v2`. Earlier releases wrote `v1` and paired and titled tests
+differently, so a `v1` file is refused with a prompt to regenerate it rather than half matched.
+`--baseline-from-ref` uses v2 as well. Historical source files, project helpers,
 re-exports, and resolver tsconfig/package metadata come from one pinned Git commit. Missing files
 never fall back to the working tree. Historical symlinks and actual dependency/configuration read
 failures are operational errors. An absent package-based tsconfig extension instead marks the
@@ -180,13 +175,13 @@ budget; an index that exceeds the cap is refused before analysis. Current includ
 resolved globals still configure both passes; historical Vitest configuration is not executed.
 See [revision baselines](baselines.md#baseline-from-a-revision) for shared admission limits.
 
-The experimental `subsumed-test` rule is opt-in. It compares complete same-file traces under
+The `subsumed-test` rule is opt-in. It compares complete same-file traces under
 the same context and callback form for strict ordered subsequences, preserving repeated events.
 It reports the smaller test first, charges every candidate pair to the shared budget, and never
 compares rows within one declaration. Placeholder callbacks, unresolved table populations and tests expected to fail, directly or through a suite, are refused. Fixture providers,
 registration conditions and unbound cells remain part of the comparison identity. Findings suggest review rather than safe deletion.
 
-The experimental hook rule compares proven synchronous, idempotent setup within one lifecycle
+The hook rule compares proven synchronous, idempotent setup within one lifecycle
 chain. It supports `let` bindings whose complete recorded write set assigns one primitive
 literal value. Dynamic lexical evaluation refuses the proof. Calls and property writes
 remain opaque until their effect and object-stability proofs are modeled. Opaque or conflicting
@@ -226,8 +221,8 @@ This workflow relaxes no gate threshold or corpus exclusion.
 ### Probing and proving a change
 
 `npm run probe -- <test file or directory>...` copies each input to a temporary project and prints
-what Vitest collects beside what both engines report, marking any disagreement. Findings of rules
-the next engine does not run are listed apart and are not a disagreement. It reads
+what Vitest collects beside what the analyzer reports, marking a run that failed or counted a
+different number of tests. It reads
 `target/release/vitest-dedup` unless `--binary` names another. Overlapping project collections
 and files the runner did not probe are unread, so partial collection cannot report agreement.
 

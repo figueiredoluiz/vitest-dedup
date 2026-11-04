@@ -6,7 +6,7 @@
 //! a tsconfig is reported only when the resolver itself failed on it, so a project that never
 //! needed the file is never told about it.
 
-use crate::frontend::{ResolutionGaps, TsconfigGap};
+use crate::lang::{ResolutionGaps, TsconfigGap};
 use crate::model::{MissingPrerequisite, PrerequisiteKind};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};

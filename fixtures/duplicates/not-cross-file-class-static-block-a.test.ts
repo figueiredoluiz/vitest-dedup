@@ -4,8 +4,8 @@
 // @vitest-dedup:extracted 1
 // @vitest-dedup:expect rule=none verdict=distinct severity=none
 // @vitest-dedup:isolates context
-// @vitest-dedup:isolation-violation the default engine's context key does not see a static block
-// @vitest-dedup:pending the default engine does not read a class expression's static block as load effects
+// The context sees the static block, so the pair stays apart without a marker.
+// The static block is read as a load effect of the module.
 // @vitest-dedup:participant L16 "reads the mode a static block set"
 // @vitest-dedup:participant not-cross-file-class-static-block-b.test.ts#L16 "reads the mode a static block set"
 import { expect, test } from 'vitest'

@@ -57,6 +57,6 @@
     the modelled and tainted shapes respectively, and the
     `fixtures/duplicates/not-duplicates-mock-then-unmock*` pair, which asserts the mocked and
     mocked-then-unmocked contexts are compared and found different rather than excluded.
-    `[status: current]` as implemented by `collect_mocked_modules` in `src/frontend/extract.rs`.
+    `[status: current]`.
 
 Back to the [Vitest surface index](../vitest-surface.md).

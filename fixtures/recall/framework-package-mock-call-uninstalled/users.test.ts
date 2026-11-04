@@ -4,7 +4,8 @@
 // The same source as framework-package-mock-call without `node_modules/@test-kit/runtime`. With
 // the package missing the calls cannot be known to register mocks, so the pair must stay
 // not-compared after the installed case is understood, and the run should name the missing package
-// as the cause. Install the package and it becomes the positive case.
+// as the cause. Install the package and it becomes the positive case. The case-local
+// `node_modules/stand-in` keeps a checkout without a root install from reading as one.
 import { expect, test } from 'vitest'
 import { mockImport, registerEndpoint } from '@test-kit/runtime'
 

@@ -40,10 +40,7 @@ file.
 - Per-project `include` overrides and in-source candidates are not applied to the base read. That
   can only make the base report fewer findings, which makes the gate stricter, never looser.
 - The base revision is subject to the same memory budget as the current run.
-- The default engine refuses imported runners on the base read. See
-  [Imported runners](imported-runners.md#baselines).
-- Under the experimental next engine, project imports and resolver tsconfig/package metadata are
-  read from the same pinned commit, with no working-tree fallback. Ancestor configuration is
+- Project imports and resolver tsconfig/package metadata are read from the same pinned commit, with no working-tree fallback. Ancestor configuration is
   available within the repository; project-source imports remain confined to the analysis root.
   Current include/exclude globs and resolved globals configure both passes. Historical Vitest
   configuration is not executed.
@@ -56,14 +53,14 @@ file.
   configuration blob that is unavailable locally still fails explicitly without fetching.
 - Repository roots must be UTF-8. Unqueryable names outside a nested analysis root do not abort
   catalog construction; the shared source reader's admission policy is unchanged.
-- If the next engine cannot obtain a package-based tsconfig extension from Git, the historical
+- If a package-based tsconfig extension cannot be obtained from Git, the historical
   pass is incomplete and contributes no baseline allowance. It never substitutes installed or
   current configuration. Current findings are still detected and gated normally. Missing relative
   configuration, escaped paths, malformed committed config, and failed committed reads remain errors. `#`-mapped
   tsconfig extensions are not included in this admission and remain explicit errors.
-- The next engine refuses historical source/helper symlinks and actual dependency/configuration
-  access failures. Oversized or invalid-UTF-8 root sources retain the shared reader's skip policy
-  and explicit skip diagnostics. Its retained Git source index counts toward the memory budget;
+- Historical source/helper symlinks are refused, as are actual dependency/configuration access
+  failures. Oversized or invalid-UTF-8 root sources retain the shared reader's skip policy
+  and explicit skip diagnostics. The retained Git source index counts toward the memory budget;
   if the index alone exceeds the cap, the command fails with a memory-budget diagnostic.
 
 ## What a report records

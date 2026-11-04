@@ -1,9 +1,8 @@
 //! VitestDedup's reusable static-analysis library.
 //!
 //! The analyzer reads Vitest test files without importing or executing them. Parsing is confined
-//! to [`frontend`] and, for the next core, [`lang`]; every other module consumes the owned
-//! intermediate representation in [`model`] or the owned tree in [`lang`]. Knowledge of the test
-//! framework is reached through [`framework`].
+//! to [`lang`]; every other module consumes the owned tree in [`lang`] or the records built over
+//! it. Knowledge of the test framework is reached through [`framework`].
 
 #![warn(missing_docs)]
 #![forbid(unsafe_code)]
@@ -18,7 +17,6 @@ pub mod corpus;
 pub mod discovery;
 pub mod exclusions;
 pub mod framework;
-pub mod frontend;
 pub mod inventory;
 pub mod lang;
 pub mod memory;

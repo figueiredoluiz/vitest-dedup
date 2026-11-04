@@ -20,5 +20,14 @@
         "testsExcluded": 2
       }
     }
-  }
+  },
+  "knownTitles": [
+    {
+      "path": "helpers.ts",
+      "kind": "missing-hook",
+      "item": "beforeEach@helpers.ts:3",
+      "reason": "A helper that registers only hooks is a `hook-wrapper` site at its call; the hooks it registers are not recorded in the helper.",
+      "waitsOn": "the analyzer reading this shape"
+    }
+  ]
 }

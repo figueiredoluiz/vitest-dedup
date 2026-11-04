@@ -13,8 +13,7 @@ use std::time::Instant;
 use vitest_dedup::cli::{ExitCode, ParsedArgs, ReporterKind};
 use vitest_dedup::config::Config;
 use vitest_dedup::exclusions::{self, ExclusionCollector};
-use vitest_dedup::frontend::{self, Globals};
-use vitest_dedup::model::{AnalysisResult, ExclusionReason, Identity, IncompleteCauses};
+use vitest_dedup::model::{AnalysisResult, ExclusionReason, IncompleteCauses};
 use vitest_dedup::modes;
 use vitest_dedup::reporters::{
     terminal_safe, DetectionTiming, HtmlReporter, JsonReporter, JsonlReporter, Reporter,
@@ -36,11 +35,6 @@ mod memory_roof_tests;
 /// Run the CLI, preserving quality-gate exit codes and reporting operational errors with
 /// sanitized diagnostics.
 fn main() -> ProcessExitCode {
-    let args: Vec<std::ffi::OsString> = std::env::args_os().collect();
-    if let Some(code) = vitest_dedup::frontend::run_package_worker(&args) {
-        return ProcessExitCode::from(u8::try_from(code).unwrap_or(2));
-    }
-    vitest_dedup::frontend::use_package_worker();
     match run() {
         Ok(code) => process_code(code),
         Err(error) => {
@@ -135,67 +129,6 @@ fn relativize_test_path(path: &std::path::Path, root: &std::path::Path) -> std::
     canonical_relative.unwrap_or_else(|| path.to_path_buf())
 }
 
-/// Relativizes declaration, registration and hook paths against the analysis root. Both
-/// `Location` families that escape to reports and fingerprints, which must never
-/// disagree about what a reported path means. Shared by the working-tree extraction loop and the
-/// `--baseline-from-ref` base pass.
-fn relativize_extraction_paths(
-    tests: &mut [vitest_dedup::model::TestCase],
-    root: &std::path::Path,
-) {
-    for test in tests {
-        test.location.path = relativize_test_path(&test.location.path, root);
-        if let Some(path) = &mut test.registration_file {
-            *path = relativize_test_path(path, root);
-        }
-        for hook in &mut test.context.hooks {
-            hook.location.path = relativize_test_path(&hook.location.path, root);
-        }
-    }
-}
-
-#[cfg(test)]
-mod registration_path_tests {
-    use super::*;
-
-    /// Regression fixture for CLI reporting: registration identity relativizes source caller
-    /// and hook paths for both passes.
-    #[test]
-    fn registration_identity_relativizes_source_caller_and_hook_paths_for_both_passes() {
-        use vitest_dedup::discovery::{ModuleFlavor, SourceFile, SourceLanguage};
-        let directory = tempfile::tempdir().unwrap();
-        let root = directory.path();
-        let file = SourceFile::without_project_context(
-            root.join("shared/runner.ts"),
-            SourceLanguage::TypeScript,
-            ModuleFlavor::Ambiguous,
-        );
-        let source = "import { it, beforeEach } from 'vitest'; beforeEach(() => { seed(); }); it('case', () => { expect(1).toBe(1); });";
-        let mut tests = frontend::extract(source, &file, Globals::Disabled).tests;
-        assert_eq!(tests.len(), 1);
-        assert_eq!(tests[0].context.hooks.len(), 1);
-        tests[0].registration_file = Some(root.join("tests/caller.test.ts"));
-        relativize_extraction_paths(&mut tests, root);
-        assert_eq!(
-            tests[0].location.path,
-            std::path::PathBuf::from("shared/runner.ts")
-        );
-        assert_eq!(
-            tests[0].registration_file(),
-            std::path::Path::new("tests/caller.test.ts")
-        );
-        assert_eq!(
-            tests[0].context.hooks[0].location.path,
-            std::path::PathBuf::from("shared/runner.ts")
-        );
-        let outside = tempfile::tempdir().unwrap();
-        let caller = outside.path().join("external.test.ts");
-        tests[0].registration_file = Some(caller.clone());
-        relativize_extraction_paths(&mut tests, root);
-        assert_eq!(tests[0].registration_file(), caller.as_path());
-    }
-}
-
 /// Builds a report path from the `--output` prefix and a reporter's extension.
 ///
 /// A prefix is a filename stem, not a directory: `--output reports/vitest-dedup` yields
@@ -253,7 +186,7 @@ fn take_helper_sources(
         if !seen.insert(path.clone()) {
             continue;
         }
-        // The next engine names its helpers root-relative already; resolving one against the
+        // The engine names its helpers root-relative already; resolving one against the
         // working directory would join it to a different file of the same relative name.
         let relative = if path.is_absolute() {
             relativize_test_path(&path, root)
@@ -277,14 +210,14 @@ fn run() -> Result<ExitCode> {
 
 /// Run the pipeline with an injectable current-RSS reader for deterministic boundary tests.
 fn run_with_rss(args: ParsedArgs, resident: impl FnMut() -> Option<u64>) -> Result<ExitCode> {
-    run_with_engine(args, resident, vitest_dedup::corpus::Engine::selected())
+    run_with_engine(args, resident, vitest_dedup::corpus::Engine::default())
 }
 
-/// [`run_with_rss`] with the engine given: the next engine, or `None` for the current core.
+/// [`run_with_rss`] with the engine given.
 fn run_with_engine(
     args: ParsedArgs,
     mut resident: impl FnMut() -> Option<u64>,
-    mut next_engine: Option<vitest_dedup::corpus::Engine>,
+    mut engine: vitest_dedup::corpus::Engine,
 ) -> Result<ExitCode> {
     // The unlocked handle, by type: `Stderr` takes the process lock for each write only, while a
     // `StderrLock` held for the whole run would block any stderr write made on the extraction
@@ -292,14 +225,6 @@ fn run_with_engine(
     // compile.
     let mut stderr: std::io::Stderr = std::io::stderr();
     let config = Config::load(&args.root, args.to_overrides())?;
-    let retired_cell_census = next_engine.is_some() && std::env::var_os("VD_CELL_CENSUS").is_some();
-
-    if next_engine.is_some() {
-        writeln!(
-            stderr,
-            "vitest-dedup: VITEST_DEDUP_ENGINE=next runs duplicate-test, duplicate-test-name, duplicate-each-row, duplicate-suite, parameterization-candidate, near-duplicate-test, subsumed-test, redundant-hook and cross-file-duplicate"
-        )?;
-    }
 
     // Resolved before any analysis, so an unusable revision, a shallow clone, or a non-repository
     // root fails immediately with exit 2 rather than after a full run. Every one of those would
@@ -315,13 +240,8 @@ fn run_with_engine(
     // Skipped under `--update-baseline`: that run rewrites the file from scratch, so applying the
     // old one first would mark this run's findings against a baseline that is about to be replaced
     // -- and, worse, would make an unreadable old file block the very command meant to fix it.
-    let identity = if next_engine.is_some() {
-        Identity::Next
-    } else {
-        Identity::Current
-    };
     let baseline = match (&args.baseline, args.update_baseline) {
-        (Some(path), false) => Some(modes::load_baseline_as(path, identity.version())?),
+        (Some(path), false) => Some(modes::load_baseline(path)?),
         _ => None,
     };
 
@@ -385,7 +305,7 @@ fn run_with_engine(
     // An explicit `--globals` always wins: the user is asserting something about their project,
     // and a detector that overrode them would be unarguable. Otherwise read the Vitest config.
     let resolved_globals = if args.globals {
-        Globals::Enabled
+        true
     } else {
         let analysis_root = config.root.clone();
         match vitest_config::detect_globals_with_projects(&config.root, Some(&projects)) {
@@ -401,9 +321,9 @@ fn run_with_engine(
                     "vitest-dedup: {} sets `test.globals = true`; analyzing ambient declarations.",
                     diagnostic_path(&globals_config, &analysis_root)
                 )?;
-                Globals::Enabled
+                true
             }
-            GlobalsDetection::Disabled { .. } => Globals::Disabled,
+            GlobalsDetection::Disabled { .. } => false,
             // Conservative by design. Guessing `Enabled` would invent findings in Playwright and
             // Jest files; guessing `Disabled` silently analyzes nothing. The zero-test check below
             // is what stops the second failure from looking like success.
@@ -412,9 +332,7 @@ fn run_with_engine(
             // announcing it on every run is noise that trains people to ignore the channel the
             // genuinely important warnings use. The zero-test guard below is what catches the
             // case where this silence would have been wrong.
-            GlobalsDetection::Unknown { reason } if reason.starts_with("no vitest.config") => {
-                Globals::Disabled
-            }
+            GlobalsDetection::Unknown { reason } if reason.starts_with("no vitest.config") => false,
             GlobalsDetection::Unknown { reason } => {
                 // `reason` may echo back filesystem-derived text (a path, a parse error); sanitize
                 // it for the same reason as the branch above.
@@ -423,11 +341,11 @@ fn run_with_engine(
                     "vitest-dedup: could not determine `test.globals` ({}).",
                     Sanitized::new(&reason)
                 )?;
-                Globals::Disabled
+                false
             }
             // `GlobalsDetection` is `#[non_exhaustive]`, so a future variant must not silently
             // become "enabled". Anything unrecognized is treated as the conservative case.
-            _ => Globals::Disabled,
+            _ => false,
         }
     };
     let discovery_time = discovery_started.map(|started| started.elapsed());
@@ -441,38 +359,30 @@ fn run_with_engine(
     // whose `globals` genuinely differed shows up as extra new findings (visible, fail-closed).
     let ref_baseline: Option<modes::Baseline> = match &args.baseline_from_ref {
         Some(revision) => {
-            let mut base_tests = Vec::new();
             let mut base_causes = IncompleteCauses::default();
-            let mut base_roof = memory_roof(&args);
+            let base_roof = memory_roof(&args);
             let mut base_files = 0;
-            let revision_files = if next_engine.is_some() {
-                Some(std::sync::Arc::new(modes::RevisionFiles::load(
-                    &config.root,
-                    revision,
-                    memory_budget_bytes(&args),
-                )?))
-            } else {
-                None
-            };
-            let mut base_engine = revision_files.as_ref().map(|files| {
-                vitest_dedup::corpus::Engine::with_sources(vitest_dedup::lang::Sources::committed(
-                    files.clone(),
-                ))
-            });
+            let revision_files = std::sync::Arc::new(modes::RevisionFiles::load(
+                &config.root,
+                revision,
+                memory_budget_bytes(&args),
+            )?);
+            let mut base_engine = vitest_dedup::corpus::Engine::with_sources(
+                vitest_dedup::lang::Sources::committed(revision_files.clone()),
+            );
             let mut base_suppressions = Vec::new();
             let mut base_helper_sources = BTreeSet::new();
             // One base file is held at a time; the roof stops the read, not only the extraction.
             let unread = modes::revision_sources(
                 &config.root,
-                revision_files
-                    .as_ref()
-                    .map_or(revision.as_str(), |files| files.commit()),
+                revision_files.commit(),
                 &config.include,
                 &config.exclude,
                 |source| {
                     base_files += 1;
-                    if let Some(engine) = base_engine.as_mut() {
-                        let files = revision_files.as_ref().expect("selected historical view");
+                    {
+                        let engine = &mut base_engine;
+                        let files = &revision_files;
                         let path = config.root.join(&source.relative);
                         files.regular_root(&path)?;
                         base_suppressions.extend(modes::scan_inline_suppressions(
@@ -485,7 +395,7 @@ fn run_with_engine(
                             &source.content,
                             vitest_dedup::corpus::Setting {
                                 dialect: vitest_dedup::framework::current().dialect(),
-                                globals: resolved_globals == Globals::Enabled,
+                                globals: resolved_globals,
                                 root: &config.root,
                             },
                             false,
@@ -504,46 +414,21 @@ fn run_with_engine(
                         files.ensure_readable()?;
                         base_causes.files_partially_read += usize::from(partial);
                         base_causes.unresolved_contexts = engine.unresolved;
-                        return Ok(!base_roof.exceeded_with_retained(
-                            &base_tests,
+                        Ok(!base_roof.exceeded_with_heap(
                             vitest_dedup::memory::HeapBytes::heap_bytes(engine),
                             &mut resident,
-                        ));
+                        ))
                     }
-                    let Some((language, module_flavor)) =
-                        discovery::classify_source_file(&source.relative)
-                    else {
-                        return Ok(true);
-                    };
-                    let base_file = discovery::SourceFile::without_project_context(
-                        config.root.join(&source.relative),
-                        language,
-                        module_flavor,
-                    );
-                    let mut extraction = frontend::extract_from_revision_within(
-                        &source.content,
-                        &base_file,
-                        resolved_globals,
-                        &config.root,
-                    );
-                    if extraction.incomplete {
-                        base_causes.files_partially_read += 1;
-                    }
-                    relativize_extraction_paths(&mut extraction.tests, &config.root);
-                    base_roof.charge(&extraction.tests, 0);
-                    base_tests.extend(extraction.tests);
-                    Ok(!base_roof.exceeded_with_rss(&base_tests, &mut resident))
                 },
             )?;
             if unread > 0 {
                 base_causes.files_over_memory_budget = unread;
                 write_roof_diagnostic(&mut stderr, "base revision", &args, base_files, unread)?;
             }
-            let configuration_degraded = revision_files
-                .as_ref()
-                .is_some_and(|files| files.configuration_degraded());
+            let configuration_degraded = revision_files.configuration_degraded();
             base_causes.project_config_degraded |= configuration_degraded;
-            let (mut base_findings, base_incomplete) = if let Some(mut engine) = base_engine {
+            let (mut base_findings, base_incomplete) = {
+                let mut engine = base_engine;
                 let files = engine.take_files();
                 let outcome = vitest_dedup::rules::run_with_hooks(
                     &files,
@@ -564,19 +449,9 @@ fn run_with_engine(
                     },
                 );
                 (finished.findings, finished.causes.any())
-            } else {
-                // Drain only the default resolver's failures, preserving its existing base pass.
-                base_causes.missing_prerequisites = vitest_dedup::prerequisites::assess(
-                    &config.root,
-                    &frontend::take_resolution_gaps(),
-                );
-                base_causes.package_worker_failures = frontend::take_package_worker_failures();
-                let result = analysis::analyze(base_tests, &config, base_files, base_causes)?;
-                let incomplete = result.incomplete();
-                (result.findings, incomplete)
             };
-            // A base read through the next engine records tsconfig and package gaps of its own. The base
-            // keeps its existing partial-baseline behavior, so its gaps are drained and dropped
+            // The base read records tsconfig and package gaps of its own. The base keeps its
+            // partial-baseline behavior, so its gaps are drained and dropped
             // here — dropped, so they cannot masquerade as the current run's missing
             // prerequisites at the main pass's drain below.
             let _ = vitest_dedup::lang::take_tsconfig_gaps();
@@ -630,7 +505,6 @@ fn run_with_engine(
             .count(),
         ..IncompleteCauses::default()
     };
-    let mut tests = Vec::new();
     let mut excluded = ExclusionCollector::new(&config.root);
     let mut diagnostics: Vec<Sanitized> = Vec::new();
     // Distinct from `diagnostics.len()`: one file can push several diagnostics (one per
@@ -638,11 +512,6 @@ fn run_with_engine(
     // general and neither may stand in for the other. Discovery-level traversal errors (below)
     // are not tied to one file at all, so they are never added here.
     let mut diagnostic_files: BTreeSet<PathBuf> = BTreeSet::new();
-    // Files whose zero-test extraction is a *proven* answer, not a sign of a missed `globals`
-    // setting: every declaration the frontend found in them was a statically empty `.each`/`.for`
-    // table (`FileExtraction::proven_empty`'s doc). Used only to decide what the "extracted no
-    // tests" guard below should say -- never to suppress it or to affect `incomplete`.
-    let mut proven_empty_files: BTreeSet<PathBuf> = BTreeSet::new();
     // Counted separately from `discovered.files`: a file that could not be read never reached the
     // frontend, so reporting it as analyzed overstates coverage on exactly the runs where coverage
     // matters most.
@@ -717,13 +586,9 @@ fn run_with_engine(
     for (index, file) in discovered.files.iter().enumerate() {
         // Whole files only: stopping before a file, once the files read so far reach the budget,
         // keeps every per-file side effect consistent, so the run is exactly a run over them.
-        // Checked here so the next engine's files, which `continue` below, are held to it too.
         if index > 0
-            && roof.exceeded_with_retained(
-                &tests,
-                next_engine
-                    .as_ref()
-                    .map_or(0, vitest_dedup::memory::HeapBytes::heap_bytes),
+            && roof.exceeded_with_heap(
+                vitest_dedup::memory::HeapBytes::heap_bytes(&engine),
                 &mut resident,
             )
         {
@@ -809,12 +674,11 @@ fn run_with_engine(
         // otherwise it is whatever the Vite/Vitest config detector determined (falling back to
         // `Disabled` when detection was inconclusive). Every file in this run shares that one
         // answer -- detection is a property of the project, not of an individual file.
-        let globals = resolved_globals;
         // Per file, not per run: two projects in one repository can disagree about `globals`,
         // and applying one project's answer to another's files is how ambient `describe` in a
         // Jest or Playwright suite becomes a finding.
         let (file_globals, unresolved_globals) = if args.globals {
-            (Globals::Enabled, None)
+            (true, None)
         } else if let Some(detection) = &file.project_globals {
             // Discovery already pinned down which project admitted this file via its
             // `includeSource` glob (`discovery::SourceFile::project_globals`'s doc comment): an
@@ -825,15 +689,15 @@ fn run_with_engine(
             // project's in-source tests as if they were not Vitest tests at all. Using the
             // admitting project's own answer directly closes that gap.
             match detection {
-                GlobalsDetection::Enabled { .. } => (Globals::Enabled, None),
-                GlobalsDetection::Disabled { .. } => (Globals::Disabled, None),
+                GlobalsDetection::Enabled { .. } => (true, None),
+                GlobalsDetection::Disabled { .. } => (false, None),
                 // The admitting project's own `globals` could not be read. Unlike the "no
                 // governing project" fallback below, this file *was* attributed to a specific
                 // project, just not confidently -- silently borrowing the repository-wide answer
                 // here would recreate the very silent-omission failure `includeSource` support
                 // was supposed to close. Mark the run incomplete instead of guessing.
                 _ => (
-                    Globals::Disabled,
+                    false,
                     Some(
                         "matched an `includeSource` project whose `globals` could not be \
                          determined; analyzed as `globals: false`, so an in-source test here may \
@@ -852,15 +716,15 @@ fn run_with_engine(
             // of quietly borrowing the repository-wide answer. `governed_globals_for` keeps the
             // two distinguishable; `globals_for` cannot.
             match projects.governed_globals_for(&file.path) {
-                vitest_projects::GovernedGlobals::Enabled => (Globals::Enabled, None),
-                vitest_projects::GovernedGlobals::Disabled => (Globals::Disabled, None),
-                vitest_projects::GovernedGlobals::NotIncluded => (globals, None),
+                vitest_projects::GovernedGlobals::Enabled => (true, None),
+                vitest_projects::GovernedGlobals::Disabled => (false, None),
+                vitest_projects::GovernedGlobals::NotIncluded => (resolved_globals, None),
                 // A project governs this file (or might), but its own `globals`, or the
                 // `include`/`exclude` that would confirm which project governs, could not be
                 // read, and no unanimous-answer shortcut saved it. Sibling of the
                 // `file.project_globals` arm above: mark the run incomplete instead of guessing.
                 _ => (
-                    Globals::Disabled,
+                    false,
                     Some(
                         "matched a `test.projects` entry whose `globals` could not be \
                          determined; analyzed as `globals: false`, so ambient tests here may \
@@ -885,140 +749,57 @@ fn run_with_engine(
             diagnostic_files.insert(file.path.clone());
             causes.files_globals_undetermined += 1;
         }
-        if let Some(engine) = next_engine.as_mut() {
-            let setting = vitest_dedup::corpus::Setting {
-                dialect: vitest_dedup::framework::current().dialect(),
-                globals: file_globals == Globals::Enabled,
-                root: &config.root,
-            };
-            let relative = relativize_test_path(&file.path, &config.root);
-            let read = engine.read_with_sources(
-                &file.path,
-                &relative,
-                &source,
-                setting,
-                args.emit_test_fingerprints,
-                unresolved_globals
-                    .map(|reason| (ExclusionReason::GlobalsUndetermined, reason.to_owned()))
-                    .into_iter()
-                    .collect(),
-            );
-            let (entry, partial) = (read.excluded_file, read.partial);
-            take_helper_sources(
-                read.helper_sources,
-                &config.root,
-                &mut seen_helper_sources,
-                &mut inline_suppressions,
-                retain_sources.then_some((&mut retained_sources, &mut retained_text)),
-            );
-            // A file read only in part is named beside its primary cause, as the current core's
-            // extraction diagnostics are; the reports carry every reason.
-            if let (true, Some(entry)) = (partial, &entry) {
-                diagnostics.push(Sanitized::new(&format!(
-                    "{}: {}",
-                    display_relative(&file.path, &config.root),
-                    entry.detail
-                )));
-                diagnostic_files.insert(file.path.clone());
-            }
-            excluded.extend(entry);
-            causes.files_partially_read += usize::from(partial);
-            // Source kept for the HTML report is held whichever engine read the file.
-            roof.charge(&[], retained_text);
-            continue;
-        }
-        let mut extraction = frontend::extract_within(&source, file, file_globals, &config.root);
-        if extraction.incomplete {
-            causes.files_partially_read += 1;
-        }
+        let setting = vitest_dedup::corpus::Setting {
+            dialect: vitest_dedup::framework::current().dialect(),
+            globals: file_globals,
+            root: &config.root,
+        };
+        let relative = relativize_test_path(&file.path, &config.root);
+        let read = engine.read_with_sources(
+            &file.path,
+            &relative,
+            &source,
+            setting,
+            args.emit_test_fingerprints,
+            unresolved_globals
+                .map(|reason| (ExclusionReason::GlobalsUndetermined, reason.to_owned()))
+                .into_iter()
+                .collect(),
+        );
+        let (entry, partial) = (read.excluded_file, read.partial);
         take_helper_sources(
-            std::mem::take(&mut extraction.helper_sources),
+            read.helper_sources,
             &config.root,
             &mut seen_helper_sources,
             &mut inline_suppressions,
             retain_sources.then_some((&mut retained_sources, &mut retained_text)),
         );
-        if extraction.proven_empty {
-            proven_empty_files.insert(file.path.clone());
-        }
-        // The frontend explains *why* it could not fully read a file. Computing that and
-        // discarding it left users with a bare "INCOMPLETE" and no way to tell one odd file from
-        // half the corpus -- which makes the degradation visible in name only.
-        let mut file_reasons: Vec<(ExclusionReason, String)> = extraction
-            .reasons
-            .iter()
-            .copied()
-            .zip(extraction.diagnostics.iter().cloned())
-            .collect();
-        file_reasons.append(&mut extraction.further_refusals);
-        if let Some(reason) = unresolved_globals {
-            file_reasons.push((ExclusionReason::GlobalsUndetermined, reason.to_owned()));
-        }
-        excluded.extend(exclusions::parsed_file(
-            relativize_test_path(&file.path, &config.root),
-            &extraction.tests,
-            file_reasons,
-        ));
-        for diagnostic in extraction.diagnostics.drain(..) {
-            // Both the filename and the frontend-produced diagnostic text can carry
-            // repository-controlled content; sanitize the whole line.
+        // A file read only in part is named beside its primary cause; the reports carry every
+        // reason.
+        if let (true, Some(entry)) = (partial, &entry) {
             diagnostics.push(Sanitized::new(&format!(
-                "{}: {diagnostic}",
-                display_relative(&file.path, &config.root)
+                "{}: {}",
+                display_relative(&file.path, &config.root),
+                entry.detail
             )));
             diagnostic_files.insert(file.path.clone());
         }
-        // `extract` receives one file at a time and has no analysis root to measure against, so it
-        // reports absolute paths. Relativizing here keeps reports portable and diffable across
-        // machines and CI checkouts, where an absolute path is noise that differs every run.
-        //
-        // A `TestCase` carries *two* kinds of `Location`, and for a long time only the first was
-        // rewritten here: its own declaration site, and one per [`Hook`] in `context.hooks`. The
-        // hook locations are not an internal detail -- they escape this function through two
-        // published surfaces, both of which reported checkout-specific absolute paths until this
-        // loop covered them:
-        //
-        // - `analysis::hook_fingerprints` copies `hook.location` verbatim into the `"hook"`
-        //   records `--emit-test-fingerprints` emits, which the isolation gate consumes and
-        //   compares across machines.
-        // - `analysis::emit_redundant_hook` copies it into `Finding::locations`, so every
-        //   `redundant-hook` finding -- in every reporter, and in the baseline fingerprint that
-        //   `Finding::fingerprint` derives from those paths -- named an absolute path where every
-        //   other rule named a relative one.
-        //
-        // Relativizing both here, at the single point where the analysis root is known, keeps the
-        // two location families from ever disagreeing about what a reported path means.
-        relativize_extraction_paths(&mut extraction.tests, &config.root);
-        roof.charge(&extraction.tests, retained_text);
-        tests.extend(extraction.tests);
+        excluded.extend(entry);
+        causes.files_partially_read += usize::from(partial);
+        // Source kept for the HTML report is held whichever engine read the file.
+        roof.charge(&[], retained_text);
     }
 
     drop(seen_helper_sources);
 
-    // The next engine records its tsconfig gaps beside the current core's, so a broken project
-    // configuration degrades a next-engine run exactly as it degrades a default-engine one.
-    let mut resolution_gaps = vitest_dedup::frontend::take_resolution_gaps();
-    for (gap, count) in vitest_dedup::lang::take_tsconfig_gaps() {
-        let gap = match gap {
-            vitest_dedup::lang::TsconfigGap::Absent(path) => {
-                vitest_dedup::frontend::TsconfigGap::Absent(path)
-            }
-            vitest_dedup::lang::TsconfigGap::Unreadable(path) => {
-                vitest_dedup::frontend::TsconfigGap::Unreadable(path)
-            }
-        };
-        *resolution_gaps.tsconfig.entry(gap).or_insert(0) += count;
-    }
-    for (directory, count) in vitest_dedup::lang::take_package_gaps() {
-        *resolution_gaps
-            .packages_not_found
-            .entry(directory)
-            .or_insert(0) += count;
-    }
+    // A broken project configuration or a missing install degrades the run: the gaps the resolver
+    // recorded are what the prerequisites name.
+    let resolution_gaps = vitest_dedup::lang::ResolutionGaps {
+        tsconfig: vitest_dedup::lang::take_tsconfig_gaps(),
+        packages_not_found: vitest_dedup::lang::take_package_gaps(),
+    };
     causes.missing_prerequisites =
         vitest_dedup::prerequisites::assess(&config.root, &resolution_gaps);
-
-    causes.package_worker_failures = frontend::take_package_worker_failures();
 
     diagnostics::write_read_omissions(&mut stderr, read_errors)?;
 
@@ -1033,13 +814,7 @@ fn run_with_engine(
     // One canonical definition drives the diagnostic, the machine `testsAnalyzed` field, and the
     // exit code. `tests.len()` also includes `describe`/`suite` containers, which do not execute
     // and therefore cannot turn a zero-test run into a quality result.
-    let total_tests = match &next_engine {
-        Some(engine) => engine.tests,
-        None => tests
-            .iter()
-            .filter(|test| analysis::is_executable_declaration(test.kind))
-            .count(),
-    };
+    let total_tests = engine.tests;
 
     if discovered.files.is_empty() {
         // S2 (2026-09-27 scan): four repositories analysed zero files and returned
@@ -1067,14 +842,11 @@ fn run_with_engine(
             // accounted for this way: one ordinary file mixed in still means the usual `globals`
             // explanation applies to at least that file, and must not be suppressed by another
             // file's unrelated, fully-explained emptiness.
-            if let Some(engine) = &next_engine {
-                proven_empty_files.extend(
-                    engine
-                        .proven_empty_files()
-                        .iter()
-                        .map(|relative| config.root.join(relative)),
-                );
-            }
+            let proven_empty_files: BTreeSet<PathBuf> = engine
+                .proven_empty_files()
+                .iter()
+                .map(|relative| config.root.join(relative))
+                .collect();
             if proven_empty_files.len() == files_read {
                 writeln!(
                     stderr,
@@ -1087,10 +859,7 @@ fn run_with_engine(
                     discovered.files.len(),
                 )?;
                 diagnostics::write_empty_files(&mut stderr, &proven_empty_files, &config.root)?;
-            } else if next_engine
-                .as_ref()
-                .map_or(!tests.is_empty(), |engine| engine.containers > 0)
-            {
+            } else if engine.containers > 0 {
                 writeln!(
                     stderr,
                     "\nvitest-dedup: discovered {} test file(s) but extracted only suite \
@@ -1124,15 +893,7 @@ fn run_with_engine(
         causes.nothing_read = true;
     }
 
-    let unresolved_tests = match &next_engine {
-        Some(engine) => engine.unresolved,
-        None => tests
-            .iter()
-            .filter(|test| {
-                analysis::is_executable_declaration(test.kind) && !test.context.is_comparable()
-            })
-            .count(),
-    };
+    let unresolved_tests = engine.unresolved;
 
     // Computed here, before `analyze` takes ownership of `tests`, and only when asked for. The
     // records need `alpha`, `structural`, and `behavior`, all of which a default run already
@@ -1156,95 +917,50 @@ fn run_with_engine(
     // Costs nothing when the flag is off: one walk of the corpus is proportional to the corpus,
     // which is exactly what a default run should not pay for an answer nobody asked for.
     let memory_reports = if args.debug_memory {
-        vec![match &next_engine {
-            Some(engine) => engine.memory_report(files_read),
-            None => vitest_dedup::memory::MemoryReport::post_extraction(
-                &tests,
-                total_tests,
-                files_read,
-                None,
-            ),
-        }]
-    } else {
-        Vec::new()
-    };
-
-    let test_fingerprints = if args.emit_test_fingerprints {
-        analysis::test_fingerprints(&tests)
-    } else {
-        Vec::new()
-    };
-    // Same reasoning, same flag: `hook_fingerprints` reads `Fingerprints::alpha/structural/
-    // behavior/trivial` off each test's `Context::hooks`, and costs nothing when the flag is off.
-    let hook_fingerprints = if args.emit_test_fingerprints {
-        analysis::hook_fingerprints(&tests)
+        vec![engine.memory_report(files_read)]
     } else {
         Vec::new()
     };
 
     let parsing_time = parsing_started.map(|started| started.elapsed());
     let analysis_started = metrics_enabled.then(Instant::now);
-    // The next engine's rules read the corpus it retained once every file has been read; the
-    // default engine's rules read the extracted tests. Both share one tail: modes, gate capture,
-    // the presentation cap, sorted findings.
-    let engine_files = next_engine.as_mut().map(|engine| engine.take_files());
-    let mut result = match &engine_files {
-        Some(files) => {
-            let outcome = vitest_dedup::rules::run_with_hooks(
-                files,
-                next_engine.as_ref().expect("selected engine").suites(),
-                next_engine.as_ref().expect("selected engine").hooks(),
-                &config,
-                &inline_suppressions,
-            );
-            causes.pair_budget_exhausted |= outcome.budget_exhausted;
-            causes.hook_scan_exhausted |= outcome.hook_scan_exhausted;
-            let finished = analysis::finish_findings(
-                outcome.findings,
-                causes,
-                analysis::RunModes {
-                    changed_files: changed_files.as_ref(),
-                    baseline: baseline.as_ref().or(ref_baseline.as_ref()),
-                    suppressions: &inline_suppressions,
-                },
-            );
-            AnalysisResult {
-                had_error_finding: finished.had_error_finding,
-                error_finding_locations: finished.error_finding_locations,
-                // Overridden from the engine just below, which owns the real counts.
-                unresolved_tests: 0,
-                blind_files: Vec::new(),
-                excluded_files: Vec::new(),
-                exclusions: Default::default(),
-                findings: finished.findings,
-                tests_analyzed: 0,
-                files_analyzed: files_read,
-                incomplete_causes: finished.causes,
-                modes: finished.modes,
-            }
-        }
-        None => analysis::analyze_with_modes(
-            tests,
-            &config,
-            files_read,
-            causes,
-            analysis::RunModes {
-                changed_files: changed_files.as_ref(),
-                // A file baseline and a ref baseline are mutually exclusive by the CLI grammar; one
-                // of these is always `None`.
-                baseline: baseline.as_ref().or(ref_baseline.as_ref()),
-                suppressions: &inline_suppressions,
-            },
-        )?,
+    // The rules read the corpus the engine retained once every file has been read.
+    let engine_files = engine.take_files();
+    let outcome = vitest_dedup::rules::run_with_hooks(
+        &engine_files,
+        engine.suites(),
+        engine.hooks(),
+        &config,
+        &inline_suppressions,
+    );
+    causes.pair_budget_exhausted |= outcome.budget_exhausted;
+    causes.hook_scan_exhausted |= outcome.hook_scan_exhausted;
+    causes.unresolved_contexts = engine.unresolved;
+    let finished = analysis::finish_findings(
+        outcome.findings,
+        causes,
+        analysis::RunModes {
+            changed_files: changed_files.as_ref(),
+            // A file baseline and a ref baseline are mutually exclusive by the CLI grammar; one
+            // of these is always `None`.
+            baseline: baseline.as_ref().or(ref_baseline.as_ref()),
+            suppressions: &inline_suppressions,
+        },
+    );
+    let (excluded_files, exclusions) = excluded.finish();
+    let mut result = AnalysisResult {
+        had_error_finding: finished.had_error_finding,
+        error_finding_locations: finished.error_finding_locations,
+        unresolved_tests: engine.unresolved,
+        blind_files: engine.blind_files(),
+        excluded_files,
+        exclusions,
+        findings: finished.findings,
+        tests_analyzed: engine.tests,
+        files_analyzed: files_read,
+        incomplete_causes: finished.causes,
+        modes: finished.modes,
     };
-
-    (result.excluded_files, result.exclusions) = excluded.finish();
-    if let Some(engine) = &next_engine {
-        result.tests_analyzed = engine.tests;
-        result.unresolved_tests = engine.unresolved;
-        result.blind_files = engine.blind_files();
-        result.incomplete_causes.unresolved_contexts = engine.unresolved;
-    }
 
     let timing = discovery_time.zip(parsing_time).zip(analysis_started).map(
         |((discovery, parsing), started)| {
@@ -1272,7 +988,7 @@ fn run_with_engine(
                 path.display()
             );
         }
-        let update = modes::write_baseline_as(path, &result.findings, identity.version())?;
+        let update = modes::write_baseline(path, &result.findings)?;
         writeln!(
             stderr,
             "vitest-dedup: wrote baseline {}: {} finding(s) recorded ({} added, {} removed).",
@@ -1305,22 +1021,17 @@ fn run_with_engine(
         .into_iter()
         .map(|report| report.with_peak_rss(peak_rss))
         .collect();
-    let jsonl_reporter = JsonlReporter::with_fingerprints(hook_fingerprints, test_fingerprints)
+    let jsonl_reporter = JsonlReporter::new()
         .with_memory(memory_reports)
         .with_owned(
-            engine_files
-                .filter(|_| args.emit_test_fingerprints)
-                .unwrap_or_default(),
-            next_engine
-                .as_mut()
-                .map(|engine| engine.take_diagnostic_hooks())
-                .unwrap_or_default(),
+            if args.emit_test_fingerprints {
+                engine_files
+            } else {
+                Vec::new()
+            },
+            engine.take_diagnostic_hooks(),
         )
-        .with_sites(
-            next_engine
-                .map(|engine| engine.into_sites())
-                .unwrap_or_default(),
-        );
+        .with_sites(engine.into_sites());
 
     let exit_code = final_exit_code(args.fail_on_incomplete, args.fail_on_new, &result, &config);
     let terminal_context = TerminalReportContext::new(&config, exit_code).with_timing(timing);
@@ -1377,12 +1088,6 @@ fn run_with_engine(
     }
     stdout.flush()?;
 
-    let census = if retired_cell_census {
-        writeln!(stderr, "vitest-dedup: VD_CELL_CENSUS is retired for the owned engine; unreadable tables remain visible as exclusions.")?;
-        Vec::new()
-    } else {
-        frontend::take_cell_census()
-    };
     diagnostics::write_run(
         &mut stderr,
         &diagnostics::RunDiagnostics {
@@ -1396,7 +1101,6 @@ fn run_with_engine(
             baseline: args.baseline.as_deref().filter(|_| !args.update_baseline),
             diagnostics: &diagnostics,
             files_with_diagnostics: diagnostic_files.len(),
-            census: &census,
         },
     )?;
 
@@ -1585,10 +1289,10 @@ mod tests {
         std::fs::write(root.join("src/companion.test.ts"), ORDINARY_TEST).unwrap();
     }
 
-    /// A copied block fails the gate its tests fail written out: the owned copy exits 1 under
-    /// the next engine, where reporting it as one Warning suite finding once let it pass.
+    /// A copied block fails the gate its tests fail written out: the owned copy exits 1, where
+    /// reporting it as one Warning suite finding once let it pass.
     #[test]
-    fn a_copied_block_fails_the_gate_under_the_next_engine() {
+    fn a_copied_block_fails_the_gate() {
         let directory = tempfile::tempdir().unwrap();
         std::fs::write(
             directory.path().join("cases.test.ts"),
@@ -1599,7 +1303,6 @@ mod tests {
             .unwrap()
             .arg(directory.path())
             .args(["--reporters", "jsonl"])
-            .env("VITEST_DEDUP_ENGINE", "next")
             .output()
             .unwrap();
         assert_eq!(output.status.code(), Some(1));
@@ -1613,41 +1316,8 @@ mod tests {
         assert_eq!(suite["covers"]["locations"].as_array().unwrap().len(), 4);
     }
 
-    /// The next-engine notice names every rule the engine runs: a rule it leaves out reads as not
-    /// running beside its own findings.
-    #[test]
-    fn the_next_engine_notice_names_the_rules_it_runs() {
-        let directory = tempfile::tempdir().unwrap();
-        std::fs::write(
-            directory.path().join("a.test.ts"),
-            "import { describe, test, expect } from 'vitest'\n\
-             describe('s', () => { test('t', () => { expect(1).toBe(1) }) })\n\
-             describe('s', () => { test('t', () => { expect(1).toBe(1) }) })\n",
-        )
-        .unwrap();
-        let output = assert_cmd::Command::cargo_bin("vitest-dedup")
-            .unwrap()
-            .arg(directory.path())
-            .env("VITEST_DEDUP_ENGINE", "next")
-            .output()
-            .unwrap();
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        for rule in [
-            "duplicate-test,",
-            "duplicate-test-name",
-            "duplicate-each-row",
-            "duplicate-suite",
-            "parameterization-candidate",
-            "near-duplicate-test",
-            "redundant-hook",
-            "cross-file-duplicate",
-        ] {
-            assert!(stderr.contains(rule), "{rule} missing from: {stderr}");
-        }
-    }
-
-    /// Runs the next engine over `files` and returns the exit code and stderr.
-    fn run_next(files: &[(&str, &str)]) -> (Option<i32>, String) {
+    /// Runs the analyzer over `files` and returns the exit code and stderr.
+    fn run_files(files: &[(&str, &str)]) -> (Option<i32>, String) {
         let directory = tempfile::tempdir().unwrap();
         for (name, contents) in files {
             let path = directory.path().join(name);
@@ -1659,7 +1329,6 @@ mod tests {
             .arg(directory.path())
             .args(["--reporters", "json", "--no-metrics", "--output"])
             .arg(directory.path().join("report"))
-            .env("VITEST_DEDUP_ENGINE", "next")
             .output()
             .unwrap();
         (
@@ -1674,21 +1343,21 @@ mod tests {
     /// A run whose every file holds only statically empty tables says so, and does not send the
     /// reader to `--globals`.
     #[test]
-    fn the_next_engine_names_statically_empty_tables_when_nothing_was_compared() {
-        let (code, stderr) = run_next(&[("empty.test.ts", EMPTY_TABLE)]);
+    fn the_analyzer_names_statically_empty_tables_when_nothing_was_compared() {
+        let (code, stderr) = run_files(&[("empty.test.ts", EMPTY_TABLE)]);
         assert_eq!(code, Some(ExitCode::OperationalError.code()), "{stderr}");
         assert!(stderr.contains("statically empty"), "{stderr}");
         assert!(stderr.contains("empty.test.ts"), "{stderr}");
         assert!(!stderr.contains("--globals"), "{stderr}");
         // A suite table proved empty is an empty table, not a suite container.
-        let (_, suites) = run_next(&[(
+        let (_, suites) = run_files(&[(
             "empty.test.ts",
             "import { describe } from 'vitest';\ndescribe.each([])('s %s', () => {});\n",
         )]);
         assert!(suites.contains("statically empty"), "{suites}");
         assert!(!suites.contains("only suite containers"), "{suites}");
         // A test inside that table never registers, so the file is still only an empty table.
-        let (code, nested) = run_next(&[(
+        let (code, nested) = run_files(&[(
             "empty.test.ts",
             "import { describe, test, expect } from 'vitest';\n\
              describe.each([])('s %s', () => { test('t', () => { expect(1).toBe(1); }); });\n",
@@ -1700,8 +1369,8 @@ mod tests {
     /// One ordinary file with nothing extracted keeps the `globals` advice: the empty table does not
     /// explain it. The same holds when the empty table's file also failed to parse.
     #[test]
-    fn the_next_engine_keeps_the_globals_advice_unless_every_file_is_proven_empty() {
-        let (_, mixed) = run_next(&[
+    fn the_analyzer_keeps_the_globals_advice_unless_every_file_is_proven_empty() {
+        let (_, mixed) = run_files(&[
             ("empty.test.ts", EMPTY_TABLE),
             ("plain.test.ts", "import { test } from 'vitest';\nfoo();\n"),
         ]);
@@ -1709,7 +1378,7 @@ mod tests {
             mixed.contains("--globals") && !mixed.contains("statically empty"),
             "{mixed}"
         );
-        let (_, broken) = run_next(&[(
+        let (_, broken) = run_files(&[(
             "bad.test.ts",
             "import { test, expect } from 'vitest';\n\
              test.each([])('x %s', (v) => { expect(v).toBe(1); });\nconst = ;\n",
@@ -1720,7 +1389,7 @@ mod tests {
         );
         // A suite whose children are not read (an ambient `it` without `globals`) is a declaration
         // the table does not explain: the run is a suite-only one.
-        let (_, ambient) = run_next(&[(
+        let (_, ambient) = run_files(&[(
             "ambient.test.ts",
             "import { test, describe } from 'vitest';\n\
              test.each([])('never %s', () => {});\n\
@@ -1731,7 +1400,7 @@ mod tests {
             "{ambient}"
         );
         // A direct `eval` is a refusal of its own, so the empty table is not all the file holds.
-        let (_, refused) = run_next(&[(
+        let (_, refused) = run_files(&[(
             "eval.test.ts",
             "import { test, expect } from 'vitest';\n\
              test.each([])('x %s', (v) => { expect(v).toBe(1); });\neval('1');\n",
@@ -1745,14 +1414,14 @@ mod tests {
     /// A file that only registers suites is a retained container, not a test that runs; a suite
     /// with a test inside gives no zero-work message at all.
     #[test]
-    fn the_next_engine_tells_a_suite_only_run_from_an_empty_one() {
-        let (code, stderr) = run_next(&[(
+    fn the_analyzer_tells_a_suite_only_run_from_an_empty_one() {
+        let (code, stderr) = run_files(&[(
             "suite.test.ts",
             "import { describe } from 'vitest';\ndescribe('container', () => {});\n",
         )]);
         assert_eq!(code, Some(ExitCode::OperationalError.code()), "{stderr}");
         assert!(stderr.contains("only suite containers"), "{stderr}");
-        let (code, stderr) = run_next(&[(
+        let (code, stderr) = run_files(&[(
             "suite.test.ts",
             "import { describe, test, expect } from 'vitest';\n\
              describe('s', () => { test('t', () => { expect(1).toBe(1); }); });\n",
@@ -1764,8 +1433,8 @@ mod tests {
     /// A file read only in part is listed under the diagnostics beside its root-relative path; a
     /// clean file is not.
     #[test]
-    fn the_next_engine_lists_a_partly_read_file_among_the_diagnostics() {
-        let (_, stderr) = run_next(&[
+    fn the_analyzer_lists_a_partly_read_file_among_the_diagnostics() {
+        let (_, stderr) = run_files(&[
             ("src/broken.test.ts", "test(: broken {\n"),
             (
                 "src/clean.test.ts",
@@ -1777,9 +1446,9 @@ mod tests {
         assert!(!stderr.contains("src/clean.test.ts"), "{stderr}");
     }
 
-    /// The next-engine rule preserves its consolidation verdict through the CLI and JSONL.
+    /// The rule preserves its consolidation verdict through the CLI and JSONL.
     #[test]
-    fn next_parameterization_reports_cases_to_keep() {
+    fn parameterization_reports_cases_to_keep() {
         let directory = tempfile::tempdir().unwrap();
         std::fs::write(
             directory.path().join("cases.test.ts"),
@@ -1797,7 +1466,6 @@ mod tests {
                 "--rule",
                 "duplicate-test=off",
             ])
-            .env("VITEST_DEDUP_ENGINE", "next")
             .output()
             .unwrap();
         assert_eq!(output.status.code(), Some(1));
@@ -1877,47 +1545,6 @@ mod tests {
             )
         });
         serde_json::from_str(&report).unwrap()
-    }
-
-    /// Regression fixture for CLI reporting: cell census counts files once and stays off
-    /// machine stdout.
-    #[test]
-    fn cell_census_counts_files_once_and_stays_off_machine_stdout() {
-        let directory = tempfile::tempdir().unwrap();
-        let source = "import { test } from 'vitest'; const N = mk(); test.each([[N], [2]])('n %s', () => {});";
-        for name in ["a.test.ts", "b.test.ts"] {
-            std::fs::write(directory.path().join(name), source).unwrap();
-        }
-        let output = |enabled| {
-            let mut command = assert_cmd::Command::cargo_bin("vitest-dedup").unwrap();
-            command
-                .arg(directory.path())
-                .args(["--reporters", "jsonl", "--threshold", "100"])
-                .env_remove("VITEST_DEDUP_ENGINE");
-            if enabled {
-                command.env("VD_CELL_CENSUS", "1");
-            } else {
-                command.env_remove("VD_CELL_CENSUS");
-            }
-            command.output().unwrap()
-        };
-        let enabled = output(true);
-        let disabled = output(false);
-        assert!(enabled.status.success());
-        assert!(disabled.status.success());
-        assert_eq!(enabled.stdout, disabled.stdout);
-        let stderr = String::from_utf8(enabled.stderr).unwrap();
-        assert!(stderr.contains("unreadable `.each` cell census"));
-        assert_eq!(
-            stderr
-                .lines()
-                .filter(|line| line.split_whitespace().collect::<Vec<_>>() == ["2", "identifier"])
-                .count(),
-            1
-        );
-        assert!(!String::from_utf8(disabled.stderr)
-            .unwrap()
-            .contains("cell census"));
     }
 
     /// Regression fixture for CLI reporting: in source file in a globals true project yields
@@ -2141,9 +1768,9 @@ mod tests {
         // tests here get an unresolved context, which makes the whole file blind.
         let directory = tempfile::tempdir().unwrap();
         //
-        // The next engine does not taint a file for `vi.doMock`; its tests are left out when a
-        // wrapper call registers what the file does not spell, which a self-calling helper does.
-        let blind = if next_engine() {
+        // A file's tests are left out when a wrapper call registers what the file does not
+        // spell, which a self-calling helper does.
+        let blind = {
             std::fs::write(
                 directory.path().join("rec.ts"),
                 "import { test, expect } from 'vitest';\n\
@@ -2151,13 +1778,6 @@ mod tests {
             )
             .unwrap();
             "import { run } from './rec';\nrun();\n"
-        } else {
-            r#"
-                import { test, expect, vi } from 'vitest';
-                vi.doMock('./service', () => ({ run: () => 1 }));
-                test('a', () => { expect(1).toBe(1); });
-                test('b', () => { expect(2).toBe(2); });
-            "#
         };
         std::fs::write(directory.path().join("blind.test.ts"), blind).unwrap();
         std::fs::write(
@@ -4211,32 +3831,9 @@ mod tests {
         assert_eq!(lines, again, "the stream must be deterministic across runs");
     }
 
-    /// One test whose `.each` table cannot be statically read (rows come from a function call,
-    /// so `EachTable::rows` is `EachRows::Unreadable` and `Context::unresolved` is set), alongside
-    /// one ordinary, fully-resolved test.
-    const ONE_UNRESOLVED_AND_ONE_RESOLVED: &str = r#"
-        import { test, expect } from 'vitest';
-
-        function loadCases() {
-            return [[1, 2]];
-        }
-
-        test.each(loadCases())('unresolved case', (a: number, b: number) => {
-            expect(a).toBeLessThan(b);
-        });
-
-        test('resolved case', () => {
-            expect(1).toBeLessThan(2);
-        });
-    "#;
-
     /// Select an input each engine actually excludes, rather than imposing legacy row policy.
     fn one_refused_record_source() -> &'static str {
-        if next_engine() {
-            "import { test, expect } from 'vitest'; const shared = () => expect(1).toBe(2); test('unresolved case', shared); test('resolved case', () => expect(1).toBeLessThan(2));"
-        } else {
-            ONE_UNRESOLVED_AND_ONE_RESOLVED
-        }
+        "import { test, expect } from 'vitest'; const shared = () => expect(1).toBe(2); test('unresolved case', shared); test('resolved case', () => expect(1).toBeLessThan(2));"
     }
 
     /// Published comparability follows the selected engine's recorded exclusion outcome.
@@ -4419,7 +4016,7 @@ mod tests {
             "`fields` must be disjoint and exhaustive: {record}"
         );
 
-        // `contextFields` refines `fields.context`, and `engineFields` (the next engine's)
+        // `contextFields` refines `fields.context`, and `engineFields`
         // refines `fields.engine`, rather than adding to them; each carries a hooks bucket.
         let mut hooks = 0;
         for (refinement, parent) in [("contextFields", "context"), ("engineFields", "engine")] {
@@ -4821,9 +4418,9 @@ mod tests {
     /// A nested `beforeEach` whose body is byte-identical to the one above it, which is exactly
     /// what `redundant-hook` fires on -- so one run produces both surfaces that publish a hook
     /// `Location`: the `"hook"` fingerprint records and a `redundant-hook` finding.
-    /// The hook body overwrites a module binding with a constant, which both engines prove
+    /// The hook body overwrites a module binding with a constant, which the analyzer proves
     /// idempotent; an ordinary call such as `connect('primary')` is unreportable, and a framework
-    /// reset is refused by the next engine, so either would leave the assertions below no finding.
+    /// reset is refused, so either would leave the assertions below no finding.
     const TWO_REDUNDANT_BEFORE_EACH_HOOKS: &str = r#"
         import { describe, test, beforeEach, expect } from 'vitest';
 
@@ -4948,12 +4545,6 @@ mod tests {
         String::from_utf8_lossy(&output.stderr).into_owned()
     }
 
-    /// Whether this run of the suite selects the next engine, so a fixture or an expectation that
-    /// only one engine can reach follows it.
-    fn next_engine() -> bool {
-        vitest_dedup::corpus::Engine::selected().is_some()
-    }
-
     /// Writes the one file whose analysis carries a diagnostic: a fatal parse error.
     fn write_broken_parse_file(root: &std::path::Path) {
         std::fs::create_dir_all(root.join("src")).unwrap();
@@ -5047,77 +4638,6 @@ mod tests {
         assert_eq!(
             report["incompleteCauses"]["nothingRead"],
             serde_json::json!(true)
-        );
-    }
-
-    /// Two executable-empty suite containers can still produce a real suite-level quality
-    /// finding. That finding keeps exit 1 even though the report correctly says zero tests ran.
-    #[test]
-    fn suite_only_quality_findings_keep_the_quality_gate_exit() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::write(
-            dir.path().join("duplicate-suites.test.ts"),
-            "import { describe } from 'vitest';\n\
-             describe('copied suite', () => { const value = setup(); });\n\
-             describe('copied suite', () => { const value = setup(); });",
-        )
-        .unwrap();
-        let prefix = dir.path().join("report");
-        let prefix_arg = prefix.to_string_lossy().into_owned();
-        let (code, _, stderr) = run_cli(
-            dir.path(),
-            &[
-                "--rule",
-                "duplicate-suite=error",
-                "--reporters",
-                "json",
-                "--output",
-                &prefix_arg,
-            ],
-        );
-
-        let report = read_json_report(&prefix);
-        if next_engine() {
-            // The next engine compares suites that hold cases, so two copies with no test inside
-            // are no finding and the run is the operational failure a zero-test run is.
-            assert_eq!(code, Some(ExitCode::OperationalError.code()), "{stderr}");
-            assert_eq!(report["findings"], serde_json::json!([]), "{report:#?}");
-            return;
-        }
-        assert_eq!(code, Some(ExitCode::QualityGateFailed.code()), "{stderr}");
-        assert_eq!(report["testsAnalyzed"], serde_json::json!(0));
-        assert_eq!(
-            report["incompleteCauses"]["nothingRead"],
-            serde_json::json!(true)
-        );
-        assert!(
-            report["findings"]
-                .as_array()
-                .is_some_and(|findings| findings
-                    .iter()
-                    .any(|finding| { finding["rule"] == serde_json::json!("duplicate-suite") })),
-            "the quality exit must be backed by the suite finding: {report:#?}"
-        );
-
-        let incomplete_prefix = dir.path().join("incomplete-report");
-        let incomplete_prefix_arg = incomplete_prefix.to_string_lossy().into_owned();
-        let (incomplete_code, _, incomplete_stderr) = run_cli(
-            dir.path(),
-            &[
-                "--rule",
-                "duplicate-suite=error",
-                "--fail-on-incomplete",
-                "--reporters",
-                "json",
-                "--output",
-                &incomplete_prefix_arg,
-            ],
-        );
-        assert_eq!(
-            incomplete_code,
-            Some(ExitCode::OperationalError.code()),
-            "an explicitly requested incomplete gate outranks the suite quality finding: \
-             {incomplete_stderr}"
         );
     }
 
@@ -5254,17 +4774,9 @@ mod tests {
         // producing diagnostics -- a config this scan learns to read, a shape that stops being
         // degraded -- would leave the assertion above true over almost no lines and still green.
         // These are the four shapes the fixture exists to reach.
-        // The two causes the engines word differently: a parse failure's detail, and the helper
-        // chain past the depth limit (the next engine excludes its tests as `registered-elsewhere`
-        // instead of printing a diagnostic).
-        let (parse_failure, deep_helper) = if next_engine() {
-            ("could not be parsed", "registered-elsewhere")
-        } else {
-            (
-                "fatal parse error",
-                "a called helper's body was not analyzed",
-            )
-        };
+        // A parse failure's detail, and the helper chain past the depth limit, whose tests are
+        // excluded as `registered-elsewhere` rather than printing a diagnostic.
+        let (parse_failure, deep_helper) = ("could not be parsed", "registered-elsewhere");
         for expected in [
             "the Vitest project map is incomplete",
             "could not be fully analyzed",

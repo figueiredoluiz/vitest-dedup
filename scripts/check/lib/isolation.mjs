@@ -26,18 +26,19 @@
 // definition what a `rule=none` fixture's participants are. Each record carries the analyzer's own
 // normalized views, as hashes that may only be compared for equality:
 //
-//   alpha        identifiers normalized (locals renamed positionally; free identifiers keyed on
-//                the binding they resolve to, not on their spelling), literal VALUES preserved.
-//   structural   `alpha` with literal values collapsed to their KIND. So `structural` equal means
-//                "identical but for literal values"; a literal whose *kind* changes still moves it.
-//   behavior     the ordered behavior events, syntax erased. Not a coarsening of `structural`:
-//                it drops syntax that `structural` keeps and keeps literal payloads that
-//                `structural` drops, so the two can disagree in either direction.
-//   trivial      the body is empty or a recognized stub, and is excluded from comparison entirely.
-//   contextKey   the ambient equality key every context-sensitive rule groups on (hooks, mocks,
-//                `test.extend` fixtures, import origins).
-//   modifierKey  the behavior-significant subset of a test's modifiers (`.fails`, `.skipIf`, an
-//                `.each` table's identity), as the rules key it.
+//   alpha        `views.body`: the exact normal form, locals renamed positionally, literal VALUES
+//                preserved.
+//   structural   `views.shape`: the literal-shaped form, literal values collapsed to their KIND,
+//                with bound row values and imports rendered by their resolved origin. So a mocked
+//                import moves it while `alpha` stays equal: it is not a coarsening of `alpha`.
+//                Absent when rendering exceeded its bound.
+//   behavior     `views.trace`: the ordered behavior events, syntax erased. Absent when the trace
+//                was not read to the end, which also keeps the pair from the trace rules.
+//   trivial      the body is empty or has no callback, and is excluded from comparison entirely.
+//   contextKey   `views.context`: the ambient context (hooks, mocks, module-load effects and
+//                inherited suite settings such as a `describe.skipIf`).
+//   modifierKey  `views.modifiers`: the test's own chain (including a `test.extend` fixture and
+//                its values), expected failure, options and unbound row inputs.
 //
 // This replaced a source-level comparison that erased a declared dimension from both participants'
 // tokenized callbacks and required the rest to match. That was an approximation of the analyzer,
@@ -97,7 +98,9 @@ export const DIMENSIONS = new Map([
     {
       summary: 'a for-of loop differs in whether it awaits each element (for await vs for)',
       equal: ['contextKey', 'modifierKey'],
-      differ: ['alpha', 'structural', 'behavior'],
+      differ: ['alpha', 'structural'],
+      // An async generator's trace is not read to the end, so it is checked where it was read.
+      differWhenRead: ['behavior'],
       why:
         '`for await` selects the async iterator protocol, falling back to a wrapped sync ' +
         'iterator that awaits Promise-valued elements. Ordinary `for` selects the sync ' +
@@ -126,7 +129,9 @@ export const DIMENSIONS = new Map([
     'literal-kind',
     {
       summary: 'two literals of different KINDS stand in the same position',
-      equal: ['contextKey', 'modifierKey'],
+      // An `.each` row value the callback does not bind is carried in `modifierKey`, so it is not
+      // constrained: the kind difference may land there.
+      equal: ['contextKey'],
       differ: ['alpha', 'structural'],
       why:
         'the kind of a literal is the one thing `structural` keeps after erasing its value, so ' +
@@ -204,16 +209,31 @@ export const DIMENSIONS = new Map([
     'context',
     {
       summary:
-        'the surrounding context differs (hooks, vi.mock factories, test.extend fixtures) and ' +
-        'nothing else does',
-      equal: ['alpha', 'structural', 'behavior', 'modifierKey'],
+        'the surrounding context differs (hooks, vi.mock factories, module setup, inherited suite ' +
+        'settings) and nothing else does',
+      equal: ['alpha', 'behavior', 'modifierKey'],
       differ: ['contextKey'],
       why:
         'the strongest agreement statement the stream can make: the two bodies are identical to ' +
-        'the analyzer at every level, so the ONLY thing that can be keeping them apart is the ' +
-        'ambient context key. A fixture declaring this that drifts into differing bodies fails on ' +
-        'the equalities; an analyzer that stops folding a hook, a mock factory, or a fixture ' +
-        'binding into `ContextKey` fails on the inequality and the pair starts being reported.',
+        'the analyzer, so the ONLY thing that can be keeping them apart is the ambient context. ' +
+        '`structural` is not constrained: it renders imports by their resolved origin, so a mock ' +
+        'moves it with the context while `alpha` already pins the body. A fixture declaring this ' +
+        'that drifts into differing bodies fails on the equalities; an analyzer that stops folding ' +
+        'a hook, a mock factory or a suite setting into the context fails on the inequality and the ' +
+        'pair starts being reported.',
+    },
+  ],
+  [
+    'fixture',
+    {
+      summary: 'the `test.extend` fixture a test is declared through differs, and nothing else does',
+      equal: ['alpha', 'structural', 'behavior', 'contextKey'],
+      differ: ['modifierKey'],
+      why:
+        "`context`'s claim for the one context the analyzer keys on the test itself: an extended " +
+        '`test` carries its fixture values in its chain, so two identical bodies declared through ' +
+        'different fixtures must still differ at `modifierKey`. An analyzer that stops reading the ' +
+        'fixture values fails on the inequality and the pair starts being reported.',
     },
   ],
   [
@@ -225,8 +245,8 @@ export const DIMENSIONS = new Map([
       why:
         "`context`'s relation with the two keys exchanged, for the same reason. `.fails` inverts " +
         'what an identical body asserts and `.skipIf` runs it under a different condition, so ' +
-        '`ModifierKey` is the only thing that may separate these pairs -- including the inherited ' +
-        'case, where a suite\'s own `.skipIf` must reach the nested test\'s key (F3).',
+        '`modifierKey` is the only thing that may separate these pairs. A suite\'s own `.skipIf` ' +
+        'reaches its tests through the context instead, so the inherited case is a `context` claim.',
     },
   ],
   [
@@ -435,16 +455,19 @@ export function collectFingerprintRecords(binary, dir) {
  */
 export function combineDimensions(names) {
   const differ = new Set()
+  const differWhenRead = new Set()
   let equal = null
   for (const name of names) {
     const dimension = DIMENSIONS.get(name)
     for (const field of dimension.differ) differ.add(field)
+    for (const field of dimension.differWhenRead ?? []) differWhenRead.add(field)
     const own = new Set(dimension.equal)
     equal = equal === null ? own : new Set([...equal].filter((field) => own.has(field)))
   }
   if (equal === null) equal = new Set()
-  for (const field of differ) equal.delete(field)
-  return { equal: [...equal], differ: [...differ] }
+  for (const field of [...differ, ...differWhenRead]) equal.delete(field)
+  for (const field of differ) differWhenRead.delete(field)
+  return { equal: [...equal], differ: [...differ], differWhenRead: [...differWhenRead] }
 }
 
 /** The bucket `tallyExpectation` files each status `checkExpectation` can return under. */
@@ -526,14 +549,12 @@ export function checkExpectation(expectation, index, readSource) {
     // context-folding regression that collapses the two contextKeys must fail here rather than
     // hide under the opt-out -- either breaks "differ only in phrasing and context", and no
     // `context` restatement could ever hold over such a pair.
-    const premiseHolds = applyRelation(
-      resolved.participants,
-      ['modifierKey'],
-      ['contextKey'],
-      'context',
-      DIMENSIONS.get('context').why,
-    )
-    if (premiseHolds.status !== 'ok') return premiseHolds
+    // The context may be ambient or a `test.extend` fixture, which the analyzer keys on the
+    // test's own chain; either premise admits the opt-out.
+    const ambient = applyRelation(resolved.participants, ['modifierKey'], ['contextKey'], 'context', DIMENSIONS.get('context').why)
+    const fixture = applyRelation(resolved.participants, ['contextKey'], ['modifierKey'], 'fixture', DIMENSIONS.get('fixture').why)
+    if (ambient.status !== 'ok' && fixture.status !== 'ok') return ambient
+    const restated = ambient.status === 'ok' ? 'context' : 'fixture'
 
     // The equal half, as the stale-marker ratchet in `isolation-violation`'s shape: every
     // `unstateable` reason records the same exit -- "restate as plain `context` when the missing
@@ -544,7 +565,7 @@ export function checkExpectation(expectation, index, readSource) {
     const asContext = evaluate(
       {
         ...expectation,
-        isolates: { dimensions: ['context'], unchecked: false, unstateable: false, notIsolable: false, reason: null },
+        isolates: { dimensions: [restated], unchecked: false, unstateable: false, notIsolable: false, reason: null },
       },
       resolved.participants,
     )
@@ -552,9 +573,9 @@ export function checkExpectation(expectation, index, readSource) {
       return {
         status: 'fail',
         message:
-          `is marked unstateable, but the \`context\` relation now holds for its participants -- ` +
+          `is marked unstateable, but the \`${restated}\` relation now holds for its participants -- ` +
           `the body-level view this reason names as missing has landed. Remove the marker and ` +
-          `declare \`isolates context\` so the agreement half is checked from here on`,
+          `declare \`isolates ${restated}\` so the agreement half is checked from here on`,
       }
     }
     return { status: 'unstateable', message: isolates.reason }
@@ -846,8 +867,10 @@ function unavailableView(records, fields) {
  * guaranteed by construction, since a dimension's `kind` (`'fingerprints'` default, or `'hook'`)
  * already routes an expectation to the matching checker before this runs.
  */
-function applyRelation(participants, equal, differ, declared, why) {
-  const unavailable = unavailableView(participants.map(({ record }) => record), new Set([...equal, ...differ]))
+function applyRelation(participants, equal, differ, declared, why, differWhenRead = []) {
+  const records = participants.map(({ record }) => record)
+  differ = [...differ, ...differWhenRead.filter((field) => unavailableView(records, [field]) === null)]
+  const unavailable = unavailableView(records, new Set([...equal, ...differ]))
   if (unavailable) return { status: 'fail', message: `cannot check ${declared}: ${unavailable} evidence is unavailable` }
   for (const field of equal) {
     for (let i = 1; i < participants.length; i += 1) {
@@ -937,10 +960,10 @@ function rejectTrivialBodies(participants, exclusionClause) {
  */
 function relateOverDimensions(expectation, participants) {
   const names = expectation.isolates.dimensions
-  const { equal, differ } = combineDimensions(names)
+  const { equal, differ, differWhenRead } = combineDimensions(names)
   const declared = names.join(', ')
   const why = names.map((name) => `${name}: ${DIMENSIONS.get(name).why}`).join('\n    ')
-  return applyRelation(participants, equal, differ, declared, why)
+  return applyRelation(participants, equal, differ, declared, why, differWhenRead)
 }
 
 /**

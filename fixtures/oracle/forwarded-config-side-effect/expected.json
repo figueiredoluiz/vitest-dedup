@@ -10,8 +10,5 @@
         "testsExcluded": 0
       }
     }
-  },
-  "blindUnderCurrent": [
-    "packages/mutated/mutated.test.ts"
-  ]
+  }
 }

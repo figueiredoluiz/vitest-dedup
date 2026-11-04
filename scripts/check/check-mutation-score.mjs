@@ -30,21 +30,10 @@
 //
 // ## Scope is part of the number, so the gate owns it
 //
-// A full run is 7,068 mutants (`cargo mutants --list`, 2026-10-24; it listed 6,075 on 2026-10-18,
-// and 2,927 on 2026-09-18, when a full run was estimated at ~4h on the development machine, and
-// cargo-mutants must rebuild and re-run the suite for each one). The measured scope is the
-// fingerprint module's files (except `classes/`) and `src/analysis.rs` -- 1,537 mutants
-// enumerated. The 71 minutes at `--jobs 2` below was timed on the 1,171 mutants of the earlier
-// scope. The 2026-10-24 hosted attempt at the current scope averaged 46.7s per mutant (median 44s) and was
-// cancelled at the workflow's 300-minute cap with 767 of 1,537 done; that run's logs are why
-// `.cargo/mutants.toml` narrows the per-mutant test run to the unittest binaries, and
-// the measured phase split recorded there is what the two jobs still buy. Those are not an
-// arbitrary slice: the
-// fingerprint module is where every
-// adjudicated false positive has lived and is the weakest
-// module in the coverage gate (71.30%), and analysis.rs turns its output into the findings users
-// act on. A mutant that survives in either is behaviour the product's verdicts depend on and no
-// test pins.
+// A full run is 7,068 mutants (`cargo mutants --list`, 2026-10-24), and cargo-mutants must rebuild
+// and re-run the suite for each one, so each scope below is a measured slice with its own floors.
+// The earlier analyzer's fingerprint and analysis scope was deleted with it; a rules-layer scope
+// waits on a measured run.
 // Everything outside `SCOPE` is therefore unmeasured, and stays unmeasured until the scope grows.
 //
 // `SCOPE` below is the single source of truth for that scope. `--run` (which is what
@@ -91,95 +80,8 @@ import { pathToFileURL } from 'node:url'
 // The bar. cuke-dedup gates at this; not yet reachable here, so `MINIMUM_SCORE` ratchets toward it.
 export const TARGET_SCORE = 90.0
 
-// Measured 2026-09-18 over SCOPE with cargo-mutants 27.1.0: 1,171 mutants, 395 caught, 746
-// survived, 30 unviable, 0 timeouts, 71 minutes at `--jobs 2`. 395/1,141 = 34.62%.
-//
-// Per file, because the total hides the finding: `src/analysis.rs` is **77.55%** (190/245) and
-// `src/frontend/fingerprint.rs` is **22.88%** (205/896). The rule layer is tested; the IR producer
-// that every rule depends on is very nearly unconstrained by `cargo test`. Widening the floor from
-// a per-file pair to a single total was considered and refused for the same reason the coverage
-// ratchet is per module -- a total lets the weak module slide while the strong one holds the
-// average -- but it is not done *yet*,
-// because at 22.88% a per-file floor would be a ratchet on a number nobody should be defending.
-// Raise this in a diff; never lower it without recording why.
-export const MINIMUM_SCORE = 34.6
-
-// Floor on work performed. 1,141 viable mutants were scored; this floor catches a run that
-// silently shrank while leaving room for mutants to disappear as dead code is deleted. It is not
-// theoretical: the first attempt at this measurement was interrupted at 693 of 1,171 mutants, and
-// its `mutants.out/outcomes.json` parses, adds up, and reports a plausible 46% -- every other
-// guard in this file passes it. This floor is the only one that rejects it.
-export const MINIMUM_SCORED = 1050
-
-// The measured scope, and the per-file floor on mutants generated from it. A file that stops
-// generating mutants has either been gutted or been renamed, and both should fail loudly rather
-// than quietly improve the score.
-//
-// Widened one file at a time, deliberately. The workflow is a single job with a 300-minute cap and
-// no sharding, and the 39 unmeasured files hold 5,531 mutants against the 1,537 already in scope --
-// adding them all at once would most likely produce a timeout instead of a number, which is the one
-// outcome worse than a narrow score.
-//
-// Adding a file changes what the score MEANS, so the recorded baseline is re-measured with it rather
-// than compared against the old one. A score is only comparable to another score over the same scope.
-//
-// ## Why `framework/vitest/config.rs` is NOT the next file, measured rather than assumed
-//
-// It was the obvious candidate and the attempt is recorded here because the result is a finding
-// about this gate, not about that file. It is the largest of the remainder -- `cargo mutants --list`
-// names **548** mutants in it, against the 483 the backlog recorded before the config work landed --
-// and it is config PARSING, where a wrong answer is silent: a mis-read config does not crash, it
-// produces a confident `Disabled`, or a scope two directories share, and every finding downstream
-// inherits that.
-//
-// A partial local run (106 of its 548 mutants, cargo-mutants 27.1.0, before the machine ran out of
-// disk) returned **0 caught, 2 timed out**. Both halves matter:
-//
-//   - **0 of 106 caught** is not a measurement artifact. `display_path` was mutated to return
-//     `String::new()` for every input by hand, and all 900 tests still passed -- so the file really
-//     is close to unconstrained, and the survivors are specific and actionable: nothing asserts
-//     `display_path`'s output at all; `read_bounded`'s `metadata.len() > MAX_CONFIG_SOURCE_BYTES`
-//     survives becoming `>=`, because no test sits exactly on the limit; `mask_non_code`,
-//     `skip_trivia` and `literal_bool_at` survive almost every arithmetic and comparison mutation
-//     applied to their index handling.
-//
-//   - **The 2 timeouts are why the file cannot enter SCOPE yet**, and they are not fixable by
-//     adding a test. They are `pos += 1` becoming `pos *= 1` inside `skip_trivia`'s two inner
-//     scanning loops (`while pos < limit && original[pos] != '\n'` and the block-comment scan). A
-//     no-op in the body of a loop whose condition depends on the body making progress is a true
-//     infinite loop, so `cargo test` never returns, and a test cannot make a non-terminating
-//     program fail fast. `checkOutcomes` rejects any report containing a timeout -- deliberately,
-//     see the note on `timeout_multiplier` in `.cargo/mutants.toml` -- so widening to this file
-//     would make the gate permanently unable to produce a score rather than produce a worse one.
-//
-// That leaves a decision rather than a task, and it is recorded here instead of being made
-// silently: either the timeout policy changes to count a timed-out mutant as SURVIVED (conservative
-// in the right direction -- a hanging mutant is certainly not caught, so counting it missed only
-// ever lowers the score, and it stays visible in the survivor list), or every file holding an
-// unguarded scanning loop stays out of scope, which is most of the parsing code this gate most
-// needs to reach. The second is the status quo and it is why the scope has grown one file at a
-// time rather than all at once.
-export const SCOPE = [
-  // The former single `src/frontend/fingerprint.rs` (1,206 mutants) is now these files. The classes/
-  // modules split from `fingerprint/classes.rs` stay out of scope, as that file was.
-  { file: 'src/frontend/fingerprint.rs', minimumMutants: 27 }, // 29 enumerated
-  { file: 'src/frontend/fingerprint/behavior.rs', minimumMutants: 207 }, // 221 enumerated
-  { file: 'src/frontend/fingerprint/behavior_calls.rs', minimumMutants: 78 }, // 84 enumerated
-  { file: 'src/frontend/fingerprint/context.rs', minimumMutants: 10 }, // 11 enumerated
-  { file: 'src/frontend/fingerprint/dataflow.rs', minimumMutants: 212 }, // 226 enumerated
-  { file: 'src/frontend/fingerprint/identity.rs', minimumMutants: 24 }, // 26 enumerated
-  { file: 'src/frontend/fingerprint/imports.rs', minimumMutants: 22 }, // 24 enumerated
-  { file: 'src/frontend/fingerprint/row_substitution.rs', minimumMutants: 9 }, // 10 enumerated
-  { file: 'src/frontend/fingerprint/serializer.rs', minimumMutants: 203 }, // 217 enumerated
-  { file: 'src/frontend/fingerprint/serializer_members.rs', minimumMutants: 280 }, // 298 enumerated
-  { file: 'src/frontend/fingerprint/text.rs', minimumMutants: 29 }, // 31 enumerated
-  { file: 'src/frontend/fingerprint/trivial.rs', minimumMutants: 27 }, // 29 enumerated
-  { file: 'src/analysis.rs', minimumMutants: 252 }, // 269 enumerated
-]
-
-// The normal forms of the next core, measured as their own scope with their own floors: folded into
-// the scope above they would move its number and hide their own. Selected with `--scope=next-core`
-// (`npm run mutants:next-core`).
+// The normal forms of the next core, measured as their own scope with their own floors. Selected
+// with `--scope=next-core` (`npm run mutants:next-core`), and the default.
 export const NEXT_CORE = {
   scope: [
     { file: 'src/normal.rs', minimumMutants: 70 }, // 74 enumerated
@@ -193,10 +95,15 @@ export const NEXT_CORE = {
   minimumScored: 320,
 }
 
+// The default scope: the next core's normal forms, the one scope the weekly workflow runs.
+export const SCOPE = NEXT_CORE.scope
+export const MINIMUM_SCORE = NEXT_CORE.minimumScore
+export const MINIMUM_SCORED = NEXT_CORE.minimumScored
+
 // The behavior trace, measured as its own scope for the same reason the normal forms are: it
 // feeds NC16 and NC17, whose claims will be exactly as strong as the tests that constrain this
 // code. Selected with `--scope=trace` (`npm run mutants:trace`). This scope is manual: the weekly
-// workflow runs the fingerprint/analysis and next-core scopes, not the trace scope.
+// workflow runs the next-core scope, not the trace scope.
 export const TRACE = {
   // The per-file and viable-count floors sit ~5% under the enumerated counts, as NEXT_CORE's
   // do: a cleanup that removes a surviving mutant raises the score and must not fail the

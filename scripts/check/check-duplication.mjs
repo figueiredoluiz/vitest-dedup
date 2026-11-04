@@ -140,7 +140,9 @@ const THRESHOLDS = {
   rust: 0.0, // 2026-09-30: 0 clones, 0 duplicated lines
   // 2026-10-13 public-repository baseline: 223 duplicated lines / 28 clones. This records the
   // imported tree as it exists; reducing the inherited repetition remains follow-up work.
-  'rust-tests': 0.65,
+  // 2026-11-04: 0.65 -> 0.83 with the earlier analyzer's tests deleted: duplicated lines fell
+  // 415 -> 289, but the scope's lines fell 64,890 -> 34,801, and no clone was added.
+  'rust-tests': 0.83,
   // 2026-10-13 public-repository baseline: 5 duplicated lines / 1 clone. The prior zero ceiling
   // no longer described the imported tree, so it made every unrelated PR fail.
   js: 0.04,
