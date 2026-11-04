@@ -23,6 +23,32 @@ fn pair(first: &str, second: &str) -> String {
     format!("{IMPORTS} let value = 0; {first} {second} {TEST}")
 }
 
+/// Scheduling can make identical hook writes observable without rewriting their target cell.
+#[test]
+fn queued_observation_prevents_hook_removal() {
+    let source = include_str!("../../../fixtures/oracle/hook-scheduling/cases.test.ts");
+    assert!(findings(source, 1).is_empty());
+    let safe = include_str!("../../../fixtures/oracle/hook-scheduling/safe.test.ts");
+    assert_eq!(findings(safe, 1).len(), 1);
+    let hook = "beforeEach(() => { value = 1 });";
+    assert_eq!(findings(&pair(hook, hook), 1).len(), 1);
+    for body in [
+        "const later = queueMicrotask; later(() => {}); expect(value).toBe(1)",
+        "schedule(); expect(value).toBe(1)",
+        "Promise.resolve().then(named); expect(value).toBe(1)",
+        "expect(value).resolves.toBe(1)",
+        "import('node:fs'); expect(value).toBe(1)",
+    ] {
+        let source =
+            format!("{IMPORTS} let value = 0; {hook} {hook} test('runtime', () => {{ {body} }});");
+        assert!(findings(&source, 1).is_empty(), "{body}");
+    }
+    let opaque_assertion = format!("{IMPORTS} import check from 'node:assert/strict'; let value = 0; {hook} {hook} test('opaque assertion', () => {{ check(value); }});");
+    assert!(findings(&opaque_assertion, 1).is_empty());
+    let bounded_chain = format!("{IMPORTS} let value = 0; {hook} {hook} test('bounded assertion', () => {{ expect(value){}.toBe(1); }});", ".not".repeat(80));
+    assert!(findings(&bounded_chain, 1).is_empty());
+}
+
 /// Erased declarations preserve the same lexical proof at file and suite scope.
 #[test]
 fn erased_types_do_not_hide_lexical_hook_pairs() {

@@ -1057,6 +1057,7 @@ fn read_parsed(
     );
     let mut helper_sources = BTreeMap::new();
     let mut imported_hooks = Vec::new();
+    let scheduling_safe = expanded.calls.iter().all(|call| call.scheduling_safe);
     let mut imported_diagnostic_hooks = Vec::new();
     let imported_tests: Vec<_> = expanded
         .calls
@@ -1091,7 +1092,12 @@ fn read_parsed(
         &tests,
         &mut normalizer,
         (setting.dialect, source),
-        (&imported_hooks, &imported_tests, &admitted_calls),
+        (
+            &imported_hooks,
+            &imported_tests,
+            &admitted_calls,
+            scheduling_safe,
+        ),
     );
     for (path, diagnostic) in &mut imported_diagnostic_hooks {
         diagnostic.effect_key = hooks

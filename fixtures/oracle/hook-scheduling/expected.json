@@ -1,0 +1,9 @@
+{
+  "files": {
+    "cases.test.ts": { "tasks": 1, "wrapperSites": [], "next": {} },
+    "imported.test.ts": { "tasks": 2, "wrapperSites": ["wrapper@2"], "next": {} },
+    "other.test.ts": { "tasks": 2, "wrapperSites": ["wrapper@2"], "next": {} },
+    "retained.test.ts": { "tasks": 1, "wrapperSites": ["wrapper@2"], "next": {} },
+    "safe.test.ts": { "tasks": 1, "wrapperSites": [], "next": {} }
+  }
+}

@@ -425,6 +425,8 @@ pub struct Normalizer<'s> {
     hook_writes: HashMap<SymbolId, Option<String>>,
     /// Dynamic lexical evaluation would invalidate the recorded write set.
     hook_eval: Option<bool>,
+    /// Potentially deferred runtime callbacks, computed once independently of lifecycle queries.
+    hook_scheduling: Option<Vec<hooks::DeferredCallback>>,
     /// While a declaration's dependencies are listed, the outside bindings its walks read.
     discovering: Option<Vec<SymbolId>>,
     /// Whether identities are being resolved, so every read must already be named.
@@ -457,6 +459,7 @@ impl<'s> Normalizer<'s> {
             externals: HashMap::new(),
             hook_writes: HashMap::new(),
             hook_eval: None,
+            hook_scheduling: None,
             discovering: None,
             resolving: false,
             shallow_imports: false,
