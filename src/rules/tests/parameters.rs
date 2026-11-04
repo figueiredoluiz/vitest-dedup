@@ -78,8 +78,18 @@ fn parameterization_row_order_preserves_declaration_claims() {
             let outcome = run(&files, &cfg);
             assert_eq!(outcome.findings.len(), expected, "{tables:?}, mask {mask}");
             assert!(!outcome.budget_exhausted);
-            let initial = baseline.get_or_insert_with(|| outcome.findings.clone());
-            assert_eq!(&outcome.findings, initial, "{tables:?}, mask {mask}");
+            // Which row stands for a declaration follows the row order; the reported claim does not.
+            let reported: Vec<_> = outcome
+                .findings
+                .iter()
+                .cloned()
+                .map(|mut finding| {
+                    finding.cases.clear();
+                    finding
+                })
+                .collect();
+            let initial = baseline.get_or_insert_with(|| reported.clone());
+            assert_eq!(&reported, initial, "{tables:?}, mask {mask}");
             let bounded = run_with_budget(&files, &cfg, 0);
             assert!(bounded.findings.is_empty());
             assert_eq!(bounded.budget_exhausted, expected > 0);

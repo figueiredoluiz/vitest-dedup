@@ -22,7 +22,7 @@ Every key is optional, and an unknown key is an error.
 | Key | Meaning |
 | --- | --- |
 | `include`, `exclude` | Globs relative to the analyzed directory. |
-| `threshold` | A percentage from 0 to 100. |
+| `threshold` | A percentage from 0 to 100 of eligible cases in error-severity duplication; see [the quality gate](#quality-gate). |
 | `rules` | Maps a rule id to `off`, `warning` or `error`. |
 
 Files matched by `.gitignore` or by a `.vitest-dedupignore` file in the same syntax are skipped as
@@ -35,6 +35,31 @@ larger repository is not affected by that repository's rules. `.vitest-dedupigno
 files are not git's and are read from every ancestor directory. Outside any repository every
 `.gitignore` in the ancestor directories applies. A rule that names the analyzed directory itself
 does not remove it.
+
+## Quality gate
+
+`threshold` is compared with the share of eligible runtime cases that sit in an error-severity
+finding.
+
+- A case is a declaration, or one row of a test table: two rows of one table are two cases, and a
+  case named by several findings counts once. A suite finding counts the tests inside its
+  copies. A `redundant-hook` finding is not a test case: it adds nothing to the count, though at
+  error it still fails a run at the default threshold.
+- Every analyzed test is eligible except benchmarks, placeholders for the tests a wrapper call or
+  module load registers, and `test.todo` with no callback. A `.todo` or `.skip` with a callback
+  stays, and so does a test the run could not compare.
+- A test under an inline suppression is not counted as duplicated, even inside a finding that
+  stays reported. Baselined findings leave the count of duplicated cases; their cases stay
+  eligible.
+  `--changed-since` keeps every eligible case.
+- With no eligible case there is no rate, and the threshold passes. At the default threshold of 0
+  any error-severity finding still fails the run.
+
+Every report publishes the three figures: the terminal footer, `qualityGate` (`errorCases`,
+`eligibleCases`, `percentage`) in the `json` and `jsonl` summaries, HTML and SARIF run properties,
+and the Action's `error-cases`, `eligible-cases` and `duplication-percentage` outputs. Earlier
+releases divided location-level findings by every analyzed test, so a nonzero threshold set
+against them needs recalibrating.
 
 ## Glob semantics
 

@@ -48,7 +48,7 @@ fn terminal_layout_preserves_duplicate_outcome() {
             "    related: sample.test.ts:3:1  second total\n",
             "    action: Review whether to remove a redundant test or repair a test whose body misses its named behavior.\n\n",
             "Analyzed 2 tests in 1 file: 1 error, 0 warnings, 0 off; 0 suppressed\n",
-            "Error-level duplication: 2 unique finding locations / 2 analyzed tests (100.00%), threshold 0.00% — FAIL\n",
+            "Error-level duplication: 2 duplicated cases / 2 eligible cases (100.00%), threshold 0.00% — FAIL\n",
             "Analysis policy: FAIL\n\n",
             "Found 1 finding.\n"
         )
@@ -162,7 +162,7 @@ fn policy_footer_matches_threshold_new_limit_and_baseline() {
     let text = String::from_utf8(run.stdout).unwrap();
     assert!(text.contains("1 error, 0 warnings, 0 off"));
     assert!(text.contains("Baseline: 1 accepted"));
-    assert!(text.contains("0 unique finding locations / 2 analyzed tests (0.00%)"));
+    assert!(text.contains("0 duplicated cases / 2 eligible cases (0.00%)"));
 }
 
 /// The exact incomplete class, not a generic warning, controls the policy decision.

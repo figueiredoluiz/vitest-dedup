@@ -222,6 +222,31 @@ pub(super) struct SummaryCounters {
     /// [`ModeSummary`] directly: it is a closed, tool-owned struct of counters and booleans, with
     /// no analyzed-repository text in it, so it needs no sanitization.
     modes: ModeSummary,
+    /// The quality gate's numerator, denominator and rate, published together.
+    quality_gate: QualityGate,
+}
+
+/// What the threshold is compared with: distinct error-level cases over eligible cases.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct QualityGate {
+    /// Distinct runtime cases (declaration and row) in a non-baselined error-severity finding.
+    error_cases: usize,
+    /// Cases the denominator counts: every test but benchmarks, placeholders and bodyless todos.
+    eligible_cases: usize,
+    /// `errorCases / eligibleCases` as a percentage; `null` when no case is eligible.
+    percentage: Option<f64>,
+}
+
+impl QualityGate {
+    /// The gate figures `result` recorded.
+    pub(super) fn of(result: &AnalysisResult) -> Self {
+        Self {
+            error_cases: result.error_cases,
+            eligible_cases: result.eligible_cases,
+            percentage: crate::analysis::gate_percentage(result),
+        }
+    }
 }
 
 impl SummaryCounters {
@@ -237,6 +262,7 @@ impl SummaryCounters {
             incomplete_causes: result.incomplete_causes.clone(),
             exclusions: result.exclusions.clone(),
             modes: result.modes,
+            quality_gate: QualityGate::of(result),
         }
     }
 }

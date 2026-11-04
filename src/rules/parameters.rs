@@ -1,6 +1,6 @@
 //! Same structure with different literal inputs: retain every case in one table.
 
-use super::{emit, keyed, Entry, Files};
+use super::{emit, keyed, reduce, whole, Entry, Files, Reduced};
 use crate::config::Config;
 use crate::model::{Finding, Rule, Severity};
 use crate::pairs::PairBudget;
@@ -36,9 +36,16 @@ pub(super) fn run<'a>(
         case.exclusion.is_none().then_some(())?;
         Some((entry.path, case.parameterization_key?))
     });
-    let groups: Vec<Vec<usize>> = groups
+    // A representative stands for the other rows of its own declaration.
+    let groups: Vec<Reduced> = groups
         .iter()
-        .map(|group| representatives(group, &entries))
+        .map(|group| {
+            reduce(
+                whole(group),
+                |group| representatives(group, &entries),
+                |index| vec![entries[index].declaration()],
+            )
+        })
         .filter(|group| group.len() >= 2)
         .collect();
     let reported = groups
@@ -46,7 +53,7 @@ pub(super) fn run<'a>(
         .map(|group| {
             group
                 .iter()
-                .filter_map(|&index| declaration(&entries[index]))
+                .filter_map(|(index, _)| declaration(&entries[*index]))
                 .collect()
         })
         .collect();

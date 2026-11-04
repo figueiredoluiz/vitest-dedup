@@ -114,6 +114,17 @@ fn render(result: &AnalysisResult, sources: &BTreeMap<PathBuf, String>) -> Resul
         result.files_analyzed,
     );
 
+    // The quality gate's three figures, as every other report publishes them.
+    let summary_line = match crate::analysis::gate_percentage(result) {
+        Some(rate) => format!(
+            "{summary_line} &middot; {} of {} eligible {} in error-level duplication ({rate:.2}%)",
+            result.error_cases,
+            result.eligible_cases,
+            pluralize(result.eligible_cases, "case"),
+        ),
+        None => format!("{summary_line} &middot; no eligible cases"),
+    };
+
     let summary_line = if result.modes.suppressions_applied > 0 {
         format!(
             "{summary_line} &middot; {} suppressed by inline directive(s)",
@@ -443,6 +454,7 @@ fn report_data(result: &AnalysisResult) -> serde_json::Value {
         // string below they need no sanitization. Present for the same reason `incomplete` is:
         // a page-local reader must be able to tell a narrowed report from a clean one.
         "modes": result.modes,
+        "qualityGate": super::shared::QualityGate::of(result),
         "findings": result.findings.iter().map(|finding| {
             let mut entry = serde_json::json!({
                 "rule": finding.rule.id(),
@@ -775,7 +787,7 @@ mod tests {
             let hostile_path = format!("src/report{character}title.test.ts");
             let result = AnalysisResult {
                 had_error_finding: false,
-                error_finding_locations: 0,
+                error_cases: 0,
                 unresolved_tests: 0,
                 blind_files: Vec::new(),
                 findings: vec![finding_with_title(
@@ -784,6 +796,7 @@ mod tests {
                     "a test",
                 )],
                 tests_analyzed: 2,
+                eligible_cases: 2,
                 files_analyzed: 1,
                 incomplete_causes: IncompleteCauses::default(),
                 modes: ModeSummary::default(),
@@ -1067,11 +1080,12 @@ mod tests {
     fn incomplete_flag_renders_a_prominent_alert() {
         let result = AnalysisResult {
             had_error_finding: false,
-            error_finding_locations: 0,
+            error_cases: 0,
             unresolved_tests: 0,
             blind_files: Vec::new(),
             findings: vec![],
             tests_analyzed: 2,
+            eligible_cases: 2,
             files_analyzed: 1,
             // Same shape as the terminal's banner test, and deliberately so: these two renderers
             // read one `reasons()` list precisely so they cannot describe the same run

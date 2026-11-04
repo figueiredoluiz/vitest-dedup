@@ -3,7 +3,7 @@
 //! report order, the quality-gate threshold and the exit code.
 //!
 //! The rules themselves live in [`crate::rules`], over the records [`crate::corpus`] builds. A
-//! finding is captured for the gate (`had_error_finding`, `error_finding_locations`) before the
+//! finding is captured for the gate (`had_error_finding`, `error_cases`) before the
 //! presentation cap truncates the list, so a capped report can never pass a gate the full list
 //! fails.
 
@@ -21,7 +21,7 @@ use std::path::PathBuf;
 ///
 /// Passed *into* analysis rather than applied to its result afterwards, and that placement is the
 /// whole point: [`AnalysisResult::had_error_finding`] and
-/// [`AnalysisResult::error_finding_locations`] -- the quality gate's two inputs -- are captured
+/// [`AnalysisResult::error_cases`] -- the quality gate's two inputs -- are captured
 /// before presentation truncation, so anything that changes which findings count against the gate
 /// has to happen before that capture. A caller that filtered `result.findings` afterwards would have
 /// a report that said one thing and an exit code that said another, and the exit code would win.
@@ -103,7 +103,7 @@ pub struct FinishedFindings {
     /// Error-severity findings existed before truncation. See [`AnalysisResult::had_error_finding`].
     pub had_error_finding: bool,
     /// Distinct locations error-severity findings carried before truncation.
-    pub error_finding_locations: usize,
+    pub error_cases: usize,
 }
 
 /// Applies the run modes to sorted `findings` and captures the quality-gate inputs: what every
@@ -151,10 +151,12 @@ pub fn finish_findings(
         .any(|finding| finding.gate_severity() == Severity::Error && !finding.baselined);
     // Captured here, beside `had_error_finding`, for the same reason: this is the threshold's
     // numerator, and truncation below would shrink it.
-    let error_finding_locations = findings
+    // A case is its declaration and row, so two rows of one table count twice and one case named
+    // by two findings counts once.
+    let error_cases = findings
         .iter()
         .filter(|finding| !finding.baselined)
-        .flat_map(|finding| finding.gate_locations(Severity::Error).cloned())
+        .flat_map(|finding| finding.gate_cases(Severity::Error))
         .collect::<BTreeSet<_>>()
         .len();
     if findings.len() > MAX_FINDINGS {
@@ -168,46 +170,46 @@ pub fn finish_findings(
         causes,
         modes: mode_summary,
         had_error_finding,
-        error_finding_locations,
+        error_cases,
     }
 }
 
 /// Whether `result`'s error-severity findings keep the project within `config`'s quality-gate
 /// threshold.
 ///
-/// The percentage is `unique test locations appearing in at least one error-severity finding`
-/// divided by `tests_analyzed` (every *executable* declaration the run read, participating
-/// or not -- see [`is_executable_declaration`]; a `describe`/`suite` is a container, never itself
-/// redundant or consolidatable, so it must not inflate this denominator and understate the real
-/// duplication rate), left unrounded; the gate passes when that percentage is `<=`
-/// `config.threshold`. An empty project (`tests_analyzed == 0`) is defined as 0%, which passes any
-/// non-negative threshold -- there is nothing to be redundant with.
+/// The percentage is [`gate_percentage`]: distinct runtime cases (declaration and table row) in at
+/// least one error-severity finding, over the eligible cases
+/// ([`AnalysisResult::eligible_cases`]), left unrounded; the gate passes when it is `<=`
+/// `config.threshold`. A run with no eligible case has no rate and passes any threshold -- there
+/// is nothing to be redundant with.
 ///
-/// A location is counted once no matter how many separate findings it appears in, per the spec's
-/// "counted once each": a test that participates in three separate error-level duplicate pairs
-/// still only costs one slot in the numerator.
+/// A case is counted once no matter how many separate findings name it, and every row of a table
+/// is its own case.
 ///
 /// This is exposed as a free function rather than a field on `AnalysisResult` because
 /// `AnalysisResult` is defined in `model.rs`, which this crate keeps free of configuration
 /// concerns (the same reason `config.rs` owns rule-id/severity string parsing instead of `Rule`).
 ///
 /// Findings a baseline accounts for are excluded from the numerator (they are already excluded
-/// from [`AnalysisResult::error_finding_locations`] when it is computed), but **not** from the
-/// denominator: `tests_analyzed` is the size of the corpus, which accepting some existing debt
+/// from [`AnalysisResult::error_cases`] when it is computed), but **not** from the
+/// denominator: the eligible cases are the size of the corpus, which accepting some existing debt
 /// does not change. The resulting percentage is therefore "how much of this project is
 /// error-level duplication nobody has signed off on", which is the number a threshold is for.
 ///
 /// See [`exit_code`]'s doc comment for how this interacts with
 /// [`AnalysisResult::had_error_finding`] at the default threshold of `0`.
 pub fn threshold_passed(result: &AnalysisResult, config: &Config) -> bool {
-    if result.tests_analyzed == 0 {
-        return true;
-    }
     // Reads the recorded pre-truncation count rather than walking `findings`, which may have been
     // shortened for presentation. Re-deriving it here is what let a truncated run pass a threshold
     // its true rate exceeded.
-    let percentage = result.error_finding_locations as f64 / result.tests_analyzed as f64 * 100.0;
-    percentage <= f64::from(config.threshold)
+    gate_percentage(result).is_none_or(|percentage| percentage <= f64::from(config.threshold))
+}
+
+/// The error-level duplication rate the quality gate reads: distinct error cases over eligible
+/// cases, as a percentage. `None` when no case is eligible, so no rate exists.
+pub fn gate_percentage(result: &AnalysisResult) -> Option<f64> {
+    (result.eligible_cases > 0)
+        .then(|| result.error_cases as f64 / result.eligible_cases as f64 * 100.0)
 }
 
 /// Determines the process exit code for one analysis run, per the contract [`ExitCode`] documents.

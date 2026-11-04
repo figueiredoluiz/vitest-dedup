@@ -241,6 +241,7 @@ fn invocation(result: &AnalysisResult) -> Value {
             "filesAnalyzed": result.files_analyzed,
             "unresolvedTests": result.unresolved_tests,
             "modes": result.modes,
+            "qualityGate": super::shared::QualityGate::of(result),
         },
     })
 }

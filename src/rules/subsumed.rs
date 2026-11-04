@@ -2,9 +2,9 @@
 
 use super::{keyed, over, Files};
 use crate::config::Config;
-use crate::model::{Finding, Rule, Severity};
+use crate::model::{Finding, GateCase, Rule, Severity};
 use crate::pairs::PairBudget;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// Compares every eligible same-context row pair, charging candidate work rather than findings.
 /// Rows of one declaration never subsume each other; repeated directional declaration claims
@@ -24,11 +24,20 @@ pub(super) fn run(
         (case.exclusion.is_none() && case.trace_complete && case.ordinary_events != 0)
             .then_some((entry.path, case.subsumption_key?))
     });
-    let mut claimed = BTreeSet::new();
+    // Each declaration pair is one finding; later row pairs of the same two tables add their cases,
+    // each once, as they arrive (two long tables would otherwise hold every pair's copy).
+    let mut claimed: BTreeMap<_, (usize, BTreeSet<GateCase>)> = BTreeMap::new();
+    let settle = |findings: &mut Vec<Finding>,
+                  claimed: BTreeMap<_, (usize, BTreeSet<GateCase>)>| {
+        for (index, cases) in claimed.into_values() {
+            findings[index].cases = cases.into_iter().collect();
+        }
+    };
     for group in groups {
         for left in 0..group.len() {
             for right in left + 1..group.len() {
                 if !budget.charge(1) {
+                    settle(findings, claimed);
                     return false;
                 }
                 let a = entries[group[left]];
@@ -47,13 +56,22 @@ pub(super) fn run(
                 } else {
                     continue;
                 };
-                if !claimed.insert((
+                let claim = (
                     members[0].path,
                     members[0].declaration(),
                     members[1].declaration(),
-                )) {
+                );
+                if let Some((_, cases)) = claimed.get_mut(&claim) {
+                    cases.extend(members.iter().map(|member| member.gate_case()));
                     continue;
                 }
+                claimed.insert(
+                    claim,
+                    (
+                        findings.len(),
+                        members.iter().map(|member| member.gate_case()).collect(),
+                    ),
+                );
                 let message = format!(
                     "one test's {} behavior events are a strict ordered subset of the other's {}; the \
                      smaller test may add no coverage, but only review can confirm the larger test's \
@@ -64,6 +82,7 @@ pub(super) fn run(
             }
         }
     }
+    settle(findings, claimed);
     true
 }
 

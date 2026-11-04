@@ -1,8 +1,8 @@
 //! Whole-suite copies and the child findings already covered by them.
 
-use super::{emit, keyed, one_per_declaration, Entry, Files};
+use super::{emit, keyed, per_declaration, whole, Entry, Files};
 use crate::config::Config;
-use crate::model::{Covers, Finding, Location, Rule, Severity};
+use crate::model::{Covers, Finding, GateCase, Location, Rule, Severity};
 use crate::modes::{apply_inline_suppressions, InlineSuppression};
 use crate::pairs::PairBudget;
 use std::collections::{BTreeMap, BTreeSet};
@@ -106,11 +106,7 @@ impl Twins {
                 continue;
             }
             for &suite in suites {
-                carry(
-                    &mut findings[suite],
-                    child.severity,
-                    child.locations.clone(),
-                );
+                carry(&mut findings[suite], child.severity, child.cases.clone());
             }
         }
         // An outer copy also stands for the tests a suite finding nested in its copies carries, so
@@ -144,7 +140,7 @@ impl Twins {
             }
         }
         for (outer, covers) in nested {
-            carry(&mut findings[outer], covers.severity, covers.locations);
+            carry(&mut findings[outer], covers.severity, covers.cases);
         }
         let removed: BTreeSet<usize> = represented.iter().map(|(child, _)| *child).collect();
         let mut index = 0;
@@ -155,19 +151,28 @@ impl Twins {
     }
 }
 
-/// Folds `locations` at `severity` into `suite`'s covers, keeping only the highest severity's.
-pub(super) fn carry(suite: &mut Finding, severity: Severity, locations: Vec<Location>) {
+/// Folds `cases` at `severity` into `suite`'s covers, keeping only the highest severity's. The
+/// reported locations stay one per declaration; the cases keep each row.
+pub(super) fn carry(suite: &mut Finding, severity: Severity, cases: Vec<GateCase>) {
     let covers = suite.covers.get_or_insert_with(|| Covers {
         severity,
         locations: Vec::new(),
+        cases: Vec::new(),
     });
     if severity > covers.severity {
         covers.severity = severity;
         covers.locations.clear();
+        covers.cases.clear();
     }
     if severity == covers.severity {
-        covers.locations.extend(locations);
-        covers.locations.sort();
+        covers.cases.extend(cases);
+        covers.cases.sort();
+        covers.cases.dedup();
+        covers.locations = covers
+            .cases
+            .iter()
+            .map(|(location, _)| location.clone())
+            .collect();
         covers.locations.dedup();
     }
 }
@@ -175,6 +180,7 @@ pub(super) fn carry(suite: &mut Finding, severity: Severity, locations: Vec<Loca
 /// Emits each copied suite level and records its successfully reported groups.
 pub(super) fn run(
     files: &Files,
+    tests: &Files,
     config: &Config,
     suppressions: &[InlineSuppression],
     budget: &mut PairBudget,
@@ -191,13 +197,13 @@ pub(super) fn run(
             .flatten()
     });
     for group in groups {
-        let group = one_per_declaration(&group, &entries);
+        let group = per_declaration(whole(&group), &entries);
         if group.len() < 2 {
             continue;
         }
         let locations: Vec<_> = group
             .iter()
-            .map(|&index| Location {
+            .map(|&(index, _)| Location {
                 path: entries[index].path.to_path_buf(),
                 span: entries[index].case.span,
             })
@@ -214,6 +220,10 @@ pub(super) fn run(
         ) {
             return (twins, true);
         }
+        // A copy stands for the tests declared inside it, whether or not a child rule reports them.
+        for finding in &mut emitted {
+            finding.cases = descendants(finding, tests);
+        }
         let mut visible = emitted.clone();
         let removed = apply_inline_suppressions(&mut visible, suppressions);
         // A partially suppressed spanning group cannot stand for every relation in the group.
@@ -223,6 +233,41 @@ pub(super) fn run(
         findings.extend(emitted);
     }
     (twins, false)
+}
+
+/// The eligible tests declared inside the suite copies `finding` names: what it stands for.
+fn descendants(finding: &Finding, tests: &Files) -> Vec<GateCase> {
+    let mut cases: Vec<GateCase> = finding
+        .locations
+        .iter()
+        .flat_map(|copy| {
+            tests
+                .iter()
+                .filter(move |(path, _)| *path == copy.path)
+                .flat_map(move |(path, declared)| {
+                    declared
+                        .iter()
+                        .filter(move |case| {
+                            case.origin.is_none()
+                                && case.gate_eligible()
+                                && copy.span.start_byte <= case.span.start_byte
+                                && case.span.end_byte <= copy.span.end_byte
+                        })
+                        .map(move |case| {
+                            (
+                                Location {
+                                    path: path.clone(),
+                                    span: case.span,
+                                },
+                                case.row,
+                            )
+                        })
+                })
+        })
+        .collect();
+    cases.sort();
+    cases.dedup();
+    cases
 }
 
 /// Describes the complete block rather than repeating its test-level findings.

@@ -299,21 +299,20 @@ impl TerminalReporter {
             )?;
         }
         if let Some(context) = context {
-            if result.tests_analyzed == 0 {
-                writeln!(
+            match analysis::gate_percentage(result) {
+                None => writeln!(
                     writer,
-                    "Error-level duplication: unavailable (no executable tests), threshold {:.2}%",
+                    "Error-level duplication: unavailable (no {} tests), threshold {:.2}%",
+                    if result.tests_analyzed == 0 { "executable" } else { "eligible" },
                     f64::from(context.config.threshold)
-                )?;
-            } else {
-                let rate =
-                    result.error_finding_locations as f64 / result.tests_analyzed as f64 * 100.0;
-                writeln!(writer,
-                    "Error-level duplication: {} unique finding locations / {} analyzed tests ({:.2}%), threshold {:.2}% — {}",
-                    result.error_finding_locations, result.tests_analyzed, rate,
+                )?,
+                Some(rate) => writeln!(writer,
+                    "Error-level duplication: {} duplicated {} / {} eligible {} ({:.2}%), threshold {:.2}% — {}",
+                    result.error_cases, pluralize(result.error_cases, "case"),
+                    result.eligible_cases, pluralize(result.eligible_cases, "case"), rate,
                     f64::from(context.config.threshold),
                     if analysis::threshold_passed(result, context.config) { "PASS" } else { "FAIL" },
-                )?;
+                )?,
             }
             let policy = match context.exit_code {
                 ExitCode::Success => "PASS",
@@ -495,6 +494,7 @@ mod tests {
                 "a",
             )],
             tests_analyzed: 2,
+            eligible_cases: 2,
             files_analyzed: 1,
             incomplete_causes: IncompleteCauses {
                 unresolved_contexts: 3,
@@ -649,11 +649,11 @@ mod tests {
         String::from_utf8(output).unwrap()
     }
 
-    /// Boundaries and omitted participants use recorded unique locations, not visible pairs.
+    /// Boundaries and omitted participants use the recorded case counts, not visible pairs.
     #[test]
     fn threshold_footer_uses_full_counters_and_exact_boundary() {
         let mut result = super::super::test_support::cross_file_result("same body");
-        result.error_finding_locations = 2;
+        result.error_cases = 2;
         result.had_error_finding = true;
         assert_eq!(result.findings.len(), 1);
         assert_eq!(result.findings[0].locations.len(), 2);
@@ -661,7 +661,7 @@ mod tests {
             let config = config_with_threshold(threshold);
             let output =
                 render_with_policy(&result, &config, analysis::exit_code(&result, &config));
-            assert!(output.contains(&format!("2 unique finding locations / 4 analyzed tests (50.00%), threshold {threshold}.00% — {label}")));
+            assert!(output.contains(&format!("2 duplicated cases / 4 eligible cases (50.00%), threshold {threshold}.00% — {label}")));
         }
         let mut overlapping_finding = result.findings[0].clone();
         overlapping_finding.rule = Rule::DuplicateTestName;
@@ -669,24 +669,24 @@ mod tests {
         let config = config_with_threshold(50);
         let overlapping = render_with_policy(&result, &config, ExitCode::Success);
         assert!(overlapping.contains("2 errors, 0 warnings"));
-        assert!(overlapping.contains("2 unique finding locations / 4 analyzed tests (50.00%)"));
+        assert!(overlapping.contains("2 duplicated cases / 4 eligible cases (50.00%)"));
         result.findings.truncate(1);
-        result.error_finding_locations = 3;
+        result.error_cases = 3;
         result.incomplete_causes.findings_truncated = 7;
         let config = config_with_threshold(50);
         let output = render_with_policy(&result, &config, ExitCode::QualityGateFailed);
         assert!(output.contains("shown findings: 1 error, 0 warnings, 0 off"));
-        assert!(output.contains(
-            "3 unique finding locations / 4 analyzed tests (75.00%), threshold 50.00% — FAIL"
-        ));
+        assert!(output
+            .contains("3 duplicated cases / 4 eligible cases (75.00%), threshold 50.00% — FAIL"));
         assert!(output.contains("Found 1 shown finding; 7 additional findings omitted."));
         assert!(output.contains("Analysis policy: FAIL (incomplete coverage)"));
         // Error locations may represent hooks/suites too; don't silently clamp the existing rate.
-        result.error_finding_locations = 6;
+        result.error_cases = 6;
         let output = render_with_policy(&result, &config, ExitCode::QualityGateFailed);
-        assert!(output.contains("6 unique finding locations / 4 analyzed tests (150.00%)"));
+        assert!(output.contains("6 duplicated cases / 4 eligible cases (150.00%)"));
         result.tests_analyzed = 100_000;
-        result.error_finding_locations = 2;
+        result.eligible_cases = 100_000;
+        result.error_cases = 2;
         let config = config_with_threshold(0);
         let output = render_with_policy(&result, &config, ExitCode::QualityGateFailed);
         assert!(output.contains("(0.00%), threshold 0.00% — FAIL"));
@@ -708,7 +708,7 @@ mod tests {
         let output = render_with_policy(&result, &config, ExitCode::Success);
         assert!(output.contains("1 error, 0 warnings, 0 off; 2 suppressed"));
         assert!(output.contains("Baseline: 1 accepted"));
-        assert!(output.contains("0 unique finding locations / 2 analyzed tests (0.00%)"));
+        assert!(output.contains("0 duplicated cases / 2 eligible cases (0.00%)"));
         assert!(output.contains("Analysis policy: PASS"));
         let mut result = AnalysisResult::default();
         for exit in [ExitCode::OperationalError, ExitCode::QualityGateFailed] {
@@ -717,7 +717,7 @@ mod tests {
                 suite.severity = Severity::Error;
                 result.findings.push(suite);
                 result.had_error_finding = true;
-                result.error_finding_locations = 2;
+                result.error_cases = 2;
                 assert_eq!(analysis::exit_code(&result, &config), exit);
             }
             let output = render_with_policy(&result, &config, exit);
@@ -789,6 +789,7 @@ mod tests {
             ));
         for tests in [0, 2] {
             result.tests_analyzed = tests;
+            result.eligible_cases = tests;
             for no_color in [true, false] {
                 let reporter = TerminalReporter { no_color };
                 let mut full = Vec::new();
@@ -1083,7 +1084,7 @@ mod tests {
     fn incomplete_flag_is_reported_prominently_before_findings() {
         let result = AnalysisResult {
             had_error_finding: false,
-            error_finding_locations: 0,
+            error_cases: 0,
             unresolved_tests: 0,
             blind_files: Vec::new(),
             findings: vec![finding_with_title(
@@ -1092,6 +1093,7 @@ mod tests {
                 "a",
             )],
             tests_analyzed: 2,
+            eligible_cases: 2,
             files_analyzed: 1,
             // The shape a real run produced: contexts that could not be resolved and files that
             // could not be read in full, and *neither* hard limit hit.
@@ -1138,7 +1140,7 @@ mod tests {
     fn sanitizes_newlines_and_ansi_escapes_in_titles_without_forging_lines() {
         let clean = AnalysisResult {
             had_error_finding: false,
-            error_finding_locations: 0,
+            error_cases: 0,
             unresolved_tests: 0,
             blind_files: Vec::new(),
             findings: vec![finding_with_title(
@@ -1147,6 +1149,7 @@ mod tests {
                 "plaintitle",
             )],
             tests_analyzed: 2,
+            eligible_cases: 2,
             files_analyzed: 1,
             incomplete_causes: IncompleteCauses::default(),
             modes: ModeSummary::default(),
@@ -1154,7 +1157,7 @@ mod tests {
         };
         let dirty = AnalysisResult {
             had_error_finding: false,
-            error_finding_locations: 0,
+            error_cases: 0,
             unresolved_tests: 0,
             blind_files: Vec::new(),
             findings: vec![finding_with_title(
@@ -1163,6 +1166,7 @@ mod tests {
                 "plain\ntitle\x1b[31m!\x1b[0m",
             )],
             tests_analyzed: 2,
+            eligible_cases: 2,
             files_analyzed: 1,
             incomplete_causes: IncompleteCauses::default(),
             modes: ModeSummary::default(),

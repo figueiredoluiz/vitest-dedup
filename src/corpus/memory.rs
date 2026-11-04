@@ -51,6 +51,7 @@ impl HeapBytes for TestCase {
             subsumption_key,
             callback_form,
             inert,
+            bodyless,
             exclusion,
         } = self;
         [
@@ -75,6 +76,7 @@ impl HeapBytes for TestCase {
             subsumption_key.heap_bytes(),
             callback_form.heap_bytes(),
             inert.heap_bytes(),
+            bodyless.heap_bytes(),
             exclusion.heap_bytes(),
         ]
         .into_iter()
@@ -170,6 +172,7 @@ impl Engine {
             hooks,
             run,
             tests,
+            eligible,
             unresolved,
             empty_tables,
             containers,
@@ -228,6 +231,7 @@ impl Engine {
             exports: exports.heap_bytes(),
             scalars: tests
                 .heap_bytes()
+                .saturating_add(eligible.heap_bytes())
                 .saturating_add(unresolved.heap_bytes())
                 .saturating_add(empty_tables.heap_bytes())
                 .saturating_add(containers.heap_bytes())

@@ -34,6 +34,7 @@
 //!     "changedScope": false,
 //!     "withheldUnchanged": 0
 //!   },
+//!   "qualityGate": { "errorCases": 2, "eligibleCases": 10, "percentage": 20.0 },
 //!   "excludedFiles": [
 //!     {
 //!       "path": "src/cart.test.ts",
@@ -71,6 +72,11 @@
 //! serialized, parallel to `locations` and `titles`: a per-participant `.skip`/`.todo` flag so a
 //! consumer can tell which side of a duplicate is dead code without parsing prose out of
 //! `message`.
+//!
+//! `qualityGate` is what `threshold` is compared with: `errorCases` distinct runtime cases (a
+//! declaration, or one table row) in non-baselined error-severity findings, over `eligibleCases`
+//! (every analyzed test but benchmarks, wrapper and module-load placeholders, and todos with no
+//! callback), as `percentage`; `percentage` is `null` when no case is eligible.
 //!
 //! `excludedFiles` lists every file excluded from comparison in whole or in part, sorted by path:
 //! files with excluded tests, files read only in part, and files never read. `reason` is the first
@@ -348,6 +354,7 @@ mod tests {
                 "incomplete",
                 "incompleteCauses",
                 "modes",
+                "qualityGate",
                 "schemaVersion",
                 "testsAnalyzed",
                 "unresolvedTests"

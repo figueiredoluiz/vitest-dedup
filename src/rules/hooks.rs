@@ -118,6 +118,7 @@ pub(super) fn run(
             inert: vec![false, false],
             baselined: false,
             covers: None,
+            cases: Vec::new(),
         });
     }
     (exhausted, false)
