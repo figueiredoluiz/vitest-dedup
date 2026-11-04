@@ -11,7 +11,7 @@ import {
   judgeRecall,
   knownProblems,
   pairEdges,
-  pairSeverities,
+  pairClaims,
   pendingByRule,
   PORTED_RULES,
   strayFindings,
@@ -393,18 +393,27 @@ for (const rule of ['duplicate-test-name', 'duplicate-each-row']) {
   })
 }
 
-test('a required link at another severity fails, and the declared severity passes', () => {
-  const finding = (severity) => ({
-    type: 'finding', rule: 'duplicate-test', severity,
+test('a required link must state the declared severity, inert flags and rendered titles', () => {
+  const finding = ({ rule = 'duplicate-each-row', severity = 'error', titles = ['doubles 2', 'doubles 2'], inert = [false, false] } = {}) => ({
+    type: 'finding', rule, severity, titles, inert,
     locations: [{ path: 'a.test.ts', line: 1 }, { path: 'a.test.ts', line: 2 }],
   })
-  const required = [{ edge: 'a.test.ts:1|a.test.ts:2', rule: 'duplicate-test', severity: 'error', from: 'a.test.ts' }]
-  const judged = (records) => judge({
-    required, forbidden: [], linked: pairEdges(records), severities: pairSeverities(records), known: [], scope: 'fixtures/d',
-  })
-  assert.deepEqual(judged([finding('error')]).failures, [])
-  const downgraded = judged([finding('warning')]).failures
+  const required = (rule = 'duplicate-each-row', inert = false) => [{
+    edge: 'a.test.ts:1|a.test.ts:2', rule, severity: 'error', from: 'a.test.ts',
+    ends: [{ point: 'a.test.ts:1', title: 'doubles 2', inert }, { point: 'a.test.ts:2', title: 'doubles 2', inert: false }],
+  }]
+  const judged = (records, expected = required()) => judge({
+    required: expected, forbidden: [], linked: pairEdges(records), claims: pairClaims(records), known: [], scope: 'fixtures/d',
+  }).failures
+  assert.deepEqual(judged([finding()]), [])
+  const downgraded = judged([finding({ severity: 'warning' })])
   assert.equal(downgraded.length, 1)
-  assert.match(downgraded[0].message, /expected duplicate-test at error .* reported warning/)
-  assert.equal(downgraded[0].id, 'severity|fixtures/d|a.test.ts:1|a.test.ts:2|duplicate-test')
+  assert.equal(downgraded[0].id, 'claim|fixtures/d|a.test.ts:1|a.test.ts:2|duplicate-each-row')
+  assert.match(downgraded[0].message, /expected duplicate-each-row at error .* reported warning/)
+  assert.equal(judged([finding({ titles: ['doubles 999', 'doubles 999'] })]).length, 1, 'another row')
+  assert.equal(judged([finding({ inert: [true, false] })]).length, 1, 'a participant reported inert')
+  assert.deepEqual(judged([finding({ inert: [true, false] })], required('duplicate-each-row', true)), [])
+  // A body rule's titles keep their source pattern, so only its severity and inert flags count.
+  const body = finding({ rule: 'duplicate-test', titles: ['t %s', 't %s'] })
+  assert.deepEqual(judged([body], required('duplicate-test')), [])
 })

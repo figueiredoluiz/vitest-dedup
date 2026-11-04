@@ -52,23 +52,42 @@ export function pairEdges(records) {
 }
 
 /**
- * The severities each rule reported each pair at, from one run's JSONL records.
+ * What each rule reported about each pair, from one run's JSONL records: the finding's severity
+ * and, per endpoint, the participant's title and inert flag.
  *
  * @param {object[]} records The parsed jsonl records of one run.
- * @returns {Map<string, Set<string>>} `edge|rule` -> the severities its findings carried.
+ * @returns {Map<string, {severity: string, ends: Map<string, {title: string, inert: boolean}>}[]>}
+ *   `edge|rule` -> one claim per finding that linked the pair.
  */
-export function pairSeverities(records) {
-  const severities = new Map()
+export function pairClaims(records) {
+  const claims = new Map()
   for (const record of records) {
     if (record?.type !== 'finding' || !PORTED_RULES.has(record.rule)) continue
-    const points = (record.locations ?? []).map((location) => endpoint({ file: basenameOf(location.path), line: location.line }))
-    for (const [left, right] of combinations(points)) {
-      const key = `${edgeKey(left, right)}|${record.rule}`
-      if (!severities.has(key)) severities.set(key, new Set())
-      severities.get(key).add(record.severity)
+    const ends = (record.locations ?? []).map((location, index) => ({
+      point: endpoint({ file: basenameOf(location.path), line: location.line }),
+      title: record.titles?.[index],
+      inert: record.inert?.[index] === true,
+    }))
+    for (const [left, right] of combinations(ends)) {
+      const key = `${edgeKey(left.point, right.point)}|${record.rule}`
+      if (!claims.has(key)) claims.set(key, [])
+      claims.get(key).push({ severity: record.severity, ends: new Map([left, right].map((end) => [end.point, end])) })
     }
   }
-  return severities
+  return claims
+}
+
+/**
+ * Whether one reported claim states what a required expectation declares: the severity, every
+ * participant's inert flag, and, for the rules whose findings carry rendered titles, the titles.
+ */
+function claimMatches(claim, expected) {
+  if (expected.severity !== undefined && claim.severity !== expected.severity) return false
+  return expected.ends.every((end) => {
+    const reported = claim.ends.get(end.point)
+    if (!reported || reported.inert !== end.inert) return false
+    return !renderedRule(expected.rule) || reported.title === end.title
+  })
 }
 
 /** Basename of a report path, forward-slash or platform-native, the way the corpus gate matches. */
@@ -107,7 +126,7 @@ export function strayFindings(records) {
  * second are silent under next by design.
  *
  * @param {Map<string, object>} fixtures Parsed fixtures by file name (`parseFixture` results).
- * @returns {{required: {edge: string, rule: string, severity: string, from: string}[], declared: {edge: string, rule: string}[], forbidden: {edge: string, from: string}[]}}
+ * @returns {{required: {edge: string, rule: string, severity: string, ends: object[], from: string}[], declared: {edge: string, rule: string}[], forbidden: {edge: string, from: string}[]}}
  */
 export function expectationEdges(fixtures) {
   const required = []
@@ -118,16 +137,23 @@ export function expectationEdges(fixtures) {
       if (expectation.pending) continue
       // In the engine's group order: files by bytes, lines by number. The serialized form sorts
       // line 9 last, and a locale puts `a.test.ts` before `B.test.ts`.
-      const points = [...(expectation.participants ?? [])]
+      const participants = [...(expectation.participants ?? [])]
         .sort((a, b) => Buffer.compare(Buffer.from(a.file), Buffer.from(b.file)) || a.line - b.line)
-        .map(endpoint)
+      const points = participants.map(endpoint)
+      const end = (i) => ({ point: points[i], title: participants[i].title, inert: participants[i].inert === true })
       if (points.length < 2) continue
       if (PORTED_RULES.has(expectation.rule)) {
         // A group of up to four is reported as a chain of neighbouring pairs, so only neighbours
         // are required; every other pair is declared, and a cluster finding may link it.
         for (const [left, right] of combinations(points)) declared.push({ edge: edgeKey(left, right), rule: expectation.rule })
         for (let i = 1; i < points.length; i += 1) {
-          required.push({ edge: edgeKey(points[i - 1], points[i]), rule: expectation.rule, severity: expectation.severity, from: `${name}` })
+          required.push({
+            edge: edgeKey(points[i - 1], points[i]),
+            rule: expectation.rule,
+            severity: expectation.severity,
+            ends: [end(i - 1), end(i)],
+            from: `${name}`,
+          })
         }
       } else if (expectation.rule === 'none') {
         for (const [left, right] of combinations(points)) {
@@ -266,7 +292,7 @@ export function knownProblems(known) {
  * @param {string} input.scope The directory the run covered, part of every id.
  * @returns {{failures: {id: string, message: string}[], held: string[], consumed: Set<string>}}
  */
-export function judge({ required, declared = [], forbidden, linked, severities, known, scope }) {
+export function judge({ required, declared = [], forbidden, linked, claims: reports, known, scope }) {
   const failures = []
   const fired = new Set()
   const missed = new Set()
@@ -281,19 +307,22 @@ export function judge({ required, declared = [], forbidden, linked, severities, 
       }`,
     })
   }
-  for (const { edge, rule, severity, from } of required) {
+  for (const expected of required) {
+    const { edge, rule, severity, from } = expected
     if (!linked.get(edge)?.has(rule)) {
       miss(edge, rule, from)
       continue
     }
-    // A link at another severity is not the claim: a downgraded finding must not satisfy it.
-    const reported = severities?.get(`${edge}|${rule}`)
-    if (severities !== undefined && severity !== undefined && !reported?.has(severity)) {
-      const id = `severity|${scope}|${edge}|${rule}`
+    // A link that states another severity, a participant's inert flag, or another rendered title
+    // is not the claim: a downgraded finding, or one about other rows, must not satisfy it.
+    const reported = reports?.get(`${edge}|${rule}`)
+    if (reports !== undefined && expected.ends !== undefined && !reported?.some((claim) => claimMatches(claim, expected))) {
+      const id = `claim|${scope}|${edge}|${rule}`
       fired.add(id)
+      const said = (reported ?? []).map((claim) => `${claim.severity} ${JSON.stringify([...claim.ends.values()].map(({ title, inert }) => (inert ? `${title} [inert]` : title)))}`)
       failures.push({
         id,
-        message: `FAIL ${from}: expected ${rule} at ${severity} between ${edge.replaceAll('|', ' <-> ')}; the analyzer reported ${[...(reported ?? [])].join(', ') || 'nothing'}`,
+        message: `FAIL ${from}: expected ${rule} at ${severity} between ${JSON.stringify(expected.ends.map(({ title, inert }) => (inert ? `${title} [inert]` : title)))}; the analyzer reported ${said.join('; ') || 'nothing'}`,
       })
     }
   }
