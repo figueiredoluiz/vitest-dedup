@@ -225,7 +225,8 @@ export function run(binary = DEFAULT_BINARY) {
       for (const expectation of parsed.expectations) {
         if (expectation.rule !== 'none') continue
         negatives += 1
-        const key = `${join(dir, name)}:L${expectation.participants[0]?.line}`
+        // KNOWN_GAPS keys are forward-slash paths on every platform.
+        const key = `${join(dir, name).replaceAll('\\', '/')}:L${expectation.participants[0]?.line}`
         const result = withKnownGap(key, checkExpectation(expectation, index, readSource), seenGaps)
         tallyExpectation(tally, join(dir, name), result)
       }

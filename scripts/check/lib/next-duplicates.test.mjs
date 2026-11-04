@@ -413,6 +413,10 @@ test('a required link must state the declared severity, inert flags and rendered
   assert.equal(judged([finding({ titles: ['doubles 999', 'doubles 999'] })]).length, 1, 'another row')
   assert.equal(judged([finding({ inert: [true, false] })]).length, 1, 'a participant reported inert')
   assert.deepEqual(judged([finding({ inert: [true, false] })], required('duplicate-each-row', true)), [])
+  // A second title group at the expected pair is a claim nothing made, beside the expected one.
+  const extra = judged([finding(), finding({ titles: ['doubles 5', 'doubles 5'] })])
+  assert.equal(extra.length, 1)
+  assert.match(extra[0].id, /^unclaimed\|fixtures\/d\|a\.test\.ts:1\|a\.test\.ts:2\|duplicate-each-row\|error\|/)
   // A body rule's titles keep their source pattern, so only its severity and inert flags count.
   const body = finding({ rule: 'duplicate-test', titles: ['t %s', 't %s'] })
   assert.deepEqual(judged([body], required('duplicate-test')), [])

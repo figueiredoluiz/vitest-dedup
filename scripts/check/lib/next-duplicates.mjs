@@ -145,7 +145,9 @@ export function expectationEdges(fixtures) {
       if (PORTED_RULES.has(expectation.rule)) {
         // A group of up to four is reported as a chain of neighbouring pairs, so only neighbours
         // are required; every other pair is declared, and a cluster finding may link it.
-        for (const [left, right] of combinations(points)) declared.push({ edge: edgeKey(left, right), rule: expectation.rule })
+        for (const [i, j] of combinations(points.map((_, index) => index))) {
+          declared.push({ edge: edgeKey(points[i], points[j]), rule: expectation.rule, severity: expectation.severity, ends: [end(i), end(j)] })
+        }
         for (let i = 1; i < points.length; i += 1) {
           required.push({
             edge: edgeKey(points[i - 1], points[i]),
@@ -339,6 +341,30 @@ export function judge({ required, declared = [], forbidden, linked, claims: repo
   }
   const claims = [...required, ...declared]
   const claimed = new Set(claims.map(({ edge, rule }) => `${edge}|${rule}`))
+  // Every finding at a pair an expectation names must be one an expectation states: a second
+  // title group, or a finding at another severity beside the expected one, is a claim nothing made.
+  if (reports !== undefined) {
+    const expectedAt = new Map()
+    for (const expected of claims.filter(({ ends }) => ends !== undefined)) {
+      const key = `${expected.edge}|${expected.rule}`
+      if (!expectedAt.has(key)) expectedAt.set(key, [])
+      expectedAt.get(key).push(expected)
+    }
+    for (const [key, expectations] of expectedAt) {
+      // A required link no claim matched has already failed as `claim|`.
+      if (fired.has(`claim|${scope}|${key}`)) continue
+      for (const claim of reports.get(key) ?? []) {
+        if (expectations.some((expected) => claimMatches(claim, expected))) continue
+        const titles = [...claim.ends.values()].map(({ title }) => title)
+        const id = `unclaimed|${scope}|${key}|${claim.severity}|${JSON.stringify(titles)}`
+        fired.add(id)
+        failures.push({
+          id,
+          message: `FAIL ${scope}: ${key.split('|').pop()} reported ${JSON.stringify(titles)} at ${claim.severity} between ${expectations[0].edge.replaceAll('|', ' <-> ')}, which no expectation there states`,
+        })
+      }
+    }
+  }
   const named = new Set(claims.map(({ edge }) => edge))
   const silenced = new Set(forbidden.map(({ edge }) => edge))
   for (const [edge, rules] of linked) {
