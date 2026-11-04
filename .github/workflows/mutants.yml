@@ -1,15 +1,10 @@
-# Scheduled mutation testing of the fingerprint, analysis and next-core contracts.
+# Scheduled mutation testing of the next-core contracts.
 #
 # Why this is not a pull-request gate: cargo-mutants rebuilds and re-runs the test selection once
-# per mutant, and the fingerprint/analysis scope is 1,537 mutants (`cargo mutants --list`,
-# 2026-10-24). Its measured history: the last timed full run, of 1,171, took around 75 minutes on the
-# development machine; a 2026-10-24 hosted attempt at the current scope averaged 46.7s per mutant (median 44s)
-# at `--jobs 2` and was cancelled at this job's 300-minute cap with 767 of 1,537 done. That
-# run's per-mutant logs showed the 24 `tests/` integration suites never catch anything the two
-# unittest binaries miss, so `.cargo/mutants.toml` now runs the test phase against those binaries
-# only -- what that buys, and the narrowing of the build phase that was tried and rejected there,
-# are recorded in that file. Whether a full hosted run fits the cap is answered by the first one
-# that finishes.
+# per mutant. The next-core scope's measured run (2026-10-29) took 64 minutes at `--jobs 2`; the
+# earlier analyzer's fingerprint/analysis scope (1,537 mutants) was cancelled at this job's
+# 300-minute cap and was deleted with that analyzer. `.cargo/mutants.toml` runs the test phase
+# against the unittest binaries only, as that run's per-mutant logs justified.
 # Per-pull-request is impossible, and the answer changes slowly enough that weekly is
 # the right cadence.
 #
@@ -57,8 +52,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: Fingerprint and analysis
-            script: mutants
           - name: Next core normal forms
             script: mutants:next-core
     # 24.04, not the 22.04 the other workflows use: the pinned cargo-mutants release binary is
