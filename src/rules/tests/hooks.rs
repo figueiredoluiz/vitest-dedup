@@ -8,6 +8,8 @@ use crate::framework::HookTiming;
 fn population() -> Vec<(PathBuf, Hooks)> {
     let declarations = (1..=3)
         .map(|line| Hook {
+            path: None,
+            registration_files: Vec::new(),
             span: case(line, line * 100, 0, 0).span,
             timing: HookTiming::BeforeEach,
             label: "beforeEach",
@@ -22,6 +24,29 @@ fn population() -> Vec<(PathBuf, Hooks)> {
             chains: vec![vec![0, 1, 2], vec![0, 1, 2]],
         },
     )]
+}
+
+/// Reversing registration order keeps one declaration pair and unions both callers.
+#[test]
+fn reversed_hook_chains_merge_their_registration_owners() {
+    let mut files = population();
+    files[0].1.chains = vec![vec![0, 1]];
+    for hook in &mut files[0].1.declarations {
+        hook.path = Some(PathBuf::from("runner.ts"));
+        hook.registration_files = vec![PathBuf::from("a.test.ts")];
+    }
+    let mut other = files[0].1.clone();
+    other.chains = vec![vec![1, 0]];
+    for hook in &mut other.declarations {
+        hook.registration_files = vec![PathBuf::from("b.test.ts")];
+    }
+    files.push((PathBuf::from("b.test.ts"), other));
+    let result = run_with_hooks(&[], &[], &files, &config_with(&[]), &[]);
+    assert_eq!(result.findings.len(), 1);
+    assert_eq!(
+        result.findings[0].registration_files,
+        vec![vec![PathBuf::from("a.test.ts"), PathBuf::from("b.test.ts")]; 2]
+    );
 }
 
 /// Candidate scans and emitted relationships have independent budgets and exact exhaustion flags.

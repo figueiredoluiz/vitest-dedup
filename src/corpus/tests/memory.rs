@@ -1,7 +1,7 @@
 //! Retained accounting follows the engine's actual owned populations and capacities.
 use super::*;
 use crate::memory::{HeapBytes, MemoryRoof};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Read a small owned project through the same shell-facing engine entry point.
 fn engine() -> Engine {
@@ -29,6 +29,27 @@ fn engine() -> Engine {
     engine
 }
 
+/// Conflicting invocation proofs cannot become a declaration-wide diagnostic proof.
+#[test]
+fn diagnostic_hook_deduplication_withholds_conflicting_effects() {
+    let mut engine = engine();
+    let span = engine.files[0].1[0].span;
+    for effect in [Some(1), Some(2), None] {
+        engine.diagnostic_hooks.push((
+            PathBuf::from("runner.ts"),
+            crate::corpus::records::DiagnosticHook {
+                span,
+                kind: "beforeEach",
+                views: None,
+                effect_key: effect,
+            },
+        ));
+    }
+    let hooks = engine.take_diagnostic_hooks();
+    assert_eq!(hooks.len(), 1);
+    assert_eq!(hooks[0].1.effect_key, None);
+}
+
 /// An empty engine costs nothing; each independently retained population contributes its bucket.
 #[test]
 fn all_engine_populations_are_charged() {
@@ -43,6 +64,8 @@ fn all_engine_populations_are_charged() {
     let case = corpus.tests[0].clone();
     corpus.suites.push(case.clone());
     corpus.hooks.declarations.push(crate::corpus::Hook {
+        path: None,
+        registration_files: Vec::new(),
         span: case.span,
         timing: crate::framework::HookTiming::BeforeEach,
         label: "phase",

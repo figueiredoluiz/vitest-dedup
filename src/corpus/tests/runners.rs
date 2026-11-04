@@ -3,6 +3,63 @@ use super::*;
 use crate::model::Rule;
 use std::path::PathBuf;
 
+/// Imported setup participates in chains with direct or expanded tests and preserves diagnostics.
+#[test]
+fn imported_setup_chains_cover_registration_shapes() {
+    for own_test in [false, true] {
+        for separate in [false, true] {
+            let helper = format!("import {{ beforeEach, test, expect }} from 'vitest'; let ready = 0; export function install() {{ beforeEach(() => {{ ready = 1; }}); beforeEach(() => {{ ready = 1; }}); {} }} export function cases() {{ test('case', () => {{ expect(ready).toBe(1); }}); }}", if own_test { "test('inside', () => { expect(ready).toBe(1); });" } else { "" });
+            let caller = format!("import {{ install, cases }} from './runner'; import {{ test, expect }} from 'vitest'; install(); {}", if separate { "cases();" } else { "test('direct', () => { expect(2).toBe(2); });" });
+            let dir = tempfile::tempdir().unwrap();
+            let caller = if separate {
+                caller
+            } else {
+                caller.replace("install, cases", "install")
+            };
+            std::fs::write(dir.path().join("runner.ts"), helper).unwrap();
+            let mut engine = Engine::default();
+            for name in ["a.test.ts", "b.test.ts"] {
+                let path = dir.path().join(name);
+                std::fs::write(&path, &caller).unwrap();
+                let read = engine.read_with_sources(
+                    &path,
+                    std::path::Path::new(name),
+                    &caller,
+                    Setting {
+                        dialect: &DIALECT,
+                        globals: false,
+                        root: dir.path(),
+                    },
+                    true,
+                    Vec::new(),
+                );
+                assert!(!read.partial);
+            }
+            assert_eq!(engine.tests, if own_test { 4 } else { 2 });
+            let diagnostics = engine.take_diagnostic_hooks();
+            assert_eq!(diagnostics.len(), 2);
+            assert!(diagnostics
+                .iter()
+                .all(|(_, hook)| hook.effect_key.is_some()));
+            let outcome = crate::rules::run_with_hooks(
+                &engine.files,
+                &engine.suites,
+                &engine.hooks,
+                &crate::config::Config::load(dir.path(), Default::default()).unwrap(),
+                &[],
+            );
+            assert_eq!(
+                outcome
+                    .findings
+                    .iter()
+                    .filter(|finding| finding.rule == Rule::RedundantHook)
+                    .count(),
+                1
+            );
+        }
+    }
+}
+
 /// Dynamic registration remains visibly partial even when there is no static test node to count.
 #[test]
 fn direct_eval_without_a_static_test_site_is_not_a_complete_empty_read() {
