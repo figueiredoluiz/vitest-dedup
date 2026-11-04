@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
+mod export_identity;
 mod runners;
 
 /// The corpus of each of `tests` (paths among `files`), read in one run.

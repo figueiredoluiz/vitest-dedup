@@ -843,7 +843,7 @@ impl<'s> Module<'s> {
                         Some(Export::Namespace) => {
                             self.origins.insert(symbol, Origin::Namespace);
                         }
-                        Some(&Export::Api(registers)) => {
+                        Some(&Export::Api { registers, .. }) => {
                             self.origins.insert(symbol, Origin::Api(registers));
                         }
                         Some(&Export::Wrapper(reach)) => {
@@ -1752,9 +1752,9 @@ impl<'s> Module<'s> {
         let tree = self.tree;
         let spelled = self.spelled_exports();
         let dialect = self.setting.dialect;
-        // Stars read so far: the first star holding a name wins it, and this table does not record
-        // a name one holds without registering.
+        // The registering-only table cannot prove what an earlier opaque star omits.
         let mut stars = 0;
+        let mut star_exports: HashMap<String, Export> = HashMap::new();
         let mut exports: HashMap<String, Export> = HashMap::new();
         let mut add = |name: String, export: Export| {
             let held = exports.entry(name).or_insert(export);
@@ -1789,10 +1789,21 @@ impl<'s> Module<'s> {
                         .child(statement, "source")
                         .and_then(|s| tree.text(s, "value"));
                     if let Some(source) = source {
-                        if dialect.is_api_module(source) {
+                        if let Some(module) =
+                            dialect.api_modules.iter().copied().find(|m| *m == source)
+                        {
                             for (local, exported) in specifiers(tree, statement) {
-                                if let Some(registers) = self.api(&export_name(tree, local)) {
-                                    add(export_name(tree, exported), Export::Api(registers));
+                                if let Some(registration) =
+                                    dialect.registration(&export_name(tree, local))
+                                {
+                                    add(
+                                        export_name(tree, exported),
+                                        Export::Api {
+                                            registers: registration.registers,
+                                            module,
+                                            name: registration.name,
+                                        },
+                                    );
                                 }
                             }
                             continue;
@@ -1892,27 +1903,41 @@ impl<'s> Module<'s> {
                     if name.is_some() {
                         continue;
                     }
-                    let forwarded = |name: &str, export: Export| match export {
-                        Export::Wrapper(_) => export,
-                        _ if stars == 0 && !spelled.contains(name) => export,
-                        _ => Export::Wrapper(Reach::Tasks),
-                    };
-                    if dialect.is_api_module(source) {
-                        for registration in dialect.registrations {
-                            let export =
-                                forwarded(registration.name, Export::Api(registration.registers));
-                            add(registration.name.to_owned(), export);
-                        }
+                    let theirs = if let Some(module) =
+                        dialect.api_modules.iter().copied().find(|m| *m == source)
+                    {
+                        dialect
+                            .registrations
+                            .iter()
+                            .map(|registration| {
+                                (
+                                    registration.name.to_owned(),
+                                    Export::Api {
+                                        registers: registration.registers,
+                                        module,
+                                        name: registration.name,
+                                    },
+                                )
+                            })
+                            .collect()
                     } else if let Some(file) =
                         modules
                             .sources
                             .resolve(self.path, source, self.setting.root)
                     {
-                        for (name, export) in modules.exports(&file, self.setting, depth + 1) {
-                            if name != "default" && name != unreadable_fixture_export("default") {
-                                let export = forwarded(&name, export);
-                                add(name, export);
-                            }
+                        modules.exports(&file, self.setting, depth + 1)
+                    } else {
+                        HashMap::new()
+                    };
+                    for (name, export) in theirs {
+                        if name != "default" && name != unreadable_fixture_export("default") {
+                            let forwarded = export.through_star(
+                                star_exports.get(&name).copied(),
+                                stars == 0,
+                                spelled.contains(&name),
+                            );
+                            let held = star_exports.entry(name).or_insert(forwarded);
+                            *held = held.widest(forwarded);
                         }
                     }
                     stars += 1;
@@ -1920,7 +1945,10 @@ impl<'s> Module<'s> {
                 _ => {}
             }
         }
-        exports
+        // Explicit known exports win independently of declaration order. Spelled-but-unproved
+        // values already made the corresponding star conservative above.
+        star_exports.extend(exports);
+        star_exports
     }
 
     /// The lexical facts around a site, innermost first.

@@ -1,0 +1,20 @@
+{
+  "files": {
+    "control.test.ts": { "tasks": 2, "wrapperSites": [], "next": {} },
+    "diamond.test.ts": { "tasks": 2, "wrapperSites": [], "next": {} },
+    "explicit.test.ts": { "tasks": 2, "wrapperSites": [], "next": {} },
+    "reverse.test.ts": { "tasks": 2, "wrapperSites": [], "next": {} },
+    "override.test.ts": { "tasks": 2, "wrapperSites": [], "next": {} },
+    "loaded.test.ts": {
+      "tasks": 3,
+      "wrapperSites": [],
+      "next": { "reasons": ["registered-elsewhere"], "testsExcluded": 1 }
+    },
+    "conflicting.test.ts": {
+      "tasks": 1,
+      "wrapperSites": ["wrapper@3"],
+      "next": { "reasons": ["registered-elsewhere", "helper-effects-unproved"], "testsExcluded": 2 }
+    }
+  },
+  "blindUnderCurrent": ["conflicting.test.ts"]
+}
