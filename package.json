@@ -73,7 +73,7 @@
     "corpus:external": "cargo build --release --locked && node scripts/check/run-external-corpus.mjs",
     "bump:version": "node scripts/release/bump-version.mjs",
     "pack:check": "npm pack --dry-run --workspaces=false",
-    "check:hooks-runtime": "vitest run --config scripts/check/hooks-runtime.config.ts"
+    "check:hooks-runtime": "vitest run --config scripts/check/hooks-runtime.config.ts && vitest run --config fixtures/oracle/hook-scheduling/vitest.config.mjs"
   },
   "engines": {
     "node": ">=20"

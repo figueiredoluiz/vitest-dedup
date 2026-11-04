@@ -36,6 +36,16 @@ a direct member read when its sole use safely accounts for the whole pattern. De
 alone does not make a body eligible for a behavior finding, and an extra binding alone does
 not establish strict subsumption. These comparisons remain review prompts.
 
+## Hook scheduling in the next engine
+
+Identical lexical writes alone do not prove a hook removable: Vitest can yield between hooks,
+so removing one may change when queued work becomes observable. The next engine withholds
+`redundant-hook` claims when callbacks in the affected lifecycle scope contain potentially
+deferred or opaque work, including async callbacks, nested callbacks, unknown calls or
+non-assertion property access. Ordinary synchronous assertions and proven lexical writes remain
+eligible. This conservative check also applies to imported setup hooks; it does not exclude
+the tests from unrelated comparisons.
+
 ## Local classes and constructors
 
 Tests that construct local classes are compared by what the classes do rather than by what they

@@ -20,6 +20,7 @@ pub(super) struct Frame {
 
 /// One fully read call; a failure discards the complete file's proposed expansion batch.
 pub(super) struct Expansion {
+    pub scheduling_safe: bool,
     pub call: NodeId,
     pub tests: Vec<TestCase>,
     pub sources: Vec<(PathBuf, String)>,
@@ -37,6 +38,7 @@ pub(super) struct ImportedHook {
 
 /// The registrations one invocation contributes before the caller assigns their scope.
 struct Invocation {
+    scheduling_safe: bool,
     tests: Vec<TestCase>,
     hooks: Vec<Hook>,
     diagnostic_hooks: Vec<(PathBuf, super::records::DiagnosticHook)>,
@@ -213,6 +215,7 @@ fn closed_batch(
             8,
         )?;
         expansions.push(Expansion {
+            scheduling_safe: invocation.scheduling_safe,
             call: call.node,
             tests: invocation.tests,
             sources: Vec::new(),
@@ -540,6 +543,8 @@ impl Planner<'_> {
                     );
                 }
             }
+            let scheduled: Vec<_> = frame.sites.iter().chain(&hook_sites).copied().collect();
+            let mut scheduling_safe = hook_normalizer.runner_scheduling_safe(&scheduled);
             drop(hook_normalizer);
             for step in plan.steps {
                 match step {
@@ -551,6 +556,7 @@ impl Planner<'_> {
                     }
                     inventory::runners::Step::Call(call) => {
                         let nested = self.call(module, call, Some(&frame), run, depth)?;
+                        scheduling_safe &= nested.scheduling_safe;
                         tests.extend(nested.tests);
                         hooks.extend(nested.hooks);
                         diagnostic_hooks.extend(nested.diagnostic_hooks);
@@ -559,6 +565,7 @@ impl Planner<'_> {
                 }
             }
             Some(Invocation {
+                scheduling_safe,
                 tests,
                 hooks,
                 diagnostic_hooks,

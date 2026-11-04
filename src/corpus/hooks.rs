@@ -45,10 +45,10 @@ pub(super) fn collect(
     tests: &[TestCase],
     normalizer: &mut Normalizer<'_>,
     input: (&crate::framework::Dialect, &str),
-    expansions: (&[super::runners::ImportedHook], &[NodeId], &[NodeId]),
+    expansions: (&[super::runners::ImportedHook], &[NodeId], &[NodeId], bool),
 ) -> Hooks {
     let (dialect, source) = input;
-    let (imported, imported_tests, admitted_calls) = expansions;
+    let (imported, imported_tests, admitted_calls, scheduling_safe) = expansions;
     let mut result = Hooks::default();
     if found
         .sites
@@ -109,6 +109,7 @@ pub(super) fn collect(
         } else {
             None
         };
+        let key = key.filter(|_| scheduling_safe && normalizer.hook_scheduling_safe(scope));
         let position = |offset| {
             let (line, column) = lines.position(source, offset);
             Position { line, column }
@@ -145,6 +146,9 @@ pub(super) fn collect(
             .get(&imported.call)
             .expect("admitted hook call has a caller scope");
         let mut hook = imported.hook.clone();
+        if !scheduling_safe || !normalizer.hook_scheduling_safe(scope) {
+            hook.key = None;
+        }
         hook.scope = scope.map(|node| tree.span(node).start);
         result.declarations.push(hook);
         declarations.entry(scope).or_default().push((

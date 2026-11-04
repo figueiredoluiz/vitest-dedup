@@ -3,6 +3,104 @@ use super::*;
 use crate::model::Rule;
 use std::path::PathBuf;
 
+/// Never-invoked async registrations do not invalidate a synchronous runner's hook proof.
+#[test]
+fn unused_runner_callbacks_preserve_the_registered_hook_positive() {
+    let helper = include_str!("../../../fixtures/oracle/hook-scheduling/retained.ts");
+    let caller = include_str!("../../../fixtures/oracle/hook-scheduling/retained.test.ts");
+    let corpus = corpora(
+        &[("retained.ts", helper), ("retained.test.ts", caller)],
+        &["retained.test.ts"],
+    )
+    .remove(0);
+    assert_eq!(corpus.tests.len(), 1);
+    assert!(corpus.tests.iter().all(|test| test.exclusion.is_none()));
+    assert_eq!(corpus.hooks.declarations.len(), 2);
+    let findings = owned_findings("retained.test.ts", corpus);
+    assert_eq!(
+        findings
+            .findings
+            .iter()
+            .filter(|finding| finding.rule == Rule::RedundantHook)
+            .count(),
+        1
+    );
+}
+
+/// Scheduling uncertainty withholds hook deletion without dropping imported tests or setup context.
+#[test]
+fn asynchronous_runner_keeps_tests_and_distinct_setup_contexts() {
+    let helper = include_str!("../../../fixtures/oracle/hook-scheduling/runner.ts");
+    let caller = include_str!("../../../fixtures/oracle/hook-scheduling/imported.test.ts");
+    let other = include_str!("../../../fixtures/oracle/hook-scheduling/other.test.ts");
+    let mut results = corpora(
+        &[
+            ("runner.ts", helper),
+            ("imported.test.ts", caller),
+            ("other.test.ts", other),
+        ],
+        &["imported.test.ts", "other.test.ts"],
+    );
+    let mut corpus = results.remove(0);
+    let other = results.remove(0);
+    assert_eq!(corpus.tests.len(), 2);
+    assert_eq!(other.tests.len(), 2);
+    assert_ne!(corpus.tests[0].key, other.tests[0].key);
+    corpus.tests.extend(other.tests);
+    assert_eq!(corpus.tests.len(), 4, "{:?}", corpus.tests);
+    assert!(corpus.tests.iter().all(|case| case.exclusion.is_none()));
+    assert_eq!(corpus.hooks.declarations.len(), 2);
+    assert!(corpus
+        .hooks
+        .declarations
+        .iter()
+        .all(|hook| hook.key.is_none()));
+    let duplicates: Vec<_> = findings_in(corpus, "imported.test.ts")
+        .into_iter()
+        .filter(|finding| finding.rule == Rule::DuplicateTest)
+        .collect();
+    assert_eq!(duplicates.len(), 2, "{duplicates:?}");
+    assert!(duplicates.iter().all(|finding| finding.titles.len() == 2));
+}
+
+/// Imported runtime callbacks constrain hooks reached directly and through a nested helper.
+#[test]
+fn runner_scheduling_evidence_reaches_the_callers_hook_chains() {
+    let hooks = "import { beforeEach } from 'vitest'; let ready = 0; export function setup() { beforeEach(() => { ready = 1; }); beforeEach(() => { ready = 1; }); }";
+    for asynchronous in [false, true] {
+        for nested in [false, true] {
+            let helper = format!("import {{ beforeEach, test, expect }} from 'vitest'; import {{ setup }} from './hooks'; let ready = 0; export function install() {{ {} test('case', {} () => {{ expect(true).toBe(true); }}); }}", if nested { "setup();" } else { "beforeEach(() => { ready = 1; }); beforeEach(() => { ready = 1; });" }, if asynchronous { "async" } else { "" });
+            let caller = "import { install } from './runner'; install();";
+            let corpus = corpora(
+                &[
+                    ("hooks.ts", hooks),
+                    ("runner.ts", &helper),
+                    ("case.test.ts", caller),
+                ],
+                &["case.test.ts"],
+            )
+            .remove(0);
+            assert_eq!(corpus.tests.len(), 1);
+            assert!(
+                corpus.tests.iter().all(|case| case.exclusion.is_none()),
+                "nested={nested} async={asynchronous}: {:?}",
+                corpus.tests
+            );
+            assert_eq!(corpus.hooks.declarations.len(), 2);
+            assert_eq!(
+                corpus
+                    .hooks
+                    .declarations
+                    .iter()
+                    .filter(|hook| hook.key.is_some())
+                    .count(),
+                if asynchronous { 0 } else { 2 },
+                "nested={nested}"
+            );
+        }
+    }
+}
+
 /// Imported setup participates in chains with direct or expanded tests and preserves diagnostics.
 #[test]
 fn imported_setup_chains_cover_registration_shapes() {
