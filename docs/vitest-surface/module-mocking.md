@@ -33,8 +33,9 @@ rejects it depending on what else the file contains. A key read from a variable 
 is not read as a mock call; the analyzer keeps the statement in the context as written. Vitest
 leaves it in place unless the variable is itself named `mock`, `unmock` or `hoisted` and another
 call triggers the transform: `vi[mock](...)` is then hoisted ahead of the variable's
-initialization. Mock calls through immutable in-source
-bindings mark mock context unresolved.
+initialization. The analyzer does not read a mock call through an in-source binding
+(`const { vi } = import.meta.vitest`) as one either and keeps it in the context as written;
+Vitest still hoists it when it is spelled `vi.mock`.
 
 Top-level ambient setup such as `vitest.stubEnv` and `tools.spyOn(...).mockReturnValue(...)`
 keeps its raw source text in the context, including aliases and immutable `import.meta.vitest`
