@@ -178,7 +178,7 @@ export const SCOPE = [
 ]
 
 // The normal forms of the next core, measured as their own scope with their own floors: folded into
-// the scope above they would move its number and hide their own. Selected with `--scope next-core`
+// the scope above they would move its number and hide their own. Selected with `--scope=next-core`
 // (`npm run mutants:next-core`).
 export const NEXT_CORE = {
   scope: [
@@ -195,7 +195,8 @@ export const NEXT_CORE = {
 
 // The behavior trace, measured as its own scope for the same reason the normal forms are: it
 // feeds NC16 and NC17, whose claims will be exactly as strong as the tests that constrain this
-// code. Selected with `--scope trace` (`npm run mutants:trace`).
+// code. Selected with `--scope=trace` (`npm run mutants:trace`). This scope is manual: the weekly
+// workflow runs the fingerprint/analysis and next-core scopes, not the trace scope.
 export const TRACE = {
   // The per-file and viable-count floors sit ~5% under the enumerated counts, as NEXT_CORE's
   // do: a cleanup that removes a surviving mutant raises the score and must not fail the

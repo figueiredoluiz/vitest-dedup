@@ -1,8 +1,8 @@
-# Scheduled mutation testing of the fingerprint and analysis contracts.
+# Scheduled mutation testing of the fingerprint, analysis and next-core contracts.
 #
 # Why this is not a pull-request gate: cargo-mutants rebuilds and re-runs the test selection once
-# per mutant, and the scope is 1,537 mutants (`cargo mutants --list`, 2026-10-24). The measured
-# history of that cost: the last timed full run, of 1,171, took around 75 minutes on the
+# per mutant, and the fingerprint/analysis scope is 1,537 mutants (`cargo mutants --list`,
+# 2026-10-24). Its measured history: the last timed full run, of 1,171, took around 75 minutes on the
 # development machine; a 2026-10-24 hosted attempt at the current scope averaged 46.7s per mutant (median 44s)
 # at `--jobs 2` and was cancelled at this job's 300-minute cap with 767 of 1,537 done. That
 # run's per-mutant logs showed the 24 `tests/` integration suites never catch anything the two
