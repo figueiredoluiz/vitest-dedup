@@ -387,6 +387,21 @@ impl Normalizer<'_> {
     fn write_atom(&mut self, node: NodeId, walk: &mut Walk, out: &mut String) -> bool {
         let tree = self.tree;
         match tree.kind(node) {
+            "MetaProperty"
+                if tree
+                    .child(node, "meta")
+                    .is_some_and(|meta| tree.text(meta, "name") == Some("import")) =>
+            {
+                // Metadata belongs to the lexical module, including in an expanded runner.
+                let module = self
+                    .setting
+                    .exports
+                    .sources
+                    .relative(self.path, self.setting.root)
+                    .unwrap_or_else(|| self.path.to_path_buf());
+                let _ = write!(out, "(import.meta {module:?})");
+                return true;
+            }
             "PrivateIdentifier" => {
                 let name = tree.text(node, "name").unwrap_or_default();
                 let owner = walk
