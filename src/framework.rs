@@ -159,6 +159,9 @@ pub struct Dialect {
     pub placeholder: fn(&crate::lang::Tree, crate::lang::NodeId) -> bool,
     /// Renders a row title only when the supplied values establish its runtime text.
     pub render_title: RenderTitle,
+    /// Renders a row title for reports: as `render_title`, with long values cut as the
+    /// framework's default display limit cuts them, so never a name to compare.
+    pub render_display_title: RenderTitle,
     /// The bounded title proof used by row comparison while broader rendering is being ported.
     pub render_row_title: RenderTitle,
     /// Modules whose imports are the API.

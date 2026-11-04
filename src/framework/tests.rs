@@ -369,3 +369,60 @@ fn the_current_framework_is_vitest_with_its_documented_defaults() {
         vitest::DEFAULT_INCLUDE_GLOBS
     );
 }
+
+/// A `$` value longer than 40 UTF-16 units is displayed as Vitest 5.0.5 displays it: its first 39 units
+/// and `…`, dropping a surrogate pair the cut would split. Each value is cut on its own.
+#[test]
+fn long_dollar_values_render_truncated_as_vitest_displays_them() {
+    let render = |pattern: &str, name: String| {
+        let mut fields = serde_json::Map::new();
+        fields.insert("name".to_owned(), serde_json::Value::String(name));
+        fields.insert("tag".to_owned(), serde_json::Value::String("x".to_owned()));
+        let row = serde_json::Value::Object(fields.clone());
+        (DIALECT.render_display_title)(pattern, &[Some(row)], Some(&fields), 0)
+    };
+    let cases = [
+        ("a".repeat(40), "a".repeat(40)),
+        ("b".repeat(41), format!("{}…", "b".repeat(39))),
+        (
+            format!("{}😀dd", "c".repeat(38)),
+            format!("{}…", "c".repeat(38)),
+        ),
+        (
+            format!("{}😀", "e".repeat(39)),
+            format!("{}…", "e".repeat(39)),
+        ),
+        (
+            format!("{}😀", "f".repeat(37)),
+            format!("{}😀", "f".repeat(37)),
+        ),
+    ];
+    for (name, shown) in cases {
+        assert_eq!(
+            render("$name", name.clone()).as_deref(),
+            Some(shown.as_str()),
+            "{name}"
+        );
+    }
+    assert_eq!(
+        render("$name / $tag", "n".repeat(41)).as_deref(),
+        Some(format!("{}… / x", "n".repeat(39)).as_str())
+    );
+    let positional = (DIALECT.render_display_title)(
+        "$0 row",
+        &[Some(serde_json::Value::String("b".repeat(41)))],
+        None,
+        0,
+    );
+    assert_eq!(positional, Some(format!("{}… row", "b".repeat(39))));
+    // A project may change the display limit, so a cut value never names a test for comparison.
+    let fields = serde_json::Map::from_iter([(
+        "name".to_owned(),
+        serde_json::Value::String("a".repeat(41)),
+    )]);
+    let row = serde_json::Value::Object(fields.clone());
+    assert_eq!(
+        (DIALECT.render_title)("$name", &[Some(row)], Some(&fields), 0),
+        None
+    );
+}

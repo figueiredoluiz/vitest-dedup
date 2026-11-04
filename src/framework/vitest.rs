@@ -62,6 +62,7 @@ macro_rules! member {
 pub static DIALECT: Dialect = Dialect {
     placeholder: stub::callback,
     render_title: titles::render,
+    render_display_title: titles::render_display,
     render_row_title: titles::render_row,
     api_modules: &["vitest"],
     in_source_member: Some("vitest"),

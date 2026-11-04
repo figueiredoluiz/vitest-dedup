@@ -1957,3 +1957,44 @@ describe('same', () => { test('child', () => { expect(1).toBe(1) }) })
     assert_eq!(suites(reexport, 2), 1);
     assert_eq!(suites(wrapper, 4), 0);
 }
+
+/// An object row's fields are read one property at a time: an unreadable value leaves only its
+/// own field unknown, the last of a duplicated key decides, and a spread refuses every field. A
+/// whole-row read that spent its budget leaves the per-property read its own.
+#[test]
+fn row_titles_read_object_fields_one_property_at_a_time() {
+    let source = format!(
+        "{HEADER}const make = () => 1;\n\
+         describe('s', () => {{\n\
+         test.each([{{ name: 'kept', other: make() }}])('$name', () => {{}});\n\
+         test.each([{{ name: 'kept', other: make() }}])('$other', () => {{}});\n\
+         test.each([{{ name: 'first', name: make() }}])('$name', () => {{}});\n\
+         test.each([{{ name: make(), name: 'last' }}])('$name', () => {{}});\n\
+         const base = {{ name: 'base' }};\n\
+         test.each([{{ ...base, name: 'spread' }}])('$name', () => {{}});\n\
+         test.each([{{ name: 'spent', data: [{literals}], other: make() }}])('$name', () => {{}});\n\
+         }});\n",
+        literals = vec!["0"; 252].join(", ")
+    );
+    let corpus = corpora(&[("a.test.ts", &source)], &["a.test.ts"]).remove(0);
+    let shown: Vec<Option<String>> = corpus
+        .tests
+        .into_iter()
+        .map(|test| test.full_title)
+        .collect();
+    let shown: Vec<&str> = shown
+        .iter()
+        .map(|title| title.as_deref().unwrap_or(""))
+        .collect();
+    assert_eq!(
+        shown,
+        [
+            "s > kept",
+            "s > $other",
+            "s > $name",
+            "s > last",
+            "s > $name",
+            "s > spent"
+        ]
+    );
+}

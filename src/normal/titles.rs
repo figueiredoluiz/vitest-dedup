@@ -1,7 +1,7 @@
 //! Bounded literal values for names, independent of callback normalization.
 
 use super::{form, Row};
-use crate::lang::{property_name, Declaration, Field, NodeId, Parsed, SymbolId};
+use crate::lang::{property_name, Declaration, Field, NodeId, Parsed, SymbolId, Tree};
 use serde_json::{Map, Value};
 use std::collections::HashMap;
 
@@ -30,6 +30,9 @@ pub(crate) fn title_with_bindings(
     }
 }
 
+/// The values one read of a row may visit.
+const ROW_VISITS: usize = 256;
+
 /// Literal printf arguments and named fields. Array rows supply positional title arguments even
 /// when the callback receives the row whole. Unknown cells remain distinct from missing ones.
 pub(crate) fn row(
@@ -37,7 +40,7 @@ pub(crate) fn row(
     row: &Row,
     whole_rows: bool,
 ) -> (Vec<Option<Value>>, Option<Map<String, Value>>) {
-    let mut budget = 256;
+    let mut budget = ROW_VISITS;
     match row {
         Row::Spread(cells) => (
             cells
@@ -63,10 +66,36 @@ pub(crate) fn row(
             if whole_rows && whole == Some(Value::Null) {
                 return (Vec::new(), None);
             }
-            let fields = whole.as_ref().and_then(Value::as_object).cloned();
+            let fields = match whole.as_ref().and_then(Value::as_object) {
+                Some(fields) => Some(fields.clone()),
+                // A whole read that failed may have spent the budget; the field read gets its own.
+                None => readable_fields(parsed, node, &mut { ROW_VISITS }),
+            };
             (vec![whole], fields)
         }
     }
+}
+
+/// The fields an object literal row spells with readable values, when some other value is not:
+/// an unreadable one is left out, so naming it stays unknown, and the last duplicate key decides.
+/// Any shape that may define or shadow a field another way refuses them all.
+fn readable_fields(
+    parsed: &Parsed,
+    node: NodeId,
+    budget: &mut usize,
+) -> Option<Map<String, Value>> {
+    let tree = &parsed.tree;
+    if tree.kind(node) != "ObjectExpression" {
+        return None;
+    }
+    let mut fields = Map::new();
+    for (name, field) in plain_properties(tree, node)? {
+        match value(parsed, field, 1, budget) {
+            Some(value) => fields.insert(name.to_owned(), value),
+            None => fields.remove(name),
+        };
+    }
+    Some(fields)
 }
 
 /// Reads literal construction and immutable scalar consts only; arbitrary execution, object
@@ -173,25 +202,36 @@ pub(crate) fn value_with_bindings(
             .map(Value::Array),
         "ObjectExpression" => {
             let mut fields = Map::new();
-            for property in tree.list(node, "properties") {
-                let property = property?;
-                if tree.kind(property) != "Property"
-                    || tree.flag(property, "computed")
-                    || tree.flag(property, "method")
-                    || tree.text(property, "kind") != Some("init")
-                {
-                    return None;
-                }
-                let name = property_name(tree, property)?;
-                if matches!(name, "__proto__" | "toString" | "valueOf") {
-                    return None;
-                }
-                fields.insert(name.to_owned(), child(tree.child(property, "value")?)?);
+            for (name, field) in plain_properties(tree, node)? {
+                fields.insert(name.to_owned(), child(field)?);
             }
             Some(Value::Object(fields))
         }
         _ => None,
     }
+}
+
+/// An object literal's `key: value` properties, in order, or nothing when any property may define
+/// or shadow a field another way (a spread, a computed key, a method or accessor, or a key that
+/// changes the prototype or coercion).
+fn plain_properties(tree: &Tree, node: NodeId) -> Option<Vec<(&str, NodeId)>> {
+    let mut properties = Vec::new();
+    for property in tree.list(node, "properties") {
+        let property = property?;
+        if tree.kind(property) != "Property"
+            || tree.flag(property, "computed")
+            || tree.flag(property, "method")
+            || tree.text(property, "kind") != Some("init")
+        {
+            return None;
+        }
+        let name = property_name(tree, property)?;
+        if matches!(name, "__proto__" | "toString" | "valueOf") {
+            return None;
+        }
+        properties.push((name, tree.child(property, "value")?));
+    }
+    Some(properties)
 }
 
 /// JavaScript string coercion for the literal values admitted above. Objects have no custom
