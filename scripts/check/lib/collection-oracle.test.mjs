@@ -70,6 +70,11 @@ test('an unproven title stands for one unmatched collected test, and an unproven
   assert.deepEqual(kinds(excess), ['extra-test a.test.ts row %s'])
 })
 
+test('an unproven record in a file Vitest never collected is an extra test', () => {
+  const result = compareDirectory(new Map(), analyzed({ unproven: { 'uncollected.test.ts': ['row %s'] } }))
+  assert.deepEqual(kinds(result), ['extra-test uncollected.test.ts row %s'])
+})
+
 test('an unproven title record is read from the comparison key', () => {
   const view = analyzerView([
     { type: 'test', path: 'a.test.ts', title: 'proven', comparisonKeys: { name: 'aa' } },

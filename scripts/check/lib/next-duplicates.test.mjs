@@ -11,6 +11,7 @@ import {
   judgeRecall,
   knownProblems,
   pairEdges,
+  pairSeverities,
   pendingByRule,
   PORTED_RULES,
   strayFindings,
@@ -391,3 +392,19 @@ for (const rule of ['duplicate-test-name', 'duplicate-each-row']) {
     assert.equal(new Set(extra.failures.map(failure => failure.id)).size, 2)
   })
 }
+
+test('a required link at another severity fails, and the declared severity passes', () => {
+  const finding = (severity) => ({
+    type: 'finding', rule: 'duplicate-test', severity,
+    locations: [{ path: 'a.test.ts', line: 1 }, { path: 'a.test.ts', line: 2 }],
+  })
+  const required = [{ edge: 'a.test.ts:1|a.test.ts:2', rule: 'duplicate-test', severity: 'error', from: 'a.test.ts' }]
+  const judged = (records) => judge({
+    required, forbidden: [], linked: pairEdges(records), severities: pairSeverities(records), known: [], scope: 'fixtures/d',
+  })
+  assert.deepEqual(judged([finding('error')]).failures, [])
+  const downgraded = judged([finding('warning')]).failures
+  assert.equal(downgraded.length, 1)
+  assert.match(downgraded[0].message, /expected duplicate-test at error .* reported warning/)
+  assert.equal(downgraded[0].id, 'severity|fixtures/d|a.test.ts:1|a.test.ts:2|duplicate-test')
+})

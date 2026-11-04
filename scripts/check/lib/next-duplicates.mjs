@@ -51,6 +51,26 @@ export function pairEdges(records) {
   return linked
 }
 
+/**
+ * The severities each rule reported each pair at, from one run's JSONL records.
+ *
+ * @param {object[]} records The parsed jsonl records of one run.
+ * @returns {Map<string, Set<string>>} `edge|rule` -> the severities its findings carried.
+ */
+export function pairSeverities(records) {
+  const severities = new Map()
+  for (const record of records) {
+    if (record?.type !== 'finding' || !PORTED_RULES.has(record.rule)) continue
+    const points = (record.locations ?? []).map((location) => endpoint({ file: basenameOf(location.path), line: location.line }))
+    for (const [left, right] of combinations(points)) {
+      const key = `${edgeKey(left, right)}|${record.rule}`
+      if (!severities.has(key)) severities.set(key, new Set())
+      severities.get(key).add(record.severity)
+    }
+  }
+  return severities
+}
+
 /** Basename of a report path, forward-slash or platform-native, the way the corpus gate matches. */
 function basenameOf(path) {
   return String(path).split(/[\\/]/).pop()
@@ -87,7 +107,7 @@ export function strayFindings(records) {
  * second are silent under next by design.
  *
  * @param {Map<string, object>} fixtures Parsed fixtures by file name (`parseFixture` results).
- * @returns {{required: {edge: string, rule: string, from: string}[], declared: {edge: string, rule: string}[], forbidden: {edge: string, from: string}[]}}
+ * @returns {{required: {edge: string, rule: string, severity: string, from: string}[], declared: {edge: string, rule: string}[], forbidden: {edge: string, from: string}[]}}
  */
 export function expectationEdges(fixtures) {
   const required = []
@@ -107,7 +127,7 @@ export function expectationEdges(fixtures) {
         // are required; every other pair is declared, and a cluster finding may link it.
         for (const [left, right] of combinations(points)) declared.push({ edge: edgeKey(left, right), rule: expectation.rule })
         for (let i = 1; i < points.length; i += 1) {
-          required.push({ edge: edgeKey(points[i - 1], points[i]), rule: expectation.rule, from: `${name}` })
+          required.push({ edge: edgeKey(points[i - 1], points[i]), rule: expectation.rule, severity: expectation.severity, from: `${name}` })
         }
       } else if (expectation.rule === 'none') {
         for (const [left, right] of combinations(points)) {
@@ -246,7 +266,7 @@ export function knownProblems(known) {
  * @param {string} input.scope The directory the run covered, part of every id.
  * @returns {{failures: {id: string, message: string}[], held: string[], consumed: Set<string>}}
  */
-export function judge({ required, declared = [], forbidden, linked, known, scope }) {
+export function judge({ required, declared = [], forbidden, linked, severities, known, scope }) {
   const failures = []
   const fired = new Set()
   const missed = new Set()
@@ -261,8 +281,21 @@ export function judge({ required, declared = [], forbidden, linked, known, scope
       }`,
     })
   }
-  for (const { edge, rule, from } of required) {
-    if (!linked.get(edge)?.has(rule)) miss(edge, rule, from)
+  for (const { edge, rule, severity, from } of required) {
+    if (!linked.get(edge)?.has(rule)) {
+      miss(edge, rule, from)
+      continue
+    }
+    // A link at another severity is not the claim: a downgraded finding must not satisfy it.
+    const reported = severities?.get(`${edge}|${rule}`)
+    if (severities !== undefined && severity !== undefined && !reported?.has(severity)) {
+      const id = `severity|${scope}|${edge}|${rule}`
+      fired.add(id)
+      failures.push({
+        id,
+        message: `FAIL ${from}: expected ${rule} at ${severity} between ${edge.replaceAll('|', ' <-> ')}; the analyzer reported ${[...(reported ?? [])].join(', ') || 'nothing'}`,
+      })
+    }
   }
   for (const { edge, from } of forbidden) {
     const rules = linked.get(edge)

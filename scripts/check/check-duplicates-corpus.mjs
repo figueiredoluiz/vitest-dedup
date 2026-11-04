@@ -99,7 +99,7 @@ import { report as reportIsolation, run as runIsolation } from './check-fixture-
 import { enumerateFixtures, FIXTURE_NAME, parseFixture } from './lib/fixture-directives.mjs'
 import { blindRecallFiles } from './lib/corpus-labels.mjs'
 import { blindCaseFiles, readCases } from './lib/oracle-cases.mjs'
-import { expectationEdges, judge, knownProblems, pairEdges, strayFindings } from './lib/next-duplicates.mjs'
+import { expectationEdges, judge, knownProblems, pairEdges, pairSeverities, strayFindings } from './lib/next-duplicates.mjs'
 import { defaultBinary, runAnalyzerJsonl } from './lib/run-analyzer.mjs'
 
 const binary = process.argv[2] ?? defaultBinary()
@@ -180,7 +180,7 @@ function checkTarget(target, known, { failures, held, consumed }) {
   if (required.length === 0) {
     failures.push(`FAIL ${dir}: no duplicate-rule expectation was asserted; a directory that judges nothing is a silent success`)
   }
-  const outcome = judge({ required, declared, forbidden, linked: pairEdges(records), known, scope: dir })
+  const outcome = judge({ required, declared, forbidden, linked: pairEdges(records), severities: pairSeverities(records), known, scope: dir })
   failures.push(...outcome.failures.map((failure) => failure.message))
   held.push(...outcome.held)
   for (const id of outcome.consumed) consumed.add(id)

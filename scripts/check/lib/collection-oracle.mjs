@@ -472,7 +472,10 @@ export function compareDirectory(vitestFiles, analyzer) {
   }
   // Tests registered by a file Vitest never collected: a test file outside Vitest's include, or one
   // a config leaves out. Benchmarks and type tests are collected by other commands.
-  for (const [path, titles] of analyzer.tests) {
+  // Unproven-title records too: no collected test is left for them to stand for.
+  const uncollected = new Map(analyzer.tests)
+  for (const [path, titles] of analyzer.unproven ?? []) uncollected.set(path, [...(uncollected.get(path) ?? []), ...titles])
+  for (const [path, titles] of uncollected) {
     if (!isModule(path)) continue
     if (BENCH_FILE.test(path)) skipped.get('bench').push({ path, detail: `${titles.length} benchmarks` })
     else if (TYPE_TEST_FILE.test(path)) skipped.get('type-test').push({ path, detail: `${titles.length} type tests` })
