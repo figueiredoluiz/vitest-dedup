@@ -52,8 +52,9 @@ struct Applied {
     /// How many leading steps a test function's registration member (`test.skip.describe`)
     /// supersedes.
     start: usize,
-    /// Whether a call before that member ran code (`test.skipIf(setup()).describe`) its
-    /// registration does not record: the site may depend on it, so it is not admitted.
+    /// Whether what precedes that member may run code (`test.skipIf(setup()).describe`,
+    /// `(setup() ? test : it).describe`) its registration does not record: the site may depend on
+    /// it, so it is not admitted.
     evaluated: bool,
 }
 
@@ -725,7 +726,6 @@ impl<'s> Module<'s> {
         // A table's call returns a plain function, which carries no registration members.
         let mut tabled = false;
         let mut start = 0;
-        let mut evaluated = false;
         for (index, step) in steps.iter().enumerate() {
             match step {
                 Step::Member(name) if registers.is_none() => registers = Some(self.api(name)?),
@@ -733,7 +733,6 @@ impl<'s> Module<'s> {
                     if let Some(member) = self.setting.dialect.test_member(name) {
                         registers = Some(member);
                         start = index + 1;
-                        evaluated = steps[..index].iter().any(|step| matches!(step, Step::Call));
                     } else {
                         tabled = matches!(
                             self.setting.dialect.chain_member(name),
@@ -751,8 +750,51 @@ impl<'s> Module<'s> {
             registers,
             pending,
             start,
-            evaluated,
+            evaluated: false,
         })
+    }
+
+    /// [`Self::apply`] for the callee chain at `node`, with [`Applied::evaluated`] set when what
+    /// precedes a test function's registration member may run code.
+    fn apply_at(&self, node: NodeId, origin: Origin, steps: &[Step]) -> Option<Applied> {
+        let mut applied = self.apply(origin, steps)?;
+        if applied.start > 0 {
+            applied.evaluated = !self
+                .member_at(node, steps.len() - applied.start)
+                .and_then(|member| self.tree.child(member, "object"))
+                .is_some_and(|object| self.reads_only(object));
+        }
+        Some(applied)
+    }
+
+    /// The expression `outer` member or call steps into the callee chain at `node`.
+    fn member_at(&self, node: NodeId, outer: usize) -> Option<NodeId> {
+        let tree = self.tree;
+        let mut node = tree.inner(node);
+        for _ in 0..outer {
+            let next = match tree.kind(node) {
+                "MemberExpression" => tree.child(node, "object"),
+                "CallExpression" => tree.child(node, "callee"),
+                "TaggedTemplateExpression" => tree.child(node, "tag"),
+                _ => None,
+            };
+            node = tree.inner(next?);
+        }
+        Some(node)
+    }
+
+    /// Whether evaluating `node` runs no code of the project: a name, or non-computed member reads
+    /// of one (`test.skip`).
+    fn reads_only(&self, node: NodeId) -> bool {
+        let tree = self.tree;
+        let node = tree.inner(node);
+        match tree.kind(node) {
+            "Identifier" => true,
+            "MemberExpression" if !tree.flag(node, "computed") => tree
+                .child(node, "object")
+                .is_some_and(|object| self.reads_only(object)),
+            _ => false,
+        }
     }
 
     /// The registration function an expression's value is (`test`, `test.skip`,
@@ -771,7 +813,7 @@ impl<'s> Module<'s> {
             };
             return Some(Origin::Wrapper(reach));
         }
-        let applied = self.apply(origin, &steps)?;
+        let applied = self.apply_at(node, origin, &steps)?;
         if applied.evaluated {
             return Some(Origin::Wrapper(Reach::Tasks));
         }
@@ -781,28 +823,17 @@ impl<'s> Module<'s> {
     /// The member expression of a test function `callee` registers through (`test.skip.describe`
     /// for `test.skip.describe.each(rows)`), if it registers through one.
     fn registration_member(&self, callee: NodeId) -> Option<NodeId> {
-        let tree = self.tree;
         let (origin, _, steps) = self.chain(callee)?;
         if origin.reach().is_some() {
             return None;
         }
         let Applied {
             start, evaluated, ..
-        } = self.apply(origin, &steps)?;
-        if evaluated {
+        } = self.apply_at(callee, origin, &steps)?;
+        if evaluated || start == 0 {
             return None;
         }
-        let mut node = tree.inner(callee);
-        for _ in start..steps.len() {
-            let next = match tree.kind(node) {
-                "MemberExpression" => tree.child(node, "object"),
-                "CallExpression" => tree.child(node, "callee"),
-                "TaggedTemplateExpression" => tree.child(node, "tag"),
-                _ => None,
-            };
-            node = tree.inner(next?);
-        }
-        (start > 0).then_some(node)
+        self.member_at(callee, steps.len() - start)
     }
 
     /// What calling `callee` registers, if anything.
@@ -836,7 +867,7 @@ impl<'s> Module<'s> {
             pending,
             start,
             evaluated,
-        } = self.apply(origin, &steps)?;
+        } = self.apply_at(callee, origin, &steps)?;
         let registers = registers?;
         if pending || chain.last().is_some_and(|last| self.inert(last)) {
             return None;
