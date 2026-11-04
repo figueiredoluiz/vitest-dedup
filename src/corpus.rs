@@ -1134,6 +1134,7 @@ fn read_parsed(
             &mut normalizer,
             setting.dialect,
             source,
+            &lines,
         )
     } else {
         Vec::new()

@@ -50,8 +50,8 @@ pub(super) fn hooks<'a>(
     normalizer: &mut Normalizer<'a>,
     dialect: &Dialect,
     source: &str,
+    lines: &Lines,
 ) -> Vec<DiagnosticHook> {
-    let lines = Lines::new(source);
     found
         .sites
         .iter()
@@ -59,7 +59,7 @@ pub(super) fn hooks<'a>(
             let SiteKind::Registers(Registers::Hook(_)) = site.kind else {
                 return None;
             };
-            let span = super::at_span(&lines, source, site.span.start, site.span.end);
+            let span = super::at_span(lines, source, site.span.start, site.span.end);
             let callback = parsed
                 .tree
                 .list(site.node, "arguments")
