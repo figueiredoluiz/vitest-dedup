@@ -1373,9 +1373,155 @@ impl<'s> Module<'s> {
     fn scan(&self) -> Vec<Found> {
         self.dead_chains.borrow_mut().clear();
         self.scanning.set(true);
-        let found = self.scan_calls();
+        let mut found = self.scan_calls();
         self.scanning.set(false);
+        // Vitest collects a file before any test, row or hook callback runs, and a registration
+        // made while one runs is refused or ignored, so nothing that runs only then is a site.
+        let calls: HashSet<NodeId> = found
+            .iter()
+            .filter(|(_, _, kind, ..)| {
+                matches!(
+                    kind,
+                    SiteKind::Registers(Registers::Test | Registers::Bench | Registers::Hook(_))
+                )
+            })
+            .map(|(node, ..)| *node)
+            .collect();
+        let functions = self.runtime_functions(&calls);
+        found.retain(|(node, ..)| !self.runs_at_runtime(*node, &calls, &functions));
         found
+    }
+
+    /// Whether `node` runs only while a test, row or hook callback of `calls` runs: it lies inside
+    /// such a callback or inside one of `functions`.
+    fn runs_at_runtime(
+        &self,
+        node: NodeId,
+        calls: &HashSet<NodeId>,
+        functions: &HashSet<NodeId>,
+    ) -> bool {
+        let tree = self.tree;
+        tree.ancestors(node).any(|ancestor| {
+            tree.is_function(ancestor)
+                && (functions.contains(&ancestor)
+                    || tree
+                        .outer_parent(ancestor)
+                        .is_some_and(|call| calls.contains(&call)))
+        })
+    }
+
+    /// The local functions that run only at runtime: a function declaration, or a `const`/`let`
+    /// binding of a function, that is not exported, never reassigned, and whose every reference
+    /// is the callee of a call that itself runs only at runtime (a greatest fixpoint, so a
+    /// function calling itself stays in).
+    fn runtime_functions(&self, calls: &HashSet<NodeId>) -> HashSet<NodeId> {
+        let tree = self.tree;
+        let exported = |node: NodeId| {
+            tree.outer_parent(node).is_some_and(|parent| {
+                matches!(
+                    tree.kind(parent),
+                    "ExportNamedDeclaration" | "ExportDefaultDeclaration"
+                )
+            })
+        };
+        let mut candidates: Vec<(NodeId, SymbolId)> = Vec::new();
+        for node in tree.nodes() {
+            let (function, id, statement) = match tree.kind(node) {
+                "FunctionDeclaration" => (node, tree.child(node, "id"), node),
+                "VariableDeclarator" => {
+                    let Some(init) = tree.child(node, "init").map(|init| tree.inner(init)) else {
+                        continue;
+                    };
+                    let Some(statement) = tree.outer_parent(node) else {
+                        continue;
+                    };
+                    if !tree.is_function(init)
+                        || !matches!(tree.text(statement, "kind"), Some("const" | "let"))
+                    {
+                        continue;
+                    }
+                    (init, tree.child(node, "id"), statement)
+                }
+                _ => continue,
+            };
+            let Some(symbol) = id
+                .filter(|&id| tree.kind(id) == "Identifier")
+                .and_then(|id| self.declares(id))
+            else {
+                continue;
+            };
+            if !exported(statement) && !self.reassigned(symbol) {
+                candidates.push((function, symbol));
+            }
+        }
+        let mut functions: HashSet<NodeId> = candidates.iter().map(|&(node, _)| node).collect();
+        // Each call reference stays at runtime while one candidate enclosing it does, unless a
+        // runtime callback encloses it. Removing a candidate revisits only what it encloses.
+        let mut remaining: Vec<(NodeId, usize)> = Vec::new();
+        let mut enclosed: HashMap<NodeId, Vec<usize>> = HashMap::new();
+        let mut removed = Vec::new();
+        for &(function, symbol) in &candidates {
+            let references = &self.parsed.scopes.symbol(symbol).references;
+            // An uncalled function keeps its sites: they are what proves what it would register.
+            let span = tree.span(function);
+            let mut runtime = references
+                .iter()
+                .any(|reference| !span.contains(reference.span));
+            for reference in references {
+                let call = reference.node.and_then(|name| {
+                    tree.outer_parent(name).filter(|&call| {
+                        tree.kind(call) == "CallExpression"
+                            && tree.child(call, "callee").map(|callee| tree.inner(callee))
+                                == Some(name)
+                    })
+                });
+                let Some(call) = call else {
+                    runtime = false;
+                    break;
+                };
+                let mut holders = Vec::new();
+                let mut fixed = false;
+                for ancestor in tree.ancestors(call).filter(|&node| tree.is_function(node)) {
+                    if tree
+                        .outer_parent(ancestor)
+                        .is_some_and(|call| calls.contains(&call))
+                    {
+                        fixed = true;
+                        break;
+                    }
+                    if functions.contains(&ancestor) {
+                        holders.push(ancestor);
+                    }
+                }
+                if fixed {
+                    continue;
+                }
+                if holders.is_empty() {
+                    runtime = false;
+                    break;
+                }
+                for holder in &holders {
+                    enclosed.entry(*holder).or_default().push(remaining.len());
+                }
+                remaining.push((function, holders.len()));
+            }
+            if !runtime {
+                removed.push(function);
+            }
+        }
+        for function in &removed {
+            functions.remove(function);
+        }
+        while let Some(function) = removed.pop() {
+            for &index in enclosed.get(&function).into_iter().flatten() {
+                let (owner, count) = &mut remaining[index];
+                *count -= 1;
+                if *count == 0 && functions.remove(owner) {
+                    removed.push(*owner);
+                }
+            }
+        }
+        functions
     }
 
     /// [`Self::scan`]'s walk over the calls.

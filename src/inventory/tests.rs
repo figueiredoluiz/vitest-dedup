@@ -108,6 +108,96 @@ fn a_free_name_is_the_api_only_under_globals() {
     assert!(sites("const it = (a, b) => {}\nit('a', () => {})", &[], true).is_empty());
 }
 
+/// Nothing inside a test, row or hook callback is a site: Vitest collects the file before those
+/// callbacks run and refuses or ignores a registration made while they do. A suite callback runs
+/// at collection, so what it holds stays a site.
+#[test]
+fn registrations_inside_runtime_callbacks_are_not_sites() {
+    let helper = (
+        "u.ts",
+        "import { beforeAll } from 'vitest'\n\
+         export function setup() { beforeAll(() => {}); return { value: () => 1 } }",
+    );
+    let found = |main: &str| sites(main, &[helper], false);
+    let header = "import { describe, test, beforeAll, beforeEach, afterEach } from 'vitest'\n\
+                  import { setup } from './u'\n";
+    for body in [
+        "test('t', () => { test('x', () => {}); beforeEach(() => {}); setup().value() })",
+        "beforeAll(() => { test('x', () => {}) })",
+        "beforeEach(() => { afterEach(() => {}) })",
+        "test.each([1])('r %i', () => { test('x', () => {}) })",
+    ] {
+        assert_eq!(found(&format!("{header}{body}")).len(), 1, "{body}");
+    }
+    let suite = found(&format!(
+        "{header}describe('s', () => {{ const {{ value }} = setup(); value(); test('a', () => {{}}) }})"
+    ));
+    assert_eq!(suite.len(), 4, "{suite:?}");
+
+    // A local function runs only at runtime when every call of it does; then its calls are not
+    // sites either. Calling it in the suite body, keeping it as a value, reassigning or exporting
+    // it, or never calling it keeps its sites.
+    let locals = |declare: &str, use_it: &str| {
+        found(&format!(
+            "{header}describe('s', () => {{ const {{ value }} = setup(); {declare}; {use_it} \
+             test('a', () => {{ check() }}) }})"
+        ))
+        .len()
+    };
+    let check = "function check() { return value() }";
+    assert_eq!(locals(check, ""), 3);
+    assert_eq!(locals("const check = () => value()", ""), 3);
+    assert_eq!(
+        locals(
+            "function inner() { return value() }; function check() { return inner() }",
+            ""
+        ),
+        3
+    );
+    assert_eq!(locals(check, "check();"), 5);
+    assert_eq!(locals(check, "const kept = [check];"), 4);
+    assert_eq!(locals("let check = () => value(); check = () => 1", ""), 4);
+    // A direct `eval` may read or rebind the local without a recorded reference.
+    assert_eq!(locals(check, "eval('');"), 4);
+    // A removal propagates down a chain: one call from the suite body keeps every link's sites.
+    let chain = "function inner() { return value() }; function mid() { return inner() }; \
+                 function check() { return mid() }";
+    assert_eq!(locals(chain, ""), 3);
+    assert!(locals(chain, "check();") > 3);
+
+    // A recursive reference is not an external call. If nobody calls the function, its sites
+    // remain visible as the proof of what calling it could register.
+    let recursive = found(&format!(
+        "{header}describe('s', () => {{ const {{ value }} = setup(); \
+         function unused() {{ unused(); return value() }}; test('a', () => {{}}) }})"
+    ));
+    assert_eq!(recursive.len(), 5, "{recursive:?}");
+}
+
+/// Removing a collection-time caller must flow through its callees without rescanning every
+/// candidate. The former fixpoint loop took quadratic time for this callee-first chain.
+#[test]
+fn collection_time_helper_chains_are_bounded() {
+    let mut main = String::from(
+        "import { test } from 'vitest'\n\
+         function f0() { return 1 }\n",
+    );
+    for level in 1..2_000 {
+        main.push_str(&format!(
+            "function f{level}() {{ return f{}() }}\n",
+            level - 1
+        ));
+    }
+    main.push_str(
+        "f1999();\n\
+         test('a', () => {});\n\
+         test('b', () => {});\n",
+    );
+    let started = std::time::Instant::now();
+    assert_eq!(sites(&main, &[], false).len(), 2);
+    assert!(started.elapsed() < std::time::Duration::from_secs(2));
+}
+
 /// Vitest calls a suite factory with its `test` API, so a call through a suite callback's parameter
 /// is a wrapper call; a table's callback receives a row, so its parameters are ordinary values.
 #[test]
