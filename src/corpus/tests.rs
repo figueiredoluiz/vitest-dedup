@@ -1959,7 +1959,8 @@ describe('same', () => { test('child', () => { expect(1).toBe(1) }) })
 }
 
 /// An object row's fields are read one property at a time: an unreadable value leaves only its
-/// own field unknown, the last of a duplicated key decides, and a spread refuses every field.
+/// own field unknown, the last of a duplicated key decides, and a spread refuses every field. A
+/// whole-row read that spent its budget leaves the per-property read its own.
 #[test]
 fn row_titles_read_object_fields_one_property_at_a_time() {
     let source = format!(
@@ -1971,7 +1972,9 @@ fn row_titles_read_object_fields_one_property_at_a_time() {
          test.each([{{ name: make(), name: 'last' }}])('$name', () => {{}});\n\
          const base = {{ name: 'base' }};\n\
          test.each([{{ ...base, name: 'spread' }}])('$name', () => {{}});\n\
-         }});\n"
+         test.each([{{ name: 'spent', data: [{literals}], other: make() }}])('$name', () => {{}});\n\
+         }});\n",
+        literals = vec!["0"; 252].join(", ")
     );
     let corpus = corpora(&[("a.test.ts", &source)], &["a.test.ts"]).remove(0);
     let shown: Vec<Option<String>> = corpus
@@ -1990,7 +1993,8 @@ fn row_titles_read_object_fields_one_property_at_a_time() {
             "s > $other",
             "s > $name",
             "s > last",
-            "s > $name"
+            "s > $name",
+            "s > spent"
         ]
     );
 }

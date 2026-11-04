@@ -30,6 +30,9 @@ pub(crate) fn title_with_bindings(
     }
 }
 
+/// The values one read of a row may visit.
+const ROW_VISITS: usize = 256;
+
 /// Literal printf arguments and named fields. Array rows supply positional title arguments even
 /// when the callback receives the row whole. Unknown cells remain distinct from missing ones.
 pub(crate) fn row(
@@ -37,7 +40,7 @@ pub(crate) fn row(
     row: &Row,
     whole_rows: bool,
 ) -> (Vec<Option<Value>>, Option<Map<String, Value>>) {
-    let mut budget = 256;
+    let mut budget = ROW_VISITS;
     match row {
         Row::Spread(cells) => (
             cells
@@ -65,7 +68,8 @@ pub(crate) fn row(
             }
             let fields = match whole.as_ref().and_then(Value::as_object) {
                 Some(fields) => Some(fields.clone()),
-                None => readable_fields(parsed, node, &mut budget),
+                // A whole read that failed may have spent the budget; the field read gets its own.
+                None => readable_fields(parsed, node, &mut { ROW_VISITS }),
             };
             (vec![whole], fields)
         }
