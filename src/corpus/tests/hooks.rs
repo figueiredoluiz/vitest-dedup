@@ -36,6 +36,8 @@ fn erased_types_do_not_hide_lexical_hook_pairs() {
         "declare enum Unused { A }",
         "declare namespace Unused { type T = string }",
         "export interface Shape {}",
+        "export default interface Shape {}",
+        "interface Shape {} export { type Shape };",
         "export type Shape = string;",
         "export type { Shape } from './missing';",
         "export type * from './missing';",
@@ -43,7 +45,7 @@ fn erased_types_do_not_hide_lexical_hook_pairs() {
     ] {
         let source = format!("{IMPORTS} {declaration} let value = 0; {hook} {hook} {TEST}");
         assert_eq!(findings(&source, 1).len(), 1, "{declaration}");
-        if !declaration.starts_with("export") && !declaration.starts_with("import") {
+        if !declaration.contains("export") && !declaration.starts_with("import") {
             let nested = format!("{IMPORTS} describe('scope', () => {{ {declaration} let value = 0; {hook} {hook} {TEST} }});");
             assert_eq!(findings(&nested, 1).len(), 1, "nested {declaration}");
         }
@@ -58,6 +60,10 @@ fn runtime_declarations_do_not_borrow_erased_hook_admission() {
         "enum Active { A = observe() }",
         "namespace Active { observe(); }",
         "class Active { static value = observe(); }",
+        "export default observe();",
+        "interface Shape {} let active = 1; export { type Shape, active };",
+        "export { type Shape } from './missing';",
+        "export {};",
     ] {
         assert!(findings(
             &format!("{IMPORTS} {declaration} let value = 0; {hooks} {TEST}"),

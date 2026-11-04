@@ -71,7 +71,19 @@ impl Tree {
                     || self
                         .child(node, "declaration")
                         .is_some_and(|declaration| self.erased_declaration(declaration))
+                    || (self.child(node, "source").is_none() && {
+                        let specifiers = self.list(node, "specifiers");
+                        !specifiers.is_empty()
+                            && specifiers.iter().all(|specifier| {
+                                specifier.is_some_and(|specifier| {
+                                    self.text(specifier, "exportKind") == Some("type")
+                                })
+                            })
+                    })
             }
+            "ExportDefaultDeclaration" => self
+                .child(node, "declaration")
+                .is_some_and(|declaration| self.erased_declaration(declaration)),
             _ => false,
         }
     }
