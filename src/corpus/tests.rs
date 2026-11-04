@@ -496,6 +496,8 @@ fn cross_file_keys_carry_what_each_file_does_while_loading() {
     let mocked = format!("import {{ test, expect, vi }} from 'vitest'\nimport data from './data.json'\nvi.mock('./x')\n{body}");
     // Vitest hoists only `vi.mock` as spelled: through another binding the call runs in place.
     let renamed = format!("import {{ test, expect, vi as tools }} from 'vitest'\nimport data from './data.json'\ntools.mock('./x')\n{body}");
+    // The same mock from another folder, loading the same data file: only the target differs.
+    let elsewhere = renamed.replace("'./data.json'", "'../one/data.json'");
     let alias = format!("import {{ test, expect, vitest as tools }} from 'vitest'\nimport data from './data.json'\ntools.mock('./x')\n{body}");
     let namespace = format!("import {{ test, expect }} from 'vitest'\nimport * as framework from 'vitest'\nimport data from './data.json'\nframework.vi.mock('./x')\n{body}");
     // Nothing but the setup file differs between directories.
@@ -521,6 +523,7 @@ fn cross_file_keys_carry_what_each_file_does_while_loading() {
             ("one/m.test.ts", &renamed),
             ("one/n.test.ts", &alias),
             ("one/o.test.ts", &namespace),
+            ("two/m.test.ts", &elsewhere),
         ],
         &[
             "one/a.test.ts",
@@ -536,6 +539,7 @@ fn cross_file_keys_carry_what_each_file_does_while_loading() {
             "one/m.test.ts",
             "one/n.test.ts",
             "one/o.test.ts",
+            "two/m.test.ts",
         ],
     );
     let key = |index: usize| corpora[index].tests[0].module_key;
@@ -568,6 +572,11 @@ fn cross_file_keys_carry_what_each_file_does_while_loading() {
     assert_eq!(key(10), key(12), "a namespace member mocks in place too");
     assert_ne!(key(10), key(2), "`vi.mock` runs before the imports");
     assert_ne!(key(10), key(0), "a renamed mock still mocks");
+    assert_ne!(
+        key(10),
+        key(13),
+        "the same mock spelling in another folder targets another file"
+    );
     assert_eq!(
         corpora[0].tests[0].key, corpora[2].tests[0].key,
         "same-file keys ignore module effects"

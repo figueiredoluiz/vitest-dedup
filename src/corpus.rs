@@ -505,11 +505,21 @@ fn read_parsed(
             .iter()
             .find(|mock| mock.statement == statement)
         {
+            // The target is the path it names from this file, as a dynamic import's is.
             let arguments: Vec<String> = tree
                 .list(mock.call, "arguments")
                 .into_iter()
                 .flatten()
-                .map(|argument| normalizer.of(argument))
+                .enumerate()
+                .map(|(index, argument)| {
+                    (index == 0)
+                        .then(|| normalizer.module_source(argument))
+                        .flatten()
+                        .map_or_else(
+                            || normalizer.of(argument),
+                            |path| format!("(module {path:?})"),
+                        )
+                })
                 .collect();
             module_context.push_str("inplace:");
             module_context.push_str(&mock.callee);

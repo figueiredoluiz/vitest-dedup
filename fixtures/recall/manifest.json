@@ -8164,6 +8164,28 @@
       "expectedUnresolvedNext": 0
     },
     {
+      "name": "vitest-api-in-place-mock-target-folder",
+      "path": "vitest-api-in-place-mock-target-folder",
+      "rule": "cross-file-duplicate",
+      "role": "negative",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-05",
+      "expectedTests": 2,
+      "expectedIncomplete": false,
+      "expectedUnresolved": 0,
+      "expectedFindings": [],
+      "expectedAbsent": [
+        {
+          "rule": "cross-file-duplicate",
+          "titles": [
+            "reads",
+            "reads"
+          ]
+        }
+      ]
+    },
+    {
       "name": "vitest-api-spelled-vi-alias",
       "path": "vitest-api-spelled-vi-alias",
       "rule": "cross-file-duplicate",

@@ -651,7 +651,7 @@ impl Normalizer<'_> {
     /// to the importing file's directory, `.` and `..` folded, the rest kept as written. Nothing
     /// is resolved, so a query, a fragment, an extension or a trailing `/` stays part of the
     /// identity, and a missing file adds no gap to the run. `None` keeps the spelling.
-    fn module_source(&self, source: NodeId) -> Option<String> {
+    pub(crate) fn module_source(&self, source: NodeId) -> Option<String> {
         let tree = self.tree;
         if !static_selector(tree, source) {
             return None;
