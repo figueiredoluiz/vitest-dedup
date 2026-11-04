@@ -299,12 +299,14 @@ impl Normalizer<'_> {
                     .position(|bound| *bound == symbol)
                     .unwrap_or(0);
                 let constant = kind == "const";
-                // A `const` bound to a primitive literal is that literal.
+                // A `const` bound to a primitive literal is that literal; a long one is named by
+                // its declaration below, since every reader would otherwise carry its whole text.
                 let primitive = init_node.is_some_and(|init| {
                     let init = tree.inner(init);
-                    (tree.kind(init) == "Literal" && !form::allocates(tree, init))
+                    ((tree.kind(init) == "Literal" && !form::allocates(tree, init))
                         || (tree.kind(init) == "TemplateLiteral"
-                            && tree.list(init, "expressions").is_empty())
+                            && tree.list(init, "expressions").is_empty()))
+                        && crate::lang::limits::text_fits(tree, init)
                 });
                 if primitive && constant && simple {
                     return Some(init);

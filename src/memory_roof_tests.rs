@@ -243,13 +243,18 @@ fn rss_stops_the_historical_pass_before_it_accepts_unseen_duplicates() {
     assert_eq!(resident["findings"], exact["findings"]);
 }
 
-/// The engine's retained titles stop later files even without an OS RSS sample.
+/// The engine's retained titles stop later files even without an OS RSS sample: 400 titles
+/// just under the text limit retain more than the 1 MiB budget.
 #[test]
 fn retained_heap_stops_at_a_whole_file_boundary_without_rss() {
+    const TESTS: usize = 400;
     let root = tempfile::tempdir().unwrap();
     write_tree(root.path(), 3);
-    let title = "x".repeat(200_000);
-    let source=format!("import {{test,expect}} from 'vitest';test('a{title}',()=>expect(1).toBe(1));test('b{title}',()=>expect(1).toBe(1));");
+    let title = "0".repeat(4_000);
+    let tests: String = (0..TESTS)
+        .map(|index| format!("test('{index}{title}',()=>expect(1).toBe(1));\n"))
+        .collect();
+    let source = format!("import {{test,expect}} from 'vitest';{tests}");
     std::fs::write(root.path().join("0.test.ts"), &source).unwrap();
     let (code, partial) = analyze(
         root.path(),
@@ -259,7 +264,7 @@ fn retained_heap_stops_at_a_whole_file_boundary_without_rss() {
     );
     assert_eq!(code, ExitCode::OperationalError);
     assert_eq!(partial["filesAnalyzed"], 1);
-    assert_eq!(partial["testsAnalyzed"], 2);
+    assert_eq!(partial["testsAnalyzed"], TESTS);
     assert_eq!(partial["incompleteCauses"]["filesOverMemoryBudget"], 2);
     assert_eq!(partial["incomplete"], true);
     let prefix = tempfile::tempdir().unwrap();
@@ -273,6 +278,6 @@ fn retained_heap_stops_at_a_whole_file_boundary_without_rss() {
         panic!("disabled budget sampled RSS")
     });
     assert_eq!(full["filesAnalyzed"], 3);
-    assert_eq!(full["testsAnalyzed"], 4);
+    assert_eq!(full["testsAnalyzed"], TESTS + 2);
     assert_eq!(full["incomplete"], false);
 }

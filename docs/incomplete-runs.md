@@ -99,7 +99,7 @@ alone. Past the cap the files with the fewest excluded tests are left out of the
 | `helper-effects-unproved` | A runner call in the scope was not expanded (see [Imported runners](imported-runners.md#what-a-refusal-does)), so the tests around it are excluded with it. |
 | `mock-factory-unreadable` | A `vi.mock` factory could not be read. |
 | `fixture-unreadable` | A `test.extend` fixture value could not be read. |
-| `unresolved-context` | Another ambient fact of a test could not be resolved: a dynamic title, an unreadable `.each` table or nested config, or a body deeper than the analyzer's recursion cap (whose behavior trace was cut short and must not be compared). |
+| `unresolved-context` | Another ambient fact of a test could not be resolved: a dynamic title or one longer than 4,096 bytes, an unreadable `.each` table or nested config, or a body deeper than the analyzer's recursion cap (whose behavior trace was cut short and must not be compared). |
 | `registered-inside-function` | A test is registered inside a function that is neither a suite callback nor an iteration callback, so what it registers depends on a caller. |
 | `order-dependent-state` | A test reads a binding that another test writes, or that a hook updates from its previous value, and nothing assigns it before each test: equal tests can observe different values depending on which ran first. |
 | `named-callback` | A test's callback is passed by name rather than written inline; the analyzer does not read it. |

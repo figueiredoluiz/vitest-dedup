@@ -112,16 +112,7 @@ fn invocation_boundaries_preserve_normal_and_trace_dimensions() {
 fn invocation_title_values_do_not_capture_shadowed_bindings() {
     let source = "import {test} from 'vitest'; export function run(label) { test(`${label} first`,()=>{}); function nested(label){test(`${label} second`,()=>{})} }";
     crate::testing::project(source, &[], false, |_, parsed, found, _| {
-        let tree = &parsed.tree;
-        let Declaration::Function(function) = parsed
-            .scopes
-            .symbol(parsed.scopes.top_level("run").unwrap())
-            .declaration
-        else {
-            panic!("function")
-        };
-        let parameter = tree.list(function, "params")[0].unwrap();
-        let symbol = parsed.scopes.symbol_at(tree.span(parameter).start).unwrap();
+        let symbol = run_parameter(parsed);
         let values = HashMap::from([(symbol, serde_json::json!("page"))]);
         let sites: Vec<_> = found
             .sites
@@ -138,4 +129,164 @@ fn invocation_title_values_do_not_capture_shadowed_bindings() {
             None
         );
     });
+}
+
+/// A title past 4,096 bytes reads as unknown, written out, through a `const` or in a template;
+/// one at the limit is read. A literal value written in place is read at any length: only text
+/// every reader copies again is limited.
+#[test]
+fn a_title_past_the_text_limit_is_unknown() {
+    let at = "0".repeat(crate::lang::limits::MAX_TEXT_BYTES);
+    // A function title's name: `_` and these zeros spell the limit exactly.
+    let name = "0".repeat(crate::lang::limits::MAX_TEXT_BYTES - 1);
+    let big = "0".repeat(65_537);
+    let (half, rest) = ("0".repeat(2_500), "0".repeat(2_000));
+    let source = format!(
+        "import {{test}} from 'vitest'; const at = '{at}'; const past = '{at}0'; const half = '{half}'; const rest = '{rest}'; const listed = ['{half}'];
+         test('{at}',()=>{{}}); test('{at}0',()=>{{}});
+         test(at,()=>{{}}); test(past,()=>{{}});
+         test(`${{at}}`,()=>{{}}); test(`${{at}}0`,()=>{{}}); test(`0${{at}}`,()=>{{}});
+         test(`{at}0`,()=>{{}}); test(`${{at}}${{at}}`,()=>{{}}); test(`${{'{at}'}}0`,()=>{{}});
+         test(function _{name}(){{}},()=>{{}}); test(function _{name}0(){{}},()=>{{}});
+         test([at, at],()=>{{}}); test(`${{'{big}'}}`,()=>{{}}); test(`{name}${{12}}`,()=>{{}});
+         test({{a: half, b: rest}},()=>{{}}); test([listed, half],()=>{{}});"
+    );
+    crate::testing::project(&source, &[], false, |_, parsed, found, normalizer| {
+        let sites: Vec<_> = found
+            .sites
+            .iter()
+            .filter(|site| site.kind == SiteKind::Registers(crate::framework::Registers::Test))
+            .collect();
+        let titles: Vec<_> = sites
+            .iter()
+            .map(|site| crate::normal::titles::title(parsed, site.node).map(|title| title.len()))
+            .collect();
+        let read = Some(at.len());
+        assert_eq!(
+            titles,
+            [
+                read, None, read, None, read, None, None, None, None, None, read, None, None, None,
+                None, None, None
+            ]
+        );
+        let written = parsed.tree.list(sites[1].node, "arguments")[0].unwrap();
+        let value =
+            crate::normal::titles::value_with_bindings(parsed, written, 0, &mut 1, &HashMap::new());
+        assert_eq!(
+            value.and_then(|v| v.as_str().map(str::len)),
+            Some(at.len() + 1)
+        );
+        // Each read of a `const` copies it again, so a long one is unknown wherever it is read.
+        let read = |site: usize| {
+            let argument = parsed.tree.list(sites[site].node, "arguments")[0].unwrap();
+            crate::normal::titles::value_with_bindings(
+                parsed,
+                argument,
+                0,
+                &mut 256,
+                &HashMap::new(),
+            )
+            .and_then(|v| v.as_str().map(str::len))
+        };
+        assert_eq!((read(2), read(3)), (Some(at.len()), None));
+        // Row values are proved by their own reader, which measures a `const` the same way.
+        let scalar = |site: usize, normalizer: &mut crate::normal::Normalizer| {
+            let argument = parsed.tree.list(sites[site].node, "arguments")[0].unwrap();
+            match normalizer.row_scalar(argument)? {
+                crate::lang::Scalar::String(text) => Some(text.len()),
+                _ => None,
+            }
+        };
+        assert_eq!(
+            (scalar(2, normalizer), scalar(3, normalizer)),
+            (Some(at.len()), None)
+        );
+        // One budget serves a read: naming a `const` twice spends it twice.
+        assert_eq!(read(8), None);
+        let pair = parsed.tree.list(sites[12].node, "arguments")[0].unwrap();
+        let pair =
+            crate::normal::titles::value_with_bindings(parsed, pair, 0, &mut 256, &HashMap::new());
+        assert_eq!(pair, None);
+        // A row reads its cells from one budget too.
+        let cells = parsed.tree.list(
+            parsed.tree.list(sites[12].node, "arguments")[0].unwrap(),
+            "elements",
+        );
+        let row = crate::normal::Row::Spread(cells.into_iter().flatten().collect());
+        let (arguments, _) = crate::normal::titles::row(parsed, &row, false);
+        let lengths: Vec<_> = arguments
+            .iter()
+            .map(|v| v.as_ref().and_then(|v| v.as_str().map(str::len)))
+            .collect();
+        assert_eq!(lengths, [Some(at.len()), None]);
+        // A field read after a failed whole-row read starts from the row's budget: `a` fits.
+        let object = parsed.tree.list(sites[15].node, "arguments")[0].unwrap();
+        let (_, fields) =
+            crate::normal::titles::row(parsed, &crate::normal::Row::Whole(object, None), false);
+        let fields = fields.unwrap();
+        assert_eq!(
+            fields.get("a").and_then(|v| v.as_str()).map(str::len),
+            Some(2_500)
+        );
+        assert!(!fields.contains_key("b"));
+        // A `const` refused as an array spends nothing: the cell after it still fits.
+        let cells = parsed.tree.list(
+            parsed.tree.list(sites[16].node, "arguments")[0].unwrap(),
+            "elements",
+        );
+        let row = crate::normal::Row::Spread(cells.into_iter().flatten().collect());
+        let (arguments, _) = crate::normal::titles::row(parsed, &row, false);
+        let lengths: Vec<_> = arguments
+            .iter()
+            .map(|v| v.as_ref().and_then(|v| v.as_str().map(str::len)))
+            .collect();
+        assert_eq!(lengths, [None, Some(2_500)]);
+        // A template written in place copies its text once per place, so only its own length
+        // limit applies to it.
+        assert_eq!(read(9), Some(at.len() + 1));
+        assert_eq!(read(13), None);
+        // A runner charges its arguments to its own budget, templates included.
+        let template = parsed.tree.list(sites[9].node, "arguments")[0].unwrap();
+        let argument = crate::normal::titles::argument(parsed, template, &HashMap::new());
+        assert_eq!(
+            argument.and_then(|v| v.as_str().map(str::len)),
+            Some(at.len() + 1)
+        );
+    });
+}
+
+/// A title read through an invocation binding is limited as one written out: the binding is
+/// measured before each read copies it.
+#[test]
+fn a_bound_title_past_the_text_limit_is_unknown() {
+    let source = "import {test} from 'vitest'; export function run(label) { test(label,()=>{}) }";
+    crate::testing::project(source, &[], false, |_, parsed, found, _| {
+        let symbol = run_parameter(parsed);
+        let site = found
+            .sites
+            .iter()
+            .find(|site| site.kind == SiteKind::Registers(crate::framework::Registers::Test))
+            .unwrap();
+        let at = "0".repeat(crate::lang::limits::MAX_TEXT_BYTES);
+        let title = |label: String| {
+            let values = HashMap::from([(symbol, serde_json::Value::String(label))]);
+            crate::normal::titles::title_with_bindings(parsed, site.node, &values).map(|t| t.len())
+        };
+        assert_eq!(title(at.clone()), Some(at.len()));
+        assert_eq!(title(format!("{at}0")), None);
+    });
+}
+
+/// The first parameter of the module's top-level `run` function.
+fn run_parameter(parsed: &crate::lang::Parsed) -> crate::lang::SymbolId {
+    let tree = &parsed.tree;
+    let Declaration::Function(function) = parsed
+        .scopes
+        .symbol(parsed.scopes.top_level("run").unwrap())
+        .declaration
+    else {
+        panic!("function")
+    };
+    let parameter = tree.list(function, "params")[0].unwrap();
+    parsed.scopes.symbol_at(tree.span(parameter).start).unwrap()
 }

@@ -1,7 +1,51 @@
-//! Limits checked before a source reaches the parser, and the stack the parser runs on.
+//! Limits checked before a source reaches the parser, the stack the parser runs on, and the text
+//! a read of the owned tree may copy.
 //!
 //! oxc recurses on nesting, and a stack overflow aborts the process rather than unwinding, so
 //! every parser entry refuses a source past these bounds first.
+
+use super::{Field, NodeId, Tree};
+use serde_json::Value;
+
+/// The most string text a read may copy where every reader keeps its own copy: a title (each
+/// test, row and nested test carries one), a template, and what a `const` or an invocation binding
+/// supplies (one may be read by every row of a table). Longer text there is unknown. A literal
+/// written in place is read at any length: it is copied once per place the source spells it.
+pub(crate) const MAX_TEXT_BYTES: usize = 4_096;
+
+/// A template element's cooked text, borrowed from the tree.
+pub(crate) fn cooked(tree: &Tree, quasi: NodeId) -> Option<&str> {
+    let Field::Object(fields) = tree.field_of(quasi, "value") else {
+        return None;
+    };
+    fields
+        .iter()
+        .find_map(|(key, field)| match (&**key, field) {
+            ("cooked", Field::Value(Value::String(text))) => Some(text.as_str()),
+            _ => None,
+        })
+}
+
+/// Whether a string literal or substitution-free template fits [`MAX_TEXT_BYTES`], measured on its
+/// value before anything copies it. Any other node fits here: its own reads are measured.
+pub(crate) fn text_fits(tree: &Tree, node: NodeId) -> bool {
+    let node = tree.inner(node);
+    match tree.kind(node) {
+        "Literal" => match tree.field_of(node, "value") {
+            Field::Value(Value::String(text)) => text.len() <= MAX_TEXT_BYTES,
+            _ => true,
+        },
+        "TemplateLiteral" => {
+            tree.list(node, "quasis")
+                .into_iter()
+                .flatten()
+                .map(|quasi| cooked(tree, quasi).map_or(0, str::len))
+                .sum::<usize>()
+                <= MAX_TEXT_BYTES
+        }
+        _ => true,
+    }
+}
 
 /// Explicit stack headroom for parsing, semantic construction, AST visitors and helper frames.
 /// The independent raw syntax budget below is essential: this stack is finite, not crash recovery.

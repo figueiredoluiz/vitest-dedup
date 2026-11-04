@@ -1,8 +1,10 @@
 //! Rendering the supported literal table-title arguments; an unknown rendering stays unknown.
 
 use crate::framework::{TitleMode, TitleValue};
+use crate::lang::limits::MAX_TEXT_BYTES;
 use crate::lang::Scalar;
 use serde_json::{Map, Value};
+use std::borrow::Cow;
 use std::collections::HashMap;
 
 /// Renders what Vitest's `formatTitle` renders for scalar items, or nothing: unknown cells are
@@ -78,7 +80,7 @@ pub(super) fn render_values(
     {
         return None;
     }
-    if pattern.contains("%%") {
+    if pattern.len() > MAX_TEXT_BYTES || pattern.contains("%%") {
         return None;
     }
     // Substituted first, so these can spell a `$` key.
@@ -91,6 +93,10 @@ pub(super) fn render_values(
     let mut float_cursor = 0;
     let mut position = 0;
     while position < chars.len() {
+        // The text only grows, so a rendering past the limit is refused as soon as it passes it.
+        if text.len() > MAX_TEXT_BYTES {
+            return None;
+        }
         let c = chars[position];
         if c == '%' && position + 1 < chars.len() {
             let directive = chars[position + 1];
@@ -160,7 +166,7 @@ pub(super) fn render_values(
                     fields?.get(&field)?
                 };
                 let rendered = scalar_typed(value)?;
-                if rendered.encode_utf16().count() > 40 && !truncate {
+                if !truncate && rendered.encode_utf16().nth(40).is_some() {
                     return None;
                 }
                 text.push_str(&truncated(&rendered));
@@ -171,30 +177,30 @@ pub(super) fn render_values(
         text.push(c);
         position += 1;
     }
-    (text.len() <= 65_536).then_some(text)
+    (text.len() <= MAX_TEXT_BYTES).then_some(text)
 }
 
-/// The scalar display shared by positional and named typed values.
-fn scalar_typed(value: &TitleValue) -> Option<String> {
+/// The scalar display shared by positional and named typed values, borrowing a string.
+fn scalar_typed(value: &TitleValue) -> Option<Cow<'_, str>> {
     match value {
         TitleValue::Json(value) => scalar(value),
-        TitleValue::Scalar(Scalar::String(text)) => Some(text.clone()),
-        TitleValue::Scalar(Scalar::BigInt(text)) => Some(format!("{text}n")),
-        TitleValue::Scalar(value) => Some(value.source()),
+        TitleValue::Scalar(Scalar::String(text)) => Some(Cow::Borrowed(text)),
+        TitleValue::Scalar(Scalar::BigInt(text)) => Some(Cow::Owned(format!("{text}n"))),
+        TitleValue::Scalar(value) => Some(Cow::Owned(value.source())),
     }
 }
 
 /// Formatting for primitives JSON cannot represent; ordinary JSON uses the existing formatter.
 fn format_typed(value: Option<&TitleValue>, directive: char) -> Option<String> {
     let Some(value) = value else {
-        return format(None, directive);
+        return format(None, directive).map(Cow::into_owned);
     };
     let scalar = match value {
-        TitleValue::Json(value) => return format(Some(value), directive),
+        TitleValue::Json(value) => return format(Some(value), directive).map(Cow::into_owned),
         TitleValue::Scalar(value) => value,
     };
     match scalar {
-        Scalar::Undefined => format(None, directive),
+        Scalar::Undefined => format(None, directive).map(Cow::into_owned),
         Scalar::BigInt(text) => matches!(directive, 's' | 'o').then(|| format!("{text}n")),
         Scalar::Number(number)
             if !number.is_finite() || (*number == 0.0 && number.is_sign_negative()) =>
@@ -224,54 +230,53 @@ fn format_typed(value: Option<&TitleValue>, directive: char) -> Option<String> {
                 Scalar::String(v) => Value::String(v.clone()),
                 _ => return None,
             };
-            format(Some(&json), directive)
+            format(Some(&json), directive).map(Cow::into_owned)
         }
     }
 }
 
 /// A `$` substitution as Vitest displays it: past 40 UTF-16 units, the first 39 and `…`, never
-/// keeping half of a surrogate pair.
-fn truncated(value: &str) -> String {
-    let units: Vec<u16> = value.encode_utf16().collect();
-    if units.len() <= 40 {
-        return value.to_owned();
+/// keeping half of a surrogate pair. Reads at most 41 units, however long the value.
+fn truncated(value: &str) -> Cow<'_, str> {
+    if value.encode_utf16().nth(40).is_none() {
+        return Cow::Borrowed(value);
     }
-    let mut kept = &units[..39];
+    let mut kept: Vec<u16> = value.encode_utf16().take(39).collect();
     if kept
         .last()
         .is_some_and(|unit| (0xD800..0xDC00).contains(unit))
     {
-        kept = &kept[..38];
+        kept.pop();
     }
-    format!("{}…", String::from_utf16_lossy(kept))
+    Cow::Owned(format!("{}…", String::from_utf16_lossy(&kept)))
 }
 
-/// The plain spelling shared by scalar string and named-field substitutions.
-fn scalar(value: &Value) -> Option<String> {
+/// The plain spelling shared by scalar string and named-field substitutions, borrowing a string.
+fn scalar(value: &Value) -> Option<Cow<'_, str>> {
     match value {
-        Value::String(text) => Some(text.clone()),
+        Value::String(text) => Some(Cow::Borrowed(text)),
         Value::Number(number) => {
             let number = number.as_f64()?;
             if number == 0.0 && number.is_sign_negative() {
                 return None;
             }
-            Some(ryu_js::Buffer::new().format(number).to_owned())
+            Some(Cow::Owned(ryu_js::Buffer::new().format(number).to_owned()))
         }
-        Value::Bool(value) => Some(value.to_string()),
-        Value::Null => Some("null".to_owned()),
+        Value::Bool(value) => Some(Cow::Borrowed(if *value { "true" } else { "false" })),
+        Value::Null => Some(Cow::Borrowed("null")),
         _ => None,
     }
 }
 
 /// One supported substitution. Numeric prefix parsing is accepted only when the whole numeric
 /// spelling is ordinary decimal; unsupported coercions must not manufacture a title collision.
-fn format(value: Option<&Value>, directive: char) -> Option<String> {
+fn format(value: Option<&Value>, directive: char) -> Option<Cow<'_, str>> {
     let Some(value) = value else {
-        return matches!(directive, 's' | 'j' | 'o').then(|| "undefined".to_owned());
+        return matches!(directive, 's' | 'j' | 'o').then_some(Cow::Borrowed("undefined"));
     };
     match directive {
         's' => scalar(value),
-        'j' if value.is_string() => Some(value.to_string()),
+        'j' if value.is_string() => Some(Cow::Owned(value.to_string())),
         'j' => scalar(value),
         'o' if !value.is_string() => scalar(value),
         'd' | 'i' | 'f' => {
@@ -299,14 +304,16 @@ fn format(value: Option<&Value>, directive: char) -> Option<String> {
                 let digits = if directive == 'i' {
                     text.split('.').next()?
                 } else {
-                    &text
+                    &*text
                 };
                 digits.parse::<f64>().ok()?
             };
             (number.is_finite() && !(number == 0.0 && number.is_sign_negative())).then(|| {
-                ryu_js::Buffer::new()
-                    .format(if number == 0.0 { 0.0 } else { number })
-                    .to_owned()
+                Cow::Owned(
+                    ryu_js::Buffer::new()
+                        .format(if number == 0.0 { 0.0 } else { number })
+                        .to_owned(),
+                )
             })
         }
         _ => None,
