@@ -202,7 +202,8 @@ fn collection_time_helper_chains_are_bounded() {
 
 /// A test function carries the suite and hook registrations as members (`test.describe`,
 /// `test.beforeEach`): each is the top-level function, so nothing chained before it applies. A
-/// table's call returns a function that carries none.
+/// call before the member ran code the registration does not record, so that site is a wrapper;
+/// a table's call returns a function that carries none.
 #[test]
 fn a_test_function_member_registers_what_the_top_level_name_does() {
     let main = "import { test, it } from 'vitest'\n\
@@ -220,9 +221,9 @@ fn a_test_function_member_registers_what_the_top_level_name_does() {
         [
             "BeforeEach@2:6 ",
             "AfterAll@3:9 ",
-            "AroundEach@4:23 ",
+            "wrapper@4:23 extend.().aroundEach via-wrapper",
             "suite@5:20 skip",
-            "suite@6:19 ",
+            "wrapper@6:19 skipIf.().suite via-wrapper",
             "suite@8:1 ",
             "test@9:18 each.().describe",
             "test@10:6 skip",
@@ -234,7 +235,10 @@ fn a_test_function_member_registers_what_the_top_level_name_does() {
         .iter()
         .map(|site| site.member.is_some())
         .collect();
-    assert_eq!(members, [true, true, true, true, true, false, false, false]);
+    assert_eq!(
+        members,
+        [true, true, false, true, false, false, false, false]
+    );
 }
 
 /// Vitest calls a suite factory with its `test` API, so a call through a suite callback's parameter

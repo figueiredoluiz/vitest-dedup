@@ -43,6 +43,20 @@ enum Step<'t> {
     Call,
 }
 
+/// What a callee chain reads as when applied to its root.
+struct Applied {
+    /// What calling it registers, if anything.
+    registers: Option<Registers>,
+    /// Whether the last member builds another registration function not called yet.
+    pending: bool,
+    /// How many leading steps a test function's registration member (`test.skip.describe`)
+    /// supersedes.
+    start: usize,
+    /// Whether a call before that member ran code (`test.skipIf(setup()).describe`) its
+    /// registration does not record: the site may depend on it, so it is not admitted.
+    evaluated: bool,
+}
+
 /// The analysis of one module.
 struct Module<'s> {
     path: &'s Path,
@@ -700,12 +714,9 @@ impl<'s> Module<'s> {
             .map(|registration| registration.registers)
     }
 
-    /// What applying `steps` to a root of `origin` registers when called, whether the last
-    /// member builds another registration function that has not been called yet, and how many
-    /// leading steps a test function's registration member (`test.skip.describe`) supersedes;
-    /// `None` when a step leaves the API (a call of a registration function, a namespace member
-    /// that is not one).
-    fn apply(&self, origin: Origin, steps: &[Step]) -> Option<(Option<Registers>, bool, usize)> {
+    /// What applying `steps` to a root of `origin` reads as ([`Applied`]); `None` when a step
+    /// leaves the API (a call of a registration function, a namespace member that is not one).
+    fn apply(&self, origin: Origin, steps: &[Step]) -> Option<Applied> {
         let mut registers = match origin {
             Origin::Api(registers) => Some(registers),
             _ => None,
@@ -714,6 +725,7 @@ impl<'s> Module<'s> {
         // A table's call returns a plain function, which carries no registration members.
         let mut tabled = false;
         let mut start = 0;
+        let mut evaluated = false;
         for (index, step) in steps.iter().enumerate() {
             match step {
                 Step::Member(name) if registers.is_none() => registers = Some(self.api(name)?),
@@ -721,6 +733,7 @@ impl<'s> Module<'s> {
                     if let Some(member) = self.setting.dialect.test_member(name) {
                         registers = Some(member);
                         start = index + 1;
+                        evaluated = steps[..index].iter().any(|step| matches!(step, Step::Call));
                     } else {
                         tabled = matches!(
                             self.setting.dialect.chain_member(name),
@@ -734,7 +747,12 @@ impl<'s> Module<'s> {
                 Step::Call => return None,
             }
         }
-        Some((registers, pending, start))
+        Some(Applied {
+            registers,
+            pending,
+            start,
+            evaluated,
+        })
     }
 
     /// The registration function an expression's value is (`test`, `test.skip`,
@@ -753,8 +771,11 @@ impl<'s> Module<'s> {
             };
             return Some(Origin::Wrapper(reach));
         }
-        let (registers, ..) = self.apply(origin, &steps)?;
-        Some(registers.map_or(Origin::Namespace, Origin::Api))
+        let applied = self.apply(origin, &steps)?;
+        if applied.evaluated {
+            return Some(Origin::Wrapper(Reach::Tasks));
+        }
+        Some(applied.registers.map_or(Origin::Namespace, Origin::Api))
     }
 
     /// The member expression of a test function `callee` registers through (`test.skip.describe`
@@ -765,7 +786,12 @@ impl<'s> Module<'s> {
         if origin.reach().is_some() {
             return None;
         }
-        let (_, _, start) = self.apply(origin, &steps)?;
+        let Applied {
+            start, evaluated, ..
+        } = self.apply(origin, &steps)?;
+        if evaluated {
+            return None;
+        }
         let mut node = tree.inner(callee);
         for _ in start..steps.len() {
             let next = match tree.kind(node) {
@@ -805,10 +831,18 @@ impl<'s> Module<'s> {
             };
             return Some((SiteKind::Wrapper(reach), chain, provenance));
         }
-        let (registers, pending, start) = self.apply(origin, &steps)?;
+        let Applied {
+            registers,
+            pending,
+            start,
+            evaluated,
+        } = self.apply(origin, &steps)?;
         let registers = registers?;
         if pending || chain.last().is_some_and(|last| self.inert(last)) {
             return None;
+        }
+        if evaluated {
+            return Some((SiteKind::Wrapper(Reach::Tasks), chain, Provenance::Wrapper));
         }
         // What was chained before a registration member does not apply to the call.
         chain.drain(..start);

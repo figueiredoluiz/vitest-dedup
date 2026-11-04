@@ -9486,6 +9486,37 @@
           ]
         }
       ]
+    },
+    {
+      "name": "cross-file-duplicate-test-member-evaluated-prefix",
+      "path": "cross-file-duplicate-test-member-evaluated-prefix",
+      "rule": "cross-file-duplicate",
+      "role": "negative",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-04",
+      "expectedTests": 6,
+      "expectedIncomplete": true,
+      "expectedUnresolved": 4,
+      "expectedFindings": [
+        {
+          "rule": "cross-file-duplicate",
+          "severity": "warning",
+          "titles": [
+            "formats the label > trims it",
+            "formats the label > trims it"
+          ]
+        }
+      ],
+      "expectedAbsent": [
+        {
+          "rule": "cross-file-duplicate",
+          "titles": [
+            "reads the marker > sees one",
+            "reads the marker > sees one"
+          ]
+        }
+      ]
     }
   ],
   "knownFalsePositiveBaseline": 1,
