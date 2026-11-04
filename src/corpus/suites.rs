@@ -81,7 +81,7 @@ pub(super) fn collect(
                         Some(Chain::Skip | Chain::Todo | Chain::Table(_))
                     )
                 })
-                || !normal::row_identity::suite_prefix_known(parsed, call, setting.dialect)
+                || !normal::row_identity::suite_prefix_known(parsed, call, owner.provenance)
             {
                 eligible = false;
                 break;

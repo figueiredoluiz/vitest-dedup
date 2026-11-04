@@ -1902,3 +1902,58 @@ fn optional_hook_records_read_proved_chains_and_withhold_unread_callbacks() {
     assert!(hooks[0].1.views.is_none());
     assert!(hooks[0].1.effect_key.is_none());
 }
+
+/// A suite prefix is read from the inventory's provenance, not the import's spelling: rows under
+/// a suite imported through a re-export of the API are compared exactly as a direct import, while
+/// rows under a user wrapper keep their scope withheld and no claim is manufactured.
+#[test]
+fn row_claims_follow_the_inventoried_provenance_not_the_import_spelling() {
+    let caller = "import { describe, test, expect } from './u'
+describe('s', () => {
+  test.each([1, 1])('row %i', (n) => { expect(n).toBe(1) })
+})
+";
+    let reexport = "export * from 'vitest'";
+    let api_corpus =
+        corpora(&[("u.ts", reexport), ("a.test.ts", caller)], &["a.test.ts"]).remove(0);
+    assert_eq!(api_corpus.tests.len(), 2);
+    assert!(api_corpus.tests.iter().all(|case| case.exclusion.is_none()));
+    let outcome = owned_findings("a.test.ts", api_corpus);
+    assert_eq!(outcome.findings.len(), 1, "{outcome:?}");
+    assert_eq!(
+        outcome.findings[0].rule,
+        crate::model::Rule::DuplicateEachRow
+    );
+
+    let wrapper = "import { describe as d } from 'vitest'
+export const describe = (name: string, fn: () => void) => d(name, fn)
+export * from 'vitest'
+";
+    let wrapper_corpus =
+        corpora(&[("u.ts", wrapper), ("a.test.ts", caller)], &["a.test.ts"]).remove(0);
+    assert_eq!(wrapper_corpus.tests.len(), 3);
+    assert!(wrapper_corpus
+        .tests
+        .iter()
+        .all(|case| case.exclusion.is_some()));
+    assert!(owned_findings("a.test.ts", wrapper_corpus)
+        .findings
+        .is_empty());
+
+    // The whole-suite claim reads the same provenance.
+    let copies = "import { describe, test, expect } from './u'
+describe('same', () => { test('child', () => { expect(1).toBe(1) }) })
+describe('same', () => { test('child', () => { expect(1).toBe(1) }) })
+";
+    let suites = |helper: &str, tests: usize| {
+        let corpus = corpora(&[("u.ts", helper), ("a.test.ts", copies)], &["a.test.ts"]).remove(0);
+        assert_eq!(corpus.tests.len(), tests);
+        owned_findings("a.test.ts", corpus)
+            .findings
+            .iter()
+            .filter(|finding| finding.rule == crate::model::Rule::DuplicateSuite)
+            .count()
+    };
+    assert_eq!(suites(reexport, 2), 1);
+    assert_eq!(suites(wrapper, 4), 0);
+}

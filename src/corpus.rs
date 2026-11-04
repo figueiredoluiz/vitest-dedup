@@ -600,6 +600,14 @@ fn read_parsed(
     };
     let mut tests = Vec::new();
     let mut empty_tables = 0;
+    // Suite registration provenance, by the registering call: the prefix a row finding may
+    // anchor on is read from the record, not re-derived from the import's spelling.
+    let suite_provenance: HashMap<NodeId, crate::inventory::Provenance> = found
+        .sites
+        .iter()
+        .filter(|site| site.kind == SiteKind::Registers(Registers::Suite))
+        .map(|site| (site.node, site.provenance))
+        .collect();
     for site in found
         .sites
         .iter()
@@ -826,7 +834,9 @@ fn read_parsed(
         let pattern = runners::title(parsed, site.node, frame.as_ref());
         let row_prefix_known = suites.iter().all(|scope| {
             structure.suites.get(scope).is_some_and(|&call| {
-                normal::row_identity::suite_prefix_known(parsed, call, setting.dialect)
+                suite_provenance.get(&call).is_some_and(|&provenance| {
+                    normal::row_identity::suite_prefix_known(parsed, call, provenance)
+                })
             })
         });
         // Each row's body, rendered flat and traced. An incomplete trace says nothing about the
