@@ -145,6 +145,38 @@
       "expectedAbsent": []
     },
     {
+      "name": "duplicate-test-name-suite-callback-test-parameter",
+      "path": "duplicate-test-name-suite-callback-test-parameter",
+      "rule": "duplicate-test-name",
+      "role": "variant",
+      "engine": "next",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-04",
+      "expectedTests": 4,
+      "expectedIncomplete": true,
+      "expectedUnresolved": 2,
+      "expectedFindings": [
+        {
+          "rule": "duplicate-test-name",
+          "severity": "warning",
+          "titles": [
+            "parses the header",
+            "parses the header"
+          ]
+        }
+      ],
+      "expectedAbsent": [
+        {
+          "rule": "duplicate-test-name",
+          "titles": [
+            "s > formats",
+            "s > formats"
+          ]
+        }
+      ]
+    },
+    {
       "name": "duplicate-test-git-mode-retention",
       "path": "duplicate-test-git-mode-retention",
       "rule": "duplicate-test",

@@ -108,6 +108,54 @@ fn a_free_name_is_the_api_only_under_globals() {
     assert!(sites("const it = (a, b) => {}\nit('a', () => {})", &[], true).is_empty());
 }
 
+/// Vitest calls a suite factory with its `test` API, so a call through a suite callback's parameter
+/// is a wrapper call; a table's callback receives a row, so its parameters are ordinary values.
+#[test]
+fn a_suite_callback_parameter_is_a_wrapper() {
+    let wrappers = |main: &str| {
+        sites(main, &[], false)
+            .iter()
+            .filter(|site| site.starts_with("wrapper@"))
+            .count()
+    };
+    for (main, expected) in [
+        (
+            "import { describe } from 'vitest'\n\
+             describe('s', (test) => { test('a', () => {}); test.skip('b', () => {}) })",
+            2,
+        ),
+        (
+            "import { describe } from 'vitest'\n\
+             describe('s', { timeout: 1 }, function ({ skip }) { skip('a', () => {}) })",
+            1,
+        ),
+        (
+            "import { describe } from 'vitest'\n\
+             describe.concurrent('s', (t) => { const u = t; u('a', () => {}) })",
+            1,
+        ),
+        (
+            "import { describe, test } from 'vitest'\n\
+             describe('s', (api) => { test('a', () => {}) })",
+            0,
+        ),
+        (
+            "import { describe } from 'vitest'\n\
+             describe.each([[() => 1]])('s %s', (make) => { make() })",
+            0,
+        ),
+        (
+            "import { describe } from 'vitest'\n\
+             describe.for([[() => 1]])('s %s', ([make]) => { make() })",
+            0,
+        ),
+    ] {
+        assert_eq!(wrappers(main), expected, "{main}");
+    }
+}
+
+/// Names that only look like the API (a member `foo.test`, an `it` from another package) and
+/// builder or table calls that are never invoked register nothing.
 #[test]
 fn lookalikes_and_fixture_builders_register_nothing() {
     let found = sites(
