@@ -411,6 +411,13 @@ test('named scopes require the equals form', () => {
   assert.ok(NEXT_CORE.minimumScored > 0)
   const printed = runCli(['--print-scope', '--scope=next-core'])
   assert.equal(printed.out.join(' '), scopeArguments(NEXT_CORE.scope).join(' '))
+  const spawn = (command, args) => {
+    assert.equal(command, 'cargo')
+    assert.deepEqual(args, ['mutants', ...scopeArguments(NEXT_CORE.scope), '--jobs', '2'])
+    return { status: 4 }
+  }
+  const run = runCli(['--run', '--scope=next-core'], { read: fakeRead({}), spawn })
+  assert.equal(run.status, 4)
 })
 
 test('unknown named scopes are refused', () => {
