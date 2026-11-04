@@ -23,6 +23,79 @@ fn pair(first: &str, second: &str) -> String {
     format!("{IMPORTS} let value = 0; {first} {second} {TEST}")
 }
 
+/// Erased declarations preserve the same lexical proof at file and suite scope.
+#[test]
+fn erased_types_do_not_hide_lexical_hook_pairs() {
+    let hook = "beforeEach(() => { value = 1 });";
+    for declaration in [
+        "interface Shape { value: string }",
+        "type Shape = string;",
+        "declare const unrelated: string;",
+        "declare function unused(): void;",
+        "declare class Unused {}",
+        "declare enum Unused { A }",
+        "declare namespace Unused { type T = string }",
+        "export interface Shape {}",
+        "export default interface Shape {}",
+        "interface Shape {} export { type Shape };",
+        "export type Shape = string;",
+        "export type { Shape } from './missing';",
+        "export type * from './missing';",
+        "import type { Shape } from './missing';",
+    ] {
+        let source = format!("{IMPORTS} {declaration} let value = 0; {hook} {hook} {TEST}");
+        assert_eq!(findings(&source, 1).len(), 1, "{declaration}");
+        if !declaration.contains("export") && !declaration.starts_with("import") {
+            let nested = format!("{IMPORTS} describe('scope', () => {{ {declaration} let value = 0; {hook} {hook} {TEST} }});");
+            assert_eq!(findings(&nested, 1).len(), 1, "nested {declaration}");
+        }
+    }
+}
+
+/// Runtime enum evaluation remains an opaque registration barrier.
+#[test]
+fn runtime_declarations_do_not_borrow_erased_hook_admission() {
+    let hooks = "beforeEach(() => { value = 1 }); beforeEach(() => { value = 1 });";
+    for declaration in [
+        "enum Active { A = observe() }",
+        "namespace Active { observe(); }",
+        "class Active { static value = observe(); }",
+        "export default observe();",
+        "interface Shape {} let active = 1; export { type Shape, active };",
+        "export { type Shape } from './missing';",
+        "export {};",
+    ] {
+        assert!(findings(
+            &format!("{IMPORTS} {declaration} let value = 0; {hooks} {TEST}"),
+            1
+        )
+        .is_empty());
+    }
+}
+
+/// Imported runners erase declarations in their module and registration body consistently.
+#[test]
+fn imported_hook_runners_preserve_erased_declarations() {
+    let helper = "import { beforeEach } from 'vitest'; export interface Shape {} export type Name = string; let value = 0; export function install() { interface Local {} type Label = string; beforeEach(() => { value = 1 }); beforeEach(() => { value = 1 }); }";
+    let caller = "import { install } from './helper'; import { test, expect } from 'vitest'; install(); test('direct', () => { expect(2).toBe(2); });";
+    let corpus = corpora(
+        &[("helper.ts", helper), ("cases.test.ts", caller)],
+        &["cases.test.ts"],
+    )
+    .remove(0);
+    assert_eq!(corpus.tests.len(), 1);
+    assert!(corpus.tests.iter().all(|test| test.exclusion.is_none()));
+    let outcome = owned_findings("cases.test.ts", corpus);
+    assert_eq!(
+        outcome
+            .findings
+            .iter()
+            .filter(|finding| finding.rule == Rule::RedundantHook)
+            .count(),
+        1
+    );
+}
+
 /// The same owned source runs under Vitest, including two unsafe default-engine positives.
 #[test]
 fn owned_hook_runtime_controls() {
