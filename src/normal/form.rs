@@ -624,19 +624,22 @@ impl Normalizer<'_> {
                 self.write_node(child, walk, out);
                 // The trailing comma is the one a written-out statement list carries.
                 out.push_str("),])");
-            } else if let Some(module) = child
-                .filter(|_| kind == "ImportExpression" && &**key == "source")
-                .and_then(|source| self.module_source(source))
-            {
-                let _ = write!(out, "(module {module:?})");
             } else {
                 let structural = walk.structural;
-                if !walk.trace
-                    && (property_key(key) || (kind == "ImportExpression" && &**key == "source"))
-                {
+                let source = kind == "ImportExpression" && &**key == "source";
+                if !walk.trace && (property_key(key) || source) {
                     walk.structural = false;
                 }
+                let from = child
+                    .filter(|_| source)
+                    .and_then(|child| self.importer_directory(child));
+                if let Some(directory) = &from {
+                    let _ = write!(out, "(from {directory:?} ");
+                }
                 self.write_field(field, walk, out);
+                if from.is_some() {
+                    out.push(')');
+                }
                 walk.structural = structural;
             }
         }
@@ -647,59 +650,46 @@ impl Normalizer<'_> {
         out.push(')');
     }
 
-    /// The root-relative path an `import()` source names: a static relative specifier joined
-    /// to the importing file's directory, `.` and `..` folded, the rest kept as written. Nothing
-    /// is resolved, so a query, a fragment, an extension or a trailing `/` stays part of the
-    /// identity, and a missing file adds no gap to the run. `None` keeps the spelling.
-    pub(crate) fn module_source(&self, source: NodeId) -> Option<String> {
+    /// The importing file's root-relative directory when a module specifier is read from it:
+    /// any specifier but a static one that is not relative (a package, a builtin, the API). The
+    /// specifier itself is written as before, so a spelling, a query, a fragment or a trailing
+    /// `/` stays part of the identity, and a constant or row value still compares with the
+    /// literal it holds. Nothing is resolved.
+    pub(crate) fn importer_directory(&self, source: NodeId) -> Option<String> {
         let tree = self.tree;
-        if !static_selector(tree, source) {
-            return None;
-        }
-        let source = tree.inner(source);
-        let specifier = match tree.kind(source) {
-            "Literal" => tree.text(source, "value").map(str::to_owned),
-            _ => tree
-                .list(source, "quasis")
-                .first()
-                .copied()
-                .flatten()
-                .and_then(|quasi| {
-                    quasi_text(tree, quasi, "cooked")
-                        .as_str()
-                        .map(str::to_owned)
-                }),
-        }?;
-        if !specifier.starts_with("./") && !specifier.starts_with("../") {
-            return None;
+        if static_selector(tree, source) {
+            let source = tree.inner(source);
+            let specifier = match tree.kind(source) {
+                "Literal" => tree.text(source, "value").map(str::to_owned),
+                _ => tree
+                    .list(source, "quasis")
+                    .first()
+                    .copied()
+                    .flatten()
+                    .and_then(|quasi| {
+                        quasi_text(tree, quasi, "cooked")
+                            .as_str()
+                            .map(str::to_owned)
+                    }),
+            };
+            if specifier.is_some_and(|text| !text.starts_with("./") && !text.starts_with("../")) {
+                return None;
+            }
         }
         let importer = self
             .setting
             .exports
             .sources
             .relative(self.path, self.setting.root)?;
-        let mut segments: Vec<String> = importer
-            .parent()
-            .into_iter()
-            .flat_map(Path::components)
-            .map(|component| component.as_os_str().to_string_lossy().into_owned())
-            .collect();
-        // `./dep/` and `./dep/.` name the directory, which `./dep` may not.
-        let directory = matches!(specifier.rsplit('/').next(), Some("" | "." | ".."));
-        for segment in specifier.split('/') {
-            match segment {
-                "." | "" => {}
-                ".." if segments.last().is_some_and(|last| last != "..") => {
-                    segments.pop();
-                }
-                other => segments.push(other.to_owned()),
-            }
-        }
-        let mut path = segments.join("/");
-        if directory {
-            path.push('/');
-        }
-        Some(path)
+        Some(
+            importer
+                .parent()
+                .into_iter()
+                .flat_map(Path::components)
+                .map(|component| component.as_os_str().to_string_lossy().into_owned())
+                .collect::<Vec<_>>()
+                .join("/"),
+        )
     }
 
     /// Writes an identifier: a local by its order of appearance, anything else by what declares it.

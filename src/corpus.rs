@@ -505,20 +505,21 @@ fn read_parsed(
             .iter()
             .find(|mock| mock.statement == statement)
         {
-            // The target is the path it names from this file, as a dynamic import's is.
+            // The target is read from this file's directory, as a dynamic import's is.
             let arguments: Vec<String> = tree
                 .list(mock.call, "arguments")
                 .into_iter()
                 .flatten()
                 .enumerate()
                 .map(|(index, argument)| {
-                    (index == 0)
-                        .then(|| normalizer.module_source(argument))
+                    let form = normalizer.of(argument);
+                    match (index == 0)
+                        .then(|| normalizer.importer_directory(argument))
                         .flatten()
-                        .map_or_else(
-                            || normalizer.of(argument),
-                            |path| format!("(module {path:?})"),
-                        )
+                    {
+                        Some(directory) => format!("(from {directory:?} {form})"),
+                        None => form,
+                    }
                 })
                 .collect();
             module_context.push_str("inplace:");

@@ -1,4 +1,5 @@
-//! A relative `import()` is keyed by the root-relative path it names, not by its spelling alone.
+//! An `import()` that may read a relative path is keyed by its spelling and the directory of the
+//! file that imports it.
 use super::module_meta::{compared_pair, distinct_modules, duplicate};
 use super::*;
 use crate::model::Rule;
@@ -49,81 +50,87 @@ fn links(outcome: &crate::rules::Outcome, paths: &[&str]) -> bool {
     })
 }
 
-/// A constant template and a string naming one path are one test; two equal-content modules
-/// are two; a spelling that names the file another way stays apart, since only Vitest's own
-/// resolution could prove it is the same file.
+/// In one file, a constant template, a constant binding and a table row holding the literal are
+/// the literal; any other spelling is another module, since only Vitest's resolution could prove
+/// two spellings load one file.
 #[test]
-fn dynamic_import_keys_name_the_path_not_its_spelling() {
-    let directory = loading(&["'./one/recipes/.'", "'./one/recipes/'"]);
-    let corpus = compared_pair(
-        &[("one/recipes/index.ts", FOUR), ("case.test.ts", &directory)],
-        "case.test.ts",
-    );
-    assert_eq!(corpus.tests[0].key, corpus.tests[1].key);
-    duplicate("case.test.ts", corpus);
-
-    let template = loading(&["`./one/recipes`", "'./one/recipes'"]);
-    let corpus = compared_pair(
-        &[("one/recipes.ts", FOUR), ("case.test.ts", &template)],
-        "case.test.ts",
-    );
-    assert_eq!(corpus.tests[0].key, corpus.tests[1].key);
-    duplicate("case.test.ts", corpus);
-
-    // Equal content in two files: identity is the file, not what it holds.
-    let apart = loading(&["'./one/recipes'", "'./two/recipes'"]);
-    distinct_modules(
-        &[
-            ("one/recipes.ts", FOUR),
-            ("two/recipes.ts", FOUR),
-            ("case.test.ts", &apart),
-        ],
-        "case.test.ts",
-    );
+fn dynamic_import_keys_keep_the_spelling_within_a_file() {
+    let files = [
+        ("one/recipes.ts", FOUR),
+        ("one/recipes.js", FOUR),
+        ("one/recipes/index.ts", FOUR),
+        ("two/recipes.ts", FOUR),
+    ];
+    let header = "import { it, expect } from 'vitest'\n";
+    let literal = reads("reads 1", "'./one/recipes'");
+    for equal in [
+        loading(&["`./one/recipes`", "'./one/recipes'"]),
+        format!("{header}const path = './one/recipes'\n{}{literal}", reads("reads 0", "path")),
+        format!(
+            "{header}it.each(['./one/recipes'])('reads %s', async (path) => {{ const {{ servings }} = await import(path); expect(servings).toBe(4) }})\n{literal}"
+        ),
+    ] {
+        let corpus = compared_pair(
+            &[files.as_slice(), &[("case.test.ts", equal.as_str())]].concat(),
+            "case.test.ts",
+        );
+        assert_eq!(corpus.tests[0].key, corpus.tests[1].key, "{equal}");
+        duplicate("case.test.ts", corpus);
+    }
     for other in [
+        "'./two/recipes'",
         "'./one/recipes.ts'",
         "'./one/recipes.js'",
         "'./one/recipes#copy'",
+        "'./one/recipes?raw'",
         "'./one/recipes/'",
+        "'./one/recipes/.'",
+        "'./one/../one/recipes'",
     ] {
         let spelled = loading(&["'./one/recipes'", other]);
         distinct_modules(
-            &[
-                ("one/recipes.ts", FOUR),
-                ("one/recipes.js", FOUR),
-                ("case.test.ts", &spelled),
-            ],
+            &[files.as_slice(), &[("case.test.ts", spelled.as_str())]].concat(),
             "case.test.ts",
         );
     }
 }
 
-/// One spelling in two folders names two modules; two spellings in two folders name one.
+/// One spelling in two folders names two modules, a literal or a constant; two files in one
+/// folder name one.
 #[test]
-fn dynamic_import_keys_follow_the_module_across_files() {
+fn dynamic_import_keys_follow_the_importing_folder() {
     let local = loading(&["'./recipes'"]);
-    let reach = loading(&["'../one/recipes'"]);
+    let constant = format!(
+        "import {{ it, expect }} from 'vitest'\nconst path = './recipes'\n{}",
+        reads("reads 0", "path")
+    );
     let files = [
         ("one/recipes.ts", FOUR),
         ("two/recipes.ts", TWELVE),
         ("one/a.test.ts", local.as_str()),
+        ("one/b.test.ts", local.as_str()),
         ("two/a.test.ts", local.as_str()),
-        ("three/a.test.ts", reach.as_str()),
+        ("one/c.test.ts", constant.as_str()),
+        ("two/c.test.ts", constant.as_str()),
     ];
-    let (results, outcome) = cross_file(
-        &files,
-        &["one/a.test.ts", "two/a.test.ts", "three/a.test.ts"],
-    );
+    let tests = [
+        "one/a.test.ts",
+        "one/b.test.ts",
+        "two/a.test.ts",
+        "one/c.test.ts",
+        "two/c.test.ts",
+    ];
+    let (results, outcome) = cross_file(&files, &tests);
     let key = |index: usize| results[index].tests[0].module_key;
-    assert_ne!(key(0), key(1), "the same spelling names another file");
-    assert_eq!(key(0), key(2), "another spelling names the same file");
-    assert!(links(&outcome, &["one/a.test.ts", "three/a.test.ts"]));
+    assert_eq!(key(0), key(1), "one folder, one module");
+    assert_ne!(key(0), key(2), "the same spelling names another file");
+    assert!(links(&outcome, &["one/a.test.ts", "one/b.test.ts"]));
     assert!(!links(&outcome, &["one/a.test.ts", "two/a.test.ts"]));
-    assert!(!links(&outcome, &["three/a.test.ts", "two/a.test.ts"]));
+    assert!(!links(&outcome, &["one/c.test.ts", "two/c.test.ts"]));
 }
 
 /// Checkout location is not module identity: keys repeat across two roots and still tell the
-/// modules apart within each.
+/// folders apart within each.
 #[test]
 fn dynamic_import_keys_are_root_relative() {
     let local = loading(&["'./recipes'"]);
@@ -146,27 +153,29 @@ fn dynamic_import_keys_are_root_relative() {
     assert_eq!(first, repeated);
 }
 
-/// A query, a missing file, a builtin and the API: equal spellings stay one test and different
-/// ones stay apart. A query names another module than the plain path.
+/// A package, a builtin and the API do not depend on the importing folder: one spelling in two
+/// folders is one module, and different spellings stay apart.
 #[test]
-fn dynamic_import_keys_keep_other_spellings_apart() {
-    for (equal, different) in [
-        ("'./recipes?raw'", "'./recipes'"),
-        ("'./missing'", "'./absent'"),
+fn dynamic_import_keys_ignore_the_folder_for_packages() {
+    for (spelling, other) in [
         ("'node:os'", "'node:path'"),
         ("'vitest'", "'vitest/config'"),
     ] {
-        let same = loading(&[equal, equal]);
-        let corpus = compared_pair(
-            &[("recipes.ts", FOUR), ("case.test.ts", &same)],
-            "case.test.ts",
+        let same = loading(&[spelling]);
+        let files = [
+            ("one/a.test.ts", same.as_str()),
+            ("two/a.test.ts", same.as_str()),
+        ];
+        let (results, outcome) = cross_file(&files, &["one/a.test.ts", "two/a.test.ts"]);
+        assert_eq!(
+            results[0].tests[0].module_key, results[1].tests[0].module_key,
+            "{spelling}"
         );
-        assert_eq!(corpus.tests[0].key, corpus.tests[1].key, "{equal}");
-        duplicate("case.test.ts", corpus);
-        let apart = loading(&[equal, different]);
-        distinct_modules(
-            &[("recipes.ts", FOUR), ("case.test.ts", &apart)],
-            "case.test.ts",
+        assert!(
+            links(&outcome, &["one/a.test.ts", "two/a.test.ts"]),
+            "{spelling}"
         );
+        let apart = loading(&[spelling, other]);
+        distinct_modules(&[("case.test.ts", apart.as_str())], "case.test.ts");
     }
 }
