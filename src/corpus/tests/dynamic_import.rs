@@ -54,6 +54,14 @@ fn links(outcome: &crate::rules::Outcome, paths: &[&str]) -> bool {
 /// resolution could prove it is the same file.
 #[test]
 fn dynamic_import_keys_name_the_path_not_its_spelling() {
+    let directory = loading(&["'./one/recipes/.'", "'./one/recipes/'"]);
+    let corpus = compared_pair(
+        &[("one/recipes/index.ts", FOUR), ("case.test.ts", &directory)],
+        "case.test.ts",
+    );
+    assert_eq!(corpus.tests[0].key, corpus.tests[1].key);
+    duplicate("case.test.ts", corpus);
+
     let template = loading(&["`./one/recipes`", "'./one/recipes'"]);
     let corpus = compared_pair(
         &[("one/recipes.ts", FOUR), ("case.test.ts", &template)],
@@ -76,6 +84,7 @@ fn dynamic_import_keys_name_the_path_not_its_spelling() {
         "'./one/recipes.ts'",
         "'./one/recipes.js'",
         "'./one/recipes#copy'",
+        "'./one/recipes/'",
     ] {
         let spelled = loading(&["'./one/recipes'", other]);
         distinct_modules(

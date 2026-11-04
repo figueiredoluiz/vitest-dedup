@@ -649,8 +649,8 @@ impl Normalizer<'_> {
 
     /// The root-relative path an `import()` source names: a static relative specifier joined
     /// to the importing file's directory, `.` and `..` folded, the rest kept as written. Nothing
-    /// is resolved, so a query, a fragment or an extension stays part of the identity, and a
-    /// missing file adds no gap to the run. `None` keeps the spelling.
+    /// is resolved, so a query, a fragment, an extension or a trailing `/` stays part of the
+    /// identity, and a missing file adds no gap to the run. `None` keeps the spelling.
     fn module_source(&self, source: NodeId) -> Option<String> {
         let tree = self.tree;
         if !static_selector(tree, source) {
@@ -684,6 +684,8 @@ impl Normalizer<'_> {
             .flat_map(Path::components)
             .map(|component| component.as_os_str().to_string_lossy().into_owned())
             .collect();
+        // `./dep/` and `./dep/.` name the directory, which `./dep` may not.
+        let directory = matches!(specifier.rsplit('/').next(), Some("" | "." | ".."));
         for segment in specifier.split('/') {
             match segment {
                 "." | "" => {}
@@ -693,7 +695,11 @@ impl Normalizer<'_> {
                 other => segments.push(other.to_owned()),
             }
         }
-        Some(segments.join("/"))
+        let mut path = segments.join("/");
+        if directory {
+            path.push('/');
+        }
+        Some(path)
     }
 
     /// Writes an identifier: a local by its order of appearance, anything else by what declares it.
