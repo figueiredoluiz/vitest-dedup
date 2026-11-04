@@ -64,6 +64,13 @@ fn analyze(root: &Path, gate: Option<&str>) -> (i32, Value, Value) {
     (code, json, summary)
 }
 
+/// Whether this run selects the next engine. It reads no generated table: module setup that calls
+/// an auto-import runs once before every test in the file, so identical tests are compared
+/// whatever the table says, where the default engine excludes them when the table is refused.
+fn next_engine() -> bool {
+    vitest_dedup::corpus::Engine::selected().is_some()
+}
+
 /// Pins extraction, eligibility and findings before checking detailed report contents.
 fn assert_outcome(json: &Value, summary: &Value, tests: u64, unresolved: u64, findings: usize) {
     assert_eq!(json["testsAnalyzed"], tests, "{json}");
@@ -114,7 +121,8 @@ fn large_flat_tables_retain_equivalent_and_distinct_pairs() {
     }
 }
 
-/// Every admission/read failure reaches the same conservative outcome on both lookup routes.
+/// Every admission/read failure reaches the same outcome on both lookup routes: the default engine
+/// excludes the dependent tests and fails the incomplete-run gate; the next engine compares them.
 #[test]
 fn refused_tables_exclude_dependent_tests_and_reach_exit_gates() {
     let depth_fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -135,6 +143,15 @@ fn refused_tables_exclude_dependent_tests_and_reach_exit_gates() {
         for (case, source) in cases.iter().enumerate() {
             fs::write(&table, source).unwrap();
             let (code, json, summary) = analyze(root, Some("reads"));
+            if next_engine() {
+                assert_eq!(
+                    code, 1,
+                    "named import: {named_import}, case: {case}, report: {json}"
+                );
+                assert_outcome(&json, &summary, 2, 0, 1);
+                assert_eq!(json["excludedFiles"], serde_json::json!([]), "{json}");
+                continue;
+            }
             assert_eq!(code, 2);
             assert_outcome(&json, &summary, 2, 2, 0);
             let reason = if named_import {
@@ -150,12 +167,14 @@ fn refused_tables_exclude_dependent_tests_and_reach_exit_gates() {
         }
         fs::remove_file(table).unwrap();
         let (code, json, summary) = analyze(root, Some("any"));
-        assert_eq!(code, 2);
-        assert_outcome(&json, &summary, 2, 2, 0);
+        let (exit, unresolved, findings) = if next_engine() { (1, 0, 1) } else { (2, 2, 0) };
+        assert_eq!(code, exit, "{json}");
+        assert_outcome(&json, &summary, 2, unresolved, findings);
     }
 }
 
-/// A failed nearest table never borrows bindings from a valid ancestor or taints unrelated tests.
+/// A failed nearest table never borrows bindings from a valid ancestor or taints unrelated tests;
+/// the next engine, which reads no table, compares the tests beside it too.
 #[test]
 fn nearest_refusal_preserves_independent_findings() {
     let directory = project(false);
@@ -174,7 +193,8 @@ fn nearest_refusal_preserves_independent_findings() {
     .unwrap();
     let (code, json, summary) = analyze(root, None);
     assert_eq!(code, 1);
-    assert_outcome(&json, &summary, 4, 2, 1);
+    let (unresolved, findings) = if next_engine() { (0, 2) } else { (2, 1) };
+    assert_outcome(&json, &summary, 4, unresolved, findings);
     fs::remove_file(nested.join("clock.test.ts")).unwrap();
     let (code, json, summary) = analyze(root, Some("reads"));
     assert_eq!(code, 1);
