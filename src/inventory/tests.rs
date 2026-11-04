@@ -215,7 +215,8 @@ fn a_test_function_member_registers_what_the_top_level_name_does() {
          const group = test.describe\n\
          group('u', () => {})\n\
          test.each([[1]]).describe('v', () => {})\n\
-         test.skip('w', () => {})";
+         test.skip('w', () => {})\n\
+         ;(globalThis.flag ? test : it).describe('x', () => {})";
     assert_eq!(
         sites(main, &[], false),
         [
@@ -227,6 +228,7 @@ fn a_test_function_member_registers_what_the_top_level_name_does() {
             "suite@8:1 ",
             "test@9:18 each.().describe",
             "test@10:6 skip",
+            "wrapper@11:32 describe via-wrapper",
         ]
     );
     let (found, _) = inventory_of(main, &[], false);
@@ -237,7 +239,7 @@ fn a_test_function_member_registers_what_the_top_level_name_does() {
         .collect();
     assert_eq!(
         members,
-        [true, true, false, true, false, false, false, false]
+        [true, true, false, true, false, false, false, false, false]
     );
 }
 

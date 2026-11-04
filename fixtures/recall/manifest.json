@@ -9495,9 +9495,13 @@
       "origin": "synthetic",
       "verdict": "generated",
       "classifiedAt": "2026-11-04",
-      "expectedTests": 14,
+      "expectedTests": 6,
       "expectedIncomplete": true,
-      "expectedUnresolved": 12,
+      "expectedUnresolved": 4,
+      "blindUnderCurrent": [
+        "stub-1.test.ts",
+        "stub-2.test.ts"
+      ],
       "expectedFindings": [
         {
           "rule": "cross-file-duplicate",
@@ -9514,13 +9518,6 @@
           "titles": [
             "reads the marker > sees one",
             "reads the marker > sees one"
-          ]
-        },
-        {
-          "rule": "cross-file-duplicate",
-          "titles": [
-            "reads the flag > sees one",
-            "reads the flag > sees one"
           ]
         }
       ]
