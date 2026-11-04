@@ -514,7 +514,7 @@ fn read_parsed(
                 .map(|(index, argument)| {
                     let form = normalizer.of(argument);
                     match (index == 0)
-                        .then(|| normalizer.importer_directory(argument))
+                        .then(|| normalizer.importer_directory())
                         .flatten()
                     {
                         Some(directory) => format!("(from {directory:?} {form})"),

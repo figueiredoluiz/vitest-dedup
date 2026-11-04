@@ -153,29 +153,34 @@ fn dynamic_import_keys_are_root_relative() {
     assert_eq!(first, repeated);
 }
 
-/// A package, a builtin and the API do not depend on the importing folder: one spelling in two
-/// folders is one module, and different spellings stay apart.
+/// A package, a builtin or the API held by a constant is the literal it holds; one spelling in
+/// two folders is two, since whether a source is relative is not decided from its syntax.
 #[test]
-fn dynamic_import_keys_ignore_the_folder_for_packages() {
+fn dynamic_import_keys_read_packages_from_the_importing_folder() {
+    let header = "import { it, expect } from 'vitest'\n";
     for (spelling, other) in [
         ("'node:os'", "'node:path'"),
         ("'vitest'", "'vitest/config'"),
     ] {
+        let constant = format!(
+            "{header}const path = {spelling}\n{}{}",
+            reads("reads 0", "path"),
+            reads("reads 1", spelling)
+        );
+        let corpus = compared_pair(&[("case.test.ts", constant.as_str())], "case.test.ts");
+        assert_eq!(corpus.tests[0].key, corpus.tests[1].key, "{spelling}");
+        duplicate("case.test.ts", corpus);
+        let apart = loading(&[spelling, other]);
+        distinct_modules(&[("case.test.ts", apart.as_str())], "case.test.ts");
         let same = loading(&[spelling]);
         let files = [
             ("one/a.test.ts", same.as_str()),
             ("two/a.test.ts", same.as_str()),
         ];
-        let (results, outcome) = cross_file(&files, &["one/a.test.ts", "two/a.test.ts"]);
-        assert_eq!(
-            results[0].tests[0].module_key, results[1].tests[0].module_key,
-            "{spelling}"
-        );
+        let (_, outcome) = cross_file(&files, &["one/a.test.ts", "two/a.test.ts"]);
         assert!(
-            links(&outcome, &["one/a.test.ts", "two/a.test.ts"]),
+            !links(&outcome, &["one/a.test.ts", "two/a.test.ts"]),
             "{spelling}"
         );
-        let apart = loading(&[spelling, other]);
-        distinct_modules(&[("case.test.ts", apart.as_str())], "case.test.ts");
     }
 }

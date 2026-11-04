@@ -632,7 +632,7 @@ impl Normalizer<'_> {
                 }
                 let from = child
                     .filter(|_| source)
-                    .and_then(|child| self.importer_directory(child));
+                    .and_then(|_| self.importer_directory());
                 if let Some(directory) = &from {
                     let _ = write!(out, "(from {directory:?} ");
                 }
@@ -650,32 +650,11 @@ impl Normalizer<'_> {
         out.push(')');
     }
 
-    /// The importing file's root-relative directory when a module specifier is read from it:
-    /// any specifier but a static one that is not relative (a package, a builtin, the API). The
-    /// specifier itself is written as before, so a spelling, a query, a fragment or a trailing
-    /// `/` stays part of the identity, and a constant or row value still compares with the
-    /// literal it holds. Nothing is resolved.
-    pub(crate) fn importer_directory(&self, source: NodeId) -> Option<String> {
-        let tree = self.tree;
-        if static_selector(tree, source) {
-            let source = tree.inner(source);
-            let specifier = match tree.kind(source) {
-                "Literal" => tree.text(source, "value").map(str::to_owned),
-                _ => tree
-                    .list(source, "quasis")
-                    .first()
-                    .copied()
-                    .flatten()
-                    .and_then(|quasi| {
-                        quasi_text(tree, quasi, "cooked")
-                            .as_str()
-                            .map(str::to_owned)
-                    }),
-            };
-            if specifier.is_some_and(|text| !text.starts_with("./") && !text.starts_with("../")) {
-                return None;
-            }
-        }
+    /// The importing file's root-relative directory, which every `import()` source is read
+    /// from: a relative path resolves against it, and whether a source is relative is not
+    /// decided here, so a constant or row value still compares with the literal it holds. The
+    /// specifier itself is written as before; nothing is resolved.
+    pub(crate) fn importer_directory(&self) -> Option<String> {
         let importer = self
             .setting
             .exports
