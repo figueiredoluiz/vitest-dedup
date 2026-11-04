@@ -792,19 +792,19 @@ test("the constant floor fails when the tie count falls", () => {
   // The silent-weakening path: the admission rule is "exactly one unit figure", so adding a
   // second sentence to a tied comment drops it out of the check and leaves a green run behind.
   // The floor is what turns that into a failure.
-  assert.equal(FLOORS.constantClaims, 2, "the measured tie count, not a round number");
+  assert.equal(FLOORS.constantClaims, 3, "the measured tie count, not a round number");
   const problems = workPerformedProblems({
     files: 40,
     fences: 38,
     jsonFamilyFences: 6,
     unitClaims: 43,
     checkedUnitClaims: 10,
-    constantClaims: 1,
+    constantClaims: 2,
   });
   assert.equal(problems.length, 1);
-  assert.match(problems[0], /constantClaims = 1, below the floor of 2/);
+  assert.match(problems[0], /constantClaims = 2, below the floor of 3/);
 
-  // Absent, not merely low: `undefined < 2` is false, which is how a floor passes on a field
+  // Absent, not merely low: `undefined < 3` is false, which is how a floor passes on a field
   // nobody reported.
   const absent = workPerformedProblems({
     files: 40,
@@ -822,5 +822,5 @@ test("the real tree's byte constants agree with their own doc comments", () => {
   // a doc comment and a constant have drifted apart and that is the finding.
   const { status, lines } = runCli([]);
   assert.equal(status, 0, lines.join("\n"));
-  assert.match(lines.join("\n"), /byte constants 2 doc comment\(s\) tied/);
+  assert.match(lines.join("\n"), /byte constants 3 doc comment\(s\) tied/);
 });

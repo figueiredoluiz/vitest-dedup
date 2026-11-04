@@ -698,7 +698,7 @@ struct AdmittedEntry {
     too_large: bool,
 }
 
-/// How much of a child's stderr [`drain_stderr`] keeps for an error message.
+/// How much of a child's stderr [`drain_stderr`] keeps for an error message: 64 KiB.
 const MAX_KEPT_STDERR_BYTES: u64 = 64 * 1024;
 
 /// Reads `pipe` to its end on a separate thread and returns the first [`MAX_KEPT_STDERR_BYTES`]
