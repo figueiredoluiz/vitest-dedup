@@ -5,6 +5,7 @@ export default {
       'fixtures/recall/redundant-hook-lexical-overwrite/main.test.ts',
       'fixtures/oracle/redundant-hooks/*.test.ts',
       'fixtures/oracle/hook-proof-boundaries/*.test.ts',
+      'fixtures/oracle/api-export-identity/*.test.ts',
     ],
     setupFiles: ['./fixtures/oracle/hook-proof-boundaries/setup.ts'],
     maxWorkers: 1,

@@ -5,6 +5,8 @@ use crate::lang::{parse, Lines};
 use std::fs;
 use std::path::Path;
 
+mod export_identity;
+
 /// The inventory of `main` (`a.test.ts`) in a project holding `files` besides it.
 fn inventory_of(main: &str, files: &[(&str, &str)], globals: bool) -> (Inventory, String) {
     let dir = tempfile::tempdir().unwrap();

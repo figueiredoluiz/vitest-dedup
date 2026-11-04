@@ -44,7 +44,14 @@ pub enum Export {
     /// The API's namespace, which nothing replaces.
     Namespace,
     /// A registration function the API's module exports, re-exported as it is.
-    Api(Registers),
+    Api {
+        /// The registration category exposed by the binding.
+        registers: Registers,
+        /// Its terminal dialect API module, borrowed from immutable dialect data.
+        module: &'static str,
+        /// Its terminal export name, retained through renamed barrel exports.
+        name: &'static str,
+    },
     /// A framework registration value exported through a local alias or builder.
     Derived(Registers),
     /// A function or value that registers when called.
@@ -52,6 +59,19 @@ pub enum Export {
 }
 
 impl Export {
+    /// A later star needs the same proven terminal binding, not merely the same reach.
+    fn through_star(self, prior: Option<Self>, first: bool, spelled: bool) -> Self {
+        match self {
+            Self::Wrapper(_) => self,
+            _ if !spelled
+                && (first || (matches!(self, Self::Api { .. }) && prior == Some(self))) =>
+            {
+                self
+            }
+            _ => Self::Wrapper(Reach::Tasks),
+        }
+    }
+
     /// What a name holds when it is reached twice: the widest reach of two wrappers, and anything
     /// else that disagrees may be either.
     fn widest(self, other: Self) -> Self {
@@ -345,7 +365,7 @@ impl crate::memory::HeapBytes for Export {
     fn heap_bytes(&self) -> usize {
         match self {
             Self::Namespace => 0,
-            Self::Api(kind) | Self::Derived(kind) => kind.heap_bytes(),
+            Self::Api { registers, .. } | Self::Derived(registers) => registers.heap_bytes(),
             Self::Wrapper(Reach::Hook | Reach::Hooks | Reach::Tasks) => 0,
         }
     }

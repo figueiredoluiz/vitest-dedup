@@ -6,6 +6,15 @@
 | Namespace import | `import * as vitest from 'vitest'; vitest.test(...)` | Member access off a namespace-imported binding from the `'vitest'` specifier must be recognized, not just bare identifiers. |
 | Globals | `globals: true` in config | No import at all. See [Globals](#globals). |
 
+## Registration re-exports
+
+The analyzer follows direct and renamed registration re-exports through project barrels.
+Multiple `export *` paths preserve a registration when they prove the same terminal API module
+and export name. An explicit known value re-export takes precedence over stars in either source
+order. A matching registration category alone does not prove binding identity; conflicting or
+opaque star sources retain their conservative refusal. Module-load registrations remain visible
+independently of which export supplies the imported function.
+
 ## Globals
 
 With `globals: true`, `test`, `describe`, `it`, `suite`, `expect`, the hooks and the rest are
