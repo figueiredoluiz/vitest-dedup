@@ -263,6 +263,28 @@
       ]
     },
     {
+      "name": "cross-file-duplicate-dynamic-import-directory",
+      "path": "cross-file-duplicate-dynamic-import-directory",
+      "rule": "cross-file-duplicate",
+      "role": "negative",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-05",
+      "expectedTests": 2,
+      "expectedIncomplete": false,
+      "expectedUnresolved": 0,
+      "expectedFindings": [],
+      "expectedAbsent": [
+        {
+          "rule": "cross-file-duplicate",
+          "titles": [
+            "reads the module",
+            "reads the module"
+          ]
+        }
+      ]
+    },
+    {
       "name": "cross-file-duplicate-dynamic-import-template-different-module",
       "path": "cross-file-duplicate-dynamic-import-template-different-module",
       "rule": "cross-file-duplicate",
