@@ -27,10 +27,9 @@ The footer summarizes analyzed tests and files, displayed severities, inline sup
 baseline debt. Truncated reports label shown findings and omitted counts explicitly. The severity
 summary keeps its fixed `errors, warnings, off` shape, so the `off` count of a CLI run is always 0.
 
-The CLI also shows the existing error-level duplication threshold: unique unbaselined error finding
-locations divided by analyzed executable tests. Locations may belong to suites or hooks too, so the
-numerator is labeled as locations rather than tests. Zero executable tests have no rate to display,
-even when a suite finding fails policy.
+The CLI also shows the error-level duplication rate the threshold is compared with: duplicated
+cases over eligible cases (see [the quality gate](../configuration.md#quality-gate)). A run with no
+eligible case has no rate to display, even when a suite finding fails policy.
 
 `Analysis policy` is separate from the threshold and includes `--fail-on-new` and the selected
 incomplete-run policy. `PASS` can be qualified by incomplete coverage; it does not certify the whole

@@ -368,6 +368,26 @@ describe("extractOutputs", () => {
     assert.equal(outputs["new-findings"], "1");
   });
 
+  test("publishes the quality gate's numerator, denominator and rate together", () => {
+    const outputs = extractOutputs(
+      { ...realisticReport, qualityGate: { errorCases: 2, eligibleCases: 8, percentage: 25 } },
+      1,
+    );
+    assert.equal(outputs["error-cases"], "2");
+    assert.equal(outputs["eligible-cases"], "8");
+    assert.equal(outputs["duplication-percentage"], "25");
+    const none = extractOutputs(
+      { ...realisticReport, qualityGate: { errorCases: 0, eligibleCases: 0, percentage: null } },
+      0,
+    );
+    assert.equal(none["eligible-cases"], "0");
+    assert.equal(none["duplication-percentage"], "", "no eligible case means no rate");
+    // A report from before the gate figures existed sets none of the three.
+    const older = extractOutputs(realisticReport, 1);
+    assert.equal("error-cases" in older, false);
+    assert.equal("duplication-percentage" in older, false);
+  });
+
   test('surfaces incomplete: true as the string "true"', () => {
     const outputs = extractOutputs({ ...realisticReport, incomplete: true }, 0);
     assert.equal(outputs.incomplete, "true");

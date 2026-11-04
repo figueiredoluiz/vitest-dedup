@@ -170,6 +170,7 @@ impl Engine {
             hooks,
             run,
             tests,
+            eligible,
             unresolved,
             empty_tables,
             containers,
@@ -228,6 +229,7 @@ impl Engine {
             exports: exports.heap_bytes(),
             scalars: tests
                 .heap_bytes()
+                .saturating_add(eligible.heap_bytes())
                 .saturating_add(unresolved.heap_bytes())
                 .saturating_add(empty_tables.heap_bytes())
                 .saturating_add(containers.heap_bytes())

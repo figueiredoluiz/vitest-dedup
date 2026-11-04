@@ -84,7 +84,7 @@ fn gate(findings: Vec<Finding>, baselined: bool) -> (bool, usize) {
         crate::model::IncompleteCauses::default(),
         crate::analysis::RunModes::default(),
     );
-    (finished.had_error_finding, finished.error_finding_locations)
+    (finished.had_error_finding, finished.error_cases)
 }
 
 /// Reporting a copied block once gates exactly as its child findings would, at their severity.
@@ -136,7 +136,7 @@ fn carried_children_keep_the_highest_severity() {
     let at = |line| {
         let mut location = suite.locations[0].clone();
         location.span.start.line = line;
-        vec![location]
+        vec![(location, None)]
     };
     let (one, two, three) = (at(1), at(2), at(3));
     crate::rules::suites::carry(&mut suite, Severity::Warning, one);
@@ -262,7 +262,7 @@ fn a_child_relation_gates_with_the_suite_finding_that_stands_for_it() {
                 ..Default::default()
             },
         );
-        (finished.had_error_finding, finished.error_finding_locations)
+        (finished.had_error_finding, finished.error_cases)
     };
     assert_eq!(gate_with(true), (false, 0));
     assert_eq!(gate_with(false), (true, 2));

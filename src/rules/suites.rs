@@ -2,7 +2,7 @@
 
 use super::{emit, keyed, one_per_declaration, Entry, Files};
 use crate::config::Config;
-use crate::model::{Covers, Finding, Location, Rule, Severity};
+use crate::model::{Covers, Finding, GateCase, Location, Rule, Severity};
 use crate::modes::{apply_inline_suppressions, InlineSuppression};
 use crate::pairs::PairBudget;
 use std::collections::{BTreeMap, BTreeSet};
@@ -106,11 +106,7 @@ impl Twins {
                 continue;
             }
             for &suite in suites {
-                carry(
-                    &mut findings[suite],
-                    child.severity,
-                    child.locations.clone(),
-                );
+                carry(&mut findings[suite], child.severity, child.cases());
             }
         }
         // An outer copy also stands for the tests a suite finding nested in its copies carries, so
@@ -144,7 +140,7 @@ impl Twins {
             }
         }
         for (outer, covers) in nested {
-            carry(&mut findings[outer], covers.severity, covers.locations);
+            carry(&mut findings[outer], covers.severity, covers.cases);
         }
         let removed: BTreeSet<usize> = represented.iter().map(|(child, _)| *child).collect();
         let mut index = 0;
@@ -155,19 +151,28 @@ impl Twins {
     }
 }
 
-/// Folds `locations` at `severity` into `suite`'s covers, keeping only the highest severity's.
-pub(super) fn carry(suite: &mut Finding, severity: Severity, locations: Vec<Location>) {
+/// Folds `cases` at `severity` into `suite`'s covers, keeping only the highest severity's. The
+/// reported locations stay one per declaration; the cases keep each row.
+pub(super) fn carry(suite: &mut Finding, severity: Severity, cases: Vec<GateCase>) {
     let covers = suite.covers.get_or_insert_with(|| Covers {
         severity,
         locations: Vec::new(),
+        cases: Vec::new(),
     });
     if severity > covers.severity {
         covers.severity = severity;
         covers.locations.clear();
+        covers.cases.clear();
     }
     if severity == covers.severity {
-        covers.locations.extend(locations);
-        covers.locations.sort();
+        covers.cases.extend(cases);
+        covers.cases.sort();
+        covers.cases.dedup();
+        covers.locations = covers
+            .cases
+            .iter()
+            .map(|(location, _)| location.clone())
+            .collect();
         covers.locations.dedup();
     }
 }

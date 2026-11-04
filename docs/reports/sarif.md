@@ -21,6 +21,8 @@ SARIF 2.1.0. The log names the published schema in `$schema`.
 - An incomplete run sets `runs[0].invocations[0].properties.incomplete`.
   `runs[0].invocations[0].properties.incompleteCauses` counts the causes, keyed and valued as in the
   `json` report, and is present with false/zero values on a complete run.
+- `runs[0].invocations[0].properties.qualityGate` carries the threshold's figures as in the `json`
+  report: `errorCases`, `eligibleCases` and `percentage`.
 - Excluded files are not results: the per-file list and reason codes are in the `json` and `jsonl`
   reports only (see [Excluded files](../incomplete-runs.md#excluded-files)).
 

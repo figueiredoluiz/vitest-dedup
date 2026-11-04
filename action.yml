@@ -116,6 +116,18 @@ outputs:
       found.
   new-findings:
     description: Number of findings absent from the baseline
+  error-cases:
+    description: >-
+      Distinct runtime cases (a declaration, or one row of a test table) in a non-baselined
+      error-severity finding: the quality gate's numerator.
+  eligible-cases:
+    description: >-
+      Runtime cases the quality gate counts: every analyzed test except benchmarks, placeholders
+      for tests a wrapper call or module load registers, and todos with no callback.
+  duplication-percentage:
+    description: >-
+      `error-cases / eligible-cases` as a percentage, the number `threshold` is compared with.
+      Empty when no case is eligible.
   json-report:
     description: Path to the JSON report
   html-report:

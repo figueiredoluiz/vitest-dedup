@@ -97,6 +97,7 @@ pub(crate) mod test_support {
             inert: vec![false, false],
             baselined: false,
             covers: None,
+            rows: Vec::new(),
         }
     }
 
@@ -108,6 +109,10 @@ pub(crate) mod test_support {
             locations: vec![
                 location("src/a.test.ts", 11, 5),
                 location("src/a.test.ts", 21, 5),
+            ],
+            cases: vec![
+                (location("src/a.test.ts", 11, 5), None),
+                (location("src/a.test.ts", 21, 5), None),
             ],
         });
         rendered_result(vec![suite])
@@ -129,6 +134,7 @@ pub(crate) mod test_support {
             inert: vec![false, false],
             baselined: false,
             covers: None,
+            rows: Vec::new(),
         }
     }
 
@@ -138,6 +144,7 @@ pub(crate) mod test_support {
         AnalysisResult {
             findings: vec![finding_across_files(message)],
             tests_analyzed: 4,
+            eligible_cases: 4,
             files_analyzed: 2,
             ..AnalysisResult::default()
         }
@@ -158,6 +165,7 @@ pub(crate) mod test_support {
         AnalysisResult {
             findings,
             tests_analyzed: 2,
+            eligible_cases: 2,
             files_analyzed: 1,
             ..AnalysisResult::default()
         }

@@ -262,6 +262,14 @@ export function extractOutputs(report, exitCode) {
   const modes = report.modes ?? {};
   outputs.baselined = String(modes.baselined ?? 0);
   outputs["new-findings"] = String(modes.newFindings ?? 0);
+  // The quality gate's figures, as the reports publish them: a report from before they existed
+  // sets none, and a run with no eligible case has no percentage.
+  const gate = report.qualityGate;
+  if (gate && typeof gate.errorCases === "number" && typeof gate.eligibleCases === "number") {
+    outputs["error-cases"] = String(gate.errorCases);
+    outputs["eligible-cases"] = String(gate.eligibleCases);
+    outputs["duplication-percentage"] = typeof gate.percentage === "number" ? String(gate.percentage) : "";
+  }
   return outputs;
 }
 

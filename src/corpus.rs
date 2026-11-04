@@ -65,6 +65,18 @@ pub enum Exclusion {
     UnresolvedTitle,
 }
 
+impl TestCase {
+    /// Whether the quality gate's denominator counts this case: every runtime test, compared or
+    /// not, except a benchmark, a placeholder for what a wrapper call or module load registers,
+    /// and a todo with no callback.
+    pub fn gate_eligible(&self) -> bool {
+        !matches!(
+            self.exclusion,
+            Some(Exclusion::Benchmark | Exclusion::RegisteredElsewhere | Exclusion::NoCallback)
+        )
+    }
+}
+
 impl Exclusion {
     /// The report's reason code and sentence, for an exclusion that leaves a test unresolved;
     /// `None` for a test with nothing to compare.
@@ -1219,6 +1231,8 @@ pub struct Engine {
     run: Run,
     /// Tests read, rows counted one each.
     pub tests: usize,
+    /// The tests the quality gate's denominator counts: see [`TestCase::gate_eligible`].
+    pub eligible: usize,
     /// Tests left unresolved: excluded for a reason that has a report code.
     pub unresolved: usize,
     /// Proven empty table declarations, independently of executable test counts.
@@ -1452,6 +1466,11 @@ impl Engine {
         }
         use crate::memory::HeapBytes;
         let case_count = corpus.tests.len();
+        self.eligible += corpus
+            .tests
+            .iter()
+            .filter(|case| case.gate_eligible())
+            .count();
         let mut corpus = corpus;
         let cases = (relative.to_path_buf(), std::mem::take(&mut corpus.tests));
         self.retained.cases = self.retained.cases.saturating_add(cases.heap_bytes());

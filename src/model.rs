@@ -1051,7 +1051,15 @@ pub struct Finding {
     /// Absent on every other finding. Not part of the fingerprint.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub covers: Option<Covers>,
+    /// The table row of each participant, parallel to `locations`; empty when no participant is
+    /// a row. With the location it identifies the runtime case the quality gate counts. Not a
+    /// report field and not part of the fingerprint.
+    #[serde(skip)]
+    pub rows: Vec<Option<usize>>,
 }
+
+/// One runtime case, as the quality gate counts it: its declaration's location and its table row.
+pub type GateCase = (Location, Option<usize>);
 
 /// What reporting a copied block once removed: the highest severity among the child findings it
 /// replaced, and their locations at that severity. Copying a whole block must not pass a gate
@@ -1062,6 +1070,9 @@ pub struct Covers {
     pub severity: Severity,
     /// The tests the replaced findings at that severity named.
     pub locations: Vec<Location>,
+    /// The runtime cases behind `locations`, rows included; what the quality gate counts.
+    #[serde(skip)]
+    pub cases: Vec<GateCase>,
 }
 
 impl Finding {
@@ -1072,15 +1083,24 @@ impl Finding {
             .map_or(self.severity, |covers| covers.severity.max(self.severity))
     }
 
-    /// The tests the quality gate counts for this finding at `severity`. A finding that carries
-    /// tests counts only those, at the carried severity or its own when higher: its own locations
-    /// are blocks, not tests.
-    pub fn gate_locations(&self, severity: Severity) -> impl Iterator<Item = &Location> {
-        let locations = match &self.covers {
-            Some(covers) => (self.gate_severity() == severity).then_some(&covers.locations),
-            None => (self.severity == severity).then_some(&self.locations),
-        };
-        locations.into_iter().flatten()
+    /// The runtime cases the quality gate counts for this finding at `severity`. A finding that
+    /// carries tests counts only those, at the carried severity or its own when higher: its own
+    /// locations are blocks, not tests.
+    pub fn gate_cases(&self, severity: Severity) -> Vec<GateCase> {
+        match &self.covers {
+            Some(covers) if self.gate_severity() == severity => covers.cases.clone(),
+            None if self.severity == severity => self.cases(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// Each participant as a runtime case: its location and its row.
+    pub fn cases(&self) -> Vec<GateCase> {
+        self.locations
+            .iter()
+            .enumerate()
+            .map(|(index, location)| (location.clone(), self.rows.get(index).copied().flatten()))
+            .collect()
     }
 
     /// Calling files represented by participant `index`, with the legacy source-file fallback.
@@ -2476,7 +2496,8 @@ pub struct AnalysisResult {
     /// Totals and the per-reason histogram behind [`AnalysisResult::excluded_files`].
     #[serde(default)]
     pub exclusions: ExclusionSummary,
-    /// Unique test locations in at least one error-severity finding, **before** truncation.
+    /// Distinct runtime cases (declaration location and table row) in at least one non-baselined
+    /// error-severity finding, **before** truncation: the threshold's numerator.
     ///
     /// `threshold_passed`'s numerator must not depend on which findings survived a display cap.
     /// Findings are sorted then truncated to a retention limit, so a run producing more
@@ -2486,7 +2507,12 @@ pub struct AnalysisResult {
     ///
     /// Same treatment as [`AnalysisResult::had_error_finding`], and for the same reason: record the
     /// fact where it is determined rather than re-deriving it from a presentation-limited list.
-    pub error_finding_locations: usize,
+    pub error_cases: usize,
+    /// The runtime cases the quality gate's denominator counts: every analyzed test except
+    /// benchmarks, wrapper and module-load placeholders, and todos with no callback. Unlike
+    /// [`AnalysisResult::tests_analyzed`], which counts every case read.
+    #[serde(default)]
+    pub eligible_cases: usize,
     /// Whether any error-severity finding was produced, **before** presentation truncation.
     ///
     /// The quality gate must not depend on which findings survived a display cap. Findings are
@@ -2497,7 +2523,7 @@ pub struct AnalysisResult {
     /// independent of presentation.
     ///
     /// Baselined findings are excluded from this and from
-    /// [`AnalysisResult::error_finding_locations`], for the same reason they are excluded from the
+    /// [`AnalysisResult::error_cases`], for the same reason they are excluded from the
     /// gate: a repository that has recorded its existing debt must be able to pass, or a baseline
     /// would be decorative. Both are still captured before truncation.
     pub had_error_finding: bool,
@@ -2558,6 +2584,7 @@ mod tests {
             inert: participants.iter().map(|_| false).collect(),
             baselined: false,
             covers: None,
+            rows: Vec::new(),
         }
     }
 

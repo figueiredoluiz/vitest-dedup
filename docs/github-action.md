@@ -55,6 +55,9 @@ The inputs are `path`, `config`, `threshold`, `reporters`, `output`, `rule`, `gl
 | `incomplete` | `"true"` when the run could not fully cover the corpus |
 | `baselined` | Findings the baseline accounted for |
 | `new-findings` | Findings absent from the baseline |
+| `error-cases` | Distinct runtime cases in a non-baselined error-severity finding: the threshold's numerator |
+| `eligible-cases` | Runtime cases the threshold counts: every test but benchmarks, wrapper placeholders and bodyless todos |
+| `duplication-percentage` | `error-cases / eligible-cases` as a percentage; empty when no case is eligible |
 | `json-report` | Path to the JSON report |
 | `html-report` | Path to the HTML report, when the html reporter was selected |
 | `attestation` | `verified`, or `unavailable` when only the checksum could be checked |

@@ -950,13 +950,14 @@ fn run_with_engine(
     let (excluded_files, exclusions) = excluded.finish();
     let mut result = AnalysisResult {
         had_error_finding: finished.had_error_finding,
-        error_finding_locations: finished.error_finding_locations,
+        error_cases: finished.error_cases,
         unresolved_tests: engine.unresolved,
         blind_files: engine.blind_files(),
         excluded_files,
         exclusions,
         findings: finished.findings,
         tests_analyzed: engine.tests,
+        eligible_cases: engine.eligible,
         files_analyzed: files_read,
         incomplete_causes: finished.causes,
         modes: finished.modes,

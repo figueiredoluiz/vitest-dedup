@@ -531,6 +531,11 @@ fn over(rule: Rule, severity: Severity, members: &[Entry<'_>], message: String) 
         inert: members.iter().map(|member| member.case.inert).collect(),
         baselined: false,
         covers: None,
+        rows: if members.iter().any(|member| member.case.row.is_some()) {
+            members.iter().map(|member| member.case.row).collect()
+        } else {
+            Vec::new()
+        },
     }
 }
 

@@ -420,7 +420,7 @@ pub fn baseline_from_findings(findings: &[Finding]) -> Baseline {
 /// Separate from [`apply_baseline`] because the file being matched against was written *from* this
 /// run: re-reading it to discover that it matches everything would be theatre. Zeroing
 /// [`AnalysisResult::had_error_finding`](crate::model::AnalysisResult::had_error_finding) and
-/// [`AnalysisResult::error_finding_locations`](crate::model::AnalysisResult::error_finding_locations)
+/// [`AnalysisResult::error_cases`](crate::model::AnalysisResult::error_cases)
 /// here is sound only because the caller refuses to write a baseline from an incomplete run, and
 /// truncation is the only way a finding could exist that this result does not carry.
 pub fn mark_all_baselined(result: &mut crate::model::AnalysisResult) {
@@ -431,7 +431,7 @@ pub fn mark_all_baselined(result: &mut crate::model::AnalysisResult) {
     result.modes.baselined = result.findings.len();
     result.modes.new_findings = 0;
     result.had_error_finding = false;
-    result.error_finding_locations = 0;
+    result.error_cases = 0;
 }
 
 /// Keeps findings with at least one participant in `changed`; returns how many were withheld.
