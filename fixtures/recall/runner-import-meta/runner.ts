@@ -5,4 +5,7 @@ export function run(label: string) {
   test(`${label} reads module metadata`, () => {
     expect(import.meta.url).toBeTruthy()
   })
+  test(`${label} reads module metadata`, () => {
+    expect(import.meta.url).toBeTruthy()
+  })
 }

@@ -12,6 +12,8 @@ tests around it are left out of comparison rather than guessed at.
 - Each call registers its own tests, titled from its own arguments. Repeated calls of one runner
   keep the runner's declaration identity, so they are not reported as duplicates of each other.
 - An expanded test is compared with every other test, including the caller's own.
+- Reads of `import.meta` retain the runner's source module identity. A matching spelling in a
+  different module does not establish equal metadata, even when both assertions happen to pass.
 - Type-only imports, interfaces and type aliases are erased and add no effects.
 
 ## When a call is expanded

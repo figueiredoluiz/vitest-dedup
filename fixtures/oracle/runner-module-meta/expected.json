@@ -1,0 +1,7 @@
+{
+  "files": {
+    "conflicting.test.ts": { "tasks": 2, "wrapperSites": ["wrapper@5"], "next": {} },
+    "same.test.ts": { "tasks": 2, "wrapperSites": ["wrapper@4", "wrapper@5"], "next": {} },
+    "other.test.ts": { "tasks": 1, "wrapperSites": ["wrapper@4"], "next": {} }
+  }
+}
