@@ -82,33 +82,33 @@ pub(crate) fn identity(parsed: &Parsed, row: &Row, callback: NodeId) -> Option<S
     Some(format!("{shape}:{identity}"))
 }
 
-/// A local or foreign imported suite callee may hide a table that the inventory has not recorded yet.
-/// Refuse its name prefix for row findings until that provenance is available.
+/// Whether a suite registration's name prefix is proven for row and suite findings: the inventory
+/// recorded its callee as reaching the API through an import (re-exports included) or the
+/// project's globals, and the callee names no local binding. A local binding may hold a suite
+/// table, which the site does not record, so its prefix stays unknown; so does a wrapper's.
 pub(crate) fn suite_prefix_known(
     parsed: &Parsed,
     call: NodeId,
-    dialect: &crate::framework::Dialect,
+    provenance: crate::inventory::Provenance,
 ) -> bool {
+    use crate::inventory::Provenance;
     let tree = &parsed.tree;
     let Some(callee) = tree.child(call, "callee") else {
         return false;
     };
-    !std::iter::once(callee)
-        .chain(tree.descendants(callee))
-        .any(|node| {
-            tree.kind(node) == "Identifier"
-                && parsed
-                    .scopes
-                    .symbol_at(tree.span(node).start)
-                    .is_some_and(|symbol| {
-                        let Declaration::Import { import, .. } =
-                            parsed.scopes.symbol(symbol).declaration
-                        else {
-                            return true;
-                        };
-                        tree.child(import, "source")
-                            .and_then(|source| tree.text(source, "value"))
-                            .is_none_or(|module| !dialect.api_modules.contains(&module))
-                    })
-        })
+    matches!(provenance, Provenance::Direct | Provenance::Global)
+        && !std::iter::once(callee)
+            .chain(tree.descendants(callee))
+            .any(|node| {
+                tree.kind(node) == "Identifier"
+                    && parsed
+                        .scopes
+                        .symbol_at(tree.span(node).start)
+                        .is_some_and(|symbol| {
+                            !matches!(
+                                parsed.scopes.symbol(symbol).declaration,
+                                Declaration::Import { .. }
+                            )
+                        })
+            })
 }

@@ -9254,6 +9254,76 @@
           ]
         }
       ]
+    },
+    {
+      "name": "suite-api-reexport-spelling",
+      "path": "suite-api-reexport-spelling",
+      "rule": "duplicate-each-row",
+      "role": "positive",
+      "engine": "next",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-04",
+      "expectedTests": 2,
+      "expectedIncomplete": false,
+      "expectedUnresolved": 0,
+      "expectedFindings": [
+        {
+          "rule": "duplicate-each-row",
+          "severity": "warning",
+          "titles": [
+            "s > row 1",
+            "s > row 1"
+          ]
+        }
+      ],
+      "expectedAbsent": []
+    },
+    {
+      "name": "suite-user-wrapper-withheld",
+      "path": "suite-user-wrapper-withheld",
+      "rule": "duplicate-each-row",
+      "role": "negative",
+      "engine": "next",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-04",
+      "expectedTests": 3,
+      "expectedIncomplete": true,
+      "expectedUnresolved": 3,
+      "expectedFindings": [],
+      "expectedAbsent": [
+        {
+          "rule": "duplicate-each-row",
+          "titles": [
+            "s > row 1",
+            "s > row 1"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "suite-local-table-withheld",
+      "path": "suite-local-table-withheld",
+      "rule": "duplicate-each-row",
+      "role": "negative",
+      "engine": "next",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-04",
+      "expectedTests": 2,
+      "expectedIncomplete": false,
+      "expectedUnresolved": 0,
+      "expectedFindings": [],
+      "expectedAbsent": [
+        {
+          "rule": "duplicate-each-row",
+          "titles": [
+            "scope %s > row",
+            "scope %s > row"
+          ]
+        }
+      ]
     }
   ],
   "knownFalsePositiveBaseline": 1,
