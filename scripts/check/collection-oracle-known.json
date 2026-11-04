@@ -55,6 +55,34 @@
       "kind": "missing-test",
       "item": "beta > reads the mode",
       "reason": "A concise suite body sequences its tests, and the default engine reads block bodies only."
+    },
+    {
+      "dir": "fixtures/recall/helper-hook-runtime-calls",
+      "path": "page.ts",
+      "kind": "missing-hook",
+      "item": "beforeAll@page.ts:6",
+      "reason": "The next inventory represents imported hook registrations at the collection-time setupPage() call as a hook-wrapper site; it does not emit physical hook records for the imported module."
+    },
+    {
+      "dir": "fixtures/recall/helper-hook-runtime-calls",
+      "path": "page.ts",
+      "kind": "missing-hook",
+      "item": "afterAll@page.ts:9",
+      "reason": "The next inventory represents imported hook registrations at the collection-time setupPage() call as a hook-wrapper site; it does not emit physical hook records for the imported module."
+    },
+    {
+      "dir": "fixtures/recall/helper-hook-runtime-local",
+      "path": "page.ts",
+      "kind": "missing-hook",
+      "item": "beforeAll@page.ts:6",
+      "reason": "The next inventory represents imported hook registrations at the collection-time setupPage() call as a hook-wrapper site; it does not emit physical hook records for the imported module."
+    },
+    {
+      "dir": "fixtures/recall/helper-hook-runtime-local",
+      "path": "page.ts",
+      "kind": "missing-hook",
+      "item": "afterAll@page.ts:9",
+      "reason": "The next inventory represents imported hook registrations at the collection-time setupPage() call as a hook-wrapper site; it does not emit physical hook records for the imported module."
     }
   ],
   "siteDisagreements": [
