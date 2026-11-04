@@ -8094,14 +8094,23 @@
       "name": "vitest-api-renamed",
       "path": "vitest-api-renamed",
       "rule": "cross-file-duplicate",
-      "role": "negative",
+      "role": "variant",
       "origin": "synthetic",
       "verdict": "generated",
       "classifiedAt": "2026-10-28",
       "expectedTests": 4,
       "expectedIncomplete": true,
       "expectedUnresolved": 2,
-      "expectedFindings": [],
+      "expectedFindings": [
+        {
+          "rule": "cross-file-duplicate",
+          "severity": "warning",
+          "locations": [
+            "alias.test.ts:5",
+            "renamed-vi.test.ts:5"
+          ]
+        }
+      ],
       "expectedAbsent": [
         {
           "rule": "cross-file-duplicate",
@@ -8120,6 +8129,147 @@
       ],
       "expectedIncompleteNext": false,
       "expectedUnresolvedNext": 0
+    },
+    {
+      "name": "vitest-api-in-place-dynamic",
+      "path": "vitest-api-in-place-dynamic",
+      "rule": "cross-file-duplicate",
+      "role": "positive",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-05",
+      "expectedTests": 3,
+      "expectedIncomplete": false,
+      "expectedUnresolved": 0,
+      "expectedFindings": [
+        {
+          "rule": "cross-file-duplicate",
+          "severity": "warning",
+          "locations": [
+            "namespace.test.ts:4",
+            "renamed.test.ts:4"
+          ]
+        }
+      ],
+      "expectedAbsent": [
+        {
+          "rule": "cross-file-duplicate",
+          "locations": [
+            "plain.test.ts:2",
+            "renamed.test.ts:4"
+          ]
+        }
+      ],
+      "expectedIncompleteNext": false,
+      "expectedUnresolvedNext": 0
+    },
+    {
+      "name": "vitest-api-spelled-vi-alias",
+      "path": "vitest-api-spelled-vi-alias",
+      "rule": "cross-file-duplicate",
+      "role": "positive",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-05",
+      "expectedTests": 3,
+      "expectedIncomplete": false,
+      "expectedUnresolved": 0,
+      "expectedFindings": [
+        {
+          "rule": "cross-file-duplicate",
+          "severity": "warning",
+          "locations": [
+            "alias.test.ts:5",
+            "vi.test.ts:5"
+          ]
+        }
+      ],
+      "expectedAbsent": [
+        {
+          "rule": "cross-file-duplicate",
+          "locations": [
+            "alias.test.ts:5",
+            "plain.test.ts:3"
+          ]
+        }
+      ],
+      "expectedIncompleteNext": false,
+      "expectedUnresolvedNext": 0
+    },
+    {
+      "name": "vitest-api-renamed-unmock",
+      "path": "vitest-api-renamed-unmock",
+      "rule": "cross-file-duplicate",
+      "role": "negative",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-05",
+      "expectedTests": 2,
+      "expectedIncomplete": false,
+      "expectedUnresolved": 0,
+      "expectedFindings": [],
+      "expectedAbsent": [
+        {
+          "rule": "cross-file-duplicate",
+          "locations": [
+            "renamed.test.ts:6",
+            "vi.test.ts:6"
+          ]
+        }
+      ],
+      "expectedIncompleteNext": false,
+      "expectedUnresolvedNext": 0
+    },
+    {
+      "name": "vitest-api-computed-mock",
+      "path": "vitest-api-computed-mock",
+      "rule": "cross-file-duplicate",
+      "role": "negative",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-05",
+      "expectedTests": 2,
+      "expectedIncomplete": false,
+      "expectedUnresolved": 0,
+      "expectedFindings": [],
+      "expectedAbsent": [
+        {
+          "rule": "cross-file-duplicate",
+          "locations": [
+            "computed.test.ts:5",
+            "vi.test.ts:5"
+          ]
+        }
+      ],
+      "expectedIncompleteNext": false,
+      "expectedUnresolvedNext": 0
+    },
+    {
+      "name": "vitest-api-renamed-in-test",
+      "path": "vitest-api-renamed-in-test",
+      "rule": "cross-file-duplicate",
+      "role": "negative",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-05",
+      "expectedTests": 2,
+      "expectedIncomplete": true,
+      "expectedUnresolved": 1,
+      "expectedFindings": [],
+      "expectedAbsent": [
+        {
+          "rule": "cross-file-duplicate",
+          "locations": [
+            "renamed.test.ts:3",
+            "vi.test.ts:3"
+          ]
+        }
+      ],
+      "expectedIncompleteNext": true,
+      "expectedUnresolvedNext": 1,
+      "blindUnderCurrent": [
+        "renamed.test.ts"
+      ]
     },
     {
       "name": "vitest-api-namespace-dynamic",

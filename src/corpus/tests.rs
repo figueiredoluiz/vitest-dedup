@@ -494,6 +494,10 @@ fn cross_file_keys_carry_what_each_file_does_while_loading() {
     let plain =
         format!("import {{ test, expect }} from 'vitest'\nimport data from './data.json'\n{body}");
     let mocked = format!("import {{ test, expect, vi }} from 'vitest'\nimport data from './data.json'\nvi.mock('./x')\n{body}");
+    // Vitest hoists only `vi.mock` as spelled: through another binding the call runs in place.
+    let renamed = format!("import {{ test, expect, vi as tools }} from 'vitest'\nimport data from './data.json'\ntools.mock('./x')\n{body}");
+    let alias = format!("import {{ test, expect, vitest as tools }} from 'vitest'\nimport data from './data.json'\ntools.mock('./x')\n{body}");
+    let namespace = format!("import {{ test, expect }} from 'vitest'\nimport * as framework from 'vitest'\nimport data from './data.json'\nframework.vi.mock('./x')\n{body}");
     // Nothing but the setup file differs between directories.
     let setup = "import { test, expect } from 'vitest'\nimport './setup.js'\ntest('t', () => { expect(globalThis.mode).toBe('a') })".to_owned();
     // What a dynamic import loads, likewise.
@@ -514,6 +518,9 @@ fn cross_file_keys_carry_what_each_file_does_while_loading() {
             ("one/f.test.ts", &dynamic),
             ("one/g.test.ts", &dynamic),
             ("two/f.test.ts", &dynamic),
+            ("one/m.test.ts", &renamed),
+            ("one/n.test.ts", &alias),
+            ("one/o.test.ts", &namespace),
         ],
         &[
             "one/a.test.ts",
@@ -526,6 +533,9 @@ fn cross_file_keys_carry_what_each_file_does_while_loading() {
             "one/f.test.ts",
             "one/g.test.ts",
             "two/f.test.ts",
+            "one/m.test.ts",
+            "one/n.test.ts",
+            "one/o.test.ts",
         ],
     );
     let key = |index: usize| corpora[index].tests[0].module_key;
@@ -544,6 +554,20 @@ fn cross_file_keys_carry_what_each_file_does_while_loading() {
         key(9),
         "a dynamic import of the same spelling is another file"
     );
+    assert!(
+        corpora[10..]
+            .iter()
+            .all(|corpus| corpus.tests[0].exclusion.is_none()),
+        "a top-level mock run in place is compared"
+    );
+    assert_eq!(
+        key(10),
+        key(11),
+        "renamed `vi` and `vitest` mock in place alike"
+    );
+    assert_eq!(key(10), key(12), "a namespace member mocks in place too");
+    assert_ne!(key(10), key(2), "`vi.mock` runs before the imports");
+    assert_ne!(key(10), key(0), "a renamed mock still mocks");
     assert_eq!(
         corpora[0].tests[0].key, corpora[2].tests[0].key,
         "same-file keys ignore module effects"

@@ -217,14 +217,6 @@
       "reason": "Tests a helper registers are excluded, not compared, until they are compared where the helper is called."
     },
     {
-      "id": "recall-absent|vitest-api-renamed|cross-file-duplicate|renamed-vi.test.ts:5,vi.test.ts:5",
-      "reason": "False positive: a mock through a renamed `vitest` import is not context across files."
-    },
-    {
-      "id": "recall-extra|vitest-api-renamed|cross-file-duplicate|alias.test.ts:5,renamed-vi.test.ts:5",
-      "reason": "False positive: a mock through a renamed `vitest` import is not context across files."
-    },
-    {
       "id": "recall-miss|vitest-api-shadowed-environment|cross-file-duplicate|alias.test.ts:4,plain.test.ts:2",
       "reason": "A shadowed `vitest` is read as the API, so its call stays in the context and equal tests key apart."
     },

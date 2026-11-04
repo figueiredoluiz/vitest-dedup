@@ -1,8 +1,8 @@
 //! The inventory of one module.
 
 use super::{
-    Escape, Export, Inventory, Label, Modules, Provenance, Reach, Setting, Site, SiteKind, ON_LOAD,
-    UNREADABLE_FIXTURE,
+    Escape, Export, InPlaceMock, Inventory, Label, Modules, Provenance, Reach, Setting, Site,
+    SiteKind, ON_LOAD, UNREADABLE_FIXTURE,
 };
 use crate::framework::{Chain, Mocking, Registers};
 use crate::lang::{
@@ -34,6 +34,17 @@ impl Origin {
             _ => None,
         }
     }
+}
+
+/// When a call of the framework's mocking namespace changes module state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MockCall {
+    /// A hoisted member written the way the framework hoists it: it applies before the imports.
+    Hoisted,
+    /// A hoisted member reached through any other spelling: it runs where it is written.
+    InPlace,
+    /// A member whose state changes only where the call runs.
+    Dynamic,
 }
 
 /// One step of a callee chain, from the root outwards.
@@ -160,6 +171,7 @@ pub(super) fn analyse(
     let inventory = Inventory {
         direct_eval: module.evaluates,
         non_hoisted_mock: module.non_hoisted_mock(),
+        in_place_mocks: module.in_place_mocks(),
         unreadable_mock_factory: module.unreadable_mock_factory(),
         unreadable_fixture,
         setup_access: super::setup_access(parsed, setting),
@@ -185,31 +197,108 @@ pub(super) fn analyse(
 type Found = (NodeId, Span, SiteKind, Vec<String>, Provenance);
 
 impl<'s> Module<'s> {
-    /// Whether this module reaches Vitest's non-hoisted mock APIs through a stable API binding.
+    /// Whether this module reaches Vitest's mock APIs through a stable API binding where they
+    /// run in place: a `doMock`/`doUnmock` anywhere, or a `mock`/`unmock` Vitest does not hoist
+    /// outside a top-level statement.
     ///
     /// These calls affect imports when they run, unlike hoisted `vi.mock` and `vi.unmock`; the
     /// next core does not model that dynamic-import state, so the corpus refuses the file rather
     /// than comparing tests under an invented shared context.
     fn non_hoisted_mock(&self) -> bool {
-        self.tree.nodes().any(|call| {
-            let Some((object, member)) = self.member_call(call) else {
-                return false;
-            };
-            self.setting.dialect.mocking_member(member) == Some(Mocking::Dynamic)
-                && self.mocking_namespace(object, &mut HashSet::new())
-                && !self.unreachable(call)
+        self.tree.nodes().any(|call| match self.mock_call(call) {
+            Some(MockCall::Dynamic) => !self.unreachable(call),
+            Some(MockCall::InPlace) => {
+                !self.unreachable(call) && self.top_level_statement(call).is_none()
+            }
+            Some(MockCall::Hoisted) | None => false,
         })
     }
 
-    /// Whether a hoisted `vi.mock` has a factory whose behavior is not written inline.
+    /// The reachable top-level statements calling a `mock`/`unmock` Vitest does not hoist.
+    fn in_place_mocks(&self) -> Vec<InPlaceMock> {
+        let Some(namespace) = self.setting.dialect.mocking_namespace else {
+            return Vec::new();
+        };
+        self.tree
+            .nodes()
+            .filter(|&call| {
+                self.mock_call(call) == Some(MockCall::InPlace) && !self.unreachable(call)
+            })
+            .filter_map(|call| {
+                let statement = self.top_level_statement(call)?;
+                let (_, member) = self.member_call(call)?;
+                Some(InPlaceMock {
+                    statement,
+                    call,
+                    callee: format!("{namespace}.{member}"),
+                })
+            })
+            .collect()
+    }
+
+    /// How a call reaching the framework's mocking namespace through a stable binding changes
+    /// module state, if it is such a call.
+    ///
+    /// Vitest hoists by spelling, not by binding: a hoisted member is hoisted only as a plain,
+    /// non-optional member of an identifier the dialect names (`vi.mock`, `vitest.unmock`).
+    fn mock_call(&self, call: NodeId) -> Option<MockCall> {
+        let (object, member) = self.member_call(call)?;
+        let mocking = self.setting.dialect.mocking_member(member)?;
+        if !self.mocking_namespace(object, &mut HashSet::new()) {
+            return None;
+        }
+        Some(match mocking {
+            Mocking::Dynamic => MockCall::Dynamic,
+            // The hoist visitor still reaches an optional call when anything else in the file
+            // triggers the transform, so where it runs is not known.
+            Mocking::Hoisted if self.optional_call(call) => MockCall::Dynamic,
+            Mocking::Hoisted if self.hoisting_spelling(call, object) => MockCall::Hoisted,
+            Mocking::Hoisted => MockCall::InPlace,
+        })
+    }
+
+    /// Whether `call` or its callee member is optional (`vi?.mock()`, `vi.mock?.()`).
+    fn optional_call(&self, call: NodeId) -> bool {
+        let tree = self.tree;
+        tree.flag(call, "optional")
+            || tree
+                .child(call, "callee")
+                .is_some_and(|callee| tree.flag(tree.inner(callee), "optional"))
+    }
+
+    /// Whether a member call is written the way the framework hoists it: a non-computed member
+    /// of an identifier the dialect spells for hoisting.
+    fn hoisting_spelling(&self, call: NodeId, object: NodeId) -> bool {
+        let tree = self.tree;
+        let object = tree.inner(object);
+        tree.child(call, "callee")
+            .map(|callee| tree.inner(callee))
+            .is_some_and(|callee| !tree.flag(callee, "computed"))
+            && tree.kind(object) == "Identifier"
+            && tree
+                .text(object, "name")
+                .is_some_and(|name| self.setting.dialect.hoists(name))
+    }
+
+    /// The module-top-level expression statement whose expression is `call`, if there is one.
+    fn top_level_statement(&self, call: NodeId) -> Option<NodeId> {
+        let tree = self.tree;
+        let mut parent = tree.outer_parent(call)?;
+        if tree.kind(parent) == "ChainExpression" {
+            parent = tree.outer_parent(parent)?;
+        }
+        (tree.kind(parent) == "ExpressionStatement" && tree.parent(parent) == Some(tree.root()))
+            .then_some(parent)
+    }
+
+    /// Whether a `vi.mock`, hoisted or in place, has a factory whose behavior is not written
+    /// inline.
     fn unreadable_mock_factory(&self) -> bool {
         self.tree.nodes().any(|call| {
-            let Some((object, member)) = self.member_call(call) else {
-                return false;
-            };
-            if self.setting.dialect.mocking_member(member) != Some(Mocking::Hoisted)
-                || !self.mocking_namespace(object, &mut HashSet::new())
-            {
+            if !matches!(
+                self.mock_call(call),
+                Some(MockCall::Hoisted | MockCall::InPlace)
+            ) {
                 return false;
             }
             let arguments: Vec<NodeId> = self

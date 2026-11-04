@@ -318,12 +318,18 @@ fn non_hoisted_mocks_are_found_only_through_stable_vitest_bindings() {
         "import { vi } from 'vitest'; const mocker = vi; mocker.doMock('./dep');",
         "import * as vitest from 'vitest'; vitest.vi.doMock('./dep');",
         "import * as vitest from 'vitest'; vitest['vi'].doMock('./dep');",
+        // A mock Vitest does not hoist, outside a top-level statement.
+        "import { test } from 'vitest'; import { vi as tools } from 'vitest'; test('a', () => { tools.mock('./dep') });",
+        "import { test, vi } from 'vitest'; test('a', () => { vi['mock']('./dep') });",
+        "import { vi as tools } from 'vitest'; const mocked = tools.mock('./dep');",
+        // Optional: where Vitest runs it depends on what else in the file it hoists.
+        "import { vi } from 'vitest'; vi?.mock('./dep');",
+        "import { vi } from 'vitest'; vi.mock?.('./dep');",
     ];
     for source in refused {
-        assert!(
-            inventory_of(source, &[], false).0.non_hoisted_mock,
-            "{source}"
-        );
+        let found = inventory_of(source, &[], false).0;
+        assert!(found.non_hoisted_mock, "{source}");
+        assert!(found.in_place_mocks.is_empty(), "{source}");
     }
     for source in [
         "import { vi } from 'vitest'; vi.mock('./dep', () => ({}));",
@@ -331,12 +337,35 @@ fn non_hoisted_mocks_are_found_only_through_stable_vitest_bindings() {
         "import { doMock } from 'other'; doMock('./dep');",
         "const vi = { doMock() {} }; vi.doMock('./dep');",
         "import { vi } from 'vitest'; const { helper = { doMock() {} } } = vi; helper.doMock('./dep');",
+        "import { vitest as vi } from 'vitest'; vi.mock('./dep');",
+        "import { test, vi } from 'vitest'; (vi).mock('./dep'); test('a', () => { vi.mock('./dep') });",
+        "import { vi as tools } from 'other'; tools.mock('./dep');",
     ] {
-        assert!(
-            !inventory_of(source, &[], false).0.non_hoisted_mock,
-            "{source}"
-        );
+        let found = inventory_of(source, &[], false).0;
+        assert!(!found.non_hoisted_mock, "{source}");
+        assert!(found.in_place_mocks.is_empty(), "{source}");
     }
+    // A top-level call through any other spelling is recorded where it runs.
+    let recorded = |source: &str| {
+        let found = inventory_of(source, &[], false).0;
+        assert!(!found.non_hoisted_mock, "{source}");
+        found
+            .in_place_mocks
+            .iter()
+            .map(|mock| mock.callee.clone())
+            .collect::<Vec<_>>()
+    };
+    for source in [
+        "import { vi as tools } from 'vitest'; tools.mock('./dep');",
+        "import { vi } from 'vitest'; vi['mock']('./dep');",
+        "import * as framework from 'vitest'; framework.vitest.mock('./dep');",
+    ] {
+        assert_eq!(recorded(source), ["vi.mock"], "{source}");
+    }
+    assert_eq!(
+        recorded("import { vitest as tools } from 'vitest'; tools.unmock('./dep');"),
+        ["vi.unmock"]
+    );
     let rewritten_global = "globalThis.vi = { doMock() {} }; vi.doMock('./dep', () => ({}));";
     assert!(
         !inventory_of(rewritten_global, &[], true).0.non_hoisted_mock,
