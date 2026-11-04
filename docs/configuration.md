@@ -42,7 +42,9 @@ does not remove it.
 finding.
 
 - A case is a declaration, or one row of a test table: two rows of one table are two cases, and a
-  case named by several findings counts once. A suite finding counts the cases it covers.
+  case named by several findings counts once. A suite finding counts the tests inside its
+  copies. A `redundant-hook` finding is not a test case: it adds nothing to the count, though at
+  error it still fails a run at the default threshold.
 - Every analyzed test is eligible except benchmarks, placeholders for the tests a wrapper call or
   module load registers, and `test.todo` with no callback. A `.todo` or `.skip` with a callback
   stays, and so does a test the run could not compare.

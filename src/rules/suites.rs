@@ -106,7 +106,7 @@ impl Twins {
                 continue;
             }
             for &suite in suites {
-                carry(&mut findings[suite], child.severity, child.cases());
+                carry(&mut findings[suite], child.severity, child.cases.clone());
             }
         }
         // An outer copy also stands for the tests a suite finding nested in its copies carries, so

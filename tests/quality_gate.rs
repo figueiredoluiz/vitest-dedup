@@ -416,3 +416,84 @@ describe('copy', () => { test.each([[1], [2], [3]])('row %s', (v) => { expect(v)
     assert!(run.json["findings"][0].get("covers").is_none());
     assert_eq!(gate(&run), (6, 6, Some(100.0)));
 }
+
+/// A redundant hook stays a finding at its severity and fails a zero-threshold run, but it is not
+/// a test case: it adds nothing to the duplicated cases.
+#[test]
+fn a_redundant_hook_is_a_finding_but_no_case() {
+    let source = "import { describe, test, expect, beforeEach } from 'vitest'
+let region = ''
+describe('outer', () => {
+  beforeEach(() => { region = 'primary' })
+  test('monthly', () => { expect(4).toBe(4) })
+  describe('inner', () => {
+    beforeEach(() => { region = 'primary' })
+    test('regional', () => { expect(['north']).toHaveLength(1) })
+  })
+})
+";
+    for (threshold, code) in [("0", 1), ("1", 0)] {
+        let run = run(
+            &[("a.test.ts", source)],
+            &["--rule", "redundant-hook=error", "--threshold", threshold],
+        );
+        let findings = run.json["findings"].as_array().unwrap();
+        assert!(findings
+            .iter()
+            .any(|f| f["rule"] == "redundant-hook" && f["severity"] == "error"));
+        assert_eq!(gate(&run), (0, 2, Some(0.0)));
+        assert_eq!(run.code, Some(code), "threshold {threshold}");
+    }
+}
+
+/// A suite copy at error counts every test inside its copies: suppressing one child finding
+/// leaves the count where it was.
+#[test]
+fn a_suite_at_error_counts_its_tests_whatever_its_children_report() {
+    let block = |suppressed: bool| {
+        format!(
+            "describe('copy', () => {{
+  test.each([[1], [2]])('row %s', (v) => {{ expect(v).toBeGreaterThan(0) }})
+{}  test('plain', () => {{ expect(2).toBe(2) }})
+}})
+",
+            if suppressed {
+                "  // vitest-dedup-disable-next-line intentional\n"
+            } else {
+                ""
+            }
+        )
+    };
+    for suppressed in [false, true] {
+        let source = format!(
+            "import {{ describe, test, expect }} from 'vitest'\n{}{}",
+            block(false),
+            block(suppressed)
+        );
+        let run = run(
+            &[("a.test.ts", &source)],
+            &[
+                "--rule",
+                "duplicate-suite=error",
+                "--rule",
+                "duplicate-test=error",
+                "--rule",
+                "duplicate-test-name=off",
+                "--rule",
+                "parameterization-candidate=off",
+                "--threshold",
+                "100",
+            ],
+        );
+        let suite = &run.json["findings"][0];
+        assert_eq!(suite["rule"], "duplicate-suite");
+        assert_eq!(suite["severity"], "error");
+        let covered = suite["covers"]["locations"].as_array().unwrap().len();
+        assert_eq!(
+            covered,
+            if suppressed { 2 } else { 4 },
+            "suppressed {suppressed}"
+        );
+        assert_eq!(gate(&run), (6, 6, Some(100.0)), "suppressed {suppressed}");
+    }
+}

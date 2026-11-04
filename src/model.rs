@@ -1051,10 +1051,10 @@ pub struct Finding {
     /// Absent on every other finding. Not part of the fingerprint.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub covers: Option<Covers>,
-    /// Every runtime case the claim covers, rows included: the participants and the other rows of
-    /// their declarations the same match held, which the one-per-declaration participants leave
-    /// out. Empty means the participants themselves, with no rows. What the quality gate counts;
-    /// not a report field and not part of the fingerprint.
+    /// Every runtime case the claim covers, rows included: the participants and the cases they
+    /// stand for, or the tests inside a suite's copies. Empty for a claim about something that is
+    /// not a test, such as a hook. What the quality gate counts; not a report field and not part
+    /// of the fingerprint.
     #[serde(skip)]
     pub cases: Vec<GateCase>,
 }
@@ -1084,26 +1084,17 @@ impl Finding {
             .map_or(self.severity, |covers| covers.severity.max(self.severity))
     }
 
-    /// The runtime cases the quality gate counts for this finding at `severity`. A finding that
-    /// carries tests counts only those, at the carried severity or its own when higher: its own
-    /// locations are blocks, not tests.
+    /// The runtime cases the quality gate counts for this finding at `severity`: its own when it
+    /// has that severity (a suite's are the tests inside its copies), else what it carries when
+    /// that promotes it. Carried children never stand in for a suite already at that severity, so
+    /// suppressing a child cannot raise the count.
     pub fn gate_cases(&self, severity: Severity) -> Vec<GateCase> {
-        match &self.covers {
-            Some(covers) if self.gate_severity() == severity => covers.cases.clone(),
-            None if self.severity == severity => Finding::cases(self),
-            _ => Vec::new(),
+        if self.severity == severity {
+            return self.cases.clone();
         }
-    }
-
-    /// The runtime cases the claim covers: [`Finding::cases`], or the participants when it is empty.
-    pub fn cases(&self) -> Vec<GateCase> {
-        if self.cases.is_empty() {
-            self.locations
-                .iter()
-                .map(|location| (location.clone(), None))
-                .collect()
-        } else {
-            self.cases.clone()
+        match &self.covers {
+            Some(covers) if covers.severity == severity => covers.cases.clone(),
+            _ => Vec::new(),
         }
     }
 
