@@ -551,7 +551,7 @@ fn parameters(
 /// Definition-time syntax whose evaluation runs no user code and reads no unknown value.
 pub(crate) fn inert_declaration(parsed: &Parsed, node: NodeId) -> bool {
     let tree = &parsed.tree;
-    if tree.flag(node, "declare") {
+    if tree.erased_declaration(node) {
         return true;
     }
     match tree.kind(node) {
@@ -651,6 +651,9 @@ fn body(
         vec![root]
     };
     for statement in statements {
+        if tree.erased_declaration(statement) {
+            continue;
+        }
         if *left == 0 {
             return Err(Refusal::Limit);
         }

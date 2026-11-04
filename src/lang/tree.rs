@@ -56,6 +56,26 @@ pub struct Tree {
 const NULL: Field = Field::Value(Value::Null);
 
 impl Tree {
+    /// Declaration syntax erased by TypeScript, with no runtime evaluation or module load.
+    pub fn erased_declaration(&self, node: NodeId) -> bool {
+        match self.kind(node) {
+            "TSInterfaceDeclaration" | "TSTypeAliasDeclaration" | "TSDeclareFunction" => true,
+            "VariableDeclaration"
+            | "ClassDeclaration"
+            | "TSEnumDeclaration"
+            | "TSModuleDeclaration" => self.flag(node, "declare"),
+            "ImportDeclaration" => self.text(node, "importKind") == Some("type"),
+            "ExportAllDeclaration" => self.text(node, "exportKind") == Some("type"),
+            "ExportNamedDeclaration" => {
+                self.text(node, "exportKind") == Some("type")
+                    || self
+                        .child(node, "declaration")
+                        .is_some_and(|declaration| self.erased_declaration(declaration))
+            }
+            _ => false,
+        }
+    }
+
     /// The tree an ESTree JSON value spells, or `None` when the value is not a node.
     pub(super) fn from_json(value: Value) -> Option<Self> {
         let mut tree = Tree {

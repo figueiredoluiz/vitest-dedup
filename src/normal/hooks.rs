@@ -118,6 +118,9 @@ impl Normalizer<'_> {
     pub fn hook_registration_inert(&self, node: NodeId) -> bool {
         let tree = self.tree;
         let node = tree.inner(node);
+        if tree.erased_declaration(node) {
+            return true;
+        }
         match tree.kind(node) {
             "FunctionDeclaration" | "FunctionExpression" | "ArrowFunctionExpression" => true,
             "Literal" => primitive(tree, node),
