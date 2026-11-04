@@ -385,6 +385,12 @@ fn read_parsed(
     // Instantiation selects registrations, but every callback in the module still contributes
     // mutation facts used to reject order-dependent comparisons.
     let structure = Structure::of(parsed, &found);
+    // Registrations through a test function's member (`test.describe`), by call.
+    let members: HashMap<NodeId, NodeId> = found
+        .sites
+        .iter()
+        .filter_map(|site| Some((site.node, site.member?)))
+        .collect();
     if let Some(frame) = &frame {
         found.sites.retain(|site| frame.sites.contains(&site.node));
         found.loads.clear();
@@ -582,7 +588,11 @@ fn read_parsed(
         .iter()
         .filter(|(_, &call)| {
             tree.child(call, "callee")
-                .and_then(|callee| normalizer.modifiers(callee).rows)
+                .and_then(|callee| {
+                    normalizer
+                        .modifiers(callee, members.get(&call).copied())
+                        .rows
+                })
                 .is_some_and(|rows| rows.is_empty())
         })
         .map(|(&scope, _)| scope)
@@ -642,7 +652,7 @@ fn read_parsed(
         };
         record.full_title = record.title.as_deref().and_then(display_title);
         let callee = tree.child(site.node, "callee");
-        let modifiers = callee.map(|callee| normalizer.modifiers(callee));
+        let modifiers = callee.map(|callee| normalizer.modifiers(callee, site.member));
         let arguments: Vec<NodeId> = tree
             .list(site.node, "arguments")
             .into_iter()
@@ -757,8 +767,8 @@ fn read_parsed(
                 .get(scope)
                 .and_then(|call| tree.child(*call, "callee"))
             {
-                let suite = normalizer.modifiers(suite_callee);
                 let call = structure.suites[scope];
+                let suite = normalizer.modifiers(suite_callee, members.get(&call).copied());
                 let suite_arguments: Vec<NodeId> =
                     tree.list(call, "arguments").into_iter().flatten().collect();
                 let suite_body = suite_arguments
@@ -1052,7 +1062,7 @@ fn read_parsed(
         }
         let empty = tree
             .child(site.node, "callee")
-            .and_then(|callee| normalizer.modifiers(callee).rows)
+            .and_then(|callee| normalizer.modifiers(callee, site.member).rows)
             .is_some_and(|rows| rows.is_empty());
         if empty {
             empty_tables += 1;

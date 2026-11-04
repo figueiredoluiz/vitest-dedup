@@ -1,0 +1,14 @@
+{
+  "files": {
+    "hooks.test.ts": {
+      "tasks": 1,
+      "wrapperSites": [],
+      "next": {}
+    },
+    "suites.test.ts": {
+      "tasks": 7,
+      "wrapperSites": [],
+      "next": {}
+    }
+  }
+}

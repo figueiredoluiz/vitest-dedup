@@ -180,6 +180,10 @@ pub struct Dialect {
     pub assertions: &'static [AssertionEntry],
     /// Members that can be chained onto a registration.
     pub chain: &'static [ChainMember],
+    /// Registrations a test function also carries as members (`test.describe`,
+    /// `test.beforeEach`): each is the same function as the top-level export, so calling it
+    /// ignores whatever was chained before it.
+    pub test_members: &'static [&'static str],
     /// Keys of a registration's options object that change only how a test is scheduled, never
     /// what it checks (a timeout, retries).
     pub scheduling_options: &'static [&'static str],
@@ -213,6 +217,16 @@ impl Dialect {
             .iter()
             .find(|member| member.name == name)
             .map(|member| member.meaning)
+    }
+
+    /// What the member `name` of a test function registers, if it is one of
+    /// [`Self::test_members`].
+    pub fn test_member(&self, name: &str) -> Option<Registers> {
+        self.test_members
+            .contains(&name)
+            .then(|| self.registration(name))
+            .flatten()
+            .map(|registration| registration.registers)
     }
 
     /// The canonical spelling of the non-registration API name `name`, if it is one.
@@ -254,6 +268,7 @@ impl Dialect {
             .chain(namespaces.iter().map(|namespace| namespace.name))
             .chain(self.mocking_members.iter().map(|member| member.name))
             .chain(chain.iter().map(|member| member.name))
+            .chain(self.test_members.iter().copied())
             .chain(self.scheduling_options.iter().copied())
             .chain(self.name_observing_matchers.iter().copied())
             .chain(self.source_keyed_matchers.iter().copied())

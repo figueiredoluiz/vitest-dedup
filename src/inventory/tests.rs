@@ -200,6 +200,43 @@ fn collection_time_helper_chains_are_bounded() {
     assert!(started.elapsed() < std::time::Duration::from_secs(2));
 }
 
+/// A test function carries the suite and hook registrations as members (`test.describe`,
+/// `test.beforeEach`): each is the top-level function, so nothing chained before it applies. A
+/// table's call returns a function that carries none.
+#[test]
+fn a_test_function_member_registers_what_the_top_level_name_does() {
+    let main = "import { test, it } from 'vitest'\n\
+         test.beforeEach(() => {})\n\
+         it.skip.afterAll(() => {})\n\
+         test.extend({ a: 1 }).aroundEach(async (run) => { await run() })\n\
+         test.only.describe.skip('s', () => {})\n\
+         test.skipIf(true).suite('t', () => {})\n\
+         const group = test.describe\n\
+         group('u', () => {})\n\
+         test.each([[1]]).describe('v', () => {})\n\
+         test.skip('w', () => {})";
+    assert_eq!(
+        sites(main, &[], false),
+        [
+            "BeforeEach@2:6 ",
+            "AfterAll@3:9 ",
+            "AroundEach@4:23 ",
+            "suite@5:20 skip",
+            "suite@6:19 ",
+            "suite@8:1 ",
+            "test@9:18 each.().describe",
+            "test@10:6 skip",
+        ]
+    );
+    let (found, _) = inventory_of(main, &[], false);
+    let members: Vec<bool> = found
+        .sites
+        .iter()
+        .map(|site| site.member.is_some())
+        .collect();
+    assert_eq!(members, [true, true, true, true, true, false, false, false]);
+}
+
 /// Vitest calls a suite factory with its `test` API, so a call through a suite callback's parameter
 /// is a wrapper call; a table's callback receives a row, so its parameters are ordinary values.
 #[test]

@@ -60,9 +60,9 @@ semantics):
 | Form | Since | Meaning |
 | --- | --- | --- |
 | `test.override(fixtures)` | 4.1 | Overrides fixture values for all tests in current + nested suites; supersedes `.scoped`. Must be called at the describe-block top level, so its call site (not just its existence) is part of the suite structure. |
-| `test.beforeEach` / `.afterEach` / `.beforeAll` / `.afterAll` | scoped-hook sugar | Hooks bound to a `test.extend`-produced object, typed with its fixtures, behaviorally identical to the free `beforeEach`/etc. but namespaced under the extended `test`. |
+| `test.beforeEach` / `.afterEach` / `.beforeAll` / `.afterAll` | scoped-hook sugar | The free `beforeEach`/etc. themselves, carried by every test function (typed with its fixtures on a `test.extend`-produced one). A modifier chained before one (`test.skip.beforeEach`) does not apply. |
 | `test.aroundEach` / `.aroundAll` | 4.1 | New hook forms combining before+after in one wrapper function. UNVERIFIED exact signature. |
-| `test.describe` / `test.suite` | 4.1 | "Scoped describe", a `describe` bound to the extended fixtures, same semantics as top-level `describe` otherwise. |
+| `test.describe` / `test.suite` | 4.1 | "Scoped describe": the top-level `describe` itself, carried by every test function. A modifier chained before it (`test.skip.describe`, `test.only.suite`) does not apply. |
 
 ### Legal chain orders
 

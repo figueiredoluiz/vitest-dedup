@@ -53,7 +53,7 @@ fn test_callbacks<'a>(
 /// bind), or its callback's alone when it has no table.
 fn site_forms(normalizer: &mut Normalizer, tree: &Tree, site: NodeId) -> Vec<Option<String>> {
     let callee = tree.child(site, "callee").unwrap();
-    let modifiers = normalizer.modifiers(callee);
+    let modifiers = normalizer.modifiers(callee, None);
     let callback = tree
         .list(site, "arguments")
         .into_iter()
@@ -434,7 +434,7 @@ fn modifiers(main: &str) -> Vec<(String, bool, Vec<String>, bool)> {
             .iter()
             .map(|site| {
                 let callee = tree.child(site.node, "callee").unwrap();
-                let modifiers = normalizer.modifiers(callee);
+                let modifiers = normalizer.modifiers(callee, site.member);
                 let arguments: Vec<_> = tree
                     .list(site.node, "arguments")
                     .into_iter()
@@ -510,7 +510,7 @@ fn literal_table_rows_bind_into_the_callback() {
         assert_eq!(keyed[8], [None], "a row that sets its prototype");
         assert!(matches!(
             normalizer
-                .modifiers(tree.child(found.sites[2].node, "callee").unwrap())
+                .modifiers(tree.child(found.sites[2].node, "callee").unwrap(), None)
                 .rows
                 .as_deref(),
             Some([TableRow {
@@ -593,7 +593,7 @@ fn wrapped_tables_keep_unreadable_input_boundaries() {
                 .filter(|site| site.kind == SiteKind::Registers(crate::framework::Registers::Test))
                 .map(|site| {
                     normalizer
-                        .modifiers(tree.child(site.node, "callee").unwrap())
+                        .modifiers(tree.child(site.node, "callee").unwrap(), site.member)
                         .rows
                 })
                 .collect();

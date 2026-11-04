@@ -124,6 +124,9 @@ pub struct Site {
     pub kind: SiteKind,
     /// The callee chain past the registration name: member names, `()` for a call.
     pub chain: Vec<String>,
+    /// The member of a test function the callee registers through (`test.skip.describe`), when
+    /// it is one: nothing chained before it applies to the call.
+    pub member: Option<NodeId>,
     /// How the callee reaches the API.
     pub provenance: Provenance,
     /// The title, when the first argument is a string the source spells.

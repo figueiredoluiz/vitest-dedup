@@ -127,6 +127,7 @@ pub(super) fn analyse(
                 span,
                 kind,
                 chain,
+                member: module.registration_member(callee),
                 provenance,
                 title: module.title(node),
                 position: module.v8_position(callee),
@@ -699,24 +700,41 @@ impl<'s> Module<'s> {
             .map(|registration| registration.registers)
     }
 
-    /// What applying `steps` to a root of `origin` registers when called, and whether the last
-    /// member builds another registration function that has not been called yet; `None` when a
-    /// step leaves the API (a call of a registration function, a namespace member that is not one).
-    fn apply(&self, origin: Origin, steps: &[Step]) -> Option<(Option<Registers>, bool)> {
+    /// What applying `steps` to a root of `origin` registers when called, whether the last
+    /// member builds another registration function that has not been called yet, and how many
+    /// leading steps a test function's registration member (`test.skip.describe`) supersedes;
+    /// `None` when a step leaves the API (a call of a registration function, a namespace member
+    /// that is not one).
+    fn apply(&self, origin: Origin, steps: &[Step]) -> Option<(Option<Registers>, bool, usize)> {
         let mut registers = match origin {
             Origin::Api(registers) => Some(registers),
             _ => None,
         };
         let mut pending = false;
-        for step in steps {
+        // A table's call returns a plain function, which carries no registration members.
+        let mut tabled = false;
+        let mut start = 0;
+        for (index, step) in steps.iter().enumerate() {
             match step {
                 Step::Member(name) if registers.is_none() => registers = Some(self.api(name)?),
+                Step::Member(name) if !pending && !tabled && registers == Some(Registers::Test) => {
+                    if let Some(member) = self.setting.dialect.test_member(name) {
+                        registers = Some(member);
+                        start = index + 1;
+                    } else {
+                        tabled = matches!(
+                            self.setting.dialect.chain_member(name),
+                            Some(Chain::Table(_))
+                        );
+                        pending = self.builds(name);
+                    }
+                }
                 Step::Member(name) => pending = self.builds(name),
                 Step::Call if pending => pending = false,
                 Step::Call => return None,
             }
         }
-        Some((registers, pending))
+        Some((registers, pending, start))
     }
 
     /// The registration function an expression's value is (`test`, `test.skip`,
@@ -735,14 +753,36 @@ impl<'s> Module<'s> {
             };
             return Some(Origin::Wrapper(reach));
         }
-        let (registers, _) = self.apply(origin, &steps)?;
+        let (registers, ..) = self.apply(origin, &steps)?;
         Some(registers.map_or(Origin::Namespace, Origin::Api))
+    }
+
+    /// The member expression of a test function `callee` registers through (`test.skip.describe`
+    /// for `test.skip.describe.each(rows)`), if it registers through one.
+    fn registration_member(&self, callee: NodeId) -> Option<NodeId> {
+        let tree = self.tree;
+        let (origin, _, steps) = self.chain(callee)?;
+        if origin.reach().is_some() {
+            return None;
+        }
+        let (_, _, start) = self.apply(origin, &steps)?;
+        let mut node = tree.inner(callee);
+        for _ in start..steps.len() {
+            let next = match tree.kind(node) {
+                "MemberExpression" => tree.child(node, "object"),
+                "CallExpression" => tree.child(node, "callee"),
+                "TaggedTemplateExpression" => tree.child(node, "tag"),
+                _ => None,
+            };
+            node = tree.inner(next?);
+        }
+        (start > 0).then_some(node)
     }
 
     /// What calling `callee` registers, if anything.
     fn registration(&self, callee: NodeId) -> Option<(SiteKind, Vec<String>, Provenance)> {
         let (origin, provenance, steps) = self.chain(callee)?;
-        let chain: Vec<String> = steps
+        let mut chain: Vec<String> = steps
             .iter()
             .map(|step| match step {
                 Step::Member(name) => (*name).to_owned(),
@@ -765,11 +805,13 @@ impl<'s> Module<'s> {
             };
             return Some((SiteKind::Wrapper(reach), chain, provenance));
         }
-        let (registers, pending) = self.apply(origin, &steps)?;
+        let (registers, pending, start) = self.apply(origin, &steps)?;
         let registers = registers?;
         if pending || chain.last().is_some_and(|last| self.inert(last)) {
             return None;
         }
+        // What was chained before a registration member does not apply to the call.
+        chain.drain(..start);
         Some((SiteKind::Registers(registers), chain, provenance))
     }
 

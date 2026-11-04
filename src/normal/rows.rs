@@ -79,8 +79,9 @@ const OBJECT_PROTOTYPE: [&str; 12] = [
 ];
 
 impl Normalizer<'_> {
-    /// The modifiers of a registration whose callee is `callee`.
-    pub fn modifiers(&mut self, callee: NodeId) -> Modifiers {
+    /// The modifiers of a registration whose callee is `callee`, which registers through the
+    /// test-function member `member` when the inventory recorded one ([`crate::inventory::Site::member`]).
+    pub fn modifiers(&mut self, callee: NodeId, member: Option<NodeId>) -> Modifiers {
         let tree = self.tree;
         let dialect = self.setting.dialect;
         let mut modifiers = Modifiers::default();
@@ -89,6 +90,18 @@ impl Normalizer<'_> {
         let mut table_at = None;
         let mut current = tree.inner(callee);
         loop {
+            // The member is the API function it names; what it was read from does not apply.
+            if member == Some(current) {
+                let name = tree
+                    .child(current, "property")
+                    .and_then(|property| tree.text(property, "name"))
+                    .unwrap_or_default();
+                let canonical = dialect
+                    .registration(name)
+                    .map_or(name, |registration| registration.canonical);
+                steps.push(format!("api:{canonical}"));
+                break;
+            }
             match tree.kind(current) {
                 "MemberExpression" if !tree.flag(current, "computed") => {
                     let name = tree

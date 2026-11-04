@@ -9405,6 +9405,87 @@
           ]
         }
       ]
+    },
+    {
+      "name": "redundant-hook-test-member-hook",
+      "path": "redundant-hook-test-member-hook",
+      "rule": "redundant-hook",
+      "role": "positive",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-04",
+      "expectedTests": 1,
+      "expectedIncomplete": false,
+      "expectedUnresolved": 0,
+      "expectedFindings": [
+        {
+          "rule": "redundant-hook",
+          "severity": "warning",
+          "titles": [
+            "beforeEach",
+            "beforeEach"
+          ],
+          "locations": [
+            "main.test.ts:11",
+            "main.test.ts:12"
+          ]
+        }
+      ],
+      "expectedAbsent": []
+    },
+    {
+      "name": "duplicate-test-test-member-suite-modifiers",
+      "path": "duplicate-test-test-member-suite-modifiers",
+      "rule": "duplicate-test",
+      "role": "positive",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-04",
+      "expectedTests": 2,
+      "expectedIncomplete": false,
+      "expectedUnresolved": 0,
+      "expectedFindings": [
+        {
+          "rule": "duplicate-test",
+          "severity": "error",
+          "titles": [
+            "checkout > totals the cart",
+            "totals the cart"
+          ]
+        }
+      ],
+      "expectedAbsent": []
+    },
+    {
+      "name": "duplicate-test-name-test-member-suite",
+      "path": "duplicate-test-name-test-member-suite",
+      "rule": "duplicate-test-name",
+      "role": "positive",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-04",
+      "expectedTests": 3,
+      "expectedIncomplete": false,
+      "expectedUnresolved": 0,
+      "expectedFindings": [
+        {
+          "rule": "duplicate-test-name",
+          "severity": "warning",
+          "titles": [
+            "parser > reads the header",
+            "parser > reads the header"
+          ]
+        }
+      ],
+      "expectedAbsent": [
+        {
+          "rule": "duplicate-test-name",
+          "titles": [
+            "parser > reads the header",
+            "reads the header"
+          ]
+        }
+      ]
     }
   ],
   "knownFalsePositiveBaseline": 1,

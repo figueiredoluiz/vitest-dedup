@@ -145,6 +145,17 @@ pub static DIALECT: Dialect = Dialect {
         member!("override", Chain::FixtureScoping),
         member!("scoped", Chain::FixtureScoping),
     ],
+    // `createTaskCollector` assigns these to every test function, extended ones included.
+    test_members: &[
+        "describe",
+        "suite",
+        "beforeEach",
+        "afterEach",
+        "beforeAll",
+        "afterAll",
+        "aroundEach",
+        "aroundAll",
+    ],
     scheduling_options: &["timeout", "retry", "repeats"],
     name_observing_matchers: &["Snapshot"],
     source_keyed_matchers: &["InlineSnapshot"],
