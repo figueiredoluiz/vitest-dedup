@@ -13,8 +13,7 @@
 // have a site of its kind on the line Vitest places it on (`lib/collection-oracle.mjs`'s
 // `compareSites`). Sites that registered nothing Vitest collected are counted, not failed: those
 // are what the exclusion reasons are for. A test whose title the analyzer did not prove is counted
-// rather than compared by title, and a helper's hook registered through a hook-wrapper call is
-// accounted at that call's site.
+// rather than compared by title.
 //
 // Owned cases under `fixtures/oracle/` run the same comparisons against their own `expected.json`
 // (`lib/oracle-cases.mjs`).
@@ -146,7 +145,7 @@ function main() {
   const dirs = [...FIXTURE_DIRS, ...manifest.cases.map((c) => `fixtures/recall/${c.path}`)]
   const known = JSON.parse(readFileSync(KNOWN, 'utf8')).disagreements
 
-  const totals = { files: 0, tests: 0, unproven: 0, hooks: 0, viaWrapper: 0, siteFiles: 0, tasks: 0, sites: 0, unexecuted: 0 }
+  const totals = { files: 0, tests: 0, unproven: 0, hooks: 0, siteFiles: 0, tasks: 0, sites: 0, unexecuted: 0 }
   const knownSites = JSON.parse(readFileSync(KNOWN, 'utf8')).siteDisagreements ?? []
   const foundSites = []
   // Every file not compared, per bucket, with what kept it out (Vitest's first collection error,
@@ -169,7 +168,6 @@ function main() {
     totals.tests += result.testsCompared
     totals.unproven += result.testsUnproven
     totals.hooks += result.hooksCompared
-    totals.viaWrapper += result.hooksViaWrapper
     for (const [bucket, entries] of result.skipped) {
       if (!buckets.has(bucket)) buckets.set(bucket, [])
       buckets.get(bucket).push(...entries.map((entry) => ({ dir, ...entry })))
@@ -186,7 +184,7 @@ function main() {
   console.log(
     `collection oracle: ${dirs.length} directories, ${totals.files} files compared, ` +
       `${totals.tests} tests (${totals.unproven} with an unproven title not compared), ` +
-      `${totals.hooks} hook sites (${totals.viaWrapper} more through a hook-wrapper call); ${found.length} disagreements ` +
+      `${totals.hooks} hook sites; ${found.length} disagreements ` +
       `(${found.length - unlisted.length} known)`,
   )
   console.log(`  not compared: ${[...buckets].map(([bucket, entries]) => `${bucket} ${entries.length}`).join(', ')}`)

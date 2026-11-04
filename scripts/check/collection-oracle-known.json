@@ -244,6 +244,111 @@
       "kind": "extra-test",
       "item": "scope %s > row",
       "reason": "A suite table is read as one suite whose title is not rendered, so its children count once rather than once per row."
+    },
+    {
+      "dir": "fixtures/hooks",
+      "path": "server-hooks.ts",
+      "kind": "missing-hook",
+      "item": "beforeEach@server-hooks.ts:7",
+      "reason": "A helper that registers only hooks is a `hook-wrapper` site at its call; the hooks it registers are not recorded in the helper."
+    },
+    {
+      "dir": "fixtures/hooks",
+      "path": "server-hooks.ts",
+      "kind": "missing-hook",
+      "item": "afterEach@server-hooks.ts:8",
+      "reason": "A helper that registers only hooks is a `hook-wrapper` site at its call; the hooks it registers are not recorded in the helper."
+    },
+    {
+      "dir": "fixtures/fixtures",
+      "path": "fixtures-scoped-hooks.test.ts",
+      "kind": "extra-test",
+      "item": "",
+      "reason": "`test.beforeEach` and `test.afterEach` on an extended test binding are read as tests with no callback, and the empty-bodied test has no proven title."
+    },
+    {
+      "dir": "fixtures/fixtures",
+      "path": "fixtures-scoped-hooks.test.ts",
+      "kind": "extra-test",
+      "item": "with scoped hooks",
+      "reason": "`test.beforeEach` and `test.afterEach` on an extended test binding are read as tests with no callback, and the empty-bodied test has no proven title."
+    },
+    {
+      "dir": "fixtures/recall/framework-setup-helper-spy-context-negative",
+      "path": "helper-spy.ts",
+      "kind": "missing-hook",
+      "item": "beforeEach@helper-spy.ts:6",
+      "reason": "A helper that registers only hooks is a `hook-wrapper` site at its call; the hooks it registers are not recorded in the helper."
+    },
+    {
+      "dir": "fixtures/recall/framework-setup-helper-spy-context-negative",
+      "path": "helper-spy.ts",
+      "kind": "missing-hook",
+      "item": "afterEach@helper-spy.ts:9",
+      "reason": "A helper that registers only hooks is a `hook-wrapper` site at its call; the hooks it registers are not recorded in the helper."
+    },
+    {
+      "dir": "fixtures/recall/framework-hook-helper-server",
+      "path": "server.ts",
+      "kind": "missing-hook",
+      "item": "beforeAll@server.ts:11",
+      "reason": "A helper that registers only hooks is a `hook-wrapper` site at its call; the hooks it registers are not recorded in the helper."
+    },
+    {
+      "dir": "fixtures/recall/framework-hook-helper-server",
+      "path": "server.ts",
+      "kind": "missing-hook",
+      "item": "afterAll@server.ts:12",
+      "reason": "A helper that registers only hooks is a `hook-wrapper` site at its call; the hooks it registers are not recorded in the helper."
+    },
+    {
+      "dir": "fixtures/recall/framework-hook-helper-inline-control",
+      "path": "server.ts",
+      "kind": "missing-hook",
+      "item": "beforeAll@server.ts:5",
+      "reason": "A helper that registers only hooks is a `hook-wrapper` site at its call; the hooks it registers are not recorded in the helper."
+    },
+    {
+      "dir": "fixtures/recall/framework-hook-helper-inline-control",
+      "path": "server.ts",
+      "kind": "missing-hook",
+      "item": "afterAll@server.ts:6",
+      "reason": "A helper that registers only hooks is a `hook-wrapper` site at its call; the hooks it registers are not recorded in the helper."
+    },
+    {
+      "dir": "fixtures/recall/framework-hook-helper-context-negative",
+      "path": "seed.ts",
+      "kind": "missing-hook",
+      "item": "beforeEach@seed.ts:6",
+      "reason": "A helper that registers only hooks is a `hook-wrapper` site at its call; the hooks it registers are not recorded in the helper."
+    },
+    {
+      "dir": "fixtures/recall/helper-hook-runtime-calls",
+      "path": "page.ts",
+      "kind": "missing-hook",
+      "item": "beforeAll@page.ts:6",
+      "reason": "A helper that registers only hooks is a `hook-wrapper` site at its call; the hooks it registers are not recorded in the helper."
+    },
+    {
+      "dir": "fixtures/recall/helper-hook-runtime-calls",
+      "path": "page.ts",
+      "kind": "missing-hook",
+      "item": "afterAll@page.ts:9",
+      "reason": "A helper that registers only hooks is a `hook-wrapper` site at its call; the hooks it registers are not recorded in the helper."
+    },
+    {
+      "dir": "fixtures/recall/helper-hook-runtime-local",
+      "path": "page.ts",
+      "kind": "missing-hook",
+      "item": "beforeAll@page.ts:6",
+      "reason": "A helper that registers only hooks is a `hook-wrapper` site at its call; the hooks it registers are not recorded in the helper."
+    },
+    {
+      "dir": "fixtures/recall/helper-hook-runtime-local",
+      "path": "page.ts",
+      "kind": "missing-hook",
+      "item": "afterAll@page.ts:9",
+      "reason": "A helper that registers only hooks is a `hook-wrapper` site at its call; the hooks it registers are not recorded in the helper."
     }
   ],
   "siteDisagreements": [

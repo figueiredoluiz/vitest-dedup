@@ -236,11 +236,9 @@ export function analyzerView(records, absoluteDir) {
   const tests = new Map()
   const hooks = new Map()
   const excluded = new Set()
-  // Per file, tests whose title the analyzer did not prove (`comparisonKeys.name` is null: an
-  // unrendered template, a dynamic value). Their record carries the template, not a title.
+  // Per file, the titles of tests the analyzer did not prove (`comparisonKeys.name` is null: an
+  // unrendered template, a dynamic value). Each record carries the template, not a title.
   const unproven = new Map()
-  // Files that call a helper registering only hooks: the helper's hooks belong to that call.
-  const hookWrappers = new Set()
   const push = (map, key, value) => {
     if (!map.has(key)) map.set(key, [])
     map.get(key).push(value)
@@ -250,13 +248,12 @@ export function analyzerView(records, absoluteDir) {
     // A test an imported runner declares belongs to the test file that registered it.
     if (record.type === 'test') {
       const file = local(record.registrationFile ?? record.path)
-      if (record.comparisonKeys?.name === null) unproven.set(file, (unproven.get(file) ?? 0) + 1)
+      if (record.comparisonKeys?.name === null) push(unproven, file, record.title)
       else push(tests, file, record.title)
     } else if (record.type === 'hook') push(hooks, path, hookSite({ ...record, path }))
     else if (record.type === 'excluded-file') excluded.add(path)
-    else if (record.type === 'site' && record.kind === 'hook-wrapper') hookWrappers.add(path)
   }
-  return { tests, hooks, excluded, unproven, hookWrappers }
+  return { tests, hooks, excluded, unproven }
 }
 
 /**
@@ -461,13 +458,17 @@ export function compareDirectory(vitestFiles, analyzer) {
     const vitest = vitestFiles.get(path)
     const extracted = analyzer.tests.get(path) ?? []
     // A test whose title is not proven may be any collected test its proven siblings leave over,
-    // so as many of those as it has unproven records are not compared.
+    // so as many of those as it has unproven records are not compared; an unproven record with
+    // no collected test left to stand for is an extra test.
     const missing = minus(vitest.tests, extracted)
-    const absorbed = Math.min(missing.length, analyzer.unproven?.get(path) ?? 0)
+    const unprovenTitles = analyzer.unproven?.get(path) ?? []
+    const absorbed = Math.min(missing.length, unprovenTitles.length)
     testsUnproven += absorbed
     testsCompared += vitest.tests.length - absorbed
     for (const item of missing.slice(absorbed)) disagreements.push({ path, kind: 'missing-test', item })
-    for (const item of minus(extracted, vitest.tests)) disagreements.push({ path, kind: 'extra-test', item })
+    for (const item of [...minus(extracted, vitest.tests), ...unprovenTitles.slice(absorbed)]) {
+      disagreements.push({ path, kind: 'extra-test', item })
+    }
   }
   // Tests registered by a file Vitest never collected: a test file outside Vitest's include, or one
   // a config leaves out. Benchmarks and type tests are collected by other commands.
@@ -498,21 +499,13 @@ export function compareDirectory(vitestFiles, analyzer) {
       .flatMap(([path, sites]) => (comparedSet.has(path) ? sites : sites.filter((site) => helperSite(path, site)))),
   )
   const pathOf = (site) => site.slice(site.indexOf('@') + 1, site.lastIndexOf(':'))
-  // A helper's hook a compared file registers through a hook-wrapper call is recorded at that call,
-  // not in the helper: the sites comparison accounts for it.
-  const viaWrapper = new Set(
-    compared
-      .filter((path) => analyzer.hookWrappers?.has(path))
-      .flatMap((path) => vitestFiles.get(path).hooks)
-      .filter((site) => isModule(pathOf(site))),
-  )
   for (const site of registered) {
-    if (!recorded.has(site) && !viaWrapper.has(site)) disagreements.push({ path: pathOf(site), kind: 'missing-hook', item: site })
+    if (!recorded.has(site)) disagreements.push({ path: pathOf(site), kind: 'missing-hook', item: site })
   }
   for (const site of recorded) {
     if (!registered.has(site)) disagreements.push({ path: pathOf(site), kind: 'extra-hook', item: site })
   }
-  return { compared, testsCompared, testsUnproven, hooksCompared: registered.size - viaWrapper.size, hooksViaWrapper: viaWrapper.size, skipped, disagreements }
+  return { compared, testsCompared, testsUnproven, hooksCompared: registered.size, skipped, disagreements }
 }
 
 /**

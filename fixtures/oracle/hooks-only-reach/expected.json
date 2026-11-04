@@ -57,5 +57,28 @@
     "escape-callee.test.ts",
     "member.test.ts",
     "result-call.test.ts"
+  ],
+  "knownTitles": [
+    {
+      "path": "setup.ts",
+      "kind": "missing-hook",
+      "item": "beforeEach@setup.ts:6",
+      "reason": "A helper that registers only hooks is a `hook-wrapper` site at its call; the hooks it registers are not recorded in the helper.",
+      "waitsOn": "the analyzer reading this shape"
+    },
+    {
+      "path": "setup.ts",
+      "kind": "missing-hook",
+      "item": "afterEach@setup.ts:31",
+      "reason": "A helper that registers only hooks is a `hook-wrapper` site at its call; the hooks it registers are not recorded in the helper.",
+      "waitsOn": "the analyzer reading this shape"
+    },
+    {
+      "path": "setup.ts",
+      "kind": "missing-hook",
+      "item": "beforeEach@setup.ts:37",
+      "reason": "A helper that registers only hooks is a `hook-wrapper` site at its call; the hooks it registers are not recorded in the helper.",
+      "waitsOn": "the analyzer reading this shape"
+    }
   ]
 }

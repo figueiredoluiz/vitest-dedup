@@ -434,5 +434,21 @@
     "reassigned-local.test.ts",
     "reassigned-namespace.test.ts",
     "var-redeclaration.test.ts"
+  ],
+  "knownTitles": [
+    {
+      "path": "annotated-binding.ts",
+      "kind": "missing-hook",
+      "item": "beforeEach@annotated-binding.ts:7",
+      "reason": "A helper that registers only hooks is a `hook-wrapper` site at its call; the hooks it registers are not recorded in the helper.",
+      "waitsOn": "the analyzer reading this shape"
+    },
+    {
+      "path": "annotated-binding.ts",
+      "kind": "missing-hook",
+      "item": "beforeEach@annotated-binding.ts:12",
+      "reason": "A helper that registers only hooks is a `hook-wrapper` site at its call; the hooks it registers are not recorded in the helper.",
+      "waitsOn": "the analyzer reading this shape"
+    }
   ]
 }

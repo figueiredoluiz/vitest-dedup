@@ -61,8 +61,7 @@ compared. The gate assumes a missing module registers no tests or hooks when it 
 The same collection checks the registration sites: every test and suite Vitest collects must have a
 site of its kind on the line Vitest places it on, or a wrapper call or module load that accounts for
 it. Sites that register nothing Vitest collected are counted, not failed. A test whose title the
-analyzer did not prove is counted rather than compared by title, and a helper's hook registered
-through a `hook-wrapper` call is accounted at that call. Floors on the files and tasks compared keep a
+analyzer did not prove is counted rather than compared by title. Floors on the files and tasks compared keep a
 shrunken comparison from passing.
 
 Known disagreements are listed with their
