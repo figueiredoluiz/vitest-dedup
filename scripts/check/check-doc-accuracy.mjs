@@ -114,7 +114,8 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 // purpose, so they follow a deliberate reduction rather than blocking it. They do not follow an
 // accidental one: anything that drops a claim without an edit here still fails.
 // Lowered 2026-11-04 when the earlier analyzer core was deleted: its fingerprint module held one
-// of the three checked claims (checked 3 -> 2).
+// of the three paragraph claims (checked 3 -> 2). Total checked coverage is restored by the third
+// byte-constant tie below; the counters stay separate so one sentence is never counted twice.
 export const FLOORS = {
   files: 25,
   fences: 20,
@@ -126,9 +127,10 @@ export const FLOORS = {
   // narrowing, which is a different failure with the same symptom. A tie is admitted only while
   // its doc comment names exactly ONE unit figure, so adding a second sentence to
   // `discovery.rs`'s comment would drop it out of the check and leave a green run behind.
-  // Measured 2026-09-29: 2 ties, `MAX_SOURCE_FILE_BYTES` and `MAX_BASELINE_BYTES`. Raise this
-  // when a third byte constant grows a unit figure; never lower it to make a run pass.
-  constantClaims: 2,
+  // Measured 2026-11-04: 3 ties, `MAX_SOURCE_FILE_BYTES`, `MAX_BASELINE_BYTES` and
+  // `MAX_KEPT_STDERR_BYTES`. Raise this when another byte constant grows a unit figure; never
+  // lower it to make a run pass.
+  constantClaims: 3,
 };
 
 // ---------------------------------------------------------------------------------------------
