@@ -10003,6 +10003,31 @@
       ]
     },
     {
+      "name": "duplicate-test-runner-beside-costly-titles-negative",
+      "path": "duplicate-test-runner-beside-costly-titles-negative",
+      "rule": "duplicate-test",
+      "role": "negative",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-05",
+      "expectedTests": 4,
+      "expectedIncomplete": true,
+      "expectedUnresolved": 4,
+      "blindUnderCurrent": [
+        "caller.test.ts"
+      ],
+      "expectedFindings": [],
+      "expectedAbsent": [
+        {
+          "rule": "duplicate-test",
+          "titles": [
+            "spells the check",
+            "checks a"
+          ]
+        }
+      ]
+    },
+    {
       "name": "duplicate-test-name-test-member-suite",
       "path": "duplicate-test-name-test-member-suite",
       "rule": "duplicate-test-name",
