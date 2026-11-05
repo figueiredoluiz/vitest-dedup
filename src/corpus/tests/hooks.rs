@@ -404,6 +404,11 @@ fn suite_table_hooks_pair_when_rows_are_proven() {
         "{IMPORTS} let value = 0; {hook} {hook} describe.each([1])('row', (row, extra = install()) => {{ test('observes', () => {{ expect(value).toBe(1) }}); }}); test('plain', () => {{ expect(value).toBe(1) }});"
     );
     assert!(findings(&defaulted, 2).is_empty());
+    // A computed key in a parameter pattern evaluates during binding too.
+    let computed_key = format!(
+        "{IMPORTS} let value = 0; {hook} {hook} describe.each([1])('s', ({{ [install()]: unused }}) => {{ test('observes', () => {{ expect(value).toBe(1) }}); }}); test('plain', () => {{ expect(value).toBe(1) }});"
+    );
+    assert!(findings(&computed_key, 2).is_empty());
     // Object rows are read while Vitest formats the title, and an accessor among them can
     // register a hook, so only primitive-literal rows close.
     let object_rows = format!(

@@ -382,9 +382,16 @@ fn callback_parameters_inert(
         .into_iter()
         .flatten()
         .all(|param| {
+            // The binding operation evaluates a default's initializer and a computed key:
+            // those are the whole set, so only inert ones can hide no hook.
             std::iter::once(param)
                 .chain(tree.descendants(param))
                 .all(|node| {
+                    if tree.kind(node) == "Property" && tree.flag(node, "computed") {
+                        return tree
+                            .child(node, "key")
+                            .is_some_and(|key| normalizer.hook_registration_inert(key));
+                    }
                     tree.kind(node) != "AssignmentPattern"
                         || tree
                             .child(node, "right")
