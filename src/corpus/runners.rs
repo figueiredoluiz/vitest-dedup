@@ -182,11 +182,11 @@ fn closed_batch(
             return None;
         }
         // Collection evaluates the title, so it must run no code. A title too long to compare is
-        // still inert: read as a runner argument is, charged to the batch.
+        // still inert: read without that limit, within the batch's work budget.
         if normal::titles::title(parsed, site.node).is_none() {
-            let title = arguments[0]
-                .and_then(|title| normal::titles::argument(parsed, title, &HashMap::new()))?;
-            planner.charge(title.as_str()?.len())?;
+            let (_, spent) = arguments[0]
+                .and_then(|title| normal::titles::title_within(parsed, title, planner.left()))?;
+            planner.charge(spent)?;
         }
     }
     let mut expansions = Vec::new();
@@ -279,6 +279,9 @@ struct Module<'a> {
     parsed: &'a Parsed,
 }
 
+/// The work one expansion batch may do, in bytes read or rendered.
+const MAX_WORK: usize = 8 * 1024 * 1024;
+
 /// One atomic expansion batch shares its source, work, admission and recursion bounds.
 struct Planner<'a> {
     setting: Setting<'a>,
@@ -296,7 +299,12 @@ impl Planner<'_> {
     /// Refuse work before a duplicated argument or a rendered frame can amplify it further.
     fn charge(&mut self, cost: usize) -> Option<()> {
         self.work = self.work.saturating_add(cost);
-        (self.work <= 8 * 1024 * 1024).then_some(())
+        (self.work <= MAX_WORK).then_some(())
+    }
+
+    /// The work the batch may still do.
+    fn left(&self) -> usize {
+        MAX_WORK.saturating_sub(self.work)
     }
 
     /// Resolve and bind a call from its actual lexical environment, charging export hops too.

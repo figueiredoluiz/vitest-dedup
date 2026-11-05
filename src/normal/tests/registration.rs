@@ -298,3 +298,32 @@ fn run_parameter(parsed: &crate::lang::Parsed) -> crate::lang::SymbolId {
     let parameter = tree.list(function, "params")[0].unwrap();
     parsed.scopes.symbol_at(tree.span(parameter).start).unwrap()
 }
+
+/// A runner caller's title is read within a budget that counts every string the read copies,
+/// not only the title it yields: an object substituted into a template copies each property.
+#[test]
+fn a_title_read_within_a_budget_counts_what_it_copies() {
+    let long = "0".repeat(crate::lang::limits::MAX_TEXT_BYTES + 1);
+    let source = format!(
+        "import {{test}} from 'vitest'; const LONG = '{long}';
+         test(`${{{{ a: LONG, b: LONG }}}}`,()=>{{}});"
+    );
+    crate::testing::project(&source, &[], false, |_, parsed, found, _| {
+        let site = found
+            .sites
+            .iter()
+            .find(|site| site.kind == SiteKind::Registers(crate::framework::Registers::Test))
+            .unwrap();
+        let title = parsed.tree.list(site.node, "arguments")[0].unwrap();
+        // Two keys of one byte and two copies of LONG.
+        let copied = 2 * (1 + long.len());
+        assert_eq!(
+            crate::normal::titles::title_within(parsed, title, copied),
+            Some(("[object Object]".to_owned(), copied))
+        );
+        assert_eq!(
+            crate::normal::titles::title_within(parsed, title, copied - 1),
+            None
+        );
+    });
+}
