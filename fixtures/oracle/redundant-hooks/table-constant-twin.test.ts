@@ -1,23 +1,20 @@
 // Runtime control for the suite-table hook claim: the identical `beforeEach` pair written
-// inside a proven `describe.each` callback executes once per generated suite, in registration
-// order, before that suite's tests. Removing either hook breaks the order the test asserts;
-// the analyzer reports the pair once by declaration location.
+// inside a proven `describe.each` callback executes once per generated suite, before that
+// suite's tests. Removing either hook keeps every test passing; the analyzer reports the pair
+// once by declaration location.
 import { describe, test, expect, beforeEach } from 'vitest'
 
-const seen: string[] = []
+let value = 0
 
-describe.each([
-  { role: 'admin' },
-  { role: 'viewer' },
-])('$role', ({ role }) => {
+describe.each(['admin', 'viewer'])('%s', () => {
   beforeEach(() => {
-    seen.push(`first:${role}`)
+    value = 1
   })
   beforeEach(() => {
-    seen.push(`second:${role}`)
+    value = 1
   })
 
-  test('hooks ran in order', () => {
-    expect(seen.slice(-2)).toEqual([`first:${role}`, `second:${role}`])
+  test('value is set', () => {
+    expect(value).toBe(1)
   })
 })
