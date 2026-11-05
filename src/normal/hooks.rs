@@ -286,6 +286,10 @@ impl Normalizer<'_> {
                             .is_some_and(|value| self.hook_registration_inert(value))
                 })
             }),
+            "ArrayExpression" => tree
+                .list(node, "elements")
+                .into_iter()
+                .all(|item| item.is_some_and(|item| self.hook_registration_inert(item))),
             "EmptyStatement" => true,
             _ => false,
         }

@@ -427,6 +427,12 @@ fn suite_table_hooks_pair_when_rows_are_proven() {
         "{IMPORTS} let value = 0; describe.each([{{ role: 'admin' }}])('s', () => {{ {hook} {hook} {TEST} }});"
     );
     assert!(findings(&object_rows, 1).is_empty());
+    // Rows read through an alias keep the refusal: the proof reads the argument spelled at
+    // the table.
+    let aliased = format!(
+        "{IMPORTS} let value = 0; const rows = [1]; describe.each(rows)('s', () => {{ {hook} {hook} {TEST} }});"
+    );
+    assert!(findings(&aliased, 1).is_empty());
     // A tagged-template table and a suite wrapped in a loop keep the ordinary refusal.
     for shape in [
         format!("{IMPORTS} let value = 0; describe.each`row ${{1}}`(() => {{ {hook} {hook} {TEST} }});"),
