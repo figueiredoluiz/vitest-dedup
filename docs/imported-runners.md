@@ -21,7 +21,8 @@ tests around it are left out of comparison rather than guessed at.
 The calling file qualifies when it parses cleanly and its top level holds only imports, inert
 declarations (functions, types, literal constants), plain `test(title, callback)` calls with a
 static title (a string of any length, or a template up to 65,536 bytes) and an inline callback,
-and statement-level calls of imported runners. A `describe`, a hook, a label, a module load the
+and statement-level calls of imported runners or [same-file helpers](#same-file-helpers). A
+`describe`, a hook, a label, a module load the
 file does not import by name, or a registration function read as a value refuses the whole file's
 expansion. Every value it imports from a project module must be a
 runner the proof read.
@@ -39,6 +40,22 @@ A runner qualifies when:
   inside a runner is not expanded yet. Statements after an unconditional `return` do not run.
 
 A title may read the call's arguments when they are literals or constants the proof can evaluate.
+
+## Same-file helpers
+
+A function in the calling file is expanded the same way when:
+
+- it is a top-level `function` declaration, or a top-level `const` bound to a function or arrow,
+  never reassigned;
+- every use of it is a call: a statement-level call at the top level, or a call from another helper
+  that qualifies;
+- a `const` helper is declared before the first top-level call, since a hoisted function called
+  above the declaration would reach it uninitialized;
+- its body meets the runner rules above.
+
+A test written inside such a helper is registered once per call, titled from that call's arguments,
+and is not counted again on its own. A helper that fails any rule leaves the file's tests excluded,
+as before.
 
 ## Hooks-only helpers
 

@@ -170,10 +170,10 @@ files, up to 10,000, with a reason code. See
 
 ## Limitations
 
-- A call to an imported helper is compared by the helper's resolved body when the import resolves
-  to a readable ES-module file with a plain parameter list. Unresolved imports, defaulted or rest
-  parameters, and helpers that call helpers fall back to comparing by name, as same-file helpers
-  always do.
+- A call to a helper is compared by the helper's resolved body when the helper is a same-file
+  `function` or `const` function, or an import that resolves to a readable ES-module file, and has
+  a plain parameter list. Unresolved imports and defaulted or rest parameters fall back to comparing
+  by name. See [docs/imported-runners.md](docs/imported-runners.md).
 - Type tests (`*.test-d.ts`) are analyzed only when the config enables the typecheck channel, which
   matches when Vitest would run them.
 - Dynamic test generation that no static reader can follow is reported as unresolved rather than

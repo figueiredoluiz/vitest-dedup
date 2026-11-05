@@ -117,10 +117,6 @@
       "reason": "Tests a helper registers are excluded, not compared, until they are compared where the helper is called."
     },
     {
-      "id": "recall-miss|local-helper-return-test|duplicate-test|hidden,visible",
-      "reason": "Tests a helper registers are excluded, not compared, until they are compared where the helper is called."
-    },
-    {
       "id": "recall-miss|local-helper-return-describe|duplicate-test|group > inner,inner",
       "reason": "Tests a helper registers are excluded, not compared, until they are compared where the helper is called."
     },
@@ -133,10 +129,6 @@
       "reason": "Tests a helper registers are excluded, not compared, until they are compared where the helper is called."
     },
     {
-      "id": "recall-miss|local-helper-return-tail|duplicate-test|hidden,visible",
-      "reason": "Tests a helper registers are excluded, not compared, until they are compared where the helper is called."
-    },
-    {
       "id": "recall-miss|describe-return-tail|duplicate-test|suite > first,visible",
       "reason": "False positive: a test after `return` never registers, and the inventory still counts it."
     },
@@ -146,18 +138,6 @@
     },
     {
       "id": "recall-miss|local-helper-shadowed-undefined|duplicate-test|suite > hidden,visible",
-      "reason": "Tests a helper registers are excluded, not compared, until they are compared where the helper is called."
-    },
-    {
-      "id": "recall-miss|local-helper-const-arrow|duplicate-test|hidden,visible",
-      "reason": "Tests a helper registers are excluded, not compared, until they are compared where the helper is called."
-    },
-    {
-      "id": "recall-miss|local-helper-const-concise|duplicate-test|hidden,visible",
-      "reason": "Tests a helper registers are excluded, not compared, until they are compared where the helper is called."
-    },
-    {
-      "id": "recall-miss|local-helper-const-later-call|duplicate-test|hidden,visible",
       "reason": "Tests a helper registers are excluded, not compared, until they are compared where the helper is called."
     },
     {
@@ -277,10 +257,6 @@
       "reason": "The next engine counts a helper's call and the tests its file spells; the default engine inlines what the helper registers."
     },
     {
-      "id": "recall-tests|local-helper-return-test|all|3",
-      "reason": "The next engine counts a helper's call and the tests its file spells; the default engine inlines what the helper registers."
-    },
-    {
       "id": "recall-tests|local-helper-return-describe|all|3",
       "reason": "The next engine counts a helper's call and the tests its file spells; the default engine inlines what the helper registers."
     },
@@ -294,10 +270,6 @@
     },
     {
       "id": "recall-tests|local-helper-unused-default|all|3",
-      "reason": "The next engine counts a helper's call and the tests its file spells; the default engine inlines what the helper registers."
-    },
-    {
-      "id": "recall-tests|local-helper-return-tail|all|3",
       "reason": "The next engine counts a helper's call and the tests its file spells; the default engine inlines what the helper registers."
     },
     {
@@ -329,19 +301,11 @@
       "reason": "The next engine counts a helper's call and the tests its file spells; the default engine inlines what the helper registers."
     },
     {
-      "id": "recall-tests|local-helper-const-arrow|all|3",
-      "reason": "The next engine counts a helper's call and the tests its file spells; the default engine inlines what the helper registers."
-    },
-    {
       "id": "recall-tests|local-helper-const-describe-scope|all|5",
       "reason": "The next engine counts a helper's call and the tests its file spells; the default engine inlines what the helper registers."
     },
     {
       "id": "recall-tests|local-helper-parameter-callee|all|2",
-      "reason": "The next engine counts a helper's call and the tests its file spells; the default engine inlines what the helper registers."
-    },
-    {
-      "id": "recall-tests|local-helper-const-concise|all|3",
       "reason": "The next engine counts a helper's call and the tests its file spells; the default engine inlines what the helper registers."
     },
     {
@@ -370,10 +334,6 @@
     },
     {
       "id": "recall-tests|local-helper-const-switch-cross-case|all|4",
-      "reason": "The next engine counts a helper's call and the tests its file spells; the default engine inlines what the helper registers."
-    },
-    {
-      "id": "recall-tests|local-helper-const-later-call|all|4",
       "reason": "The next engine counts a helper's call and the tests its file spells; the default engine inlines what the helper registers."
     },
     {

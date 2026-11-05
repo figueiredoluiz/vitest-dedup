@@ -9,6 +9,7 @@ mod completion;
 mod dynamic_import;
 mod export_identity;
 mod import_keys;
+mod local_helpers;
 mod module_meta;
 mod nc64;
 mod runners;
