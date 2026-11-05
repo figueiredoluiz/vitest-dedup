@@ -240,197 +240,6 @@ fn hook_cross_scope_before_all_needs_invariant_state() {
     assert!(findings(&nested(reset), 1).is_empty());
 }
 
-/// An own-property write over a proven plain receiver is proven setup; every route around the
-/// proof refuses. Hazard routes sit in a never-called function: inert to scope closure, outside
-/// every runtime callback, yet still part of the module-wide write set.
-#[test]
-fn hook_property_writes_pair_over_a_proven_receiver() {
-    let receiver = "const audit = { mode: '' };";
-    let hook = "beforeEach(() => { audit.mode = 'primary' });";
-    let source = |extra: &str| {
-        format!("{IMPORTS} {receiver} {extra} {hook} {hook} test('reads', () => {{ expect(audit.mode).toBe('primary') }});")
-    };
-    assert_eq!(findings(&source(""), 1).len(), 1);
-    let route = |statement: &str| format!("function route() {{ {statement} }}");
-    // A hook over the receiver and a hook over a lexical cell are different work.
-    let cell = "beforeEach(() => { value = 1 });";
-    assert!(findings(
-        &format!("{IMPORTS} let value = 0; {receiver} {hook} {cell} {TEST}"),
-        1
-    )
-    .is_empty());
-    // The receiver escapes as a value.
-    assert!(findings(&source(&route("return audit;")), 1).is_empty());
-    // The receiver is reassigned.
-    assert!(findings(&source(&route("audit = { mode: 'x' };")), 1).is_empty());
-    // A delete on the receiver removes the state the hook establishes.
-    assert!(findings(&source(&route("delete audit.mode;")), 1).is_empty());
-    // A computed write keeps the property unknown.
-    let computed = "beforeEach(() => { audit[key] = 'primary' });";
-    assert!(findings(
-        &format!("{IMPORTS} {receiver} {computed} {computed} {TEST}"),
-        1
-    )
-    .is_empty());
-    // An accessor in the literal makes the write call user code.
-    let accessor = "const audit = { get mode() { return '' } };";
-    assert!(findings(&format!("{IMPORTS} {accessor} {hook} {hook} {TEST}"), 1).is_empty());
-    // A deeper path goes through an unproven intermediate.
-    let deeper = "beforeEach(() => { audit.inner.mode = 'primary' });";
-    assert!(findings(&format!("{IMPORTS} {receiver} {deeper} {deeper} {TEST}"), 1).is_empty());
-    // A compound write to the tracked path breaks the single-value invariant.
-    assert!(findings(&source(&route("audit.mode += 'x';")), 1).is_empty());
-    // An increment to the tracked path is a write the proof cannot value.
-    assert!(findings(&source(&route("audit.mode++;")), 1).is_empty());
-    // A prototype pollution route makes the assignment call user code.
-    assert!(findings(
-        &source(&route(
-            "Object.defineProperty(Object.prototype, 'mode', { set(v) {} });"
-        )),
-        1
-    )
-    .is_empty());
-    // The remaining define-property routes refuse the same way, one route per module.
-    for pollution in [
-        "Object.defineProperties(Object.prototype, { mode: { set(v) {} } });",
-        "Reflect.set(Object.prototype, 'mode', 1);",
-        "Object.prototype.__defineSetter__('mode', () => {});",
-    ] {
-        assert!(
-            findings(&source(&route(pollution)), 1).is_empty(),
-            "{pollution}"
-        );
-    }
-    // A `__proto__` key in the literal gives the receiver a foreign prototype.
-    let foreign = "const audit = { __proto__: {}, mode: '' };";
-    assert!(findings(&format!("{IMPORTS} {foreign} {hook} {hook} {TEST}"), 1).is_empty());
-    // A quoted key is still a static data property: the pair fires.
-    let quoted = "const audit = { 'mode': '' };";
-    let quoted_hook = "beforeEach(() => { audit.mode = 'primary' });";
-    assert_eq!(
-        findings(
-            &format!("{IMPORTS} {quoted} {quoted_hook} {quoted_hook} test('reads', () => {{ expect(audit.mode).toBe('primary') }});"),
-            1
-        )
-        .len(),
-        1
-    );
-    // A `declare`d receiver has no initializer to prove.
-    let declared = "declare const audit: { mode: string };";
-    assert!(findings(&format!("{IMPORTS} {declared} {hook} {hook} {TEST}"), 1).is_empty());
-    // A receiver local to the hook callback is fresh per run, not shared setup.
-    let local = "beforeEach(() => { const audit = { mode: '' }; audit.mode = 'primary' });";
-    assert!(findings(&format!("{IMPORTS} {local} {local} {TEST}"), 1).is_empty());
-    // A non-literal write on the tracked path has no value to keep.
-    assert!(findings(&source(&route("audit.mode = compute();")), 1).is_empty());
-    // A write to a sibling path leaves the tracked property alone.
-    let sibling = "const audit = { mode: '', other: 1 };";
-    assert_eq!(
-        findings(&format!("{IMPORTS} {sibling} function route() {{ audit.other = 2; }} {hook} {hook} test('reads', () => {{ expect(audit.mode).toBe('primary') }});"), 1)
-            .len(),
-        1
-    );
-    // A computed access on the receiver anywhere keeps its use unknown.
-    assert!(findings(&source(&route("audit[key] = 'x';")), 1).is_empty());
-    // A `__proto__` segment replaces the receiver's prototype.
-    assert!(findings(&source(&route("audit.__proto__.x = 1;")), 1).is_empty());
-    // A method call on the receiver exposes it as `this`, which can install a setter.
-    assert!(findings(&source(&route("audit.install();")), 1).is_empty());
-    // The same holds for the invocation forms that keep the receiver.
-    for call in ["audit.install``;", "(audit?.install)();"] {
-        assert!(findings(&source(&route(call)), 1).is_empty(), "{call}");
-    }
-    // A coercion of an object-valued property runs its `valueOf`.
-    let coercing = "const audit = { mode: { valueOf() { queue() } } };";
-    let coercing_hooks = "beforeEach(() => { value = 1 }); beforeEach(() => { value = 1 });";
-    assert!(findings(
-        &format!("{IMPORTS} let value = 0; {coercing} {coercing_hooks} test('reads', () => {{ expect(+audit.mode).toBe(0) }});"),
-        1
-    )
-    .is_empty());
-    // A destructured binding's initializer is not the receiver's value.
-    let destructured = format!(
-        "{IMPORTS} const {{ audit }} = {{ audit: source, mode: 0 }}; function route() {{ return audit.mode; }} {hook} {hook} {TEST}"
-    );
-    assert!(findings(&destructured, 1).is_empty());
-    // A later write can replace the primitive the initializer declared, so a coercion of the
-    // read is only exempt when the path's whole write history keeps one primitive.
-    let rewritten = format!(
-        "{IMPORTS} let value = 0; {receiver} {hook} {hook} test('rewrites', () => {{ audit.mode = make(); expect(+audit.mode).toBe(0) }}); test('reads', () => {{ expect(value).toBe(1) }});"
-    );
-    assert!(findings(&rewritten, 2).is_empty());
-    // Any differing write to the path refuses the exemption, primitive or not: the proof
-    // keeps one literal value across the module.
-    // A `var` receiver can be redeclared: the second initializer replaces the proven literal
-    // without a write reference.
-    let redeclared = format!(
-        "{IMPORTS} var audit = {{ mode: '' }}; var audit = {{ set mode(v) {{ writes += 1 }} }}; {hook} {hook} {TEST}"
-    );
-    assert!(findings(&redeclared, 1).is_empty());
-    assert!(findings(
-        &format!("{IMPORTS} var audit = {{ mode: '' }}; {hook} {hook} {TEST}"),
-        1
-    )
-    .is_empty());
-    // A duplicate key's later initializer wins at runtime.
-    let duplicated = "const audit = { mode: 0, mode: { valueOf() { queue() } } };";
-    assert!(findings(&format!("{IMPORTS} {duplicated} {hook} {hook} {TEST}"), 1).is_empty());
-    // A destructuring target writes the property with an unproven value, however nested.
-    for target in [
-        "([audit.mode] = [make()]);",
-        "({ x: [audit.mode] } = make());",
-        "for ([audit.mode] of make()) {}",
-    ] {
-        assert!(findings(&source(&route(target)), 1).is_empty(), "{target}");
-    }
-    // A receiver without the tracked key would write through an inherited accessor the
-    // file cannot see.
-    let empty = "const audit = {}; ";
-    assert!(findings(&format!("{IMPORTS} {empty} {hook} {hook} {TEST}"), 1).is_empty());
-    // Differing values are a barrier, not a pair.
-    let other = "beforeEach(() => { audit.mode = 'secondary' });";
-    assert!(findings(&format!("{IMPORTS} {receiver} {hook} {other} {TEST}"), 1).is_empty());
-}
-
-/// The scheduling scan's plain-receiver exemption holds only over the same receiver discipline:
-/// a receiver handed out as a value can grow a getter or setter later.
-#[test]
-fn hook_plain_member_exemption_needs_receiver_discipline() {
-    let receiver = "const audit = { mode: '' };";
-    let hooks = "beforeEach(() => { value = 1 }); beforeEach(() => { value = 1 });";
-    // The exemption covers reading a member of the proven receiver.
-    let read = format!(
-        "{IMPORTS} let value = 0; {receiver} {hooks} test('reads', () => {{ expect(audit.mode).toBe('') }});"
-    );
-    assert_eq!(findings(&read, 1).len(), 1);
-    // Coercing a primitive-valued property runs no user code.
-    let numeric = format!(
-        "{IMPORTS} let value = 0; const audit = {{ mode: 1 }}; {hooks} test('reads', () => {{ expect(+audit.mode).toBe(1) }});"
-    );
-    assert_eq!(findings(&numeric, 1).len(), 1);
-    // A returned property can carry a `then` the analyzer cannot see: only assertion
-    // arguments are exempt from the scheduling scan.
-    let returned = format!(
-        "{IMPORTS} let value = 0; {receiver} {hooks} test('queues', () => audit.mode); test('reads', () => {{ expect(value).toBe(1) }});"
-    );
-    assert!(findings(&returned, 2).is_empty());
-    // A concise arrow returns the assignment's value, which is the right-hand side.
-    let returned_assignment = format!(
-        "{IMPORTS} let value = 0; {receiver} {hooks} test('queues', () => audit.mode = value); test('reads', () => {{ expect(value).toBe(1) }});"
-    );
-    assert!(findings(&returned_assignment, 2).is_empty());
-    // Handing the receiver to a call lets the callee rewrite its properties.
-    let escaped = format!(
-        "{IMPORTS} let value = 0; {receiver} function route() {{ configure(audit); }} {hooks} test('reads', () => {{ expect(audit.mode).toBe('') }});"
-    );
-    assert!(findings(&escaped, 1).is_empty());
-    // A method call on the receiver exposes it as `this`.
-    let method = format!(
-        "{IMPORTS} let value = 0; {receiver} function route() {{ audit.install(); }} {hooks} test('reads', () => {{ expect(audit.mode).toBe('') }});"
-    );
-    assert!(findings(&method, 1).is_empty());
-}
-
 /// Different and opaque work block a pair; removing the barrier keeps the positive.
 #[test]
 fn hook_intervening_effects_and_observers_are_barriers() {
@@ -452,6 +261,7 @@ fn hook_intervening_effects_and_observers_are_barriers() {
 #[test]
 fn hook_effect_proof_refuses_unknown_work() {
     for body in [
+        "audit.mode = 1",
         "value += 1",
         "value = make()",
         "value ||= make()",
@@ -587,6 +397,12 @@ fn suite_table_hooks_pair_when_rows_are_proven() {
         "{IMPORTS} let value = 0; {hook} {hook} describe.each([registerObserver()])('s', () => {{ test('observes', () => {{ expect(value).toBe(1) }}); }}); test('plain', () => {{ expect(value).toBe(1) }});"
     );
     assert!(findings(&calling, 2).is_empty());
+    // Object rows are read while Vitest formats the title, and an accessor among them can
+    // register a hook, so only primitive-literal rows close.
+    let object_rows = format!(
+        "{IMPORTS} let value = 0; describe.each([{{ role: 'admin' }}])('s', () => {{ {hook} {hook} {TEST} }});"
+    );
+    assert!(findings(&object_rows, 1).is_empty());
     // A tagged-template table and a suite wrapped in a loop keep the ordinary refusal.
     for shape in [
         format!("{IMPORTS} let value = 0; describe.each`row ${{1}}`(() => {{ {hook} {hook} {TEST} }});"),

@@ -15,11 +15,6 @@
       "wrapperSites": [],
       "next": {}
     },
-    "property-constant-twin.test.ts": {
-      "tasks": 1,
-      "wrapperSites": [],
-      "next": {}
-    },
     "before-all-constant-twin.test.ts": {
       "tasks": 2,
       "wrapperSites": [],

@@ -345,13 +345,14 @@ fn closed_scope(
             let rows = tree
                 .child(call, "callee")
                 .and_then(|callee| tree.list(callee, "arguments").into_iter().next().flatten());
-            // The rows argument and every registration argument evaluate at registration, so
-            // only inert ones can hide no hook.
+            // The rows argument and every registration argument evaluate at registration, and
+            // title formatting reads the rows again, so only primitive-literal rows and inert
+            // registration arguments can hide no hook.
             return matches!(
                 tables.get(&site.node),
                 Some(TableRows::Empty | TableRows::Populated)
             ) && !uncertain(site)
-                && rows.is_some_and(|rows| normalizer.hook_registration_inert(rows))
+                && rows.is_some_and(|rows| primitive_literal_rows(tree, rows))
                 && inert_registration_arguments(tree, normalizer, call);
         }
         if matches!(site.kind, SiteKind::Wrapper(_)) {
@@ -359,6 +360,16 @@ fn closed_scope(
         }
         inert_registration_arguments(tree, normalizer, call)
     })
+}
+
+/// Every row of the table's array is a primitive literal: a row object's properties are read
+/// while Vitest formats the title, and an accessor among them can register a hook.
+fn primitive_literal_rows(tree: &crate::lang::Tree, rows: NodeId) -> bool {
+    tree.kind(rows) == "ArrayExpression"
+        && tree
+            .list(rows, "elements")
+            .into_iter()
+            .all(|row| row.is_some_and(|row| tree.kind(tree.inner(row)) == "Literal"))
 }
 
 /// Every registration argument is a function or literal the inertness proof covers: evaluating
