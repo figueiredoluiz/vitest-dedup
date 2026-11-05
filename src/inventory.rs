@@ -150,14 +150,30 @@ pub struct Escape {
     pub text: String,
 }
 
+/// A module-top-level statement calling a mock member the framework does not hoist
+/// (`tools.mock` for `vi as tools`): it changes module state where it is written.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct InPlaceMock {
+    /// The top-level statement.
+    pub statement: NodeId,
+    /// The call.
+    pub call: NodeId,
+    /// The member it calls on the canonical mocking namespace (`vi.mock`), whatever binding
+    /// spells it.
+    pub callee: String,
+}
+
 /// What one module registers.
 #[derive(Clone, Debug, Default)]
 pub struct Inventory {
     /// Intrinsic direct eval may write lexical bindings without ordinary assignment references.
     pub direct_eval: bool,
-    /// A `vi.doMock` or `vi.doUnmock` changes module state at its execution point.
+    /// A `vi.doMock` or `vi.doUnmock`, or a mock call the framework does not hoist outside a
+    /// top-level statement, changes module state at its execution point.
     pub non_hoisted_mock: bool,
-    /// A hoisted `vi.mock` factory is not an inline function or proven spy option.
+    /// Reachable top-level mock calls the framework does not hoist, in source order.
+    pub in_place_mocks: Vec<InPlaceMock>,
+    /// A `vi.mock` factory, hoisted or in place, is not an inline function or proven spy option.
     pub unreadable_mock_factory: bool,
     /// A `test.extend` fixture value cannot be represented without evaluating user code.
     pub unreadable_fixture: bool,

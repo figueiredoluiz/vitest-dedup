@@ -9,7 +9,7 @@ const SAME: &str = include_str!("../../../fixtures/oracle/runner-module-meta/sam
 const OTHER: &str = include_str!("../../../fixtures/oracle/runner-module-meta/other.test.ts");
 
 /// Read exactly two comparable executions before making any equality or finding assertion.
-fn compared_pair(files: &[(&str, &str)], path: &str) -> FileCorpus {
+pub(super) fn compared_pair(files: &[(&str, &str)], path: &str) -> FileCorpus {
     let corpus = corpora(files, &[path]).remove(0);
     assert_eq!(corpus.tests.len(), 2, "{path}");
     assert!(corpus.tests.iter().all(|case| case.exclusion.is_none()));
@@ -17,7 +17,7 @@ fn compared_pair(files: &[(&str, &str)], path: &str) -> FileCorpus {
 }
 
 /// Different metadata owners must stay distinct in the body and every finding consumer.
-fn distinct_modules(files: &[(&str, &str)], path: &str) {
+pub(super) fn distinct_modules(files: &[(&str, &str)], path: &str) {
     let corpus = compared_pair(files, path);
     assert_ne!(corpus.tests[0].body, corpus.tests[1].body);
     assert_ne!(corpus.tests[0].key, corpus.tests[1].key);
@@ -25,7 +25,7 @@ fn distinct_modules(files: &[(&str, &str)], path: &str) {
 }
 
 /// Require the retained duplicate claim while allowing a caller to inspect companion findings.
-fn duplicate(path: &str, corpus: FileCorpus) -> crate::rules::Outcome {
+pub(super) fn duplicate(path: &str, corpus: FileCorpus) -> crate::rules::Outcome {
     let outcome = owned_findings(path, corpus);
     assert!(outcome
         .findings

@@ -20,12 +20,22 @@ the way `vi.doMock` does. The distinction is easy to miss because the call shape
 ## API aliases and timing
 
 `vi` and `vitest` denote the same mock API. The analyzer recognizes named imports, renamed
-imports, namespace members and configured globals. Direct top-level `vi.mock`/`vitest.mock`
-and `unmock` calls retain the file-wide model below. Mock calls through renamed or namespace
-bindings, computed members, optional calls, or immutable in-source bindings mark mock context unresolved:
-API identity alone does not prove that Vitest hoists them before static imports. Such files
-remain visible in extraction but are excluded from duplicate comparison. This also applies to
-renamed `vi` imports.
+imports, namespace members and configured globals. Vitest hoists `mock` and `unmock` by
+spelling: only a plain member of an identifier spelled `vi` or `vitest` (`vi.mock`,
+`vitest.unmock`, also when that identifier is a renamed import such as `vitest as vi`). Those
+calls retain the file-wide model below. A call through any other binding of the API (a renamed
+import such as `vi as tools`, a namespace member, a string key `vi['mock']`) is not hoisted
+and runs where it is written, after the static imports. As a top-level statement it is part of
+the file's context at its position: such files compare with each other, never with a hoisted
+`vi.mock` or a file without the call. Anywhere else it excludes the file from comparison, as
+`vi.doMock` does. An optional call (`vi?.mock`) also excludes the file: Vitest hoists it or
+rejects it depending on what else the file contains. A key read from a variable (`vi[name]`)
+is not read as a mock call; the analyzer keeps the statement in the context as written. Vitest
+leaves it in place unless the variable is itself named `mock`, `unmock` or `hoisted` and another
+call triggers the transform: `vi[mock](...)` is then hoisted ahead of the variable's
+initialization. The analyzer does not read a mock call through an in-source binding
+(`const { vi } = import.meta.vitest`) as one either and keeps it in the context as written;
+Vitest still hoists it when it is spelled `vi.mock`.
 
 Top-level ambient setup such as `vitest.stubEnv` and `tools.spyOn(...).mockReturnValue(...)`
 keeps its raw source text in the context, including aliases and immutable `import.meta.vitest`

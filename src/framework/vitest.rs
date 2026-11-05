@@ -122,6 +122,7 @@ pub static DIALECT: Dialect = Dialect {
             mocking: Mocking::Dynamic,
         },
     ],
+    hoisting_objects: &["vi", "vitest"],
     assertions: &[AssertionEntry {
         name: "expect",
         label: "expect",

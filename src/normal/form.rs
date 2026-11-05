@@ -6,6 +6,7 @@ use crate::lang::{Field, Name, NodeId, Tree};
 use serde_json::Value;
 use std::collections::HashSet;
 use std::fmt::Write as _;
+use std::path::Path;
 
 /// ESTree keys that carry source spelling or TypeScript-only information.
 const DROPPED: [&str; 12] = [
@@ -625,12 +626,20 @@ impl Normalizer<'_> {
                 out.push_str("),])");
             } else {
                 let structural = walk.structural;
-                if !walk.trace
-                    && (property_key(key) || (kind == "ImportExpression" && &**key == "source"))
-                {
+                let source = kind == "ImportExpression" && &**key == "source";
+                if !walk.trace && (property_key(key) || source) {
                     walk.structural = false;
                 }
+                let from = child
+                    .filter(|_| source)
+                    .and_then(|_| self.importer_directory());
+                if let Some(directory) = &from {
+                    let _ = write!(out, "(from {directory:?} ");
+                }
                 self.write_field(field, walk, out);
+                if from.is_some() {
+                    out.push(')');
+                }
                 walk.structural = structural;
             }
         }
@@ -639,6 +648,27 @@ impl Normalizer<'_> {
         }
         walk.in_type -= usize::from(type_level);
         out.push(')');
+    }
+
+    /// The importing file's root-relative directory, which every `import()` source is read
+    /// from: a relative path resolves against it, and whether a source is relative is not
+    /// decided here, so a constant or row value still compares with the literal it holds. The
+    /// specifier itself is written as before; nothing is resolved.
+    pub(crate) fn importer_directory(&self) -> Option<String> {
+        let importer = self
+            .setting
+            .exports
+            .sources
+            .relative(self.path, self.setting.root)?;
+        Some(
+            importer
+                .parent()
+                .into_iter()
+                .flat_map(Path::components)
+                .map(|component| component.as_os_str().to_string_lossy().into_owned())
+                .collect::<Vec<_>>()
+                .join("/"),
+        )
     }
 
     /// Writes an identifier: a local by its order of appearance, anything else by what declares it.

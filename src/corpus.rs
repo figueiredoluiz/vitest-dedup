@@ -498,6 +498,37 @@ fn read_parsed(
     // act without registering, and imports run for their effects alone.
     let mut module_context = String::new();
     for statement in tree.list(tree.root(), "body").into_iter().flatten() {
+        // A mock Vitest does not hoist runs here, after the static imports, whichever binding
+        // spells it: it is its canonical callee and arguments, apart from a hoisted `vi.mock`.
+        if let Some(mock) = found
+            .in_place_mocks
+            .iter()
+            .find(|mock| mock.statement == statement)
+        {
+            // The target is read from this file's directory, as a dynamic import's is.
+            let arguments: Vec<String> = tree
+                .list(mock.call, "arguments")
+                .into_iter()
+                .flatten()
+                .enumerate()
+                .map(|(index, argument)| {
+                    let form = normalizer.of(argument);
+                    match (index == 0)
+                        .then(|| normalizer.importer_directory())
+                        .flatten()
+                    {
+                        Some(directory) => format!("(from {directory:?} {form})"),
+                        None => form,
+                    }
+                })
+                .collect();
+            module_context.push_str("inplace:");
+            module_context.push_str(&mock.callee);
+            module_context.push('(');
+            module_context.push_str(&arguments.join(","));
+            module_context.push_str(");");
+            continue;
+        }
         let kind = tree.kind(statement);
         let acts = !inert(&normalizer, tree, statement) && !registration(statement);
         let bare_import =
