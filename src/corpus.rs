@@ -1009,13 +1009,12 @@ fn read_parsed(
                     })
                     .unwrap_or_default()
             });
-            let observes_tagged_input = modifiers.rows.as_ref().is_some_and(|rows| {
-                rows.iter()
-                    .any(|row| matches!(row.value, normal::Row::Fields(_)))
-            }) && function
-                .and_then(|function| tree.child(function, "body"))
-                .is_some_and(|body| crate::lang::uses_receiver(tree, &parsed.scopes, body));
-            let parameters = parameters.filter(|_| !observes_tagged_input);
+            // Implicit reads can observe inputs even when no parameter binds a cell.
+            let observes_input = modifiers.rows.is_some()
+                && function
+                    .and_then(|function| tree.child(function, "body"))
+                    .is_some_and(|body| crate::lang::uses_receiver(tree, &parsed.scopes, body));
+            let parameters = parameters.filter(|_| !observes_input);
             let rows = match &modifiers.rows {
                 None => vec![(HashMap::new(), false, String::new())],
                 Some(rows) => rows

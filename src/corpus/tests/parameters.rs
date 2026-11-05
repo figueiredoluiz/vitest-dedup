@@ -609,6 +609,23 @@ fn parameterization_keeps_row_allocation_observers() {
     }
 }
 
+/// Invocation inputs remain significant without disabling safe zero-parameter duplicates.
+#[test]
+fn table_invocation_observers_preserve_unbound_inputs() {
+    let source = include_str!("../../../fixtures/duplicates/table-invocation-observers.test.ts");
+    let findings = owned_findings("a.test.ts", eligible(source, 22)).findings;
+    assert_eq!(findings.len(), 3, "{findings:#?}");
+    for prefix in ["same input", "unused input", "nested frame"] {
+        let titles = [format!("{prefix} first"), format!("{prefix} second")];
+        assert!(
+            findings
+                .iter()
+                .any(|finding| finding.rule == Rule::DuplicateTest && finding.titles == titles),
+            "{findings:#?}"
+        );
+    }
+}
+
 /// The callback's extra invocation inputs cannot disappear when repeated cells become readable.
 #[test]
 fn parameterization_retains_invocation_observers() {
