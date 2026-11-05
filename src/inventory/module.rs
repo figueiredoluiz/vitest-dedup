@@ -213,7 +213,9 @@ impl<'s> Module<'s> {
             }
             // Vitest refuses the file whenever it hoists a call from anywhere but the top level,
             // reachable or not.
-            Some(MockCall::Hoisted) => self.top_level_statement(call).is_none(),
+            Some(MockCall::Hoisted) => {
+                self.top_level_statement(call).is_none() && !self.in_source_statement(call)
+            }
             None => false,
         })
     }
@@ -293,6 +295,48 @@ impl<'s> Module<'s> {
         }
         (tree.kind(parent) == "ExpressionStatement" && tree.parent(parent) == Some(tree.root()))
             .then_some(parent)
+    }
+
+    /// Whether `call` is a statement directly inside the block of an `if (import.meta.vitest)
+    /// { ... }`, which Vitest hoists from as it does from the module's top level.
+    fn in_source_statement(&self, call: NodeId) -> bool {
+        let tree = self.tree;
+        let Some(statement) = tree
+            .outer_parent(call)
+            .filter(|&parent| tree.kind(parent) == "ExpressionStatement")
+        else {
+            return false;
+        };
+        let Some(block) = tree
+            .parent(statement)
+            .filter(|&block| tree.kind(block) == "BlockStatement")
+        else {
+            return false;
+        };
+        let Some(guard) = tree.parent(block).filter(|&guard| {
+            tree.kind(guard) == "IfStatement" && tree.child(guard, "consequent") == Some(block)
+        }) else {
+            return false;
+        };
+        tree.child(guard, "test").is_some_and(|test| {
+            tree.kind(test) == "MemberExpression"
+                && !tree.flag(test, "computed")
+                && tree
+                    .child(test, "property")
+                    .and_then(|property| tree.text(property, "name"))
+                    == Some("vitest")
+                && tree.child(test, "object").is_some_and(|object| {
+                    tree.kind(object) == "MetaProperty"
+                        && tree
+                            .child(object, "meta")
+                            .and_then(|meta| tree.text(meta, "name"))
+                            == Some("import")
+                        && tree
+                            .child(object, "property")
+                            .and_then(|property| tree.text(property, "name"))
+                            == Some("meta")
+                })
+        })
     }
 
     /// Whether a `vi.mock`, hoisted or in place, has a factory whose behavior is not written

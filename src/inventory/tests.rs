@@ -328,6 +328,8 @@ fn non_hoisted_mocks_are_found_only_through_stable_vitest_bindings() {
         "import { vi } from 'vitest'; if (globalThis.flag) vi.mock('./dep');",
         "import { vi } from 'vitest'; function never() { return; vi.mock('./dep') }",
         "import { vi } from 'vitest'; const mocked = vi.mock('./dep');",
+        "import { vi } from 'vitest'; if (import.meta.vitest) vi.mock('./dep');",
+        "import { vi } from 'vitest'; if (globalThis.vitest) { vi.mock('./dep') }",
         // Optional: where Vitest runs it depends on what else in the file it hoists.
         "import { vi } from 'vitest'; vi?.mock('./dep');",
         "import { vi } from 'vitest'; vi.mock?.('./dep');",
@@ -345,6 +347,9 @@ fn non_hoisted_mocks_are_found_only_through_stable_vitest_bindings() {
         "import { vi } from 'vitest'; const { helper = { doMock() {} } } = vi; helper.doMock('./dep');",
         "import { vitest as vi } from 'vitest'; vi.mock('./dep');",
         "import { test, vi } from 'vitest'; (vi).mock('./dep');",
+        // Vitest hoists from the top level of an in-source guard's block as from the module's.
+        "import { vi } from 'vitest'; if (import.meta.vitest) { vi.mock('./dep'); vi.unmock('./x') }",
+        "import { vi } from 'vitest'; function f() { if (import.meta.vitest) { vi.mock('./dep') } }",
         "import { vi as tools } from 'other'; tools.mock('./dep');",
     ] {
         let found = inventory_of(source, &[], false).0;
