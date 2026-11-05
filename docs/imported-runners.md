@@ -20,7 +20,7 @@ tests around it are left out of comparison rather than guessed at.
 
 The calling file qualifies when it parses cleanly and its top level holds only imports, inert
 declarations (functions, types, literal constants), plain `test(title, callback)` calls with a
-static title and an inline callback, and statement-level calls of imported runners. A `describe`,
+static title, of any length, and an inline callback, and statement-level calls of imported runners. A `describe`,
 a hook, a label, a module load the file does not import by name, or a registration function read as
 a value refuses the whole file's expansion. Every value it imports from a project module must be a
 runner the proof read.

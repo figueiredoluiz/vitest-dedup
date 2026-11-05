@@ -9951,6 +9951,58 @@
       "expectedAbsent": []
     },
     {
+      "name": "duplicate-test-runner-beside-long-title",
+      "path": "duplicate-test-runner-beside-long-title",
+      "rule": "duplicate-test",
+      "role": "positive",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-05",
+      "expectedTests": 4,
+      "expectedIncomplete": true,
+      "expectedUnresolved": 2,
+      "expectedFindings": [
+        {
+          "rule": "duplicate-test",
+          "severity": "error",
+          "titles": [
+            "spells the check",
+            "checks a"
+          ],
+          "locations": [
+            "caller.test.ts:9",
+            "runner.ts:5"
+          ]
+        }
+      ],
+      "expectedAbsent": []
+    },
+    {
+      "name": "duplicate-test-runner-beside-call-title-negative",
+      "path": "duplicate-test-runner-beside-call-title-negative",
+      "rule": "duplicate-test",
+      "role": "negative",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-05",
+      "expectedTests": 3,
+      "expectedIncomplete": true,
+      "expectedUnresolved": 3,
+      "blindUnderCurrent": [
+        "caller.test.ts"
+      ],
+      "expectedFindings": [],
+      "expectedAbsent": [
+        {
+          "rule": "duplicate-test",
+          "titles": [
+            "spells the check",
+            "checks a"
+          ]
+        }
+      ]
+    },
+    {
       "name": "duplicate-test-name-test-member-suite",
       "path": "duplicate-test-name-test-member-suite",
       "rule": "duplicate-test-name",

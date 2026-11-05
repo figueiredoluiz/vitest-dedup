@@ -157,20 +157,6 @@ fn closed_batch(
             return None;
         }
     }
-    for site in found
-        .sites
-        .iter()
-        .filter(|site| site.kind == SiteKind::Registers(Registers::Test))
-    {
-        let arguments = tree.list(site.node, "arguments");
-        if !site.chain.is_empty()
-            || arguments.len() != 2
-            || normal::titles::title(parsed, site.node).is_none()
-            || !arguments[1].is_some_and(|argument| tree.is_function(tree.inner(argument)))
-        {
-            return None;
-        }
-    }
     let owner = run.sources.relative(path, setting.root)?;
     let mut planner = Planner {
         setting,
@@ -183,6 +169,26 @@ fn closed_batch(
         left: 2000,
         work: 0,
     };
+    for site in found
+        .sites
+        .iter()
+        .filter(|site| site.kind == SiteKind::Registers(Registers::Test))
+    {
+        let arguments = tree.list(site.node, "arguments");
+        if !site.chain.is_empty()
+            || arguments.len() != 2
+            || !arguments[1].is_some_and(|argument| tree.is_function(tree.inner(argument)))
+        {
+            return None;
+        }
+        // Collection evaluates the title, so it must run no code. A title too long to compare is
+        // still inert: read as a runner argument is, charged to the batch.
+        if normal::titles::title(parsed, site.node).is_none() {
+            let title = arguments[0]
+                .and_then(|title| normal::titles::argument(parsed, title, &HashMap::new()))?;
+            planner.charge(title.as_str()?.len())?;
+        }
+    }
     let mut expansions = Vec::new();
     let mut checked_bindings = HashSet::new();
     for call in calls {
