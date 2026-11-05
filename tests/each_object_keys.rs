@@ -16,16 +16,22 @@ fn run(source: &str, count: u64) -> serde_json::Value {
 }
 
 /// A table key that spells the rendering's framing must not collapse onto the structure it
-/// spells: no pair becomes an error duplicate. The pairs would be consolidation candidates under a
-/// whole-value row model; until then their different object shapes keep them apart
-/// (`next-duplicates-known.json` records the three misses).
+/// spells: all three pairs are consolidation candidates, never error duplicates.
 #[test]
 fn each_table_keys_that_spell_the_framing_stay_distinct() {
     let result = run(
         include_str!("../fixtures/duplicates/each-object-key-ambiguity.test.ts"),
         6,
     );
-    assert!(findings(&result).is_empty(), "{result}");
+    let findings = findings(&result);
+    assert_eq!(findings.len(), 3, "{result}");
+    assert!(
+        findings
+            .iter()
+            .all(|finding| finding["rule"] == "parameterization-candidate"
+                && finding["severity"] == "warning"),
+        "{result}"
+    );
 }
 
 /// A `test.extend` value whose key spells the framing is its own context: identical bodies, and

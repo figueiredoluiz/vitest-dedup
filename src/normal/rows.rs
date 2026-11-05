@@ -570,6 +570,9 @@ impl Normalizer<'_> {
     /// A cell that reads a binding something reassigns is not written in either: the row holds the
     /// value it had when the test registered, which the binding may no longer hold when it runs.
     fn cell(&mut self, symbol: SymbolId, cell: NodeId, structural: bool) -> Option<String> {
+        if self.row_callback_uses_receiver(symbol) {
+            return None;
+        }
         if let Some(value) = self.row_scalar(cell) {
             return self.scalar_form(&value, structural);
         }
@@ -590,6 +593,18 @@ impl Normalizer<'_> {
         }
         let reads = self.scopes.symbol(symbol).references.len();
         let fresh = form::creates(self, cell) || form::allocates(self.tree, cell);
-        (!fresh || reads <= 1).then(|| self.render(cell, HashMap::new(), false, structural))
+        if fresh && reads > 1 && !self.readonly_row_data(symbol, cell) {
+            return None;
+        }
+        if structural
+            && matches!(
+                tree.kind(tree.inner(cell)),
+                "ObjectExpression" | "ArrayExpression"
+            )
+            && self.literal_row_data(cell, &HashMap::new())
+        {
+            return self.row_data_shape(cell, &HashMap::new());
+        }
+        Some(self.render(cell, HashMap::new(), false, structural))
     }
 }

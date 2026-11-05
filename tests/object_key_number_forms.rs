@@ -15,15 +15,21 @@ fn run(source: &str) -> serde_json::Value {
     result
 }
 
-/// Runtime-distinct keys stay distinct: neither the `.each` pair nor the `test.extend` pair is
-/// linked. The `.each` pair would be a parameterization candidate under a whole-value row model;
-/// until then its different runtime keys keep it out (`next-duplicates-known.json` records the miss).
+/// Runtime-distinct keys never become error duplicates. Only the data-row pair consolidates;
+/// different fixture contexts remain separate.
 #[test]
 fn keys_that_look_alike_stay_distinct() {
     let result = run(include_str!(
         "../fixtures/duplicates/object-key-number-forms-distinct.test.ts"
     ));
-    assert!(findings(&result).is_empty(), "{result}");
+    let findings = findings(&result);
+    assert_eq!(findings.len(), 1, "{result}");
+    assert_eq!(findings[0]["rule"], "parameterization-candidate");
+    assert_eq!(findings[0]["severity"], "warning");
+    assert_eq!(
+        findings[0]["titles"],
+        serde_json::json!(["exponent each", "decimal each"])
+    );
 }
 
 /// Runtime-identical keys fold together in both paths: identical-bodied tests report

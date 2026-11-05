@@ -9,6 +9,28 @@ use std::path::{Path, PathBuf};
 /// Per-proof source and recursion bounds; failure never supplies a partial value.
 const MAX_SOURCE_BYTES: usize = 512 * 1024;
 
+/// Own literal keys use JavaScript's spelling for numbers, just as exact object forms do.
+fn row_property_key(tree: &crate::lang::Tree, property: NodeId) -> Option<String> {
+    if let Some(key) = crate::lang::property_name(tree, property) {
+        return Some(key.into());
+    }
+    let key = tree.child(property, "key")?;
+    match tree.field_of(key, "value") {
+        Field::Value(serde_json::Value::Number(value)) => {
+            Some(super::form::js_number(value.as_f64()?))
+        }
+        _ => None,
+    }
+}
+
+/// A static own data property has no getter, method or computed-key evaluation.
+fn own_data_property(tree: &crate::lang::Tree, property: NodeId) -> bool {
+    tree.kind(property) == "Property"
+        && !tree.flag(property, "computed")
+        && !tree.flag(property, "method")
+        && tree.text(property, "kind") == Some("init")
+}
+
 /// A borrowed module view; all identifiers still belong to that module's scopes.
 #[derive(Clone, Copy)]
 struct View<'a> {
@@ -86,6 +108,176 @@ struct Reader<'a, 'proof> {
 }
 
 impl Normalizer<'_> {
+    /// Only recorded primitive row substitutions can stand for a literal data leaf.
+    fn row_data_input(
+        &self,
+        node: NodeId,
+        substitutions: &HashMap<SymbolId, String>,
+    ) -> Option<String> {
+        let tree = self.tree;
+        let node = tree.inner(node);
+        if tree.kind(node) != "Identifier" {
+            return None;
+        }
+        let symbol = self.scopes.symbol_at(tree.span(node).start)?;
+        let form = substitutions.get(&symbol)?;
+        matches!(
+            form.as_str(),
+            "L<string>" | "L<number>" | "L<boolean>" | "L<null>" | "L<bigint>"
+        )
+        .then(|| form.clone())
+    }
+
+    /// Whole object payloads may vary; arrays retain cardinality and element-kind boundaries.
+    pub(super) fn row_data_shape(
+        &mut self,
+        node: NodeId,
+        substitutions: &HashMap<SymbolId, String>,
+    ) -> Option<String> {
+        let tree = self.tree;
+        let node = tree.inner(node);
+        match tree.kind(node) {
+            "ObjectExpression" => Some("row-data<ObjectExpression>".into()),
+            "ArrayExpression" => {
+                let mut out = String::from("row-data<ArrayExpression>[");
+                for element in tree.list(node, "elements") {
+                    let element = element?;
+                    if matches!(
+                        tree.kind(tree.inner(element)),
+                        "ObjectExpression" | "ArrayExpression"
+                    ) {
+                        out.push_str(&self.row_data_shape(element, substitutions)?);
+                    } else if let Some(form) = self.row_data_input(element, substitutions) {
+                        out.push_str(&form);
+                    } else {
+                        let scalar = self.row_scalar(element)?;
+                        out.push_str(&self.scalar_form(&scalar, true)?);
+                    }
+                    out.push(',');
+                }
+                out.push(']');
+                Some(out)
+            }
+            _ => None,
+        }
+    }
+
+    /// A bounded composite contains only literal data; no getter, spread or coercion executes.
+    pub(super) fn literal_row_data(
+        &mut self,
+        node: NodeId,
+        substitutions: &HashMap<SymbolId, String>,
+    ) -> bool {
+        let tree = self.tree;
+        let mut pending = vec![node];
+        let mut work = 0;
+        while let Some(node) = pending.pop() {
+            work += 1;
+            if work > 256 {
+                return false;
+            }
+            let node = tree.inner(node);
+            match tree.kind(node) {
+                "ArrayExpression" => {
+                    for element in tree.list(node, "elements") {
+                        let Some(element) = element else { return false };
+                        pending.push(element);
+                    }
+                }
+                "ObjectExpression" => {
+                    for property in tree.list(node, "properties").into_iter().flatten() {
+                        if !own_data_property(tree, property)
+                            || row_property_key(tree, property)
+                                .is_none_or(|key| key == "__proto__" || key.contains('\u{fffd}'))
+                        {
+                            return false;
+                        }
+                        let Some(value) = tree.child(property, "value") else {
+                            return false;
+                        };
+                        pending.push(value);
+                    }
+                }
+                "UnaryExpression" if self.row_scalar(node).is_some() => {
+                    let Some(argument) = tree.child(node, "argument") else {
+                        return false;
+                    };
+                    pending.push(argument);
+                }
+                "BinaryExpression" if self.row_scalar(node).is_some() => {
+                    let Some(left) = tree.child(node, "left") else {
+                        return false;
+                    };
+                    let Some(right) = tree.child(node, "right") else {
+                        return false;
+                    };
+                    pending.extend([left, right]);
+                }
+                "Literal" | "TemplateLiteral" if self.row_scalar(node).is_some() => {}
+                "Identifier" if self.row_data_input(node, substitutions).is_some() => {}
+                _ => return false,
+            }
+            if pending.len() + work > 256 {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// A row substitution cannot erase inputs an implicit invocation observer can still read.
+    pub(super) fn row_callback_uses_receiver(&self, symbol: SymbolId) -> bool {
+        let tree = self.tree;
+        let Some(callback) = self
+            .scopes
+            .declaration_node(symbol)
+            .and_then(|declaration| {
+                tree.ancestors(declaration)
+                    .find(|&node| tree.is_function(node))
+            })
+        else {
+            return true;
+        };
+        tree.child(callback, "body")
+            .is_none_or(|body| crate::lang::uses_receiver(tree, self.scopes, body))
+    }
+
+    /// Repeated reads can only observe own primitive data, never the cell's allocation identity.
+    pub(super) fn readonly_row_data(&mut self, symbol: SymbolId, node: NodeId) -> bool {
+        let tree = self.tree;
+        let node = tree.inner(node);
+        if tree.kind(node) == "ArrayExpression" {
+            return self.readonly_array(symbol, node);
+        }
+        if tree.kind(node) != "ObjectExpression" || !self.literal_row_data(node, &HashMap::new()) {
+            return false;
+        }
+        let symbol = self.scopes.symbol(symbol);
+        if !readonly_members(tree, symbol) {
+            return false;
+        }
+        let mut primitive = HashSet::new();
+        for property in tree.list(node, "properties").into_iter().flatten() {
+            let Some(key) = row_property_key(tree, property) else {
+                return false;
+            };
+            if tree
+                .child(property, "value")
+                .is_some_and(|value| self.row_scalar(value).is_some())
+            {
+                primitive.insert(key);
+            } else {
+                primitive.remove(&key);
+            }
+        }
+        symbol.references.iter().all(|reference| {
+            reference
+                .node
+                .and_then(|read| tree.parent(read))
+                .and_then(|member| crate::lang::member_name(tree, member))
+                .is_some_and(|key| primitive.contains(key))
+        })
+    }
+
     /// Gives one fresh normalizer the enclosing suite invocation's proven primitive inputs.
     pub(crate) fn for_suite_values(mut self, values: HashMap<SymbolId, Scalar>) -> Self {
         self.row_values = values;
@@ -101,7 +293,7 @@ impl Normalizer<'_> {
         let tree = self.tree;
         if tree
             .child(function, "body")
-            .is_none_or(|body| crate::lang::uses_receiver(tree, body))
+            .is_none_or(|body| crate::lang::uses_receiver(tree, self.scopes, body))
         {
             return None;
         }
@@ -353,8 +545,11 @@ impl Normalizer<'_> {
         .read(parsed, self.path, node, &self.row_values)
     }
 
-    /// Writes the proven value with the ordinary writer, preserving literal/type normal forms.
+    /// Writes the proven value using the ordinary literal/type normal forms.
     pub(crate) fn scalar_form(&self, scalar: &Scalar, structural: bool) -> Option<String> {
+        if structural && matches!(scalar, Scalar::String(_)) {
+            return Some("L<string>".into());
+        }
         let source = format!("({});", scalar.source());
         let parsed = crate::lang::parse(self.path, &source).ok()?;
         let statement = parsed
@@ -543,6 +738,19 @@ impl Reader<'_, '_> {
                 };
                 Scalar::Number(left / right)
             }
+            "BinaryExpression" if tree.text(node, "operator") == Some("+") => {
+                let left = self.read(parsed, path, tree.child(node, "left")?, bound)?;
+                let right = self.read(parsed, path, tree.child(node, "right")?, bound)?;
+                if !matches!(left, Scalar::String(_)) && !matches!(right, Scalar::String(_)) {
+                    return None;
+                }
+                let text = |value: Scalar| match value {
+                    Scalar::String(value) | Scalar::BigInt(value) => value,
+                    Scalar::Number(0.0) => "0".into(),
+                    value => value.source(),
+                };
+                Scalar::String(format!("{}{}", text(left), text(right)))
+            }
             "TemplateLiteral" if tree.list(node, "expressions").is_empty() => {
                 let quasi = tree.list(node, "quasis").first().copied()??;
                 let Field::Object(fields) = tree.field_of(quasi, "value") else {
@@ -644,7 +852,27 @@ impl Reader<'_, '_> {
         }
     }
 
-    /// Static member reads require a literal object with no observable mutation or escape route.
+    /// Primitive keys have no user-defined conversion; unknown keys cannot identify an own value.
+    fn member_key(
+        &mut self,
+        parsed: View<'_>,
+        path: &Path,
+        member: NodeId,
+        bound: &HashMap<SymbolId, Scalar>,
+    ) -> Option<String> {
+        let tree = parsed.tree;
+        let property = tree.child(member, "property")?;
+        if !tree.flag(member, "computed") {
+            return tree.text(property, "name").map(str::to_owned);
+        }
+        match self.read(parsed, path, property, bound)? {
+            Scalar::String(value) => Some(value),
+            Scalar::Number(value) => Some(super::form::js_number(value)),
+            _ => None,
+        }
+    }
+
+    /// Static own primitive reads require a literal collection with no mutation or escape route.
     fn member(
         &mut self,
         parsed: View<'_>,
@@ -660,15 +888,7 @@ impl Reader<'_, '_> {
         let symbol = parsed
             .scopes
             .symbol(parsed.scopes.symbol_at(tree.span(object).start)?);
-        let property = tree.child(node, "property")?;
-        let key = if !tree.flag(node, "computed") {
-            tree.text(property, "name")?.to_owned()
-        } else {
-            match self.read(parsed, path, property, bound)? {
-                Scalar::String(v) => v,
-                _ => return None,
-            }
-        };
+        let key = self.member_key(parsed, path, node, bound)?;
         let Declaration::Variable(decl) = symbol.declaration else {
             return None;
         };
@@ -691,39 +911,54 @@ impl Reader<'_, '_> {
             return None;
         }
         let init = tree.inner(tree.child(decl, "init")?);
-        if tree.kind(init) != "ObjectExpression" || !readonly_members(tree, symbol) {
+        if !readonly_members(tree, symbol) {
             return None;
         }
         let mut selected = None;
         let mut own = HashSet::new();
-        for property in tree.list(init, "properties").into_iter().flatten() {
-            if tree.kind(property) != "Property"
-                || tree.flag(property, "computed")
-                || tree.flag(property, "method")
-                || tree.text(property, "kind") != Some("init")
-            {
-                return None;
+        match tree.kind(init) {
+            "ObjectExpression" => {
+                for property in tree.list(init, "properties").into_iter().flatten() {
+                    if !own_data_property(tree, property) {
+                        return None;
+                    }
+                    let name = row_property_key(tree, property)?;
+                    if matches!(name.as_str(), "__proto__" | "toString" | "valueOf") {
+                        return None;
+                    }
+                    let value_node = tree.child(property, "value")?;
+                    let value =
+                        self.supplying(|reader| reader.read(parsed, path, value_node, bound))?;
+                    if name == key {
+                        selected = Some(value);
+                    }
+                    own.insert(name);
+                }
             }
-            let name = crate::lang::property_name(tree, property)?;
-            if matches!(name, "__proto__" | "toString" | "valueOf") {
-                return None;
+            "ArrayExpression" => {
+                let elements = tree.list(init, "elements");
+                for (index, element) in elements.iter().enumerate() {
+                    let value_node = (*element)?;
+                    let value =
+                        self.supplying(|reader| reader.read(parsed, path, value_node, bound))?;
+                    let name = index.to_string();
+                    if name == key {
+                        selected = Some(value);
+                    }
+                    own.insert(name);
+                }
+                if key == "length" {
+                    selected = Some(Scalar::Number(elements.len() as f64));
+                }
+                own.insert("length".to_owned());
             }
-            // Every property is read, and a `const` object supplies them to every reader again.
-            let value_node = tree.child(property, "value")?;
-            let value = self.supplying(|reader| reader.read(parsed, path, value_node, bound))?;
-            own.insert(name);
-            if name == key {
-                selected = Some(value);
-            }
+            _ => return None,
         }
-        if symbol.references.iter().any(|reference| {
-            reference
-                .node
-                .and_then(|id| tree.parent(id))
-                .and_then(|member| crate::lang::member_name(tree, member))
-                .is_none_or(|name| !own.contains(name))
-        }) {
-            return None;
+        for reference in &symbol.references {
+            let member = tree.parent(reference.node?)?;
+            if !own.contains(&self.member_key(parsed, path, member, bound)?) {
+                return None;
+            }
         }
         selected
     }

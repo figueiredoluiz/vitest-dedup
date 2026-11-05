@@ -1,16 +1,20 @@
 {
   "cases": [
     {
+      "id": "miss|fixtures/duplicates|parameterization-data-selectors.test.ts:25|parameterization-data-selectors.test.ts:26|parameterization-candidate",
+      "reason": "The base already misses this valid helper consolidation. A computed dependency may invoke a tag or coercion hook, so helper recovery awaits a modeled input/effect proof rather than a syntax-only data-use shortcut."
+    },
+    {
+      "id": "miss|fixtures/duplicates|parameterization-selector-operations.test.ts:38|parameterization-selector-operations.test.ts:39|parameterization-candidate",
+      "reason": "The base already misses this valid primitive-selector/helper consolidation. Unknown call consumers remain outside the selector admission until helper argument roles are modeled; a later spread alone does not change the first argument's position."
+    },
+    {
       "id": "miss|fixtures/duplicates|destructured-selected-sibling.test.ts:16|destructured-selected-sibling.test.ts:17|duplicate-test",
       "reason": "Selecting one key from an object literal must ignore the unselected siblings; the next engine cannot read destructuring dataflow yet, so the two groups key apart instead of merging."
     },
     {
       "id": "miss|fixtures/duplicates|destructured-selected-sibling.test.ts:18|destructured-selected-sibling.test.ts:19|duplicate-test",
       "reason": "Selecting one key from an object literal must ignore the unselected siblings; the next engine cannot read destructuring dataflow yet, so the two groups key apart instead of merging."
-    },
-    {
-      "id": "miss|fixtures/duplicates|duplicates-each-composite-cells.test.ts:40|duplicates-each-composite-cells.test.ts:58|duplicate-test",
-      "reason": "The rows' nested `expected` object cell is read three times, and a cell that creates an object is written in only when read at most once (one object per row, not one per read), so the rows key by their whole spelling -- the differing `name` included -- instead of by the substituted body."
     },
     {
       "id": "link|fixtures/duplicates|assigned-class-alias-mutation.test.ts:12|assigned-class-alias-mutation.test.ts:13",
@@ -462,19 +466,7 @@
     },
     {
       "id": "miss|fixtures/duplicates|duplicates-each-composite-cells.test.ts:40|duplicates-each-composite-cells.test.ts:58|parameterization-candidate",
-      "reason": "The destructured expected object is read three times, so the binder retains the exact whole row, including its different name, until composite allocation identity is proved. Even with structural row substitution, next does not use a fully covered declaration to establish literal variation; the default engine expects a row-level consolidation here."
-    },
-    {
-      "id": "miss|fixtures/duplicates|each-object-key-ambiguity.test.ts:19|each-object-key-ambiguity.test.ts:20|parameterization-candidate",
-      "reason": "NC14 preserves object-cell structure and property keys; the default engine abstracts the substituted cell as one object value. A whole-value row model is needed before different object shapes can share a consolidation key. Deferred parameterization parity; NC64 supplies the value proof."
-    },
-    {
-      "id": "miss|fixtures/duplicates|each-object-key-ambiguity.test.ts:21|each-object-key-ambiguity.test.ts:22|parameterization-candidate",
-      "reason": "NC14 preserves object-cell structure and property keys; the default engine abstracts the substituted cell as one object value. A whole-value row model is needed before different object shapes can share a consolidation key. Deferred parameterization parity; NC64 supplies the value proof."
-    },
-    {
-      "id": "miss|fixtures/duplicates|each-object-key-ambiguity.test.ts:23|each-object-key-ambiguity.test.ts:24|parameterization-candidate",
-      "reason": "NC14 preserves object-cell structure and property keys; the default engine abstracts the substituted cell as one object value. A whole-value row model is needed before different object shapes can share a consolidation key. Deferred parameterization parity; NC64 supplies the value proof."
+      "reason": "The readonly composite binding is now proved, but next does not use a fully covered declaration to establish literal variation; the default engine expects a row-level consolidation here. This remaining difference is declaration-coverage policy, not an unproved composite value."
     },
     {
       "id": "miss|fixtures/duplicates|escaped-instance-mismatch.test.ts:10|escaped-instance-mismatch.test.ts:11|parameterization-candidate",
@@ -489,16 +481,8 @@
       "reason": "The next normal form preserves the observed class name, while the default engine treats the name as a parameterizable value. NC14 does not turn nominal declarations into row data; recovering this candidate needs a reviewed name/value model, with the differing runtime outcome retained."
     },
     {
-      "id": "miss|fixtures/duplicates|not-duplicates-concat-number-format.test.ts:20|not-duplicates-concat-number-format.test.ts:24|parameterization-candidate",
-      "reason": "The next row form retains a concatenation expression versus a string literal instead of folding both to runtime string values. NC14 does not introduce value evaluation; NC64 must retain JavaScript coercion and number formatting when recovering this candidate."
-    },
-    {
       "id": "miss|fixtures/duplicates|not-duplicates-concat-tostring-vs-inspect.test.ts:28|not-duplicates-concat-tostring-vs-inspect.test.ts:32|parameterization-candidate",
-      "reason": "The next row form retains a concatenation expression versus a string literal instead of folding both to runtime string values. NC14 does not introduce value evaluation; NC64 must retain JavaScript coercion and number formatting when recovering this candidate."
-    },
-    {
-      "id": "miss|fixtures/duplicates|object-key-number-forms-distinct.test.ts:20|object-key-number-forms-distinct.test.ts:21|parameterization-candidate",
-      "reason": "The substituted objects have different runtime property keys. NC14 retains those keys; the default structural row form abstracts the whole object cell. Recovery waits on the whole-value row model, without making the exact duplicate keys equal."
+      "reason": "Primitive concatenation is proved, but this input concatenates an object. Recovering it needs an intrinsic/effect proof for object coercion; NC64 must retain prototype, custom coercion and getter observations."
     },
     {
       "id": "extra|fixtures/duplicates|destructured-selected-sibling.test.ts:17|destructured-selected-sibling.test.ts:19",

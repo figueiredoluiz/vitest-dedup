@@ -476,10 +476,9 @@ impl Planner<'_> {
                             return None;
                         }
                         let callback = callback.function?;
-                        if tree
-                            .child(callback, "body")
-                            .is_some_and(|body| crate::lang::uses_receiver(tree, body))
-                        {
+                        if tree.child(callback, "body").is_some_and(|body| {
+                            crate::lang::uses_receiver(tree, &parsed.scopes, body)
+                        }) {
                             return None;
                         }
                         title(parsed, *node, Some(&frame))?;

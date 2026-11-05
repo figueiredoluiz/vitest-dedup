@@ -3,37 +3,40 @@
 use super::{NodeId, Scopes, SymbolId, Tree};
 
 /// Whether a subtree reads its surrounding invocation's receiver or implicit arguments.
-/// Arrow functions inherit those values; ordinary functions and class bodies bind their own.
+/// Arrow functions and computed class keys inherit them; ordinary functions, field initializers
+/// and static blocks bind their own.
 /// Meta properties are not receiver reads: Vitest only calls test callbacks, so `new.target`
 /// is deterministically absent and `import.meta` is fixed per module — neither can make two
 /// invocations of the same callback differ.
-pub fn uses_receiver(tree: &Tree, root: NodeId) -> bool {
-    let binds = |node| {
+pub fn uses_receiver(tree: &Tree, scopes: &Scopes, root: NodeId) -> bool {
+    let binds = |ancestor, read| {
         matches!(
-            tree.kind(node),
-            "FunctionExpression" | "FunctionDeclaration" | "ClassBody"
-        )
+            tree.kind(ancestor),
+            "FunctionExpression" | "FunctionDeclaration" | "StaticBlock"
+        ) || (matches!(
+            tree.kind(ancestor),
+            "PropertyDefinition" | "AccessorProperty"
+        ) && tree
+            .child(ancestor, "value")
+            .is_some_and(|value| tree.span(value).contains(tree.span(read))))
     };
-    if binds(root) {
-        return false;
-    }
-    if tree.kind(root) == "Identifier" {
-        return tree.text(root, "name") == Some("arguments");
-    }
     std::iter::once(root)
         .chain(tree.descendants(root))
         .any(|node| {
-            // `new.target` flows through ordinary functions — only a construct frame sets it —
-            // so it is invocation-dependent wherever the callback's own frame reaches, but an
-            // intervening ordinary function or class binds its own.
             let reads = matches!(tree.kind(node), "ThisExpression" | "Super")
                 || (tree.kind(node) == "Identifier"
-                    && tree.text(node, "name") == Some("arguments"));
+                    && tree.text(node, "name") == Some("arguments")
+                    && matches!(
+                        scopes.name_at(tree.span(node).start),
+                        Some(super::Name::Reference(_))
+                    ));
             reads
-                && !tree
-                    .ancestors(node)
-                    .take_while(|&ancestor| ancestor != root)
-                    .any(|ancestor| binds(ancestor) || tree.kind(ancestor) == "Identifier")
+                && (node == root
+                    || !tree
+                        .ancestors(node)
+                        .take_while(|&ancestor| ancestor != root)
+                        .chain(std::iter::once(root))
+                        .any(|ancestor| binds(ancestor, node)))
         })
 }
 
@@ -111,7 +114,7 @@ mod tests {
 
     fn body_reads(source: &str) -> bool {
         let (parsed, body) = arrow_body(source);
-        uses_receiver(&parsed.tree, body)
+        uses_receiver(&parsed.tree, &parsed.scopes, body)
     }
 
     #[test]
@@ -125,7 +128,7 @@ mod tests {
         // `() => new.target` at module scope does not parse; the factory shape is the valid form.
         let (parsed, body) = arrow_body("function factory() { return () => new.target }");
         assert!(parsed.parse_errors == 0);
-        assert!(!uses_receiver(&parsed.tree, body));
+        assert!(!uses_receiver(&parsed.tree, &parsed.scopes, body));
     }
 
     #[test]
@@ -136,7 +139,7 @@ mod tests {
             "import { test } from 'vitest'; test('a', () => { function inner() { return new.target } return inner() })";
         let (parsed, body) = arrow_body(source);
         assert!(parsed.parse_errors == 0);
-        assert!(!uses_receiver(&parsed.tree, body));
+        assert!(!uses_receiver(&parsed.tree, &parsed.scopes, body));
     }
 
     #[test]
