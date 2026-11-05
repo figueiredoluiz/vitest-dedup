@@ -75,11 +75,13 @@ struct Limit {
 }
 
 impl Limit {
-    /// A title: every test, row and nested test copies it.
+    /// A title: every test, row and nested test copies it. Reading a template copies its text
+    /// once more as it is assembled, so the read may copy twice the limit; the title itself is
+    /// measured against [`MAX_TEXT_BYTES`] when it is returned.
     fn title() -> Self {
         Self {
             copied: true,
-            left: MAX_TEXT_BYTES,
+            left: 2 * MAX_TEXT_BYTES,
         }
     }
 
@@ -347,7 +349,11 @@ fn read(
                 limit.spelled(cooked.len())?;
                 text.push_str(cooked);
                 if let Some(expression) = expressions.get(index) {
-                    text.push_str(&string(&child((*expression)?, limit)?)?);
+                    // The substitution's text is copied into this template again, at every level
+                    // of a nested template.
+                    let part = string(&child((*expression)?, limit)?)?;
+                    limit.spelled(part.len())?;
+                    text.push_str(&part);
                 }
             }
             Some(Value::String(text))
