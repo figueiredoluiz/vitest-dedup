@@ -4,12 +4,14 @@
 // exactly as in the twin.
 // @vitest-dedup:extracted 1
 // @vitest-dedup:expect rule=none verdict=distinct severity=none
-// @vitest-dedup:participant L15 "beforeEach"
-// @vitest-dedup:participant L18 "beforeEach"
+// @vitest-dedup:participant L17 "beforeEach"
+// @vitest-dedup:participant L20 "beforeEach"
 // @vitest-dedup:isolates not-isolable the two hooks are byte-identical, so the isolated variable is the enclosing table's rows proof, which no participant fingerprint carries; the guard is the corpus gate's silence assertion plus the named weakening in the header
 import { describe, test, expect, beforeEach } from 'vitest'
 
 const rows = makeRows()
+
+let value = 0
 
 describe.each(rows())('row %s', () => {
   beforeEach(() => {
