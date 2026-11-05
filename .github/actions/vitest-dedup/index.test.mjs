@@ -603,18 +603,18 @@ describe("runAction", () => {
     return {
       dir,
       reportPath,
-      run(script, inputs = {}) {
+      run(script, inputs = {}, cwd = dir) {
         const binaryPath = join(dir, "fake-binary.mjs");
         writeFileSync(binaryPath, `#!/usr/bin/env node\n${script}\n`);
         chmodSync(binaryPath, 0o755);
         return runAction({
-          cwd: dir,
+          cwd,
           env: { VITEST_DEDUP_BINARY: binaryPath, GITHUB_OUTPUT: githubOutputPath, ...inputs },
         });
       },
       /** Run without a supplied binary, so the Action takes its install path. */
-      runUnpinned(inputs = {}) {
-        return runAction({ cwd: dir, env: { GITHUB_OUTPUT: githubOutputPath, ...inputs } });
+      runUnpinned(inputs = {}, cwd = dir) {
+        return runAction({ cwd, env: { GITHUB_OUTPUT: githubOutputPath, ...inputs } });
       },
       outputs: () => parseGithubOutput(readFileSync(githubOutputPath, "utf8")),
     };
@@ -652,6 +652,147 @@ describe("runAction", () => {
     extraScript,
     "process.exit(0);",
   ].join("\n");
+
+  /** Add a sibling destination whose similarly named path must still count as outside. */
+  function reportBoundaryFixture(t) {
+    const fixture = actionFixture(t);
+    const outside = mkdtempSync(`${fixture.dir}-outside-`);
+    t.after(() => rmSync(outside, { recursive: true, force: true }));
+    for (const extension of ["json", "html"]) {
+      writeFileSync(join(outside, `vitest-dedup.${extension}`), `outside ${extension}`);
+    }
+    return { ...fixture, outside };
+  }
+
+  for (const shape of ["default", "absolute", "nested", "missing suffix", "outward then inward", "dangling", "cycle", "file"]) {
+    test(`report parent rejects ${shape} before cleanup, install or execution`, async (t) => {
+      const fixture = reportBoundaryFixture(t);
+      const reports = dirname(fixture.reportPath);
+      let output;
+      if (shape === "default" || shape === "absolute") {
+        rmSync(reports, { recursive: true });
+        symlinkSync(fixture.outside, reports, "junction");
+        if (shape === "absolute") output = join(reports, "vitest-dedup");
+      } else if (shape === "outward then inward") {
+        symlinkSync(fixture.outside, join(fixture.dir, "escape"), "junction");
+        symlinkSync(reports, join(fixture.outside, "back"), "junction");
+        output = "escape/back/vitest-dedup";
+      } else if (shape === "file") {
+        writeFileSync(join(reports, "parent"), "not a directory");
+        output = "reports/parent/vitest-dedup";
+      } else {
+        const link = join(reports, "parent");
+        const target = shape === "dangling" ? join(fixture.outside, "absent")
+          : shape === "cycle" ? link : fixture.outside;
+        symlinkSync(target, link, "junction");
+        output = shape === "missing suffix" ? "reports/parent/missing/vitest-dedup"
+          : "reports/parent/vitest-dedup";
+      }
+      const inputs = output === undefined ? {} : { INPUT_OUTPUT: output };
+      // Invalid version proves the guard runs before installation, without network access.
+      await assert.rejects(fixture.runUnpinned({ ...inputs, INPUT_VERSION: "1.0.0+build" }), /unsafe report output parent/);
+      const marker = join(fixture.dir, "executed");
+      await assert.rejects(fixture.run(
+        `import {writeFileSync} from 'node:fs'; writeFileSync(${JSON.stringify(marker)}, 'ran');`, inputs,
+      ), /unsafe report output parent/);
+      assert.equal(existsSync(marker), false);
+      for (const extension of ["json", "html"]) {
+        assert.equal(readFileSync(join(fixture.outside, `vitest-dedup.${extension}`), "utf8"), `outside ${extension}`);
+      }
+      assert.deepEqual(fixture.outputs(), { "exit-code": "2" });
+    });
+  }
+
+  for (const shape of ["ordinary", "inward", "missing", "external", "link then dotdot", "file links"]) {
+    test(`report parent permits ${shape} and publishes fresh results`, async (t) => {
+      const fixture = reportBoundaryFixture(t);
+      let output = "reports/vitest-dedup";
+      if (shape === "inward") {
+        mkdirSync(join(fixture.dir, "owned"));
+        rmSync(dirname(fixture.reportPath), { recursive: true });
+        symlinkSync(join(fixture.dir, "owned"), dirname(fixture.reportPath), "junction");
+      } else if (shape === "missing") output = "new/nested/vitest-dedup";
+      else if (shape === "external") output = join(fixture.outside, "vitest-dedup");
+      else if (shape === "link then dotdot") {
+        symlinkSync(fixture.outside, join(fixture.dir, "escape"), "junction");
+        output = "escape/../reports/vitest-dedup";
+      } else if (shape === "file links") {
+        for (const extension of ["json", "html"]) {
+          if (!toolAlias(t, join(fixture.outside, `vitest-dedup.${extension}`),
+            join(fixture.dir, `reports/vitest-dedup.${extension}`))) return;
+        }
+      }
+      const json = resolveJsonReportPath(fixture.dir, output);
+      const html = resolveReportPath(fixture.dir, output, "html");
+      if (["ordinary", "inward"].includes(shape)) {
+        writeFileSync(json, "stale json"); writeFileSync(html, "stale html");
+      }
+      const report = { schemaVersion: "0.1", testsAnalyzed: 3, filesAnalyzed: 1, findings: [] };
+      // Honor the actual forwarded stem. Asserting cleanup here also catches a fix that skips it.
+      const script = [
+        'import assert from "node:assert/strict";',
+        'import {existsSync, mkdirSync, writeFileSync} from "node:fs";',
+        'import {dirname} from "node:path";',
+        'const stem = process.argv[process.argv.indexOf("--output") + 1];',
+        `assert.equal(stem + ".json", ${JSON.stringify(json)});`,
+        'assert.equal(existsSync(stem + ".json"), false);',
+        'assert.equal(existsSync(stem + ".html"), false);',
+        'mkdirSync(dirname(stem), {recursive: true});',
+        `writeFileSync(stem + ".json", ${JSON.stringify(JSON.stringify(report))});`,
+        'writeFileSync(stem + ".html", "fresh html");',
+      ].join("\n");
+      assert.equal(await fixture.run(script, { INPUT_OUTPUT: output, INPUT_REPORTERS: "json,html" }), 0);
+      assert.equal(fixture.outputs()["tests-analyzed"], "3");
+      assert.equal(fixture.outputs()["json-report"], json);
+      assert.equal(fixture.outputs()["html-report"], html);
+      assert.equal(readFileSync(html, "utf8"), "fresh html");
+      if (shape !== "external") {
+        for (const extension of ["json", "html"]) {
+          assert.equal(readFileSync(join(fixture.outside, `vitest-dedup.${extension}`), "utf8"), `outside ${extension}`);
+        }
+      }
+    });
+  }
+
+  test("report parent permits a symlinked working directory and still cleans stale reports", async (t) => {
+    const fixture = reportBoundaryFixture(t);
+    const alias = join(fixture.outside, "workspace");
+    symlinkSync(fixture.dir, alias, "junction");
+    writeFileSync(fixture.reportPath, "stale");
+    await assert.rejects(runAction({ cwd: alias, env: { INPUT_VERSION: "1.0.0+build" } }), /invalid release version/);
+    assert.equal(existsSync(fixture.reportPath), false);
+  });
+
+  for (const outward of [true, false]) {
+    test(`report parent checks canonical output in a symlinked cwd: ${outward ? "outward" : "inward"}`, async (t) => {
+      const fixture = reportBoundaryFixture(t);
+      const alias = join(fixture.outside, "workspace");
+      symlinkSync(fixture.dir, alias, "junction");
+      const owned = join(fixture.dir, "owned");
+      mkdirSync(owned);
+      rmSync(dirname(fixture.reportPath), { recursive: true });
+      symlinkSync(outward ? fixture.outside : owned, dirname(fixture.reportPath), "junction");
+      const prefix = join(realpathSync(fixture.dir), "reports/vitest-dedup");
+      const inputs = { INPUT_OUTPUT: prefix };
+      if (outward) {
+        await assert.rejects(fixture.runUnpinned({ ...inputs, INPUT_VERSION: "1.0.0+build" }, alias), /unsafe report output parent/);
+        const marker = join(fixture.dir, "executed");
+        await assert.rejects(fixture.run(
+          `import {writeFileSync} from 'node:fs'; writeFileSync(${JSON.stringify(marker)}, 'ran');`, inputs, alias,
+        ), /unsafe report output parent/);
+        assert.equal(existsSync(marker), false);
+        assert.deepEqual(fixture.outputs(), { "exit-code": "2" });
+      } else {
+        const report = { schemaVersion: "0.1", testsAnalyzed: 3, filesAnalyzed: 1, findings: [] };
+        assert.equal(await fixture.run(reportWriter(`${prefix}.json`, report), inputs, alias), 0);
+        assert.equal(fixture.outputs()["tests-analyzed"], "3");
+        assert.equal(fixture.outputs()["json-report"], `${prefix}.json`);
+      }
+      for (const extension of ["json", "html"]) {
+        assert.equal(readFileSync(join(fixture.outside, `vitest-dedup.${extension}`), "utf8"), `outside ${extension}`);
+      }
+    });
+  }
 
   test("invalid globals fail before install or analyzer execution", async (t) => {
     const fixture = actionFixture(t);
