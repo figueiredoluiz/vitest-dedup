@@ -216,17 +216,19 @@ fn a_title_past_the_text_limit_is_unknown() {
             crate::normal::titles::value_with_bindings(parsed, pair, 0, &mut 256, &HashMap::new());
         assert_eq!(pair, None);
         // A row reads its cells from one budget too.
-        let cells = parsed.tree.list(
-            parsed.tree.list(sites[12].node, "arguments")[0].unwrap(),
-            "elements",
-        );
-        let row = crate::normal::Row::Spread(cells.into_iter().flatten().collect());
-        let (arguments, _) = crate::normal::titles::row(parsed, &row, false);
-        let lengths: Vec<_> = arguments
-            .iter()
-            .map(|v| v.as_ref().and_then(|v| v.as_str().map(str::len)))
-            .collect();
-        assert_eq!(lengths, [Some(at.len()), None]);
+        let spread = |site: usize| {
+            let cells = parsed.tree.list(
+                parsed.tree.list(sites[site].node, "arguments")[0].unwrap(),
+                "elements",
+            );
+            let row = crate::normal::Row::Spread(cells.into_iter().flatten().collect());
+            let (arguments, _) = crate::normal::titles::row(parsed, &row, false);
+            arguments
+                .iter()
+                .map(|v| v.as_ref().and_then(|v| v.as_str().map(str::len)))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(spread(12), [Some(at.len()), None]);
         // A field read after a failed whole-row read starts from the row's budget: `a` fits.
         let object = parsed.tree.list(sites[15].node, "arguments")[0].unwrap();
         let (_, fields) =
@@ -238,28 +240,21 @@ fn a_title_past_the_text_limit_is_unknown() {
         );
         assert!(!fields.contains_key("b"));
         // A `const` refused as an array spends nothing: the cell after it still fits.
-        let cells = parsed.tree.list(
-            parsed.tree.list(sites[16].node, "arguments")[0].unwrap(),
-            "elements",
-        );
-        let row = crate::normal::Row::Spread(cells.into_iter().flatten().collect());
-        let (arguments, _) = crate::normal::titles::row(parsed, &row, false);
-        let lengths: Vec<_> = arguments
-            .iter()
-            .map(|v| v.as_ref().and_then(|v| v.as_str().map(str::len)))
-            .collect();
-        assert_eq!(lengths, [None, Some(2_500)]);
+        assert_eq!(spread(16), [None, Some(2_500)]);
         // A template written in place copies its text once per place, so only its own length
         // limit applies to it.
         assert_eq!(read(9), Some(at.len() + 1));
         assert_eq!(read(13), None);
-        // A runner charges its arguments to its own budget, templates included.
+        // A runner argument is read within its batch's budget, every copied byte counted: the
+        // literal, its copy into the template, and the trailing `0`.
         let template = parsed.tree.list(sites[9].node, "arguments")[0].unwrap();
-        let argument = crate::normal::titles::argument(parsed, template, &HashMap::new());
-        assert_eq!(
-            argument.and_then(|v| v.as_str().map(str::len)),
-            Some(at.len() + 1)
-        );
+        let within = |budget| {
+            crate::normal::titles::value_within(parsed, template, &HashMap::new(), budget)
+                .map(|(value, spent)| (value.as_str().map(str::len), spent))
+        };
+        let copied = 2 * at.len() + 1;
+        assert_eq!(within(copied), Some((Some(at.len() + 1), copied)));
+        assert_eq!(within(copied - 1), None);
     });
 }
 
@@ -315,8 +310,8 @@ fn a_title_read_within_a_budget_counts_what_it_copies() {
             .find(|site| site.kind == SiteKind::Registers(crate::framework::Registers::Test))
             .unwrap();
         let title = parsed.tree.list(site.node, "arguments")[0].unwrap();
-        // Two keys of one byte and two copies of LONG.
-        let copied = 2 * (1 + long.len());
+        // Two keys of one byte, two copies of LONG and the rendering copied into the template.
+        let copied = 2 * (1 + long.len()) + "[object Object]".len();
         assert_eq!(
             crate::normal::titles::title_within(parsed, title, copied),
             Some(("[object Object]".to_owned(), copied))
@@ -325,5 +320,29 @@ fn a_title_read_within_a_budget_counts_what_it_copies() {
             crate::normal::titles::title_within(parsed, title, copied - 1),
             None
         );
+    });
+}
+
+/// A substitution copies its text into the template again, so a nested template is charged at
+/// every level it is copied through, not only where its text is spelled.
+#[test]
+fn a_nested_template_is_charged_at_every_level() {
+    let text = "0".repeat(1_000);
+    let source = format!("import {{test}} from 'vitest'; test(`${{`${{'{text}'}}`}}`,()=>{{}});");
+    crate::testing::project(&source, &[], false, |_, parsed, found, _| {
+        let site = found
+            .sites
+            .iter()
+            .find(|site| site.kind == SiteKind::Registers(crate::framework::Registers::Test))
+            .unwrap();
+        let title = parsed.tree.list(site.node, "arguments")[0].unwrap();
+        // Spelled once, then copied into the inner and the outer template.
+        let copied = 3 * text.len();
+        let within = |budget| {
+            crate::normal::titles::value_within(parsed, title, &HashMap::new(), budget)
+                .map(|(_, spent)| spent)
+        };
+        assert_eq!(within(copied), Some(copied));
+        assert_eq!(within(copied - 1), None);
     });
 }

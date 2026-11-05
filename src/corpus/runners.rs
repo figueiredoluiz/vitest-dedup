@@ -339,7 +339,11 @@ impl Planner<'_> {
         }
         let mut actual = Vec::new();
         for argument in arguments {
-            let value = normal::titles::argument(parsed, argument?, values)?;
+            // Reading an argument may copy more text than it keeps: a template of an object
+            // copies each property. Both the reading and what the frame keeps are charged.
+            let (value, spent) =
+                normal::titles::value_within(parsed, argument?, values, self.left())?;
+            self.charge(spent)?;
             self.charge(serde_json::to_vec(&value).ok()?.len())?;
             actual.push(value);
         }
