@@ -1009,11 +1009,20 @@ fn read_parsed(
                     })
                     .unwrap_or_default()
             });
-            // Implicit reads can observe inputs even when no parameter binds a cell.
-            let observes_input = modifiers.rows.is_some()
-                && function
-                    .and_then(|function| tree.child(function, "body"))
-                    .is_some_and(|body| crate::lang::uses_receiver(tree, &parsed.scopes, body));
+            // Ordinary callbacks bind the invocation frame; tagged rows keep their prior guard.
+            let observes_input = function.is_some_and(|function| {
+                let binds_receiver = tree.kind(function) != "ArrowFunctionExpression";
+                let guard_inputs = modifiers.rows.as_ref().is_some_and(|rows| {
+                    binds_receiver
+                        || rows
+                            .iter()
+                            .any(|row| matches!(row.value, normal::Row::Fields(_)))
+                });
+                guard_inputs
+                    && tree
+                        .child(function, "body")
+                        .is_some_and(|body| crate::lang::uses_receiver(tree, &parsed.scopes, body))
+            });
             let parameters = parameters.filter(|_| !observes_input);
             let rows = match &modifiers.rows {
                 None => vec![(HashMap::new(), false, String::new())],
