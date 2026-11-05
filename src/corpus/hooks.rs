@@ -347,12 +347,21 @@ fn closed_scope(
                 .and_then(|callee| tree.list(callee, "arguments").into_iter().next().flatten());
             // The rows argument and every registration argument evaluate at registration, and
             // title formatting reads the rows again, so only primitive-literal rows and inert
-            // registration arguments can hide no hook.
+            // registration arguments can hide no hook. The callback binds once per generated
+            // suite, so a parameter default's initializer runs then too.
+            let callbacks_inert = tree
+                .list(call, "arguments")
+                .into_iter()
+                .flatten()
+                .map(|arg| tree.inner(arg))
+                .filter(|arg| tree.is_function(*arg))
+                .all(|arg| callback_parameters_inert(tree, normalizer, arg));
             return matches!(
                 tables.get(&site.node),
                 Some(TableRows::Empty | TableRows::Populated)
             ) && !uncertain(site)
                 && rows.is_some_and(|rows| primitive_literal_rows(tree, rows))
+                && callbacks_inert
                 && inert_registration_arguments(tree, normalizer, call);
         }
         if matches!(site.kind, SiteKind::Wrapper(_)) {
@@ -360,6 +369,28 @@ fn closed_scope(
         }
         inert_registration_arguments(tree, normalizer, call)
     })
+}
+
+/// A table callback's parameter defaults evaluate when each generated suite binds its row:
+/// only inert initializers can hide no hook.
+fn callback_parameters_inert(
+    tree: &crate::lang::Tree,
+    normalizer: &Normalizer<'_>,
+    callback: NodeId,
+) -> bool {
+    tree.list(callback, "params")
+        .into_iter()
+        .flatten()
+        .all(|param| {
+            std::iter::once(param)
+                .chain(tree.descendants(param))
+                .all(|node| {
+                    tree.kind(node) != "AssignmentPattern"
+                        || tree
+                            .child(node, "right")
+                            .is_some_and(|right| normalizer.hook_registration_inert(right))
+                })
+        })
 }
 
 /// Every row of the table's array is a primitive literal: a row object's properties are read

@@ -397,6 +397,13 @@ fn suite_table_hooks_pair_when_rows_are_proven() {
         "{IMPORTS} let value = 0; {hook} {hook} describe.each([registerObserver()])('s', () => {{ test('observes', () => {{ expect(value).toBe(1) }}); }}); test('plain', () => {{ expect(value).toBe(1) }});"
     );
     assert!(findings(&calling, 2).is_empty());
+    // A callback parameter default evaluates when each generated suite binds its row; the
+    // table refuses, and with it the file scope, so the file-scope pair beside it is not
+    // eligible either.
+    let defaulted = format!(
+        "{IMPORTS} let value = 0; {hook} {hook} describe.each([1])('row', (row, extra = install()) => {{ test('observes', () => {{ expect(value).toBe(1) }}); }}); test('plain', () => {{ expect(value).toBe(1) }});"
+    );
+    assert!(findings(&defaulted, 2).is_empty());
     // Object rows are read while Vitest formats the title, and an accessor among them can
     // register a hook, so only primitive-literal rows close.
     let object_rows = format!(
