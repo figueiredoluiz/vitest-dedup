@@ -200,7 +200,7 @@ impl<'s> Module<'s> {
     /// Whether this module reaches Vitest's mock APIs through a stable API binding in a way the
     /// file-wide model cannot answer: a `doMock`/`doUnmock` anywhere, a `mock`/`unmock` Vitest
     /// does not hoist outside a top-level statement, or one it hoists from anywhere but the top
-    /// level, which makes Vitest refuse the file at load.
+    /// level or from inside another hoisted call, which makes Vitest refuse the file at load.
     ///
     /// The first two affect imports when they run, and the next core does not model that
     /// dynamic-import state; the last has no runtime context at all. The corpus refuses the file
@@ -212,9 +212,10 @@ impl<'s> Module<'s> {
                 !self.unreachable(call) && self.top_level_statement(call).is_none()
             }
             // Vitest refuses the file whenever it hoists a call from anywhere but the top level,
-            // reachable or not.
+            // reachable or not, or from inside another call it hoists.
             Some(MockCall::Hoisted) => {
-                self.top_level_statement(call).is_none() && !self.in_source_statement(call)
+                self.inside_hoisted_call(call)
+                    || (self.top_level_statement(call).is_none() && !self.in_source_statement(call))
             }
             None => false,
         })
@@ -284,6 +285,16 @@ impl<'s> Module<'s> {
             && tree
                 .text(object, "name")
                 .is_some_and(|name| self.setting.dialect.hoists(name))
+    }
+
+    /// Whether `node` lies inside a call the framework hoists by its spelling alone
+    /// (`vi.mock`, `vitest.unmock`, `vi.hoisted`), whatever that call's binding.
+    fn inside_hoisted_call(&self, node: NodeId) -> bool {
+        self.tree.ancestors(node).any(|outer| {
+            self.member_call(outer).is_some_and(|(object, member)| {
+                self.setting.dialect.hoisted_member(member) && self.hoisting_spelling(outer, object)
+            })
+        })
     }
 
     /// The module-top-level expression statement whose expression is `call`, if there is one.

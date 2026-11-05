@@ -208,6 +208,9 @@ pub struct Dialect {
     /// Identifier spellings whose [`Mocking::Hoisted`] member calls the framework hoists; the
     /// same member reached through any other spelling runs where it is written.
     pub hoisting_objects: &'static [&'static str],
+    /// Members besides the [`Mocking::Hoisted`] ones that the framework also hoists from a
+    /// [`Self::hoisting_objects`] spelling, without affecting module context.
+    pub hoisted_helpers: &'static [&'static str],
     /// The assertion entries the behavior trace recognizes.
     pub assertions: &'static [AssertionEntry],
     /// Members that can be chained onto a registration.
@@ -282,6 +285,12 @@ impl Dialect {
         self.hoisting_objects.contains(&object)
     }
 
+    /// Whether the framework hoists the member named `name` when it is spelled on a hoisting
+    /// object.
+    pub fn hoisted_member(&self, name: &str) -> bool {
+        self.mocking_member(name) == Some(Mocking::Hoisted) || self.hoisted_helpers.contains(&name)
+    }
+
     /// The assertion entry the name `name` spells, if it is one.
     pub fn assertion(&self, name: &str) -> Option<&'static AssertionEntry> {
         self.assertions.iter().find(|entry| entry.name == name)
@@ -305,6 +314,7 @@ impl Dialect {
             .chain(namespaces.iter().map(|namespace| namespace.name))
             .chain(self.mocking_members.iter().map(|member| member.name))
             .chain(self.hoisting_objects.iter().copied())
+            .chain(self.hoisted_helpers.iter().copied())
             .chain(chain.iter().map(|member| member.name))
             .chain(self.test_members.iter().copied())
             .chain(self.scheduling_options.iter().copied())
