@@ -87,6 +87,10 @@ Differences from the set Vitest runs:
 - `includeSource` is additive. A file matching it is also scanned for in-source tests, whether or not
   `include` matches it.
 
+Optional extglob groups such as `?(spec|test)` are expanded into at most 64 concrete patterns
+per glob. A larger expansion, including one whose count overflows, is refused and makes the
+project configuration incomplete. Simplify the pattern to stay within this limit.
+
 ### Monorepos
 
 A config declaring `test.projects`, or a `vitest.workspace.*` file, is resolved entry by entry,

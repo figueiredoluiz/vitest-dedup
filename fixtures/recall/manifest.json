@@ -6,6 +6,46 @@
   "recallDestination": 1,
   "cases": [
     {
+      "name": "config-extglob-overflow",
+      "path": "config-extglob-overflow",
+      "rule": "duplicate-test",
+      "role": "positive",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-05",
+      "expectedTests": 2,
+      "expectedIncomplete": true,
+      "expectedUnresolved": 0,
+      "expectedFindings": [
+        {
+          "rule": "duplicate-test",
+          "severity": "error",
+          "titles": ["uncertain first", "uncertain second"]
+        }
+      ],
+      "expectedAbsent": []
+    },
+    {
+      "name": "config-extglob-boundary",
+      "path": "config-extglob-boundary",
+      "rule": "duplicate-test",
+      "role": "positive",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-05",
+      "expectedTests": 2,
+      "expectedIncomplete": false,
+      "expectedUnresolved": 0,
+      "expectedFindings": [
+        {
+          "rule": "duplicate-test",
+          "severity": "error",
+          "titles": ["kept first", "kept second"]
+        }
+      ],
+      "expectedAbsent": []
+    },
+    {
       "name": "runner-unproved-scope-retention",
       "path": "runner-unproved-scope-retention",
       "rule": "duplicate-test",

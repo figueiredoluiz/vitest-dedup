@@ -1,5 +1,16 @@
 use super::*;
 
+/// An overflowing ignore expansion must refuse project resolution, never drop the ignore.
+#[test]
+fn extglob_overflow_in_ignore_refuses_projects() {
+    let pattern = format!("pkg/{}**", "?(a)".repeat(usize::BITS as usize));
+    let directory = two_projects(&format!(", {{ ignore: '{pattern}' }}"));
+    let set = resolve_projects(directory.path());
+    assert!(set.projects.is_empty(), "{set:?}");
+    assert!(set.has_unresolved_entries, "{set:?}");
+    assert!(!set.diagnostics.is_empty(), "{set:?}");
+}
+
 /// A root config listing `pkg/*` projects through `glob.sync` with `options` as its second
 /// argument, and a `globals: true` project in each of `pkg/a` and `pkg/b`.
 fn two_projects(options: &str) -> tempfile::TempDir {
