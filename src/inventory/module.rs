@@ -217,7 +217,8 @@ impl<'s> Module<'s> {
                 self.inside_hoisted_call(call)
                     || (self.top_level_statement(call).is_none() && !self.in_source_statement(call))
             }
-            None => false,
+            // A helper Vitest hoists (`vi.hoisted`) refuses the file the same way when nested.
+            None => self.hoisted_by_spelling(call) && self.inside_hoisted_call(call),
         })
     }
 
@@ -290,10 +291,15 @@ impl<'s> Module<'s> {
     /// Whether `node` lies inside a call the framework hoists by its spelling alone
     /// (`vi.mock`, `vitest.unmock`, `vi.hoisted`), whatever that call's binding.
     fn inside_hoisted_call(&self, node: NodeId) -> bool {
-        self.tree.ancestors(node).any(|outer| {
-            self.member_call(outer).is_some_and(|(object, member)| {
-                self.setting.dialect.hoisted_member(member) && self.hoisting_spelling(outer, object)
-            })
+        self.tree
+            .ancestors(node)
+            .any(|outer| self.hoisted_by_spelling(outer))
+    }
+
+    /// Whether the framework hoists `call` by its spelling alone, whatever its binding.
+    fn hoisted_by_spelling(&self, call: NodeId) -> bool {
+        self.member_call(call).is_some_and(|(object, member)| {
+            self.setting.dialect.hoisted_member(member) && self.hoisting_spelling(call, object)
         })
     }
 
