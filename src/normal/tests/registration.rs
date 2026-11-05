@@ -142,14 +142,15 @@ fn a_title_past_the_text_limit_is_unknown() {
     let big = "0".repeat(65_537);
     let (half, rest) = ("0".repeat(2_500), "0".repeat(2_000));
     let source = format!(
-        "import {{test}} from 'vitest'; const at = '{at}'; const past = '{at}0'; const half = '{half}'; const rest = '{rest}'; const listed = ['{half}'];
+        "import {{test}} from 'vitest'; const at = '{at}'; const past = '{at}0'; const half = '{half}'; const rest = '{rest}'; const listed = ['{half}']; const fits = {{ name: '{at}', id: 1 }}; const over = {{ name: '{at}0', id: 1 }};
          test('{at}',()=>{{}}); test('{at}0',()=>{{}});
          test(at,()=>{{}}); test(past,()=>{{}});
          test(`${{at}}`,()=>{{}}); test(`${{at}}0`,()=>{{}}); test(`0${{at}}`,()=>{{}});
          test(`{at}0`,()=>{{}}); test(`${{at}}${{at}}`,()=>{{}}); test(`${{'{at}'}}0`,()=>{{}});
          test(function _{name}(){{}},()=>{{}}); test(function _{name}0(){{}},()=>{{}});
          test([at, at],()=>{{}}); test(`${{'{big}'}}`,()=>{{}}); test(`{name}${{12}}`,()=>{{}});
-         test({{a: half, b: rest}},()=>{{}}); test([listed, half],()=>{{}});"
+         test({{a: half, b: rest}},()=>{{}}); test([listed, half],()=>{{}});
+         test(fits.id,()=>{{}}); test(over.id,()=>{{}});"
     );
     crate::testing::project(&source, &[], false, |_, parsed, found, normalizer| {
         let sites: Vec<_> = found
@@ -166,7 +167,7 @@ fn a_title_past_the_text_limit_is_unknown() {
             titles,
             [
                 read, None, read, None, read, None, None, None, None, None, read, None, None, None,
-                None, None, None
+                None, None, None, None, None
             ]
         );
         let written = parsed.tree.list(sites[1].node, "arguments")[0].unwrap();
@@ -201,6 +202,13 @@ fn a_title_past_the_text_limit_is_unknown() {
             (scalar(2, normalizer), scalar(3, normalizer)),
             (Some(at.len()), None)
         );
+        // A member read copies the whole `const` object, so all its text counts.
+        let member = |site: usize, normalizer: &mut crate::normal::Normalizer| {
+            let argument = parsed.tree.list(sites[site].node, "arguments")[0].unwrap();
+            normalizer.row_scalar(argument)
+        };
+        assert!(member(17, normalizer).is_some());
+        assert!(member(18, normalizer).is_none());
         // One budget serves a read: naming a `const` twice spends it twice.
         assert_eq!(read(8), None);
         let pair = parsed.tree.list(sites[12].node, "arguments")[0].unwrap();

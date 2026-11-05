@@ -708,7 +708,9 @@ impl Reader<'_, '_> {
             if matches!(name, "__proto__" | "toString" | "valueOf") {
                 return None;
             }
-            let value = self.read(parsed, path, tree.child(property, "value")?, bound)?;
+            // Every property is read, and a `const` object supplies them to every reader again.
+            let value_node = tree.child(property, "value")?;
+            let value = self.supplying(|reader| reader.read(parsed, path, value_node, bound))?;
             own.insert(name);
             if name == key {
                 selected = Some(value);
