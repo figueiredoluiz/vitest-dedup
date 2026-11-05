@@ -38,6 +38,13 @@ The inputs are `path`, `config`, `threshold`, `reporters`, `output`, `rule`, `gl
   the other accepted values preserve config detection. Other values fail before installation or analysis.
 - `rule` accepts several overrides separated by newlines or commas.
 - The JSON reporter is always enabled so the outputs below can be read.
+- `output` defaults to `reports/vitest-dedup`. The Action resolves the filename stem against its
+  working directory before cleanup and analysis. Destinations under either its lexical path or
+  its canonical path count as inside the working directory. For those destinations, every
+  existing parent must resolve inside it too; outward, dangling or cyclic directory links fail
+  before cleanup or installation. Inward links and missing directories are supported. Explicit
+  output paths outside the working directory remain supported and are the workflow author's
+  responsibility. This check assumes the checkout is not concurrently modified.
 - `--update-baseline` is deliberately not an input: rewriting a committed record of accepted debt is
   not a CI gate operation.
 - `changed-since` needs `fetch-depth: 0` on the checkout.

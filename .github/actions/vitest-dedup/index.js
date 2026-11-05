@@ -16,6 +16,7 @@ import {
   constants,
   createWriteStream,
   existsSync,
+  lstatSync,
   mkdirSync,
   readFileSync,
   realpathSync,
@@ -196,6 +197,33 @@ export function resolveReportPath(cwd, output, extension) {
 /** Where the JSON reporter writes its report, given the `--output` prefix passed to the CLI. */
 export function resolveJsonReportPath(cwd, output) {
   return resolveReportPath(cwd, output, "json");
+}
+
+/** Reject checkout-controlled parent links that redirect workspace reports outside the workspace. */
+function validateReportDirectory(cwd, reportPath) {
+  const canonicalWorkspace = realpathSync(cwd);
+  const workspace = [resolve(cwd), canonicalWorkspace].find((root) => withinDirectory(root, reportPath));
+  // An explicitly external workflow output is an operator-selected destination.
+  if (workspace === undefined) return;
+  let parent = workspace;
+  for (const component of relative(workspace, dirname(reportPath)).split(sep).filter(Boolean)) {
+    parent = join(parent, component);
+    try {
+      try {
+        lstatSync(parent);
+      } catch (error) {
+        // Missing suffixes will be created by the reporter. lstat distinguishes a dangling link.
+        if (error.code === "ENOENT") return;
+        throw error;
+      }
+      const canonical = realpathSync(parent);
+      if (!withinDirectory(canonicalWorkspace, canonical) || !statSync(canonical).isDirectory()) {
+        throw new Error("parent must resolve to a directory inside the working directory");
+      }
+    } catch (error) {
+      throw new Error(`unsafe report output parent ${parent}: ${error.message}`, { cause: error });
+    }
+  }
 }
 
 /**
@@ -756,6 +784,12 @@ async function analyze({ env, cwd }, state) {
   // that a later artifact-upload step collects is indistinguishable from one this run produced.
   // `htmlRequested` still governs whether the `html-report` output is published.
   const htmlReportPath = resolveReportPath(cwd, outputPrefix, "html");
+
+  // Both extensions share a parent. Validate before touching either stale report, even if HTML
+  // was not requested. Pass the same resolved stem to the native writer: a link followed by `..`
+  // must not make it write somewhere different from these checked cleanup paths.
+  validateReportDirectory(cwd, jsonReportPath);
+  inputs.output = jsonReportPath.slice(0, -".json".length);
 
   // Delete any report left over from an earlier run in this workspace *before* anything else that
   // can fail -- including, critically, before `installRelease` (download, checksum verification,
