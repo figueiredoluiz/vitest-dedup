@@ -40,6 +40,7 @@ fn a_forwarded_config_is_the_project_config() {
         "export { default } from '../../vitest.shared'",
         "/// <reference types=\"vitest\" />\nimport shared from '../../vitest.shared.ts'\n\nexport default shared\n",
         "import type { UserConfig } from 'vitest/config'\nimport { default as shared } from '../../vitest.shared.ts'\nexport default shared;",
+        "import type { UserConfig } from 'vitest/config' assert { 'resolution-mode': 'require' }\nimport { default as shared } from '../../vitest.shared.ts'\nexport default shared;",
     ] {
         let directory = forwarding_repo(forward, &[SHARED]);
         let set = resolves_enabled(directory.path());
@@ -87,6 +88,9 @@ fn a_forward_with_anything_else_stays_unresolved() {
         "export * from '../../vitest.shared.ts'",
         "export { default } from '../../missing.ts'",
         "export { default } from '../../vitest.shared.ts'\nconsole.log(1)",
+        "import type { UserConfig } from 'vitest/config'",
+        "export { default } '../../vitest.shared.ts'",
+        "export { default } from '../../vitest.shared.ts'; rogue",
     ] {
         let directory = forwarding_repo(forward, &[SHARED]);
         let set = resolve_projects(directory.path());

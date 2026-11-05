@@ -24,8 +24,8 @@
 //! `glob.sync(...)` with a NON-literal pattern, a spread, a ternary, or any other computed value
 //! is treated as unreadable, not approximated.
 //!
-//! Two literal shapes are read rather than refused (B3), both narrowing to exactly what a literal
-//! already carries -- neither executes anything:
+//! These static shapes are read rather than refused, each narrowing to exactly what a literal
+//! already carries -- none executes anything:
 //!
 //! - `test.projects: glob.sync('<literal>')` (directly, or through one `const` hop), with `glob`
 //!   verified imported from the `glob` package: the pattern is a string literal, and its
@@ -36,8 +36,13 @@
 //!   `ignore_spelling_is_read`), or any other option, refuses.
 //! - `export default mergeConfig(<imported base>, <literal>)`: explicit arrays concatenate
 //!   base first, scalar overrides win, and nullish overrides preserve the base. Defaults apply
-//!   after merging. Measured before these two: 575 of 575 files undetermined on one large
-//!   React monorepo (both shapes stack there), 3 of 199 on another; after: 0 and 0.
+//!   after merging. Before the glob and direct-merge shapes were supported, 575 of 575 files were
+//!   undetermined on one large React monorepo (both shapes stack there), and 3 of 199 on another;
+//!   after: 0 and 0.
+//! - An exported named config literal may carry a bounded TypeScript-only suffix (`as const`,
+//!   `satisfies Type`, `as Type`, or `!`). A supported merge may be assigned to one top-level
+//!   `const` and exported by name when imports, that declaration, and the default export are the
+//!   file's only statements. Other suffix grammar, bindings, uses, or statements refuse the file.
 //!
 //! A project file that only forwards another config (`export { default } from './x'`, or an
 //! import exported again as the default) is read as `mergeConfig(x, {})`. Only erased `import
@@ -117,7 +122,7 @@ use crate::discovery::{
 use crate::vitest_config::{
     boolean_property, display_path, find_direct_key_value_starts_precise,
     find_export_default_value_start, find_matching_delim, find_project_config, find_workspace_file,
-    is_ident_char, literal_bool_at, locate_config_object,
+    is_ident_char, is_js_whitespace, literal_bool_at, locate_config_object,
     locate_delimited_literal_or_call_argument, locate_object_literal_or_call_argument,
     locate_test_object, mask_non_code, property_present, read_bounded, skip_trivia, ConfigObject,
     DelimitedLiteral, GlobalsDetection, TestObject,
@@ -763,9 +768,8 @@ pub fn resolve_projects(root: &Path) -> ProjectSet {
             )
         }
     };
-    let is_merge = find_export_default_value_start(&masked).is_some_and(|value_start| {
-        merge_config_overrides_literal(&masked, &original, value_start).is_some()
-    });
+    let is_merge = default_config_expression(&masked, &original)
+        .is_some_and(|value| merge_config_overrides_literal(&masked, &original, value).is_some());
     let merged = is_merge
         .then(|| resolve_standalone_config_within(root, &config_path))
         .flatten();
@@ -2324,14 +2328,14 @@ fn expand_project_path_ignoring(
 /// preserve the base. Missing bases leave discovery arrays
 /// unknown, while cycles and excessive depth refuse the chain.
 fn locate_config_config_object(masked: &[char], original: &[char], path: &Path) -> ConfigObject {
-    let Some(value_start) = find_export_default_value_start(masked) else {
+    let Some(value) = default_config_expression(masked, original) else {
         return ConfigObject::NoExport;
     };
-    if !merge_config_export_shape(masked, original, value_start) {
+    if !merge_config_export_shape(masked, original, value.start) {
         return locate_config_object(masked);
     }
     // A merge must never fall through to the generic reader's first-argument shortcut.
-    let Some(overrides) = merge_config_overrides_literal(masked, original, value_start) else {
+    let Some(overrides) = merge_config_overrides_literal(masked, original, value) else {
         return ConfigObject::NonLiteral;
     };
     // The merge cannot be performed here -- this function returns positions, the merge needs the
@@ -2358,7 +2362,7 @@ fn merge_config_export_shape(masked: &[char], original: &[char], value_start: us
 fn merge_config_overrides_literal(
     masked: &[char],
     original: &[char],
-    value_start: usize,
+    value: Range<usize>,
 ) -> Option<(usize, usize)> {
     let callee = "mergeConfig";
     if !is_imported_from_package(
@@ -2369,7 +2373,7 @@ fn merge_config_overrides_literal(
     ) {
         return None;
     }
-    let callee_start = skip_trivia(original, value_start, original.len());
+    let callee_start = skip_trivia(original, value.start, value.end);
     if !masked[callee_start..].starts_with(&callee.chars().collect::<Vec<_>>()) {
         return None;
     }
@@ -2377,7 +2381,7 @@ fn merge_config_overrides_literal(
     if masked.get(after).is_some_and(|c| is_ident_char(*c)) {
         return None;
     }
-    let open_paren = skip_trivia(original, after, original.len());
+    let open_paren = skip_trivia(original, after, value.end);
     if masked.get(open_paren) != Some(&'(') {
         return None;
     }
@@ -2387,39 +2391,107 @@ fn merge_config_overrides_literal(
         return None;
     }
     // Both arguments and the complete export expression must match the supported shape.
-    if !merge_config_export_ends_after_optional_object_assertion(original, close_paren + 1) {
+    if !merge_config_export_ends_after_optional_object_assertion(
+        original,
+        close_paren + 1,
+        value.end,
+    ) {
         return None;
     }
     read_bare_identifier(original, arguments[0].clone())?;
     static_config_object_literal(masked, original, arguments[1].clone())
 }
 
-/// Accepts the runtime-neutral assertion observed on package configs, and nothing broader.
-///
-/// A general TypeScript type parser does not belong in this textual config reader. The observed
-/// shape is exactly `mergeConfig(...) as object`; admitting an arbitrary suffix here would bring
-/// back the object-prefix bug fixed in PR #34, where a readable prefix hid a conflicting tail.
+/// Accept the one whole-merge assertion already observed on package configs.
 fn merge_config_export_ends_after_optional_object_assertion(
     original: &[char],
     after_expression: usize,
+    limit: usize,
 ) -> bool {
-    let mut end = skip_trivia(original, after_expression, original.len());
-    if original.get(end) == Some(&';') || end == original.len() {
+    let mut at = skip_trivia(original, after_expression, limit);
+    if at == limit {
         return true;
     }
-
+    if original.get(at) == Some(&';') {
+        return true;
+    }
     for word in ["as", "object"] {
         let token: Vec<char> = word.chars().collect();
-        if !original[end..].starts_with(&token)
+        if !original[at..].starts_with(&token)
             || original
-                .get(end + token.len())
+                .get(at + token.len())
                 .is_some_and(|ch| is_ident_char(*ch))
         {
             return false;
         }
-        end = skip_trivia(original, end + token.len(), original.len());
+        at = skip_trivia(original, at + token.len(), limit);
     }
-    original.get(end) == Some(&';') || end == original.len()
+    if at < limit && original.get(at) == Some(&';') {
+        return true;
+    }
+    at == limit
+}
+
+/// Accepts only fully consumed runtime-neutral suffixes around a supported object literal.
+///
+/// A general TypeScript type parser does not belong in this textual reader, so assertions and
+/// `satisfies` are limited to `const` or a dotted type name. An arbitrary suffix stays unreadable;
+/// otherwise a readable prefix could hide a conflicting runtime tail.
+fn erased_config_suffix(original: &[char], after_expression: usize, limit: usize) -> bool {
+    let mut at = skip_trivia(original, after_expression, limit);
+    while at < limit && original.get(at) == Some(&'!') {
+        at = skip_trivia(original, at + 1, limit);
+    }
+    loop {
+        let (keyword, after_keyword) = ["as", "satisfies"]
+            .into_iter()
+            .find_map(|keyword| {
+                let token: Vec<char> = keyword.chars().collect();
+                original[at..]
+                    .starts_with(&token)
+                    .then_some(())
+                    .filter(|_| {
+                        !original
+                            .get(at + token.len())
+                            .is_some_and(|ch| is_ident_char(*ch))
+                    })
+                    .map(|_| (keyword, at + token.len()))
+            })
+            .unwrap_or(("", at));
+        if keyword.is_empty() {
+            break;
+        }
+        at = skip_trivia(original, after_keyword, limit);
+        let type_start = at;
+        while at < limit && is_ident_char(original[at]) {
+            at += 1;
+        }
+        let type_name: String = original[type_start..at].iter().collect();
+        if at == type_start
+            || matches!(type_name.as_str(), "as" | "satisfies")
+            || (keyword == "satisfies" && type_name == "const")
+        {
+            return false;
+        }
+        if type_name == "const" && original.get(at) == Some(&'.') {
+            return false;
+        }
+        while at < limit && original.get(at) == Some(&'.') {
+            at += 1;
+            let segment = at;
+            while at < limit && is_ident_char(original[at]) {
+                at += 1;
+            }
+            if at == segment {
+                return false;
+            }
+        }
+        at = skip_trivia(original, at, limit);
+    }
+    if at < limit && original.get(at) == Some(&';') {
+        at = skip_trivia(original, at + 1, limit);
+    }
+    at == limit
 }
 
 /// Only an entire object literal or a verified identity config/project wrapper is static.
@@ -2428,9 +2500,19 @@ fn static_config_object_literal(
     original: &[char],
     value: Range<usize>,
 ) -> Option<(usize, usize)> {
+    static_config_object_literal_with_suffix(masked, original, value).map(|(object, _)| object)
+}
+
+/// [`static_config_object_literal`] plus whether an erased suffix made the value readable.
+fn static_config_object_literal_with_suffix(
+    masked: &[char],
+    original: &[char],
+    value: Range<usize>,
+) -> Option<((usize, usize), bool)> {
     let start = skip_trivia(original, value.start, value.end);
-    let (open, limit) = if masked.get(start) == Some(&'{') {
-        (start, value.end)
+    let (open, object_limit, expression_end) = if masked.get(start) == Some(&'{') {
+        let close = find_matching_delim(masked, start, '{', '}')?;
+        (start, close + 1, close + 1)
     } else {
         let mut end = start;
         while end < value.end && is_ident_char(masked[end]) {
@@ -2456,19 +2538,163 @@ fn static_config_object_literal(
             return None;
         }
         let close = find_matching_delim(masked, paren, '(', ')')?;
-        if close >= value.end || skip_trivia(original, close + 1, value.end) != value.end {
+        if close >= value.end {
             return None;
         }
-        (skip_trivia(original, paren + 1, close), close)
+        (skip_trivia(original, paren + 1, close), close, close + 1)
     };
+    let has_erased_suffix = skip_trivia(original, expression_end, value.end) != value.end;
+    if !erased_config_suffix(original, expression_end, value.end) {
+        return None;
+    }
     if masked.get(open) != Some(&'{') {
         return None;
     }
     let close = find_matching_delim(masked, open, '{', '}')?;
-    if close >= limit || skip_trivia(original, close + 1, limit) != limit {
+    if close >= object_limit || skip_trivia(original, close + 1, object_limit) != object_limit {
         return None;
     }
-    Some((open, close))
+    Some(((open, close), has_erased_suffix))
+}
+
+/// The default config expression, following one local `const` only for a supported merge.
+fn default_config_expression(masked: &[char], original: &[char]) -> Option<Range<usize>> {
+    let value_start = find_export_default_value_start(masked)?;
+    let direct = value_start..original.len();
+    if merge_config_export_shape(masked, original, value_start) {
+        return Some(direct);
+    }
+
+    let export_end = masked[value_start..]
+        .iter()
+        .position(|ch| matches!(ch, ';' | '\n'))
+        .map_or(original.len(), |offset| value_start + offset);
+    let Some(name) = read_bare_identifier(original, value_start..export_end) else {
+        return Some(direct);
+    };
+    if masked.contains(&'\\') {
+        return Some(direct);
+    }
+    let token: Vec<char> = name.chars().collect();
+    let uses = masked
+        .windows(token.len())
+        .enumerate()
+        .filter(|(at, chars)| {
+            *chars == token
+                && (*at == 0 || !is_ident_char(masked[*at - 1]))
+                && !masked
+                    .get(*at + token.len())
+                    .is_some_and(|ch| is_ident_char(*ch))
+        })
+        .count();
+    if uses != 2 {
+        return Some(direct);
+    }
+    let Some(initializer) = find_const_initializer(masked, original, &name, value_start) else {
+        return Some(direct);
+    };
+    if !merge_config_export_shape(masked, original, initializer.start)
+        || !config_alias_file_is_closed(masked, original, &name, initializer.clone(), value_start)
+    {
+        return Some(direct);
+    }
+    Some(initializer)
+}
+
+/// The end of a top-level statement, retaining its semicolon or terminating newline.
+fn top_level_statement_end(masked: &[char], start: usize) -> usize {
+    let mut depth = 0i32;
+    for (offset, ch) in masked[start..].iter().enumerate() {
+        match ch {
+            '(' | '[' | '{' => depth += 1,
+            ')' | ']' | '}' => depth -= 1,
+            ';' | '\n' if depth == 0 => return start + offset + 1,
+            _ => {}
+        }
+    }
+    masked.len()
+}
+
+/// Whether imports, the selected `const`, and its default export are the file's only statements.
+fn config_alias_file_is_closed(
+    masked: &[char],
+    original: &[char],
+    name: &str,
+    initializer: Range<usize>,
+    export_value: usize,
+) -> bool {
+    let Some(const_start) = top_level_keyword_positions(masked, "const")
+        .into_iter()
+        .find(|at| {
+            let start = skip_trivia(original, at + "const".len(), initializer.start);
+            original[start..].starts_with(&name.chars().collect::<Vec<_>>())
+                && !original
+                    .get(start + name.chars().count())
+                    .is_some_and(|ch| is_ident_char(*ch))
+        })
+    else {
+        return false;
+    };
+    let Some(export_start) = top_level_keyword_positions(masked, "export")
+        .into_iter()
+        .find(|at| *at < export_value && find_export_default_value_start(&masked[*at..]).is_some())
+    else {
+        return false;
+    };
+
+    let callee_start = skip_trivia(original, initializer.start, initializer.end);
+    let open_paren = skip_trivia(
+        original,
+        callee_start + "mergeConfig".len(),
+        initializer.end,
+    );
+    let close_paren = find_matching_delim(masked, open_paren, '(', ')');
+    let Some(close_paren) = close_paren else {
+        return false;
+    };
+    let arguments = split_top_level(original, masked, open_paren + 1..close_paren);
+    let Some(base_name) = arguments
+        .first()
+        .and_then(|argument| read_bare_identifier(original, argument.clone()))
+    else {
+        return false;
+    };
+    let Some((_, _, base_import)) = imported_config_source(masked, original, &base_name) else {
+        return false;
+    };
+
+    let mut allowed_imports = BTreeSet::from([base_import]);
+    for binding in ["mergeConfig", "defineConfig", "defineProject"] {
+        let Some((specifier, _, start)) = imported_config_source(masked, original, binding) else {
+            continue;
+        };
+        if ["vitest/config", "vitest", "vite"].contains(&specifier.as_str()) {
+            allowed_imports.insert(start);
+        }
+    }
+    if imported_config_source(masked, original, "mergeConfig")
+        .is_none_or(|(_, _, start)| !allowed_imports.contains(&start))
+    {
+        return false;
+    }
+
+    let mut allowed = vec![false; masked.len()];
+    for start in top_level_keyword_positions(masked, "import") {
+        let statement_end = if let Some(end) = type_only_import_end(masked, original, start) {
+            end
+        } else if allowed_imports.contains(&start) {
+            top_level_statement_end(masked, start)
+        } else {
+            return false;
+        };
+        allowed[start..statement_end].fill(true);
+    }
+    allowed[const_start..top_level_statement_end(masked, initializer.end)].fill(true);
+    allowed[export_start..top_level_statement_end(masked, export_start)].fill(true);
+    masked
+        .iter()
+        .enumerate()
+        .all(|(at, ch)| allowed[at] || is_js_whitespace(*ch))
 }
 
 /// The imported file and selected export supplying a merge base.
@@ -2530,14 +2756,101 @@ fn imported_config_source(
         })
 }
 
-/// Whether the import at `start` is erased by TypeScript before the config runs.
-fn type_only_import(original: &[char], start: usize) -> bool {
+/// Whether the complete import at `start` is erased by TypeScript before the config runs.
+fn type_only_import(masked: &[char], original: &[char], start: usize) -> bool {
+    type_only_import_end(masked, original, start).is_some()
+}
+
+/// The end of a complete type-only import at `start`, including its statement terminator.
+fn type_only_import_end(masked: &[char], original: &[char], start: usize) -> Option<usize> {
     let type_start = skip_trivia(original, start + "import".len(), original.len());
     let token: Vec<char> = "type".chars().collect();
-    original[type_start..].starts_with(&token)
-        && !original
+    if !original[type_start..].starts_with(&token)
+        || original
             .get(type_start + token.len())
             .is_some_and(|ch| is_ident_char(*ch))
+    {
+        return None;
+    }
+
+    let clause_start = skip_trivia(original, type_start + token.len(), original.len());
+    let from_offset = top_level_keyword_positions(&masked[clause_start..], "from")
+        .first()
+        .copied()?;
+    let from = clause_start + from_offset;
+    if from == clause_start {
+        return None;
+    }
+    let statement_end = type_only_import_specifier_end(masked, original, from)?;
+
+    let valid_clause = match masked[clause_start] {
+        '{' => find_matching_delim(masked, clause_start, '{', '}')
+            .is_some_and(|close| close < from && skip_trivia(original, close + 1, from) == from),
+        '*' => {
+            let clause: String = masked[clause_start..from].iter().collect();
+            let tokens: Vec<_> = clause.split_whitespace().collect();
+            matches!(tokens.as_slice(), ["*", "as", name] if !name.is_empty())
+        }
+        _ => read_bare_identifier(original, clause_start..from).is_some(),
+    };
+    if !valid_clause {
+        return None;
+    }
+    Some(statement_end)
+}
+
+/// The end of a type-only import's module specifier and optional resolution-mode attribute.
+fn type_only_import_specifier_end(
+    masked: &[char],
+    original: &[char],
+    from: usize,
+) -> Option<usize> {
+    let statement_end = top_level_statement_end(masked, from);
+    if import_specifier(masked, original, from + "from".len()).is_some() {
+        return Some(statement_end);
+    }
+
+    let specifier_start = skip_trivia(original, from + "from".len(), statement_end);
+    let (attribute_offset, keyword) = ["with", "assert"]
+        .into_iter()
+        .filter_map(|keyword| {
+            top_level_keyword_positions(&masked[specifier_start..statement_end], keyword)
+                .first()
+                .copied()
+                .map(|offset| (offset, keyword))
+        })
+        .min_by_key(|(offset, _)| *offset)?;
+    let attribute_start = specifier_start + attribute_offset;
+    read_string_literal(original, specifier_start..attribute_start)?;
+
+    let open = skip_trivia(original, attribute_start + keyword.len(), statement_end);
+    if masked.get(open) != Some(&'{') {
+        return None;
+    }
+    let close = find_matching_delim(masked, open, '{', '}')?;
+    let content_end = if masked.get(statement_end.saturating_sub(1)) == Some(&';') {
+        statement_end - 1
+    } else {
+        statement_end
+    };
+    if close >= content_end || skip_trivia(original, close + 1, content_end) != content_end {
+        return None;
+    }
+    let properties = split_top_level(original, masked, open + 1..close);
+    let [property] = properties.as_slice() else {
+        return None;
+    };
+    let colon = masked[property.clone()]
+        .iter()
+        .position(|ch| *ch == ':')
+        .map(|offset| property.start + offset)?;
+    if read_string_literal(original, property.start..colon)?.as_str() != "resolution-mode" {
+        return None;
+    }
+    let mode = read_string_literal(original, colon + 1..property.end)?;
+    ["import", "require"]
+        .contains(&mode.as_str())
+        .then_some(statement_end)
 }
 
 /// Resolve the imported base of a verified mergeConfig export, retaining any selected named
@@ -2551,10 +2864,10 @@ fn merge_config_base_path(
     original: &[char],
     config_path: &Path,
 ) -> Option<Result<ImportedConfigBase, String>> {
-    let value_start = find_export_default_value_start(masked)?;
-    merge_config_overrides_literal(masked, original, value_start)?;
-    let callee_start = skip_trivia(original, value_start, original.len());
-    let open_paren = skip_trivia(original, callee_start + "mergeConfig".len(), original.len());
+    let value = default_config_expression(masked, original)?;
+    merge_config_overrides_literal(masked, original, value.clone())?;
+    let callee_start = skip_trivia(original, value.start, value.end);
+    let open_paren = skip_trivia(original, callee_start + "mergeConfig".len(), value.end);
     let close_paren = find_matching_delim(masked, open_paren, '(', ')')?;
     let arguments = split_top_level(original, masked, open_paren + 1..close_paren);
     let name = read_bare_identifier(original, arguments.first()?.clone())?;
@@ -2708,7 +3021,7 @@ fn forwarded_config(
     };
     if top_level_keyword_positions(masked, "import")
         .into_iter()
-        .any(|start| Some(start) != forwarded_import && !type_only_import(original, start))
+        .any(|start| Some(start) != forwarded_import && !type_only_import(masked, original, start))
     {
         return None;
     }
@@ -2980,9 +3293,37 @@ fn named_config_literal(masked: &[char], original: &[char], name: &str) -> Optio
             continue;
         }
         let value = find_const_initializer(masked, original, name, original.len())?;
-        return static_config_object_literal(masked, original, value);
+        let (object, has_erased_suffix) =
+            static_config_object_literal_with_suffix(masked, original, value.clone())?;
+        if has_erased_suffix
+            && !suffixed_named_config_file_is_closed(masked, original, export, value.clone())
+        {
+            return None;
+        }
+        return Some(object);
     }
     None
+}
+
+/// Whether a suffixed named config has only erased imports and its selected declaration.
+fn suffixed_named_config_file_is_closed(
+    masked: &[char],
+    original: &[char],
+    export_start: usize,
+    initializer: Range<usize>,
+) -> bool {
+    let mut allowed = vec![false; masked.len()];
+    for start in top_level_keyword_positions(masked, "import") {
+        let Some(statement_end) = type_only_import_end(masked, original, start) else {
+            return false;
+        };
+        allowed[start..statement_end].fill(true);
+    }
+    allowed[export_start..top_level_statement_end(masked, initializer.end)].fill(true);
+    masked
+        .iter()
+        .enumerate()
+        .all(|(at, ch)| allowed[at] || is_js_whitespace(*ch))
 }
 
 /// Resolve a standalone config to its project name, effective fields and any refused
@@ -3086,12 +3427,12 @@ fn resolve_config_test_scope_inner(
             None,
         )
     } else {
-        let value_start = find_export_default_value_start(&masked)
+        let value = default_config_expression(&masked, &original)
             .ok_or_else(|| format!("{} has no `export default`", path.display()))?;
-        if !merge_config_export_shape(&masked, &original, value_start) {
+        if !merge_config_export_shape(&masked, &original, value.start) {
             return crate::vitest_config::config_test_scope(path);
         }
-        let is_merge = merge_config_overrides_literal(&masked, &original, value_start).is_some();
+        let is_merge = merge_config_overrides_literal(&masked, &original, value).is_some();
         if !is_merge {
             return Err(format!(
                 "{}'s mergeConfig default export cannot be read",
@@ -3239,10 +3580,10 @@ fn resolve_standalone_config_inner(
             ConfigObject::Found(open, close) => (open, close),
             _ => return None,
         };
-        let value_start = find_export_default_value_start(&masked)?;
+        let value = default_config_expression(&masked, &original)?;
         (
             config_object,
-            merge_config_overrides_literal(&masked, &original, value_start).is_some(),
+            merge_config_overrides_literal(&masked, &original, value).is_some(),
             merge_config_base_path(root, &masked, &original, path),
         )
     };

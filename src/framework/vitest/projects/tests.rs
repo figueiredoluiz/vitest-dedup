@@ -698,7 +698,7 @@ fn review_computed_shapes_refuse_malformed_calls_and_declarations() {
         let masked = mask_non_code(&source).unwrap();
         let value = find_export_default_value_start(&masked).unwrap();
         assert!(
-            merge_config_overrides_literal(&masked, &original, value).is_none(),
+            merge_config_overrides_literal(&masked, &original, value..original.len()).is_none(),
             "{expression}"
         );
     }
@@ -1006,6 +1006,211 @@ fn merge_config_cast_scopes_preserve_differences_and_uncertainty() {
         scope("other-cast").is_err(),
         "the narrow assertion reader must not grow into a partial TypeScript parser"
     );
+}
+
+fn named_base_project(base_source: &str) -> tempfile::TempDir {
+    let directory = tempfile::tempdir().unwrap();
+    write(directory.path(), "base.ts", base_source);
+    write(
+        directory.path(),
+        "vitest.config.ts",
+        "import { defineConfig, mergeConfig } from 'vitest/config';\n\
+         import { base } from './base';\n\
+         export default mergeConfig(base, defineConfig({ test: { projects: ['./pkg'] } }));",
+    );
+    write(
+        directory.path(),
+        "pkg/vitest.config.ts",
+        "import { defineProject, mergeConfig } from 'vitest/config';\n\
+         import { base } from '../base';\n\
+         export default mergeConfig(base, defineProject({ test: { name: 'pkg' } }));",
+    );
+    directory
+}
+
+fn default_base_project(root_config: &str, project_config: &str) -> tempfile::TempDir {
+    let directory = tempfile::tempdir().unwrap();
+    write(
+        directory.path(),
+        "base.ts",
+        "export default { test: { globals: true } };",
+    );
+    write(directory.path(), "vitest.config.ts", root_config);
+    write(directory.path(), "pkg/vitest.config.ts", project_config);
+    directory
+}
+
+/// TypeScript-only suffixes on a named config base do not hide its runtime object.
+#[test]
+fn named_config_bases_peel_supported_typescript_suffixes() {
+    for (case, suffix) in [
+        ("as-const-satisfies", "as const satisfies ViteUserConfig"),
+        ("as-type", "as ViteUserConfig"),
+        ("as-dotted-type", "as Namespace.ViteUserConfig"),
+        ("satisfies", "satisfies ViteUserConfig"),
+        ("non-null", "!"),
+    ] {
+        let directory = named_base_project(&format!(
+                "import type\n{{ ViteUserConfig }} from './types' with {{ 'resolution-mode': 'import' }};\n\
+                 export const base = {{ test: {{ globals: true }} }} {suffix};"
+            ));
+
+        let base_source = fs::read_to_string(directory.path().join("base.ts")).unwrap();
+        let base_original: Vec<char> = base_source.chars().collect();
+        let base_masked = mask_non_code(&base_source).unwrap();
+        let export = top_level_keyword_positions(&base_masked, "export")[0];
+        let initializer =
+            find_const_initializer(&base_masked, &base_original, "base", base_original.len())
+                .unwrap_or_else(|| panic!("{case}: initializer missing"));
+        assert!(
+            suffixed_named_config_file_is_closed(
+                &base_masked,
+                &base_original,
+                export,
+                initializer.clone(),
+            ),
+            "{case}: the owned one-declaration base must be closed"
+        );
+        assert!(
+            static_config_object_literal(&base_masked, &base_original, initializer.clone())
+                .is_some(),
+            "{case}: initializer {:?} must be readable",
+            base_original[initializer].iter().collect::<String>()
+        );
+        assert!(
+            named_config_literal(&base_masked, &base_original, "base").is_some(),
+            "{case}: named literal must be readable"
+        );
+
+        let set = resolve_projects(directory.path());
+        assert!(!set.has_unresolved_entries, "{case}: {:?}", set.diagnostics);
+        assert_eq!(set.projects.len(), 1, "{case}: {set:?}");
+        assert_single_named_enabled(&set, "pkg");
+    }
+
+    for suffix in [
+        "as const.Member",
+        "as Namespace.",
+        "as satisfies",
+        "satisfies const",
+    ] {
+        let source = format!("export const base = {{ test: {{ globals: true }} }} {suffix};");
+        let original: Vec<char> = source.chars().collect();
+        let masked = mask_non_code(&source).unwrap();
+        assert!(
+            named_config_literal(&masked, &original, "base").is_none(),
+            "an unsupported suffix must stay unreadable: {suffix}"
+        );
+    }
+
+    let directory = named_base_project(
+        "export const base = { test: { globals: true } } as const\n\
+         && { test: { globals: false } };",
+    );
+    let refused = resolve_projects(directory.path());
+    assert!(refused.has_unresolved_entries, "{refused:?}");
+    assert!(refused
+        .projects
+        .iter()
+        .all(|project| !matches!(project.globals, GlobalsDetection::Enabled { .. })));
+
+    let directory = named_base_project(
+        "export const base =\n\
+         { test: { globals: true } } as const;",
+    );
+    let multiline = resolve_projects(directory.path());
+    assert!(
+        !multiline.has_unresolved_entries,
+        "{:?}",
+        multiline.diagnostics
+    );
+    assert_single_named_enabled(&multiline, "pkg");
+}
+
+/// A default export may follow one stable local `const`, but not a mutable or reused binding.
+#[test]
+fn merge_config_default_exports_follow_only_a_stable_const() {
+    let outcome = |declaration: &str| {
+        let directory = default_base_project(
+            "import { defineConfig, mergeConfig } from 'vitest/config';\n\
+             import base from './base';\n\
+             const rootConfig = mergeConfig(base, defineConfig({ test: { projects: ['./pkg'] } }));\n\
+             export default rootConfig;",
+            &format!(
+                "import {{ defineProject, mergeConfig }} from 'vitest/config';\n\
+                 import base from '../base';\n\
+                 {declaration}\n\
+                 export default config;"
+            ),
+        );
+        resolve_projects(directory.path())
+    };
+
+    for declaration in [
+        "const config = mergeConfig(base, defineProject({ test: { name: 'pkg' } }));",
+        "const config =\nmergeConfig(base, defineProject({ test: { name: 'pkg' } }));",
+    ] {
+        let stable = outcome(declaration);
+        assert!(!stable.has_unresolved_entries, "{:?}", stable.diagnostics);
+        assert_single_named_enabled(&stable, "pkg");
+    }
+
+    for declaration in [
+        "import type { Config } from './types';\nconst config = mergeConfig(base, defineProject({ test: { name: 'pkg' } }));",
+        "import type * as ConfigTypes from './types';\nconst config = mergeConfig(base, defineProject({ test: { name: 'pkg' } }));",
+        "import type Config from './types';\nconst config = mergeConfig(base, defineProject({ test: { name: 'pkg' } }));",
+        "import type\n{ Config } from './types';\nconst config = mergeConfig(base, defineProject({ test: { name: 'pkg' } }));",
+        "import type\n* as ConfigTypes\nfrom './types';\nconst config = mergeConfig(base, defineProject({ test: { name: 'pkg' } }));",
+        "import type\nConfig\nfrom './types';\nconst config = mergeConfig(base, defineProject({ test: { name: 'pkg' } }));",
+        "import type { Config } from './types' with { 'resolution-mode': 'import' };\nconst config = mergeConfig(base, defineProject({ test: { name: 'pkg' } }));",
+    ] {
+        let with_type_import = outcome(declaration);
+        assert!(
+            !with_type_import.has_unresolved_entries,
+            "{with_type_import:?}"
+        );
+        assert_single_named_enabled(&with_type_import, "pkg");
+    }
+
+    for declaration in [
+        "let config = mergeConfig(base, defineProject({ test: { name: 'pkg' } }));",
+        "const config = mergeConfig(base, defineProject({ test: { name: 'pkg' } })); void config;",
+        "const config = mergeConfig(base, defineProject({ test: { name: 'pkg' } })); eval('config.test.globals = false');",
+        "const config = mergeConfig(base, defineProject({ test: { name: 'pkg' } })); base.test.globals = false;",
+        "import.meta.url && (base.test.globals = false);\nconst config = mergeConfig(base, defineProject({ test: { name: 'pkg' } }));",
+        "import type from './effect.mjs';\nconst config = mergeConfig(base, defineProject({ test: { name: 'pkg' } }));",
+        "import type * ConfigTypes from './types';\nconst config = mergeConfig(base, defineProject({ test: { name: 'pkg' } }));",
+        "import type { Config } from './types' with 'resolution-mode';\nconst config = mergeConfig(base, defineProject({ test: { name: 'pkg' } }));",
+        "import type { Config } from './types' with { 'resolution-mode': 'import' } trailing;\nconst config = mergeConfig(base, defineProject({ test: { name: 'pkg' } }));",
+        "import type { Config } from './types' with {};\nconst config = mergeConfig(base, defineProject({ test: { name: 'pkg' } }));",
+        "import type { Config } from './types' with { 'other': 'import' };\nconst config = mergeConfig(base, defineProject({ test: { name: 'pkg' } }));",
+    ] {
+        let refused = outcome(declaration);
+        assert!(refused.has_unresolved_entries, "{refused:?}");
+        assert!(matches!(
+            single_project(&refused).globals,
+            GlobalsDetection::Unknown { .. }
+        ));
+    }
+}
+
+/// A direct merge ends at its semicolon; later declarations are not part of its expression.
+#[test]
+fn direct_merge_preserves_independent_declarations() {
+    let directory = default_base_project(
+        "import { defineConfig, mergeConfig } from 'vitest/config';\n\
+         import base from './base';\n\
+         export default mergeConfig(base, defineConfig({ test: { projects: ['./pkg'] } }));\n\
+         export type ConfigLabel = string;",
+        "import { defineProject, mergeConfig } from 'vitest/config';\n\
+         import base from '../base';\n\
+         export default mergeConfig(base, defineProject({ test: { name: 'pkg' } }));\n\
+         export type ConfigLabel = string;",
+    );
+
+    let set = resolve_projects(directory.path());
+    assert!(!set.has_unresolved_entries, "{:?}", set.diagnostics);
+    assert_single_named_enabled(&set, "pkg");
 }
 
 /// A merge whose two inputs contribute no `test` object is not a comparison scope.
