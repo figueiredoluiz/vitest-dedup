@@ -61,8 +61,15 @@ impl Normalizer<'_> {
                                 !self.synchronous_assertion_node(node)
                                     // A member of a proven plain receiver runs no getter, so it
                                     // defers nothing either read or written.
+                                    // A member of a proven plain receiver runs no getter. Its
+                                    // value defers nothing when it is consumed by a framework
+                                    // assertion or written over — but a returned property can
+                                    // carry a `then` the analyzer cannot see, so anything else
+                                    // keeps the callback deferred.
                                     && !(tree.kind(node) == "MemberExpression"
-                                        && self.plain_member(node).is_some())
+                                        && self.plain_member(node).is_some()
+                                        && (self.assertion_argument(node)
+                                            || self.assignment_target(node)))
                             }
                             _ if tree.is_function(node) => {
                                 tree.flag(node, "async")
@@ -194,12 +201,40 @@ impl Normalizer<'_> {
             return None;
         }
         let symbol = self.scopes.symbol_at(tree.span(object).start)?;
+        if !self.plain_receiver(symbol) {
+            return None;
+        }
+        Some((symbol, name))
+    }
+
+    /// The receiver-wide half of the plain-object proof, resolved once per symbol: a lexical
+    /// binding (`let`/`const`, never redeclared or `declare`d) assigned nowhere, whose only
+    /// value is a plain object literal, and whose every use is a static member read or a
+    /// member-path write. A bare value can grow properties elsewhere, and a method call
+    /// exposes the receiver as `this`, which can install a setter no global-object scan sees.
+    fn plain_receiver(&self, symbol: SymbolId) -> bool {
+        if let Some(plain) = self.hook_receiver_plain.borrow().get(&symbol) {
+            return *plain;
+        }
+        let plain = self.plain_receiver_checked(symbol).is_some();
+        self.hook_receiver_plain.borrow_mut().insert(symbol, plain);
+        plain
+    }
+
+    fn plain_receiver_checked(&self, symbol: SymbolId) -> Option<()> {
+        let tree = self.tree;
         let binding = self.scopes.symbol(symbol);
         let Declaration::Variable(declaration) = binding.declaration else {
             return None;
         };
-        // A `declare`d receiver has no initializer to prove.
-        if tree.flag(tree.parent(declaration)?, "declare") {
+        // A `declare`d receiver has no initializer to prove, and a `var` can be redeclared:
+        // the second initializer replaces the proven literal without a write reference.
+        if tree.flag(tree.parent(declaration)?, "declare")
+            || matches!(
+                tree.text(tree.parent(declaration)?, "kind"),
+                Some("var") | None
+            )
+        {
             return None;
         }
         // The receiver is assigned nowhere, so the initializer's object literal is its only
@@ -229,10 +264,6 @@ impl Normalizer<'_> {
                 return None;
             }
         }
-        // Every use of the receiver is a static member read or a member-path write: a bare value
-        // can grow properties elsewhere, and a method call exposes the receiver as `this`, which
-        // can install a setter no global-object scan sees.
-        let binding = self.scopes.symbol(symbol);
         for reference in &binding.references {
             let node = reference.node?;
             let (_, current, use_of) = self.member_chain(node)?;
@@ -247,7 +278,7 @@ impl Normalizer<'_> {
                 return None;
             }
         }
-        Some((symbol, name))
+        Some(())
     }
 
     /// The static member chain a reference sits under: its segments, the chain's outermost
@@ -312,9 +343,6 @@ impl Normalizer<'_> {
                 "UpdateExpression"
                     if tracked && tree.inner(tree.child(use_of, "argument")?) == current =>
                 {
-                    return None;
-                }
-                "UnaryExpression" if tree.text(use_of, "operator") == Some("delete") => {
                     return None;
                 }
                 _ => {}
@@ -391,6 +419,37 @@ impl Normalizer<'_> {
         self.hook_pollution
             .get()
             .expect("pollution facts initialized")
+    }
+
+    /// Whether this node sits in the argument subtree of a proven framework assertion call:
+    /// the assertion consumes the value, so nothing awaits or retains it for the analyzer's
+    /// purposes. A member used as a callee, a return value or a plain call argument does not
+    /// qualify.
+    fn assertion_argument(&self, node: NodeId) -> bool {
+        let tree = self.tree;
+        let mut current = node;
+        while let Some(parent) = tree.outer_parent(current) {
+            if tree.kind(parent) == "CallExpression" {
+                return tree
+                    .child(parent, "callee")
+                    .is_some_and(|callee| tree.inner(callee) != current)
+                    && self.synchronous_assertion_node(parent);
+            }
+            current = parent;
+        }
+        false
+    }
+
+    /// Whether this node is the direct target of an assignment: the assigned value is the
+    /// literal on the right, never the member's own value.
+    fn assignment_target(&self, node: NodeId) -> bool {
+        let tree = self.tree;
+        tree.outer_parent(node).is_some_and(|parent| {
+            tree.kind(parent) == "AssignmentExpression"
+                && tree
+                    .child(parent, "left")
+                    .is_some_and(|left| tree.inner(left) == node)
+        })
     }
 
     /// Only a directly imported framework assertion and its synchronous member chain qualify.

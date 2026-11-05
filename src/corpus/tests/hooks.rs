@@ -302,7 +302,7 @@ fn hook_property_writes_pair_over_a_proven_receiver() {
         );
     }
     // A `__proto__` key in the literal gives the receiver a foreign prototype.
-    let foreign = "const audit = { __proto__: base, mode: '' };";
+    let foreign = "const audit = { __proto__: {}, mode: '' };";
     assert!(findings(&format!("{IMPORTS} {foreign} {hook} {hook} {TEST}"), 1).is_empty());
     // A quoted key is still a static data property: the pair fires.
     let quoted = "const audit = { 'mode': '' };";
@@ -329,6 +329,17 @@ fn hook_property_writes_pair_over_a_proven_receiver() {
     assert!(findings(&source(&route("audit.__proto__.x = 1;")), 1).is_empty());
     // A method call on the receiver exposes it as `this`, which can install a setter.
     assert!(findings(&source(&route("audit.install();")), 1).is_empty());
+    // A `var` receiver can be redeclared: the second initializer replaces the proven literal
+    // without a write reference.
+    let redeclared = format!(
+        "{IMPORTS} var audit = {{ mode: '' }}; var audit = {{ set mode(v) {{ writes += 1 }} }}; {hook} {hook} {TEST}"
+    );
+    assert!(findings(&redeclared, 1).is_empty());
+    assert!(findings(
+        &format!("{IMPORTS} var audit = {{ mode: '' }}; {hook} {hook} {TEST}"),
+        1
+    )
+    .is_empty());
     // Differing values are a barrier, not a pair.
     let other = "beforeEach(() => { audit.mode = 'secondary' });";
     assert!(findings(&format!("{IMPORTS} {receiver} {hook} {other} {TEST}"), 1).is_empty());
@@ -345,6 +356,12 @@ fn hook_plain_member_exemption_needs_receiver_discipline() {
         "{IMPORTS} let value = 0; {receiver} {hooks} test('reads', () => {{ expect(audit.mode).toBe('') }});"
     );
     assert_eq!(findings(&read, 1).len(), 1);
+    // A returned property can carry a `then` the analyzer cannot see: only assertion
+    // arguments are exempt from the scheduling scan.
+    let returned = format!(
+        "{IMPORTS} let value = 0; {receiver} {hooks} test('queues', () => audit.mode); test('reads', () => {{ expect(value).toBe(1) }});"
+    );
+    assert!(findings(&returned, 2).is_empty());
     // Handing the receiver to a call lets the callee rewrite its properties.
     let escaped = format!(
         "{IMPORTS} let value = 0; {receiver} function route() {{ configure(audit); }} {hooks} test('reads', () => {{ expect(audit.mode).toBe('') }});"
