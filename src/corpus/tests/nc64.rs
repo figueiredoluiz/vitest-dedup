@@ -2,6 +2,94 @@
 use super::*;
 use crate::model::Rule;
 
+/// Parentheses and erased type wrappers cannot hide deletes or updates to literal members.
+#[test]
+fn nc64_wrapped_member_mutations_refuse_scalar_claims() {
+    let source =
+        include_str!("../../../fixtures/oracle/row-value-tables/wrapped-mutations.test.ts");
+    assert_owned_row_findings(
+        counted_corpus(source, "cases.test.ts", 10, 0),
+        &[("stable control", 2)],
+    );
+}
+
+/// Implicit arguments retain tagged inputs while argument-independent arrows can still compare.
+#[test]
+fn nc64_tagged_arguments_cannot_erase_invocation_data() {
+    let source = include_str!("../../../fixtures/oracle/row-value-tables/tagged-arguments.test.ts");
+    let corpus = counted_corpus(source, "cases.test.ts", 6, 4);
+    let outcome = owned_findings("cases.test.ts", corpus);
+    let exact = outcome
+        .findings
+        .iter()
+        .filter(|f| f.rule == Rule::DuplicateTest)
+        .collect::<Vec<_>>();
+    assert_eq!(exact.len(), 1, "{exact:?}");
+    assert_eq!(exact[0].titles, ["arrow control one", "arrow control two"]);
+}
+
+/// The suite's own options must be inert before removing one of its repeated invocations.
+#[test]
+fn nc64_own_suite_options_require_collection_purity() {
+    let source = include_str!("../../../fixtures/oracle/row-value-tables/own-options.test.ts");
+    assert_owned_row_findings(
+        counted_corpus(source, "cases.test.ts", 5, 0),
+        &[("own literal control", 2)],
+    );
+}
+
+/// Header-line interpolations cannot invent rows, even when the template starts with a newline.
+#[test]
+fn nc64_tagged_headers_end_before_the_first_cell() {
+    let source = include_str!("../../../fixtures/oracle/row-value-tables/tagged-header.test.ts");
+    assert_owned_row_findings(
+        counted_corpus(source, "cases.test.ts", 4, 0),
+        &[("terminated header", 2)],
+    );
+}
+
+/// Executed concise expressions cannot borrow the empty-block collection proof, even when nested.
+#[test]
+fn nc64_concise_collection_effects_do_not_claim_removable_suite_rows() {
+    let source = include_str!("../../../fixtures/oracle/row-value-tables/concise-effects.test.ts");
+    assert_owned_row_findings(
+        counted_corpus(source, "cases.test.ts", 7, 1),
+        &[("block control", 2)],
+    );
+}
+
+/// Destructuring does not bind the initializer object; plain identifiers retain member proofs.
+#[test]
+fn nc64_destructured_members_do_not_inherit_the_initializer_object() {
+    let source = include_str!("../../../fixtures/oracle/row-value-tables/destructured.test.ts");
+    assert_owned_row_findings(
+        counted_corpus(source, "cases.test.ts", 8, 0),
+        &[("plain control", 2)],
+    );
+}
+
+/// Lazy safety checks retain both local and imported row claims from the runtime fixture.
+#[test]
+fn nc64_lazy_import_checks_preserve_local_and_imported_claims() {
+    let corpus = corpora(
+        &[
+            (
+                "cases.test.ts",
+                include_str!("../../../fixtures/oracle/row-value-tables/literal-imports.test.ts"),
+            ),
+            (
+                "scalar-values.ts",
+                include_str!("../../../fixtures/oracle/row-value-tables/scalar-values.ts"),
+            ),
+        ],
+        &["cases.test.ts"],
+    )
+    .remove(0);
+    assert_eq!(corpus.tests.len(), 4);
+    assert!(corpus.tests.iter().all(|case| case.exclusion.is_none()));
+    assert_owned_row_findings(corpus, &[("local control", 2), ("imported control", 2)]);
+}
+
 /// Select owned repeated-row claims after the caller has checked the extracted population.
 fn row_claims(corpus: FileCorpus) -> Vec<crate::model::Finding> {
     owned_findings("cases.test.ts", corpus)

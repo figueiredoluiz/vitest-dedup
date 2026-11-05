@@ -54,10 +54,14 @@ fn readonly_members(tree: &crate::lang::Tree, symbol: &crate::lang::Symbol) -> b
             "AssignmentExpression" | "ForOfStatement" | "ForInStatement" => tree
                 .child(a, "left")
                 .is_some_and(|l| tree.span(l).contains(tree.span(member))),
-            "UpdateExpression" => tree.child(a, "argument") == Some(member),
+            "UpdateExpression" => tree
+                .child(a, "argument")
+                .is_some_and(|argument| tree.inner(argument) == member),
             "UnaryExpression" => {
                 tree.text(a, "operator") == Some("delete")
-                    && tree.child(a, "argument") == Some(member)
+                    && tree
+                        .child(a, "argument")
+                        .is_some_and(|argument| tree.inner(argument) == member)
             }
             "CallExpression" | "NewExpression" => tree.child(a, "callee").is_some_and(receiver),
             "TaggedTemplateExpression" => tree.child(a, "tag").is_some_and(receiver),
@@ -67,12 +71,12 @@ fn readonly_members(tree: &crate::lang::Tree, symbol: &crate::lang::Symbol) -> b
 }
 
 /// One primitive read owns its work budget and import recursion set.
-struct Reader<'a> {
+struct Reader<'a, 'proof> {
     setting: Setting<'a>,
     budget: usize,
     bytes: usize,
     active: HashSet<(PathBuf, String)>,
-    imports_safe: bool,
+    imports_safe: &'proof mut dyn FnMut() -> bool,
 }
 
 impl Normalizer<'_> {
@@ -319,15 +323,13 @@ impl Normalizer<'_> {
         if self.structure.direct_eval {
             return None;
         }
-        let imports_safe = if let Some(safe) = self.scalar_imports_safe {
-            safe
-        } else {
-            let mut visited = HashSet::new();
-            let mut bytes = 0;
-            let safe = !self.structure.setup_access
-                && safe_graph(self.path, self.tree, self.setting, &mut visited, &mut bytes);
-            self.scalar_imports_safe = Some(safe);
-            safe
+        let mut imports_safe = || {
+            *self.scalar_imports_safe.get_or_insert_with(|| {
+                let mut visited = HashSet::new();
+                let mut bytes = 0;
+                !self.structure.setup_access
+                    && safe_graph(self.path, self.tree, self.setting, &mut visited, &mut bytes)
+            })
         };
         let parsed = View {
             tree: self.tree,
@@ -338,7 +340,7 @@ impl Normalizer<'_> {
             budget: 256,
             bytes: 0,
             active: HashSet::new(),
-            imports_safe,
+            imports_safe: &mut imports_safe,
         }
         .read(parsed, self.path, node, &self.row_values)
     }
@@ -447,7 +449,7 @@ fn safe_graph(
     true
 }
 
-impl Reader<'_> {
+impl Reader<'_, '_> {
     /// Reads only primitive constructions, immutable constants and disciplined own-member reads.
     fn read(
         &mut self,
@@ -589,7 +591,7 @@ impl Reader<'_> {
                 import,
                 specifier,
                 imported,
-            } if self.imports_safe => {
+            } if (self.imports_safe)() => {
                 if tree.text(*import, "importKind") == Some("type")
                     || tree.text(*specifier, "importKind") == Some("type")
                 {
@@ -643,6 +645,7 @@ impl Reader<'_> {
         let parent = tree.parent(decl)?;
         if tree.text(parent, "kind") != Some("const")
             || tree.flag(parent, "declare")
+            || tree.kind(tree.child(decl, "id")?) != "Identifier"
             || tree.span(decl).end > tree.span(node).start
         {
             return None;

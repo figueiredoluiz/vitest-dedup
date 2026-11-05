@@ -1,6 +1,13 @@
 {
   "blindUnderCurrent": ["bindings.test.ts", "tagged-captures.test.ts", "tagged-effects.test.ts"],
   "files": {
+    "wrapped-mutations.test.ts": { "tasks": 10, "wrapperSites": [], "next": {} },
+    "tagged-arguments.test.ts": { "tasks": 6, "wrapperSites": [], "next": { "reasons": ["unresolved-context"], "testsExcluded": 4 } },
+    "own-options.test.ts": { "tasks": 9, "wrapperSites": [], "next": {} },
+    "tagged-header.test.ts": { "tasks": 4, "wrapperSites": [], "next": {} },
+    "concise-effects.test.ts": { "tasks": 15, "wrapperSites": [], "next": { "reasons": ["order-dependent-state"], "testsExcluded": 1 } },
+    "destructured.test.ts": { "tasks": 8, "wrapperSites": [], "next": {} },
+    "literal-imports.test.ts": { "tasks": 4, "wrapperSites": [], "next": {} },
     "cases.test.ts": { "tasks": 28, "wrapperSites": [], "next": {} },
     "sparse.test.ts": { "tasks": 2, "wrapperSites": [], "next": {} },
     "objects.test.ts": { "tasks": 4, "wrapperSites": [], "next": {} },

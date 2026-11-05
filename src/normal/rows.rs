@@ -379,8 +379,11 @@ impl Normalizer<'_> {
         }
         // Vitest strips ASCII spaces only; other whitespace can be part of the actual key.
         if first
-            .chars()
-            .any(|c| c.is_whitespace() && !matches!(c, ' ' | '\n'))
+            .rsplit_once('\n')
+            .is_none_or(|(_, cells)| !cells.trim().is_empty())
+            || first
+                .chars()
+                .any(|c| c.is_whitespace() && !matches!(c, ' ' | '\n'))
         {
             return None;
         }

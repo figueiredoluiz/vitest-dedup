@@ -46,14 +46,17 @@ mocking capability remain unknown. Namespace or dynamic-import capability also w
 value proofs because Vitest module objects can be rewritten. A local literal object's member is readable only while the
 object has no writes, aliases or escaping uses.
 
-Rectangular tagged tables with unique static headers support primitive cells and flat
-destructuring; effectful cells or unsupported bindings leave the row unresolved. Suite tables
+Rectangular tagged tables with unique static headers followed by a newline support primitive cells and flat
+destructuring; effectful cells or unsupported bindings leave the row unresolved. Tagged callbacks
+that read `this` or `arguments` also remain unresolved. Suite tables
 expand their children with the row's primitive bindings and title
 ancestry, including nested suite and test tables. Expansion is bounded to 2,048 enclosing suite
 invocations per declaration; unsupported inputs produce unresolved cases. Readonly literal arrays
 can retain child comparisons through their own scalar indices or `length`, with each invocation
 kept separate. They do not establish repeated-row input equality. Whole-suite table
-equivalence and arbitrary collection-time execution are outside this row proof.
+equivalence and arbitrary collection-time execution are outside this row proof. Removable
+suite-row claims require block callbacks, including nested suites, and inert owning options; concise callbacks still
+contribute children but do not establish an inert collection body.
 
 ## Hook scheduling
 

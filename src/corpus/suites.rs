@@ -242,7 +242,8 @@ pub(super) fn table_rows(
                     .into_iter()
                     .flatten()
                     .collect::<Vec<_>>(),
-            ) || !closed_collection(parsed, found, &mut normalizer, body, 16)
+            ) || !pure_registration(tree, &mut normalizer, site.node)
+                || !closed_collection(parsed, found, &mut normalizer, body, 16)
             {
                 continue;
             }
@@ -335,6 +336,12 @@ fn closed_collection(
         return false;
     }
     let tree = &parsed.tree;
+    if tree
+        .child(body, "body")
+        .is_none_or(|body| tree.kind(body) != "BlockStatement")
+    {
+        return false;
+    }
     normalizer
         .body_statements(body)
         .into_iter()
@@ -352,41 +359,7 @@ fn closed_collection(
             let Some(site) = found.sites.iter().find(|s| s.node == call) else {
                 return false;
             };
-            let pure = tree
-                .list(call, "arguments")
-                .into_iter()
-                .flatten()
-                .all(|arg| {
-                    let arg = tree.inner(arg);
-                    matches!(
-                        tree.kind(arg),
-                        "ArrowFunctionExpression" | "FunctionExpression"
-                    ) || pure_input(tree, normalizer, arg, 32)
-                });
-            let Some(callee) = tree.child(call, "callee") else {
-                return false;
-            };
-            let pure = pure
-                && std::iter::once(callee)
-                    .chain(tree.descendants(callee))
-                    .filter(|&n| {
-                        matches!(tree.kind(n), "CallExpression" | "TaggedTemplateExpression")
-                    })
-                    .all(|call| {
-                        let inputs = if tree.kind(call) == "TaggedTemplateExpression" {
-                            let Some(quasi) = tree.child(call, "quasi") else {
-                                return false;
-                            };
-                            tree.list(quasi, "expressions")
-                        } else {
-                            tree.list(call, "arguments")
-                        };
-                        inputs
-                            .into_iter()
-                            .flatten()
-                            .all(|arg| pure_input(tree, normalizer, arg, 32))
-                    });
-            if !pure {
+            if !pure_registration(tree, normalizer, call) {
                 return false;
             }
             match site.kind {
@@ -402,6 +375,44 @@ fn closed_collection(
 }
 
 /// A registration's options and table construction must execute no unknown project expression.
+fn pure_registration(
+    tree: &crate::lang::Tree,
+    normalizer: &mut Normalizer<'_>,
+    call: NodeId,
+) -> bool {
+    let Some(callee) = tree.child(call, "callee") else {
+        return false;
+    };
+    tree.list(call, "arguments")
+        .into_iter()
+        .flatten()
+        .all(|arg| {
+            let arg = tree.inner(arg);
+            matches!(
+                tree.kind(arg),
+                "ArrowFunctionExpression" | "FunctionExpression"
+            ) || pure_input(tree, normalizer, arg, 32)
+        })
+        && std::iter::once(callee)
+            .chain(tree.descendants(callee))
+            .filter(|&n| matches!(tree.kind(n), "CallExpression" | "TaggedTemplateExpression"))
+            .all(|call| {
+                let inputs = if tree.kind(call) == "TaggedTemplateExpression" {
+                    let Some(quasi) = tree.child(call, "quasi") else {
+                        return false;
+                    };
+                    tree.list(quasi, "expressions")
+                } else {
+                    tree.list(call, "arguments")
+                };
+                inputs
+                    .into_iter()
+                    .flatten()
+                    .all(|arg| pure_input(tree, normalizer, arg, 32))
+            })
+}
+
+/// A bounded literal input is inert only when each of its evaluated children is also inert.
 fn pure_input(
     tree: &crate::lang::Tree,
     normalizer: &mut Normalizer<'_>,
