@@ -43,74 +43,11 @@
       "reason": "Deliberate: the analyzer skips files git ignores; Vitest does not read .gitignore."
     },
     {
-      "dir": "fixtures/duplicates",
-      "path": "redundant-hook-describe-each-suite.test.ts",
-      "kind": "missing-test",
-      "item": "viewer permissions > grants its scope",
-      "reason": "A suite table is read as one suite whose title is not rendered, so its children count once rather than once per row."
-    },
-    {
-      "dir": "fixtures/each",
-      "path": "describe-each.test.ts",
-      "kind": "missing-test",
-      "item": "Suite B > nested test",
-      "reason": "A suite table is read as one suite whose title is not rendered, so its children count once rather than once per row."
-    },
-    {
       "dir": "fixtures/each",
       "path": "each-nonliteral-table.test.ts",
       "kind": "missing-test",
       "item": "with nonliteral table",
       "reason": "A table the analyzer cannot read counts as one test with an unproven title, not one per row."
-    },
-    {
-      "dir": "fixtures/each",
-      "path": "each-tagged-template.test.ts",
-      "kind": "missing-test",
-      "item": "returns 5",
-      "reason": "A table the analyzer cannot read counts as one test with an unproven title, not one per row."
-    },
-    {
-      "dir": "fixtures/recall/duplicate-each-row-describe-each",
-      "path": "roles.test.ts",
-      "kind": "missing-test",
-      "item": "editor permissions > resolves a permission set",
-      "reason": "A suite table is read as one suite whose title is not rendered, so its children count once rather than once per row."
-    },
-    {
-      "dir": "fixtures/recall/duplicate-each-row-describe-each",
-      "path": "roles.test.ts",
-      "kind": "missing-test",
-      "item": "editor permissions > renders a label",
-      "reason": "A suite table is read as one suite whose title is not rendered, so its children count once rather than once per row."
-    },
-    {
-      "dir": "fixtures/recall/duplicate-each-row-describe-each",
-      "path": "roles.test.ts",
-      "kind": "missing-test",
-      "item": "admin permissions > resolves a permission set",
-      "reason": "A suite table is read as one suite whose title is not rendered, so its children count once rather than once per row."
-    },
-    {
-      "dir": "fixtures/recall/duplicate-each-row-describe-each",
-      "path": "roles.test.ts",
-      "kind": "missing-test",
-      "item": "admin permissions > renders a label",
-      "reason": "A suite table is read as one suite whose title is not rendered, so its children count once rather than once per row."
-    },
-    {
-      "dir": "fixtures/recall/duplicate-suite-describe-each",
-      "path": "roles.test.ts",
-      "kind": "missing-test",
-      "item": "editor permissions > resolves a permission set",
-      "reason": "A suite table is read as one suite whose title is not rendered, so its children count once rather than once per row."
-    },
-    {
-      "dir": "fixtures/recall/duplicate-suite-describe-each",
-      "path": "roles.test.ts",
-      "kind": "missing-test",
-      "item": "viewer permissions > resolves a permission set",
-      "reason": "A suite table is read as one suite whose title is not rendered, so its children count once rather than once per row."
     },
     {
       "dir": "fixtures/recall/framework-package-parenthesised-registration",
@@ -125,13 +62,6 @@
       "kind": "missing-test",
       "item": "package check",
       "reason": "A package under node_modules registers this test when the file calls it; the analyzer does not read package code."
-    },
-    {
-      "dir": "fixtures/recall/duplicate-each-row-imported-constants",
-      "path": "values.test.ts",
-      "kind": "missing-test",
-      "item": "tags fast",
-      "reason": "A table the analyzer cannot read counts as one test with an unproven title, not one per row."
     },
     {
       "dir": "fixtures/recall/guarded-hook-differing",

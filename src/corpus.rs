@@ -9,6 +9,7 @@ mod memory;
 pub mod records;
 mod runners;
 mod suites;
+mod table_frames;
 pub use hooks::{Hook, Hooks};
 
 use crate::exclusions;
@@ -33,6 +34,8 @@ pub enum Exclusion {
     NoCallback,
     /// A spread argument, or a callee the analysis cannot read, may hide the callback that runs.
     UnreadableCallback,
+    /// A tagged row's cells or callback bindings have no complete primitive proof.
+    UnprovedTableRow,
     /// It reads state another test writes, or a hook accumulates.
     OrderDependentState,
     /// Its body is deeper than the normal form reads, so it can match nothing.
@@ -63,9 +66,15 @@ pub enum Exclusion {
     UnreadableFixture,
     /// The declaration title cannot be proved, so neither its name nor invocation is comparable.
     UnresolvedTitle,
+    /// An enclosing suite's row inputs or bounded population could not be proved.
+    UnprovedSuiteRow,
 }
 
 impl TestCase {
+    /// Runtime case identity keeps enclosing suite multiplicity separate from a written row.
+    pub fn gate_row(&self) -> Option<usize> {
+        self.runtime_row.or(self.row)
+    }
     /// Whether the quality gate's denominator counts this case: every runtime test, compared or
     /// not, except a benchmark, a placeholder for what a wrapper call or module load registers,
     /// and a todo with no callback.
@@ -83,6 +92,10 @@ impl Exclusion {
     /// `None` for a test with nothing to compare.
     pub fn reason(self) -> Option<(ExclusionReason, &'static str)> {
         match self {
+            Self::UnprovedTableRow=>Some((ExclusionReason::UnresolvedContext,
+                "the tagged table row's inputs or callback bindings could not be proved")),
+            Self::UnprovedSuiteRow=>Some((ExclusionReason::UnresolvedContext,
+                "the enclosing suite table's inputs or bounded invocation population could not be proved")),
             Self::RegisteredInsideFunction => Some((
                 ExclusionReason::RegisteredInsideFunction,
                 "a test is registered inside a function whose caller decides what it registers",
@@ -164,6 +177,10 @@ pub struct Origin {
 /// One test, one row of a test table, or a suite in the separate suite population.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TestCase {
+    /// Flattened enclosing-suite/child-row ordinal for the quality gate, not a written row index.
+    pub runtime_row: Option<usize>,
+    /// Ancestor suite declarations and their invocation ordinals.
+    pub suite_rows: Vec<(u32, usize)>,
     /// A declaration outside the file that registers it; absent for ordinary inline tests.
     pub origin: Option<Origin>,
     /// Optional owned normalization evidence, retained only for diagnostic records.
@@ -364,6 +381,35 @@ fn at_span(lines: &Lines, source: &str, start: u32, end: u32) -> Span {
     }
 }
 
+/// A source declaration before any rule-specific equality or invocation proof.
+fn unkeyed_case(span: Span, title: Option<String>, exclusion: Option<Exclusion>) -> TestCase {
+    TestCase {
+        runtime_row: None,
+        suite_rows: Vec::new(),
+        origin: None,
+        views: None,
+        span,
+        title,
+        full_title: None,
+        name: None,
+        row: None,
+        row_class: None,
+        key: 0,
+        module_key: 0,
+        body: 0,
+        parameterization_key: None,
+        trace: Vec::new(),
+        ordinary_events: 0,
+        trace_complete: false,
+        similarity_key: 0,
+        subsumption_key: None,
+        callback_form: normal::CallbackForm::Interchangeable,
+        inert: false,
+        bodyless: false,
+        exclusion,
+    }
+}
+
 /// Reads one test file into the corpus.
 pub fn file(
     path: &Path,
@@ -424,19 +470,24 @@ fn read_parsed(
         .collect();
     let tree = &parsed.tree;
     let lines = Lines::new(source);
-    let mut normalizer = Normalizer::new(
-        path,
-        parsed,
-        normal::Setting {
-            dialect: setting.dialect,
-            root: setting.root,
-            exports: &run.exports,
-        },
-        &structure,
-    );
-    if let Some(frame) = &frame {
-        normalizer = normalizer.for_registration(frame.function, frame.bindings.clone());
-    }
+    // Registration bindings seed both ordinary and suite-row invocations in the same way.
+    let make_normalizer = || {
+        let mut normalizer = Normalizer::new(
+            path,
+            parsed,
+            normal::Setting {
+                dialect: setting.dialect,
+                root: setting.root,
+                exports: &run.exports,
+            },
+            &structure,
+        );
+        if let Some(frame) = &frame {
+            normalizer = normalizer.for_registration(frame.function, frame.bindings.clone());
+        }
+        normalizer
+    };
+    let mut normalizer = make_normalizer();
     // A statement that is a call registering a test, suite or benchmark is that registration, not
     // context; any other statement holding one (a loop, a sequence with setup) is context whole.
     let registration = |statement: NodeId| {
@@ -483,6 +534,7 @@ fn read_parsed(
             }
         }
     }
+    let ambient_nodes = ambient.clone();
     let mut contexts: HashMap<Option<NodeId>, String> = HashMap::new();
     for (scope, mut statements) in ambient {
         statements.sort_by_key(|&statement| tree.span(statement).start);
@@ -598,29 +650,6 @@ fn read_parsed(
         }
     };
     // A case as its site spells it, before anything keys it.
-    let unkeyed_case = |span: Span, title: Option<String>, exclusion: Option<Exclusion>| TestCase {
-        origin: None,
-        views: None,
-        span,
-        title,
-        full_title: None,
-        name: None,
-        row: None,
-        row_class: None,
-        key: 0,
-        module_key: 0,
-        body: 0,
-        parameterization_key: None,
-        trace: Vec::new(),
-        ordinary_events: 0,
-        trace_complete: false,
-        similarity_key: 0,
-        subsumption_key: None,
-        callback_form: normal::CallbackForm::Interchangeable,
-        inert: false,
-        bodyless: false,
-        exclusion,
-    };
     let unkeyed = |site: &Site, exclusion: Option<Exclusion>| {
         unkeyed_case(
             at(site.span.start, site.span.end),
@@ -653,14 +682,6 @@ fn read_parsed(
 
     // Comparison names take only a rendering the values establish; display may also cut long
     // values as the default limit does, which a project can change.
-    let render_with = |render: crate::framework::RenderTitle| {
-        move |pattern: &str, row: &normal::TableRow, whole_rows| {
-            let (arguments, fields) = normal::titles::row(parsed, &row.value, whole_rows);
-            render(pattern, &arguments, fields.as_ref(), row.index)
-        }
-    };
-    let render_test_row = render_with(setting.dialect.render_title);
-    let display_test_row = render_with(setting.dialect.render_display_title);
     let mut tests = Vec::new();
     let mut empty_tables = 0;
     // Suite registration provenance, by the registering call: the prefix a row finding may
@@ -676,268 +697,394 @@ fn read_parsed(
         .iter()
         .filter(|site| site.kind == SiteKind::Registers(Registers::Test))
     {
-        if unregistered(&mut normalizer, site.node) {
-            continue;
-        }
-        let mut record = unkeyed(site, None);
-        // Display identity survives every refusal; it is not a name-comparison proof.
-        let display_prefix = normalizer.suites_around(site.node).and_then(|scopes| {
-            scopes
-                .iter()
-                .map(|scope| {
-                    structure
-                        .suites
-                        .get(scope)
-                        .and_then(|call| suite_titles.get(call))
-                        .and_then(|title| title.clone())
-                })
-                .collect::<Option<Vec<_>>>()
-        });
-        let display_title = |title: &str| {
-            let mut segments = display_prefix.clone()?;
-            segments.push(title.to_owned());
-            Some(segments.join(" > "))
-        };
-        record.full_title = record.title.as_deref().and_then(display_title);
-        let callee = tree.child(site.node, "callee");
-        let modifiers = callee.map(|callee| normalizer.modifiers(callee, site.member));
-        let arguments: Vec<NodeId> = tree
-            .list(site.node, "arguments")
-            .into_iter()
-            .flatten()
-            .collect();
-        record.inert = modifiers.as_ref().is_some_and(|modifiers| modifiers.inert)
-            || normalizer.inert_options(&arguments);
-        // The same test the callback branch below applies, before any refusal can take its place.
-        record.bodyless = modifiers.is_some()
-            && normalizer.callback(site.node).is_none()
-            && !arguments
-                .iter()
-                .any(|argument| tree.kind(*argument) == "SpreadElement");
-        // An excluded test is still one case per row of a table the file spells out.
-        let table_rows = modifiers
-            .as_ref()
-            .and_then(|modifiers| modifiers.rows.as_ref());
-        empty_tables += usize::from(table_rows.is_some_and(Vec::is_empty));
-        let excluded = |exclusion| -> Vec<TestCase> {
-            let case = |row: Option<&normal::TableRow>| {
-                let rendered = row.and_then(|row| {
-                    let pattern = record.title.as_deref()?;
-                    let modifiers = modifiers.as_ref()?;
-                    display_test_row(pattern, row, modifiers.whole_rows)
-                });
-                let mut case = record.clone();
-                case.row = row.map(|row| row.index);
-                if let Some(title) = rendered.as_deref().and_then(display_title) {
-                    case.full_title = Some(title);
-                }
-                case.exclusion = Some(exclusion);
-                case
-            };
-            match table_rows {
-                None => vec![case(None)],
-                Some(rows) => rows.iter().map(|row| case(Some(row))).collect(),
-            }
-        };
-        let unread_callee = modifiers.is_none();
-        if manifest_refused {
-            tests.extend(excluded(Exclusion::UnreadableManifest));
-            continue;
-        }
-        if found.direct_eval
-            || found.non_hoisted_mock
-            || found.unreadable_mock_factory
-            || found.unreadable_fixture
-        {
-            tests.extend(excluded(if found.direct_eval {
-                Exclusion::DynamicBindings
-            } else if found.non_hoisted_mock {
-                Exclusion::NonHoistedMock
-            } else if found.unreadable_mock_factory {
-                Exclusion::UnreadableMockFactory
+        let suite_frames = table_frames::around(
+            path,
+            parsed,
+            &structure,
+            normal::Setting {
+                dialect: setting.dialect,
+                root: setting.root,
+                exports: &run.exports,
+            },
+            site.node,
+            &found,
+        );
+        for (suite_ordinal, suite_frame) in suite_frames.into_iter().enumerate() {
+            let mut frame_normalizer;
+            let normalizer = if suite_frame.table {
+                frame_normalizer = make_normalizer().for_suite_values(suite_frame.values.clone());
+                &mut frame_normalizer
             } else {
-                Exclusion::UnreadableFixture
-            }));
-            continue;
-        }
-        let refused = expanded.refused.contains(&None)
-            || normalizer.suites_around(site.node).is_some_and(|scopes| {
+                &mut normalizer
+            };
+            let mut frame_contexts = HashMap::new();
+            if suite_frame.table {
+                for (scope, nodes) in &ambient_nodes {
+                    let mut nodes = nodes.clone();
+                    nodes.sort_by_key(|&n| tree.span(n).start);
+                    nodes.dedup();
+                    frame_contexts.insert(
+                        *scope,
+                        nodes
+                            .into_iter()
+                            .map(|n| normalizer.of(n))
+                            .collect::<Vec<_>>()
+                            .join(";"),
+                    );
+                }
+            }
+            let contexts = if suite_frame.table {
+                &frame_contexts
+            } else {
+                &contexts
+            };
+            let mut frame_names;
+            let suite_names = if suite_frame.table {
+                frame_names = suite_names.clone();
+                frame_names.extend(suite_frame.names.clone());
+                &frame_names
+            } else {
+                &suite_names
+            };
+            let mut frame_titles;
+            let suite_titles = if suite_frame.table {
+                frame_titles = suite_titles.clone();
+                frame_titles.extend(suite_frame.display.clone());
+                &frame_titles
+            } else {
+                &suite_titles
+            };
+            if unregistered(normalizer, site.node) {
+                continue;
+            }
+            let mut record = unkeyed(site, None);
+            record.suite_rows = suite_frame.rows.clone();
+            // Display identity survives every refusal; it is not a name-comparison proof.
+            let display_prefix = normalizer.suites_around(site.node).and_then(|scopes| {
                 scopes
                     .iter()
-                    .any(|scope| expanded.refused.contains(&Some(*scope)))
+                    .map(|scope| {
+                        structure
+                            .suites
+                            .get(scope)
+                            .and_then(|call| suite_titles.get(call))
+                            .and_then(|title| title.clone())
+                    })
+                    .collect::<Option<Vec<_>>>()
             });
-        if refused {
-            tests.extend(excluded(Exclusion::UnprovedRunner));
-            continue;
-        }
-        let (Some(modifiers), Some(callback)) =
-            (modifiers.as_ref(), normalizer.callback(site.node))
-        else {
-            // A spread may expand to the callback Vitest runs; only a test with none is a todo.
-            let hidden = unread_callee
-                || arguments
+            let display_title = |title: &str| {
+                let mut segments = display_prefix.clone()?;
+                segments.push(title.to_owned());
+                Some(segments.join(" > "))
+            };
+            record.full_title = record.title.as_deref().and_then(display_title);
+            let callee = tree.child(site.node, "callee");
+            let modifiers = callee.map(|callee| normalizer.modifiers(callee, site.member));
+            let row_titles = modifiers
+                .as_ref()
+                .and_then(|m| {
+                    m.rows.as_ref().map(|rows| {
+                        rows.iter()
+                            .map(|row| {
+                                let render = |normalizer: &mut Normalizer<'_>, mode| {
+                                    record.title.as_deref().and_then(|p| {
+                                        normalizer.render_table_title(
+                                            parsed,
+                                            p,
+                                            row,
+                                            m.whole_rows,
+                                            mode,
+                                        )
+                                    })
+                                };
+                                (
+                                    row.index,
+                                    (
+                                        render(normalizer, crate::framework::TitleMode::Comparison),
+                                        render(normalizer, crate::framework::TitleMode::Display),
+                                        render(normalizer, crate::framework::TitleMode::Row),
+                                    ),
+                                )
+                            })
+                            .collect::<HashMap<_, _>>()
+                    })
+                })
+                .unwrap_or_default();
+            let render_test_row =
+                |_: &str, row: &normal::TableRow, _| row_titles.get(&row.index)?.0.clone();
+            let display_test_row =
+                |_: &str, row: &normal::TableRow, _| row_titles.get(&row.index)?.1.clone();
+            let arguments: Vec<NodeId> = tree
+                .list(site.node, "arguments")
+                .into_iter()
+                .flatten()
+                .collect();
+            record.inert = modifiers.as_ref().is_some_and(|modifiers| modifiers.inert)
+                || normalizer.inert_options(&arguments)
+                || suite_frame.inert;
+            let row_stride = modifiers
+                .as_ref()
+                .and_then(|m| m.rows.as_ref())
+                .and_then(|rows| rows.iter().map(|r| r.index).max())
+                .and_then(|n| n.checked_add(1))
+                .unwrap_or(1);
+            if suite_frame.table {
+                record.runtime_row = suite_ordinal.checked_mul(row_stride);
+            }
+            // The same test the callback branch below applies, before any refusal can take its place.
+            record.bodyless = modifiers.is_some()
+                && normalizer.callback(site.node).is_none()
+                && !arguments
                     .iter()
                     .any(|argument| tree.kind(*argument) == "SpreadElement");
-            tests.extend(excluded(if hidden {
-                Exclusion::UnreadableCallback
-            } else {
-                Exclusion::NoCallback
-            }));
-            continue;
-        };
-        if record.title.is_none() {
-            tests.extend(excluded(Exclusion::UnresolvedTitle));
-            continue;
-        }
-        if !callback.inline {
-            tests.extend(excluded(Exclusion::NamedCallback));
-            continue;
-        }
-        let (body, function) = (callback.argument, callback.function);
-        let empty = function.is_some_and(|function| {
-            tree.child(function, "body").is_some_and(|body| {
-                tree.kind(body) == "BlockStatement" && tree.list(body, "body").is_empty()
-            })
-        });
-        if empty {
-            tests.extend(excluded(Exclusion::EmptyBody));
-            continue;
-        }
-        let Some(suites) = normalizer.suites_around(site.node) else {
-            tests.extend(excluded(Exclusion::RegisteredInsideFunction));
-            continue;
-        };
-        if function.is_some_and(|function| normalizer.order_dependent(function)) {
-            tests.extend(excluded(Exclusion::OrderDependentState));
-            continue;
-        }
-        let mut context = contexts.get(&None).cloned().unwrap_or_default();
-        let mut suite_expects_failure = false;
-        for scope in &suites {
-            // An enclosing suite's run condition, table or expected failure applies to the test
-            // as well. How deep the suites nest changes nothing; only what each one adds does.
-            if let Some(suite_callee) = structure
-                .suites
-                .get(scope)
-                .and_then(|call| tree.child(*call, "callee"))
-            {
-                let call = structure.suites[scope];
-                let suite = normalizer.modifiers(suite_callee, members.get(&call).copied());
-                let suite_arguments: Vec<NodeId> =
-                    tree.list(call, "arguments").into_iter().flatten().collect();
-                let suite_body = suite_arguments
-                    .iter()
-                    .copied()
-                    .find(|&argument| tree.inner(argument) == *scope)
-                    .unwrap_or(*scope);
-                let (suite_options, options_fail) =
-                    normalizer.options(&suite_arguments, suite_body);
-                let fails = suite.fails || options_fail;
-                suite_expects_failure |= fails;
-                if suite.chain.contains('.') || fails || !suite_options.is_empty() {
-                    context.push('|');
-                    context.push_str(&suite.chain);
-                    if fails {
-                        context.push_str(".!fails");
+            // An excluded test is still one case per row of a table the file spells out.
+            let table_rows = modifiers
+                .as_ref()
+                .and_then(|modifiers| modifiers.rows.as_ref());
+            empty_tables += usize::from(table_rows.is_some_and(Vec::is_empty));
+            let excluded = |exclusion| -> Vec<TestCase> {
+                let case = |row: Option<&normal::TableRow>| {
+                    let rendered = row.and_then(|row| {
+                        let pattern = record.title.as_deref()?;
+                        let modifiers = modifiers.as_ref()?;
+                        display_test_row(pattern, row, modifiers.whole_rows)
+                    });
+                    let mut case = record.clone();
+                    case.row = row.map(|row| row.index);
+                    case.runtime_row = record
+                        .runtime_row
+                        .and_then(|base| base.checked_add(row.map_or(0, |r| r.index)));
+                    if let Some(title) = rendered.as_deref().and_then(display_title) {
+                        case.full_title = Some(title);
                     }
-                    context.push_str(&suite_options.join(","));
+                    case.exclusion = Some(exclusion);
+                    case
+                };
+                match table_rows {
+                    None => vec![case(None)],
+                    Some(rows) => rows.iter().map(|row| case(Some(row))).collect(),
+                }
+            };
+            let unread_callee = modifiers.is_none();
+            if suite_frame.table && (!suite_frame.proven || record.runtime_row.is_none()) {
+                tests.extend(excluded(Exclusion::UnprovedSuiteRow));
+                continue;
+            }
+            if manifest_refused {
+                tests.extend(excluded(Exclusion::UnreadableManifest));
+                continue;
+            }
+            if found.direct_eval
+                || found.non_hoisted_mock
+                || found.unreadable_mock_factory
+                || found.unreadable_fixture
+            {
+                tests.extend(excluded(if found.direct_eval {
+                    Exclusion::DynamicBindings
+                } else if found.non_hoisted_mock {
+                    Exclusion::NonHoistedMock
+                } else if found.unreadable_mock_factory {
+                    Exclusion::UnreadableMockFactory
+                } else {
+                    Exclusion::UnreadableFixture
+                }));
+                continue;
+            }
+            let refused = expanded.refused.contains(&None)
+                || normalizer.suites_around(site.node).is_some_and(|scopes| {
+                    scopes
+                        .iter()
+                        .any(|scope| expanded.refused.contains(&Some(*scope)))
+                });
+            if refused {
+                tests.extend(excluded(Exclusion::UnprovedRunner));
+                continue;
+            }
+            let (Some(modifiers), Some(callback)) =
+                (modifiers.as_ref(), normalizer.callback(site.node))
+            else {
+                // A spread may expand to the callback Vitest runs; only a test with none is a todo.
+                let hidden = unread_callee
+                    || arguments
+                        .iter()
+                        .any(|argument| tree.kind(*argument) == "SpreadElement");
+                tests.extend(excluded(if hidden {
+                    Exclusion::UnreadableCallback
+                } else {
+                    Exclusion::NoCallback
+                }));
+                continue;
+            };
+            if record.title.is_none() {
+                tests.extend(excluded(Exclusion::UnresolvedTitle));
+                continue;
+            }
+            if !callback.inline {
+                tests.extend(excluded(Exclusion::NamedCallback));
+                continue;
+            }
+            let (body, function) = (callback.argument, callback.function);
+            let empty = function.is_some_and(|function| {
+                tree.child(function, "body").is_some_and(|body| {
+                    tree.kind(body) == "BlockStatement" && tree.list(body, "body").is_empty()
+                })
+            });
+            if empty {
+                tests.extend(excluded(Exclusion::EmptyBody));
+                continue;
+            }
+            let Some(suites) = normalizer.suites_around(site.node) else {
+                tests.extend(excluded(Exclusion::RegisteredInsideFunction));
+                continue;
+            };
+            if function.is_some_and(|function| normalizer.order_dependent(function)) {
+                tests.extend(excluded(Exclusion::OrderDependentState));
+                continue;
+            }
+            let mut context = contexts.get(&None).cloned().unwrap_or_default();
+            if suite_frame.isolated {
+                context.push_str(&format!(
+                    "|suite-input:{}:{:?}",
+                    path.display(),
+                    suite_frame.rows
+                ));
+            }
+            let mut suite_expects_failure = false;
+            for scope in &suites {
+                // An enclosing suite's run condition, table or expected failure applies to the test
+                // as well. How deep the suites nest changes nothing; only what each one adds does.
+                if let Some(suite_callee) = structure
+                    .suites
+                    .get(scope)
+                    .and_then(|call| tree.child(*call, "callee"))
+                {
+                    let call = structure.suites[scope];
+                    let suite = normalizer.modifiers(suite_callee, members.get(&call).copied());
+                    let suite_arguments: Vec<NodeId> =
+                        tree.list(call, "arguments").into_iter().flatten().collect();
+                    let suite_body = suite_arguments
+                        .iter()
+                        .copied()
+                        .find(|&argument| tree.inner(argument) == *scope)
+                        .unwrap_or(*scope);
+                    let (suite_options, options_fail) =
+                        normalizer.options(&suite_arguments, suite_body);
+                    let fails = suite.fails || options_fail;
+                    suite_expects_failure |= fails;
+                    if suite.chain.contains('.') || fails || !suite_options.is_empty() {
+                        context.push('|');
+                        context.push_str(&suite.chain);
+                        if fails {
+                            context.push_str(".!fails");
+                        }
+                        context.push_str(&suite_options.join(","));
+                    }
+                }
+                if let Some(statements) = contexts.get(&Some(*scope)) {
+                    context.push('|');
+                    context.push_str(statements);
                 }
             }
-            if let Some(statements) = contexts.get(&Some(*scope)) {
-                context.push('|');
-                context.push_str(statements);
-            }
-        }
-        let (options, option_fails) = normalizer.options(&arguments, body);
-        let fails = if modifiers.fails || option_fails {
-            ".!fails"
-        } else {
-            ""
-        };
-        // A larger passing test proves a smaller one's events only when both expect to pass.
-        let expects_failure = suite_expects_failure || !fails.is_empty();
-        let options = options.join(",");
-        // A row of a table the file spells out is the callback with its parameters bound to the
-        // row's cells, so it compares with a test that spells those values itself.
-        // Only an inline callback's parameters are bound: a named one may run elsewhere.
-        let parameters: Option<Vec<NodeId>> = callback.inline.then(|| {
-            function
-                .map(|function| {
-                    tree.list(function, "params")
-                        .into_iter()
-                        .flatten()
-                        .collect()
-                })
-                .unwrap_or_default()
-        });
-        let rows = match &modifiers.rows {
-            None => vec![(HashMap::new(), false, String::new())],
-            Some(rows) => rows
-                .iter()
-                .map(|row| {
-                    match parameters
-                        .as_deref()
-                        .and_then(|parameters| normalizer.bind_row(parameters, &row.value))
-                    {
-                        Some((bound, every)) => (bound, every, String::new()),
-                        None => {
-                            let cells: Vec<NodeId> = match &row.value {
-                                normal::Row::Spread(cells) => cells.clone(),
-                                normal::Row::Whole(row, _) => vec![*row],
-                            };
-                            let written: Vec<String> =
-                                cells.into_iter().map(|cell| normalizer.of(cell)).collect();
-                            (HashMap::new(), false, written.join(","))
+            let (options, option_fails) = normalizer.options(&arguments, body);
+            let fails = if modifiers.fails || option_fails {
+                ".!fails"
+            } else {
+                ""
+            };
+            // A larger passing test proves a smaller one's events only when both expect to pass.
+            let expects_failure = suite_expects_failure || !fails.is_empty();
+            let options = options.join(",");
+            // A row of a table the file spells out is the callback with its parameters bound to the
+            // row's cells, so it compares with a test that spells those values itself.
+            // Only an inline callback's parameters are bound: a named one may run elsewhere.
+            let parameters: Option<Vec<NodeId>> = callback.inline.then(|| {
+                function
+                    .map(|function| {
+                        tree.list(function, "params")
+                            .into_iter()
+                            .flatten()
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            });
+            let rows = match &modifiers.rows {
+                None => vec![(HashMap::new(), false, String::new())],
+                Some(rows) => rows
+                    .iter()
+                    .map(|row| {
+                        match parameters
+                            .as_deref()
+                            .and_then(|parameters| normalizer.bind_row(parameters, &row.value))
+                        {
+                            Some((bound, every)) => (bound, every, String::new()),
+                            None => {
+                                let cells: Vec<NodeId> = match &row.value {
+                                    normal::Row::Spread(cells) => cells.clone(),
+                                    normal::Row::Whole(row, _) => vec![*row],
+                                    normal::Row::Fields(fields) => {
+                                        fields.iter().map(|(_, node)| *node).collect()
+                                    }
+                                };
+                                let written: Vec<String> = match &row.value {
+                                    normal::Row::Fields(fields) => fields
+                                        .iter()
+                                        .map(|(name, node)| {
+                                            format!("{name:?}:{}", normalizer.of(*node))
+                                        })
+                                        .collect(),
+                                    _ => {
+                                        cells.into_iter().map(|cell| normalizer.of(cell)).collect()
+                                    }
+                                };
+                                (HashMap::new(), false, written.join(","))
+                            }
                         }
-                    }
+                    })
+                    .collect(),
+            };
+            let table = modifiers.rows.is_some();
+            // Name comparison consumes values, not display fallbacks. In particular an unread table
+            // or a suite table cannot stand for its runtime names through a raw pattern.
+            let name_prefix: Option<Vec<String>> = suites
+                .iter()
+                .map(|scope| suite_names.get(structure.suites.get(scope)?)?.clone())
+                .collect();
+            let pattern = runners::title(parsed, site.node, frame.as_ref());
+            let row_prefix_known = suites.iter().all(|scope| {
+                structure.suites.get(scope).is_some_and(|&call| {
+                    suite_provenance.get(&call).is_some_and(|&provenance| {
+                        normal::row_identity::suite_prefix_known(parsed, call, provenance)
+                    })
                 })
-                .collect(),
-        };
-        let table = modifiers.rows.is_some();
-        // Name comparison consumes values, not display fallbacks. In particular an unread table
-        // or a suite table cannot stand for its runtime names through a raw pattern.
-        let name_prefix: Option<Vec<String>> = suites
-            .iter()
-            .map(|scope| suite_names.get(structure.suites.get(scope)?)?.clone())
-            .collect();
-        let pattern = runners::title(parsed, site.node, frame.as_ref());
-        let row_prefix_known = suites.iter().all(|scope| {
-            structure.suites.get(scope).is_some_and(|&call| {
-                suite_provenance.get(&call).is_some_and(|&provenance| {
-                    normal::row_identity::suite_prefix_known(parsed, call, provenance)
-                })
-            })
-        });
-        // Each row's body, rendered flat and traced. An incomplete trace says nothing about the
-        // flat form, so it excludes nothing here: only a rule reading traces skips the row. A flat
-        // form past the depth bound can match nothing, so its test is excluded out loud.
-        let parameterization_uncertain = normalizer.parameterization_uncertain(body);
-        let mut traced: Vec<(String, crate::behavior::Trace, normal::CallbackForm)> = Vec::new();
-        let mut truncated = false;
-        // The trace walks the function itself, not the argument as written: a parenthesized or
-        // type-wrapped callback would otherwise read as a body with no statements in it.
-        let traced_body = function.unwrap_or(body);
-        for (bound, every, _) in &rows {
-            // Cleared first: the flag is shared, and only this render decides this test.
-            normalizer.take_truncated();
-            let normal_body = normalizer.substituted(body, bound.clone(), *every);
-            truncated |= normalizer.take_truncated();
-            let (trace, callback_form) =
-                crate::behavior::trace(&mut normalizer, parsed, traced_body, bound.clone(), *every);
-            traced.push((normal_body, trace, callback_form));
-        }
-        if truncated {
-            tests.extend(excluded(Exclusion::TruncatedBody));
-            continue;
-        }
-        for (index, ((_, every, unbound), (normal_body, trace, callback_form))) in
-            rows.iter().zip(traced).enumerate()
-        {
-            let name =
-                name_prefix
-                    .clone()
-                    .zip(pattern.as_deref())
-                    .and_then(|(mut segments, pattern)| {
+            });
+            // Each row's body, rendered flat and traced. An incomplete trace says nothing about the
+            // flat form, so it excludes nothing here: only a rule reading traces skips the row. A flat
+            // form past the depth bound can match nothing, so its test is excluded out loud.
+            let parameterization_uncertain = normalizer.parameterization_uncertain(body);
+            let mut traced: Vec<(String, crate::behavior::Trace, normal::CallbackForm)> =
+                Vec::new();
+            let mut truncated = false;
+            // The trace walks the function itself, not the argument as written: a parenthesized or
+            // type-wrapped callback would otherwise read as a body with no statements in it.
+            let traced_body = function.unwrap_or(body);
+            for (bound, every, _) in &rows {
+                // Cleared first: the flag is shared, and only this render decides this test.
+                normalizer.take_truncated();
+                let normal_body = normalizer.substituted(body, bound.clone(), *every);
+                truncated |= normalizer.take_truncated();
+                let (trace, callback_form) =
+                    crate::behavior::trace(normalizer, parsed, traced_body, bound.clone(), *every);
+                traced.push((normal_body, trace, callback_form));
+            }
+            if truncated {
+                tests.extend(excluded(Exclusion::TruncatedBody));
+                continue;
+            }
+            for (index, ((_, every, unbound), (normal_body, trace, callback_form))) in
+                rows.iter().zip(traced).enumerate()
+            {
+                let name = name_prefix.clone().zip(pattern.as_deref()).and_then(
+                    |(mut segments, pattern)| {
                         let title = if table_site(site) {
                             let row = modifiers.rows.as_ref()?.get(index)?;
                             render_test_row(pattern, row, modifiers.whole_rows)?
@@ -946,101 +1093,108 @@ fn read_parsed(
                         };
                         segments.push(title);
                         Some(segments)
-                    });
-            let full_title = table_site(site)
-                .then(|| {
+                    },
+                );
+                let full_title = table_site(site)
+                    .then(|| {
+                        let row = modifiers.rows.as_ref()?.get(index)?;
+                        display_test_row(pattern.as_deref()?, row, modifiers.whole_rows)
+                    })
+                    .flatten()
+                    .and_then(|title| display_title(&title))
+                    .or_else(|| record.full_title.clone());
+                let row_class = (|| {
+                    if !row_prefix_known {
+                        return None;
+                    }
                     let row = modifiers.rows.as_ref()?.get(index)?;
-                    display_test_row(pattern.as_deref()?, row, modifiers.whole_rows)
-                })
-                .flatten()
-                .and_then(|title| display_title(&title))
-                .or_else(|| record.full_title.clone());
-            let row_class = (|| {
-                if !row_prefix_known {
-                    return None;
-                }
-                let row = modifiers.rows.as_ref()?.get(index)?;
-                let identity = normal::row_identity::identity(parsed, &row.value, function?)?;
-                let (arguments, fields) =
-                    normal::titles::row(parsed, &row.value, modifiers.whole_rows);
-                let rendered = (setting.dialect.render_row_title)(
-                    pattern.as_deref()?,
-                    &arguments,
-                    fields.as_ref(),
-                    row.index,
-                )?;
-                if name.as_ref()?.last()? != &rendered {
-                    return None;
-                }
-                Some(digest(&identity))
-            })();
-            // A row whose every parameter is bound is the test it would be written out as.
-            let chain = if table && rows[index].1 {
-                &modifiers.untabled
-            } else {
-                &modifiers.chain
-            };
-            let key = format!(
-                "{chain}{fails}\u{1}{options}\u{1}{unbound}\u{1}{normal_body}\u{1}{context}"
-            );
-            let form = callback_form.token();
-            let parameterization_eligible =
-                trace.complete && !parameterization_uncertain && trace.ordinary_events != 0;
-            let shape = (parameterization_eligible || run.diagnostics).then(|| {
-                let bound = modifiers
-                    .rows
-                    .as_ref()
-                    .and_then(|rows| rows.get(index))
-                    .and_then(|row| normalizer.bind_row_shape(parameters.as_deref()?, &row.value))
-                    .map(|(bound, _)| bound)
-                    .unwrap_or_default();
-                normalizer.take_truncated();
-                let shape = normalizer.shape(body, bound, *every);
-                let complete = !normalizer.take_truncated();
-                (shape, complete)
-            });
-            let parameterization_key = parameterization_eligible.then(|| {
-                let shape = &shape.as_ref().expect("eligible shape was rendered").0;
-                digest(&format!(
-                    "{chain}{fails}\u{1}{options}\u{1}{unbound}\u{1}{shape}\u{1}{context}"
-                ))
-            });
-            let views = run.diagnostics.then(|| {
-                let (shape, complete) = shape.as_ref().expect("diagnostic shape was rendered");
-                Box::new(records::Views {
+                    let identity =
+                        normal::row_identity::identity(normalizer, &row.value, function?)?;
+                    let rendered = row_titles.get(&row.index)?.2.clone()?;
+                    if name.as_ref()?.last()? != &rendered {
+                        return None;
+                    }
+                    Some(digest(&identity))
+                })();
+                // A row whose every parameter is bound is the test it would be written out as.
+                let chain = if table && rows[index].1 {
+                    &modifiers.untabled
+                } else {
+                    &modifiers.chain
+                };
+                let key = format!(
+                    "{chain}{fails}\u{1}{options}\u{1}{unbound}\u{1}{normal_body}\u{1}{context}"
+                );
+                let form = callback_form.token();
+                let parameterization_eligible =
+                    trace.complete && !parameterization_uncertain && trace.ordinary_events != 0;
+                let shape = (parameterization_eligible || run.diagnostics).then(|| {
+                    let bound = modifiers
+                        .rows
+                        .as_ref()
+                        .and_then(|rows| rows.get(index))
+                        .and_then(|row| {
+                            normalizer.bind_row_shape(parameters.as_deref()?, &row.value)
+                        })
+                        .map(|(bound, _)| bound)
+                        .unwrap_or_default();
+                    normalizer.take_truncated();
+                    let shape = normalizer.shape(body, bound, *every);
+                    let complete = !normalizer.take_truncated();
+                    (shape, complete)
+                });
+                let parameterization_key = parameterization_eligible.then(|| {
+                    let shape = &shape.as_ref().expect("eligible shape was rendered").0;
+                    digest(&format!(
+                        "{chain}{fails}\u{1}{options}\u{1}{unbound}\u{1}{shape}\u{1}{context}"
+                    ))
+                });
+                let views = run.diagnostics.then(|| {
+                    let (shape, complete) = shape.as_ref().expect("diagnostic shape was rendered");
+                    Box::new(records::Views {
+                        body: digest(&normal_body),
+                        shape: complete.then(|| digest(shape)),
+                        trace: trace
+                            .complete
+                            .then(|| digest(&format!("{:?}", trace.events))),
+                        context: digest(&format!("{context}\u{1}{module_context}")),
+                        modifiers: digest(&format!("{chain}{fails}\u{1}{options}\u{1}{unbound}")),
+                    })
+                });
+                tests.push(TestCase {
+                    runtime_row: record.runtime_row.and_then(|base| {
+                        base.checked_add(
+                            modifiers.rows.as_ref().map_or(0, |rows| rows[index].index),
+                        )
+                    }),
+                    views,
+                    row: modifiers.rows.as_ref().map(|rows| rows[index].index),
+                    row_class,
+                    key: digest(&key),
+                    module_key: digest(&format!("{key}\u{1}{module_context}")),
                     body: digest(&normal_body),
-                    shape: complete.then(|| digest(shape)),
-                    trace: trace
-                        .complete
-                        .then(|| digest(&format!("{:?}", trace.events))),
-                    context: digest(&format!("{context}\u{1}{module_context}")),
-                    modifiers: digest(&format!("{chain}{fails}\u{1}{options}\u{1}{unbound}")),
-                })
-            });
-            tests.push(TestCase {
-                views,
-                row: modifiers.rows.as_ref().map(|rows| rows[index].index),
-                row_class,
-                key: digest(&key),
-                module_key: digest(&format!("{key}\u{1}{module_context}")),
-                body: digest(&normal_body),
-                parameterization_key,
-                trace: trace.events,
-                ordinary_events: trace.ordinary_events,
-                trace_complete: trace.complete,
-                similarity_key: digest(&format!(
-                    "{chain}{fails}\u{1}{options}\u{1}{unbound}\u{1}{context}\u{1}{form}"
-                )),
-                subsumption_key: (!expects_failure
-                    && !(setting.dialect.placeholder)(&parsed.tree, traced_body)
-                    && (!table_site(site) || modifiers.rows.is_some()))
-                .then(|| digest(&format!("{chain}\u{1}{unbound}\u{1}{context}\u{1}{form}"))),
-                callback_form,
-                name,
-                full_title,
-                inert: record.inert,
-                ..record.clone()
-            });
+                    parameterization_key,
+                    trace: trace.events,
+                    ordinary_events: trace.ordinary_events,
+                    trace_complete: trace.complete,
+                    similarity_key: digest(&format!(
+                        "{chain}{fails}\u{1}{options}\u{1}{unbound}\u{1}{context}\u{1}{form}"
+                    )),
+                    subsumption_key: (!expects_failure
+                        && !(setting.dialect.placeholder)(&parsed.tree, traced_body)
+                        && (!table_site(site) || modifiers.rows.is_some()))
+                    .then(|| digest(&format!("{chain}\u{1}{unbound}\u{1}{context}\u{1}{form}"))),
+                    callback_form,
+                    name,
+                    full_title,
+                    inert: record.inert,
+                    exclusion: modifiers.rows.as_ref().and_then(|rows| {
+                        (matches!(rows[index].value, normal::Row::Fields(_)) && !unbound.is_empty())
+                            .then_some(Exclusion::UnprovedTableRow)
+                    }),
+                    ..record.clone()
+                });
+            }
         }
     }
 
@@ -1124,7 +1278,7 @@ fn read_parsed(
             containers += 1;
         }
     }
-    let suites = suites::collect(
+    let mut suites = suites::collect(
         parsed,
         &found,
         &structure,
@@ -1133,6 +1287,19 @@ fn read_parsed(
         &mut normalizer,
         (setting, source),
     );
+    suites.extend(suites::table_rows(
+        path,
+        parsed,
+        &found,
+        &structure,
+        &tests,
+        normal::Setting {
+            dialect: setting.dialect,
+            root: setting.root,
+            exports: &run.exports,
+        },
+        source,
+    ));
     let mut helper_sources = BTreeMap::new();
     let mut imported_hooks = Vec::new();
     let scheduling_safe = expanded.calls.iter().all(|call| call.scheduling_safe);

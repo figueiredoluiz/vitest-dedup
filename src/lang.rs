@@ -11,6 +11,7 @@ pub(crate) mod limits;
 pub(crate) mod manifest_fs;
 pub(crate) mod packages;
 mod resolve;
+mod scalar;
 mod scopes;
 mod sources;
 mod syntax;
@@ -21,6 +22,7 @@ pub use resolve::{
     take_confinement_refusal, take_manifest_refusal, take_package_gaps, take_tsconfig_gaps,
     ResolutionGaps, TsconfigGap,
 };
+pub use scalar::Scalar;
 pub use scopes::{Declaration, Imported, Name, Reference, Scopes, Symbol, SymbolId};
 pub use sources::{SourceKind, SourceTree, Sources};
 pub use syntax::{bound_symbols, export_name, member_name, property_name, uses_receiver};

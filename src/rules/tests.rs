@@ -12,6 +12,8 @@ mod origins;
 /// A case at `line` with the keys and flags given; rows of one table share `site`.
 fn case(line: u32, site: u32, key: u64, module_key: u64) -> TestCase {
     TestCase {
+        runtime_row: None,
+        suite_rows: Vec::new(),
         origin: None,
         views: None,
         span: Span {

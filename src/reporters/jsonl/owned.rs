@@ -66,6 +66,7 @@ fn test(path: &Path, case: &TestCase) -> Value {
     }
     let compared = case.exclusion.is_none();
     record["row"] = json!(case.row);
+    record["runtimeRow"] = json!(case.runtime_row);
     record["comparable"] = json!(compared);
     record["exclusion"] = json!(case.exclusion.map(|exclusion| match exclusion {
         Exclusion::EmptyBody => "empty-body",
@@ -140,7 +141,7 @@ pub(super) fn write(
             case.span.start.line,
             case.span.start.column,
             report_safe_path(path),
-            case.row,
+            case.gate_row(),
         )
     });
     for (path, case) in cases {
@@ -148,4 +149,53 @@ pub(super) fn write(
         writer.write_all(b"\n")?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Diagnostic records retain written row indexes and four distinct nested runtime ordinals.
+    #[test]
+    fn suite_table_records_keep_runtime_rows_separate_from_written_rows() {
+        let path = Path::new("rows.test.ts");
+        let source = "import {describe,test,expect} from 'vitest';\n\
+            describe.each([1,2])('suite %s', n => {\n\
+              test.each([3,4])('row %s', v => expect([n,v]).toHaveLength(2));\n\
+            });";
+        let corpus = crate::corpus::file(
+            path,
+            source,
+            crate::corpus::Setting {
+                dialect: &crate::framework::vitest::DIALECT,
+                globals: false,
+                root: Path::new("."),
+            },
+            &mut crate::corpus::Run::default(),
+        )
+        .unwrap();
+        assert_eq!(corpus.tests.len(), 4);
+        assert!(corpus.tests.iter().all(|case| case.exclusion.is_none()));
+        let mut output = Vec::new();
+        write(&[(path.into(), corpus.tests)], &[], &mut output).unwrap();
+        let records = String::from_utf8(output)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            records
+                .iter()
+                .map(|r| r["runtimeRow"].as_u64().unwrap())
+                .collect::<Vec<_>>(),
+            [0, 1, 2, 3]
+        );
+        assert_eq!(
+            records
+                .iter()
+                .map(|r| r["row"].as_u64().unwrap())
+                .collect::<Vec<_>>(),
+            [0, 1, 0, 1]
+        );
+    }
 }

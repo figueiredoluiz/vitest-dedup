@@ -42,6 +42,15 @@ pub(crate) fn row(
 ) -> (Vec<Option<Value>>, Option<Map<String, Value>>) {
     let mut budget = ROW_VISITS;
     match row {
+        Row::Fields(properties) => {
+            let fields = properties
+                .iter()
+                .filter_map(|(key, node)| {
+                    value(parsed, *node, 0, &mut budget).map(|v| (key.clone(), v))
+                })
+                .collect();
+            (vec![None], Some(fields))
+        }
         Row::Spread(cells) => (
             cells
                 .iter()

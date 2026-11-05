@@ -79,11 +79,6 @@ if (!existsSync(binary)) {
 // this replaced counted regex shapes -- brittle against any fixture edit, and it validated the
 // prose rather than the measurement.
 const MINIMUM_ROWS = 20
-// `global signed %s` reads rows that are not literals (`1 / -Infinity`), so its table is one record
-// with an unproven title where Vitest runs four tests. One-way: a count that matches fails until
-// this is zero.
-const TABLE_ROWS_COUNTED_ONCE = 3
-
 // 1. The runtime truth: real Vitest, JSON reporter, written to a temp file so the reporter's
 // stdout cannot interleave with anything else.
 const outDir = mkdtempSync(join(tmpdir(), 'vitest-dedup-titles-'))
@@ -159,9 +154,8 @@ const unexpected = []
 for (const [title, count] of expectedCounts) {
   for (let i = actualCounts.get(title) ?? 0; i < count; i++) unmatched.push(title)
 }
-// As many unmatched Vitest titles as there are unproven records, and the rows of a table counted
-// once, are those records' rows.
-const missing = unmatched.slice(unproven + TABLE_ROWS_COUNTED_ONCE)
+// Unknown titles account for unmatched names, while every runtime row must still be counted.
+const missing = unmatched.slice(unproven)
 for (const [title, count] of actualCounts) {
   for (let i = expectedCounts.get(title) ?? 0; i < count; i++) unexpected.push(title)
 }
@@ -182,12 +176,12 @@ if (vitestTitles.length < MINIMUM_ROWS) {
   )
   process.exit(1)
 }
-if (titleRecords.length + TABLE_ROWS_COUNTED_ONCE !== vitestTitles.length) {
+if (titleRecords.length !== vitestTitles.length) {
   // A count mismatch is a finding in itself -- an unproven value refuses its row rather than
   // rendering it -- and the diff below is what names the refused row.
   console.error(
     `FAIL: the analyzer extracted ${titleRecords.length} test(s) but Vitest ran ` +
-      `${vitestTitles.length}, and ${TABLE_ROWS_COUNTED_ONCE} row(s) are known to count once.`,
+      `${vitestTitles.length}.`,
   )
   reportDiff()
   process.exit(1)

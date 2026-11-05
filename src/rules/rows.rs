@@ -4,6 +4,7 @@ use super::{emit, keyed, whole, Entry, Files};
 use crate::config::Config;
 use crate::model::{Finding, Rule, Severity};
 use crate::pairs::PairBudget;
+use std::collections::BTreeMap;
 
 /// Requires both proven inputs and equivalent callback/context keys, under one rendered name.
 pub(super) fn run(
@@ -24,6 +25,7 @@ pub(super) fn run(
         Some((
             entry.path,
             entry.declaration(),
+            &case.suite_rows,
             case.row_class?,
             case.name.as_ref()?,
             case.key,
@@ -38,6 +40,52 @@ pub(super) fn run(
         budget,
         findings,
     )
+}
+
+/// A suite-row claim charges its actual child cases, never its non-executable suite declaration.
+pub(super) fn cover_suites(findings: &mut [Finding], files: &Files) {
+    let mut children = BTreeMap::new();
+    for (path, cases) in files {
+        for case in cases.iter().filter(|c| c.gate_eligible()) {
+            let owner = case.declaration_path(path);
+            for &(start, row) in &case.suite_rows {
+                children
+                    .entry((owner, start, row))
+                    .or_insert_with(Vec::new)
+                    .push((
+                        crate::model::Location {
+                            path: owner.to_path_buf(),
+                            span: case.span,
+                        },
+                        case.gate_row(),
+                    ));
+            }
+        }
+    }
+    for finding in findings
+        .iter_mut()
+        .filter(|f| f.rule == Rule::DuplicateEachRow)
+    {
+        let mut covered = Vec::new();
+        let mut suite_claim = false;
+        for (location, row) in finding
+            .cases
+            .iter()
+            .filter_map(|(location, row)| row.map(|row| (location, row)))
+        {
+            if let Some(cases) =
+                children.get(&(location.path.as_path(), location.span.start_byte, row))
+            {
+                suite_claim = true;
+                covered.extend(cases.iter().cloned());
+            }
+        }
+        if suite_claim {
+            covered.sort();
+            covered.dedup();
+            finding.cases = covered;
+        }
+    }
 }
 
 /// Names the equality claim without implying that other declarations are involved.

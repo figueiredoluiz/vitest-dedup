@@ -1,6 +1,9 @@
 //! Rendering the supported literal table-title arguments; an unknown rendering stays unknown.
 
+use crate::framework::{TitleMode, TitleValue};
+use crate::lang::Scalar;
 use serde_json::{Map, Value};
+use std::collections::HashMap;
 
 /// Renders what Vitest's `formatTitle` renders for scalar items, or nothing: unknown cells are
 /// never undefined, and composite inspection, dotted fields and percent escaping are refused. A
@@ -32,6 +35,49 @@ fn render_with(
     index: usize,
     truncate: bool,
 ) -> Option<String> {
+    let arguments = arguments
+        .iter()
+        .map(|v| v.clone().map(TitleValue::Json))
+        .collect::<Vec<_>>();
+    let fields = fields.map(|f| {
+        f.iter()
+            .map(|(k, v)| (k.clone(), TitleValue::Json(v.clone())))
+            .collect()
+    });
+    render_values(
+        pattern,
+        &arguments,
+        fields.as_ref(),
+        index,
+        if truncate {
+            TitleMode::Display
+        } else {
+            TitleMode::Comparison
+        },
+    )
+}
+
+/// Renders typed row inputs without conflating unknown, undefined, number or bigint values.
+pub(super) fn render_values(
+    pattern: &str,
+    arguments: &[Option<TitleValue>],
+    fields: Option<&HashMap<String, TitleValue>>,
+    index: usize,
+    mode: TitleMode,
+) -> Option<String> {
+    let truncate = mode == TitleMode::Display;
+    if mode == TitleMode::Row
+        && (pattern.contains('\u{fffd}')
+            || (pattern.contains("%i")
+                && arguments.iter().flatten().any(|value| {
+                    matches!(
+                        value,
+                        TitleValue::Json(Value::String(_)) | TitleValue::Scalar(Scalar::String(_))
+                    )
+                })))
+    {
+        return None;
+    }
     if pattern.contains("%%") {
         return None;
     }
@@ -42,6 +88,7 @@ fn render_with(
     let chars: Vec<char> = pattern.chars().collect();
     let mut text = String::new();
     let mut cursor = 0;
+    let mut float_cursor = 0;
     let mut position = 0;
     while position < chars.len() {
         let c = chars[position];
@@ -55,7 +102,28 @@ fn render_with(
                         None => None,
                     };
                     cursor += 1;
-                    Some(format(argument, directive)?)
+                    let mut rendered = format_typed(argument, directive)?;
+                    if directive == 'f' {
+                        // Vitest's prefix pass indexes float occurrences, not printf arguments.
+                        let prefix = match arguments.get(float_cursor) {
+                            Some(None) => return None,
+                            Some(Some(TitleValue::Scalar(Scalar::Number(number)))) => {
+                                if number.is_nan() {
+                                    return None;
+                                }
+                                *number == 0.0 && number.is_sign_negative()
+                            }
+                            Some(Some(TitleValue::Json(Value::Number(number)))) => number
+                                .as_f64()
+                                .is_some_and(|n| n == 0.0 && n.is_sign_negative()),
+                            _ => false,
+                        };
+                        float_cursor += 1;
+                        if prefix {
+                            rendered.insert(0, '-');
+                        }
+                    }
+                    Some(rendered)
                 }
                 _ => None,
             };
@@ -80,7 +148,10 @@ fn render_with(
                 let value = if field.bytes().all(|byte| byte.is_ascii_digit()) {
                     // `$01` is a key no item has; an object first item answers before position.
                     if (field.len() > 1 && field.starts_with('0'))
-                        || matches!(arguments.first(), Some(None | Some(Value::Object(_))))
+                        || matches!(
+                            arguments.first(),
+                            Some(None | Some(TitleValue::Json(Value::Object(_))))
+                        )
                     {
                         return None;
                     }
@@ -88,7 +159,7 @@ fn render_with(
                 } else {
                     fields?.get(&field)?
                 };
-                let rendered = scalar(value)?;
+                let rendered = scalar_typed(value)?;
                 if rendered.encode_utf16().count() > 40 && !truncate {
                     return None;
                 }
@@ -101,6 +172,61 @@ fn render_with(
         position += 1;
     }
     (text.len() <= 65_536).then_some(text)
+}
+
+/// The scalar display shared by positional and named typed values.
+fn scalar_typed(value: &TitleValue) -> Option<String> {
+    match value {
+        TitleValue::Json(value) => scalar(value),
+        TitleValue::Scalar(Scalar::String(text)) => Some(text.clone()),
+        TitleValue::Scalar(Scalar::BigInt(text)) => Some(format!("{text}n")),
+        TitleValue::Scalar(value) => Some(value.source()),
+    }
+}
+
+/// Formatting for primitives JSON cannot represent; ordinary JSON uses the existing formatter.
+fn format_typed(value: Option<&TitleValue>, directive: char) -> Option<String> {
+    let Some(value) = value else {
+        return format(None, directive);
+    };
+    let scalar = match value {
+        TitleValue::Json(value) => return format(Some(value), directive),
+        TitleValue::Scalar(value) => value,
+    };
+    match scalar {
+        Scalar::Undefined => format(None, directive),
+        Scalar::BigInt(text) => matches!(directive, 's' | 'o').then(|| format!("{text}n")),
+        Scalar::Number(number)
+            if !number.is_finite() || (*number == 0.0 && number.is_sign_negative()) =>
+        {
+            match directive {
+                's' | 'o' => Some(scalar.source()),
+                'd' => Some(if *number == 0.0 {
+                    "0".into()
+                } else {
+                    scalar.source()
+                }),
+                'j' => Some(if number.is_finite() { "0" } else { "null" }.into()),
+                'i' => Some(if number.is_finite() { "0" } else { "NaN" }.into()),
+                'f' if !number.is_nan() => Some(if *number == 0.0 {
+                    "0".into()
+                } else {
+                    scalar.source()
+                }),
+                _ => None,
+            }
+        }
+        _ => {
+            let json = match scalar {
+                Scalar::Null => Value::Null,
+                Scalar::Bool(v) => Value::Bool(*v),
+                Scalar::Number(v) => Value::Number(serde_json::Number::from_f64(*v)?),
+                Scalar::String(v) => Value::String(v.clone()),
+                _ => return None,
+            };
+            format(Some(&json), directive)
+        }
+    }
 }
 
 /// A `$` substitution as Vitest displays it: past 40 UTF-16 units, the first 39 and `…`, never
@@ -185,19 +311,4 @@ fn format(value: Option<&Value>, directive: char) -> Option<String> {
         }
         _ => None,
     }
-}
-
-/// Refuses named fields and string integer conversions for row equality.
-pub(super) fn render_row(
-    pattern: &str,
-    arguments: &[Option<Value>],
-    fields: Option<&Map<String, Value>>,
-    index: usize,
-) -> Option<String> {
-    if pattern.contains(['$', '\u{FFFD}'])
-        || (pattern.contains("%i") && arguments.iter().flatten().any(Value::is_string))
-    {
-        return None;
-    }
-    render(pattern, arguments, fields, index)
 }

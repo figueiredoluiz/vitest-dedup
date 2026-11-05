@@ -8,6 +8,8 @@ impl HeapBytes for Exclusion {
     fn heap_bytes(&self) -> usize {
         match self {
             Self::RegisteredInsideFunction
+            | Self::UnprovedTableRow
+            | Self::UnprovedSuiteRow
             | Self::EmptyBody
             | Self::NoCallback
             | Self::UnreadableCallback
@@ -32,6 +34,8 @@ impl HeapBytes for TestCase {
     /// Account every owned case field, including display names and retained trace capacity.
     fn heap_bytes(&self) -> usize {
         let Self {
+            runtime_row,
+            suite_rows,
             origin,
             views,
             span,
@@ -55,6 +59,8 @@ impl HeapBytes for TestCase {
             exclusion,
         } = self;
         [
+            runtime_row.heap_bytes(),
+            suite_rows.heap_bytes(),
             origin.heap_bytes(),
             views
                 .as_ref()

@@ -36,6 +36,25 @@ a direct member read when its sole use safely accounts for the whole pattern. De
 alone does not make a body eligible for a behavior finding, and an extra binding alone does
 not establish strict subsumption. These comparisons remain review prompts.
 
+## Parameterized rows
+
+Repeated-row claims require proven input values, equal rendered titles and equivalent callback
+and setup context within one declaration. Primitive proofs preserve JavaScript types, negative
+zero, bigint and non-finite numbers. Immutable scalar constants can cross explicit named exports
+and re-exports; mutable bindings, erased declarations, cyclic value reads and dependencies with
+mocking capability remain unknown. Namespace or dynamic-import capability also withholds imported
+value proofs because Vitest module objects can be rewritten. A local literal object's member is readable only while the
+object has no writes, aliases or escaping uses.
+
+Rectangular tagged tables with unique static headers support primitive cells and flat
+destructuring; effectful cells or unsupported bindings leave the row unresolved. Suite tables
+expand their children with the row's primitive bindings and title
+ancestry, including nested suite and test tables. Expansion is bounded to 2,048 enclosing suite
+invocations per declaration; unsupported inputs produce unresolved cases. Readonly literal arrays
+can retain child comparisons through their own scalar indices or `length`, with each invocation
+kept separate. They do not establish repeated-row input equality. Whole-suite table
+equivalence and arbitrary collection-time execution are outside this row proof.
+
 ## Hook scheduling
 
 Identical lexical writes alone do not prove a hook removable: Vitest can yield between hooks,

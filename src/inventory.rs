@@ -191,6 +191,23 @@ pub struct Inventory {
     pub registration_values: HashSet<NodeId>,
 }
 
+/// Whether intrinsic eval can write lexical state outside the static reference graph.
+pub(crate) fn direct_eval(parsed: &Parsed) -> bool {
+    let tree = &parsed.tree;
+    tree.nodes()
+        .filter(|&node| tree.kind(node) == "CallExpression")
+        .filter_map(|node| tree.child(node, "callee"))
+        .map(|callee| tree.inner(callee))
+        .any(|callee| {
+            tree.kind(callee) == "Identifier"
+                && tree.text(callee, "name") == Some("eval")
+                && !matches!(
+                    parsed.scopes.name_at(tree.span(callee).start),
+                    Some(crate::lang::Name::Reference(Some(_)))
+                )
+        })
+}
+
 /// Whether a module can read framework setup utilities whose effects this inventory does not model.
 /// This is deliberately a capability refusal, not a prediction of which calls are hoisted.
 pub(crate) fn setup_access(parsed: &Parsed, setting: Setting) -> bool {

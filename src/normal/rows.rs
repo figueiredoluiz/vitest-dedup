@@ -15,6 +15,8 @@ pub enum Row {
     /// One value passed whole, with its properties when it is an object literal that spells them
     /// all statically.
     Whole(NodeId, Option<Vec<(String, NodeId)>>),
+    /// An object row assembled from a proven tagged-table header and interpolation cells.
+    Fields(Vec<(String, NodeId)>),
 }
 
 /// A present table element and its index in the written array, counting outer elisions.
@@ -63,7 +65,7 @@ fn scheduling(meaning: Option<Chain>) -> bool {
 }
 
 /// What `Object.prototype` holds, which a destructured key an object literal lacks reads.
-const OBJECT_PROTOTYPE: [&str; 12] = [
+pub(super) const OBJECT_PROTOTYPE: [&str; 12] = [
     "constructor",
     "hasOwnProperty",
     "isPrototypeOf",
@@ -163,6 +165,17 @@ impl Normalizer<'_> {
                     current = callee;
                 }
                 "TaggedTemplateExpression" => {
+                    if let Some(rows) = self.tagged_rows(current) {
+                        modifiers.rows = Some(rows);
+                        modifiers.whole_rows = true;
+                        steps.push("(rows)".to_owned());
+                        table_at = Some(steps.len());
+                        current = tree.inner(
+                            tree.child(current, "tag")
+                                .expect("a proved tag has a callee"),
+                        );
+                        continue;
+                    }
                     let quasi = tree.child(current, "quasi").map(|quasi| self.of(quasi));
                     steps.push(format!("`{}`", quasi.unwrap_or_default()));
                     let Some(tag) = tree.child(current, "tag") else {
@@ -325,6 +338,104 @@ impl Normalizer<'_> {
             .collect()
     }
 
+    /// Reads only framework tagged tables whose rows are interpolation-only and rectangular.
+    fn tagged_rows(&self, tagged: NodeId) -> Option<Vec<TableRow>> {
+        let tree = self.tree;
+        let tag = tree.inner(tree.child(tagged, "tag")?);
+        if tree.kind(tag) != "MemberExpression" || tree.flag(tag, "computed") {
+            return None;
+        }
+        let member = tree.text(tree.child(tag, "property")?, "name")?;
+        if !matches!(
+            self.setting.dialect.chain_member(member),
+            Some(Chain::Table(_))
+        ) {
+            return None;
+        }
+        let quasi = tree.child(tagged, "quasi")?;
+        let quasis = tree.list(quasi, "quasis");
+        let expressions = tree.list(quasi, "expressions");
+        let text = |node| {
+            let crate::lang::Field::Object(fields) = tree.field_of(node, "value") else {
+                return None;
+            };
+            fields
+                .iter()
+                .find_map(|(key, field)| match (&**key, field) {
+                    ("cooked", crate::lang::Field::Value(Value::String(text))) => {
+                        Some(text.as_str())
+                    }
+                    _ => None,
+                })
+        };
+        let first = text(quasis.first().copied()??)?;
+        if expressions.is_empty() {
+            return (!first.contains('\u{fffd}') && first.len() <= 65_536).then(|| {
+                vec![TableRow {
+                    index: 0,
+                    value: Row::Whole(quasi, None),
+                }]
+            });
+        }
+        // Vitest strips ASCII spaces only; other whitespace can be part of the actual key.
+        if first
+            .chars()
+            .any(|c| c.is_whitespace() && !matches!(c, ' ' | '\n'))
+        {
+            return None;
+        }
+        let lines = first
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .collect::<Vec<_>>();
+        if lines.len() != 1 {
+            return None;
+        }
+        let headers = lines[0].split('|').map(str::trim).collect::<Vec<_>>();
+        if headers.is_empty()
+            || headers.iter().any(|h| {
+                h.is_empty()
+                    || !h
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$')
+                    || matches!(*h, "__proto__" | "constructor" | "toString" | "valueOf")
+            })
+            || headers
+                .iter()
+                .collect::<std::collections::HashSet<_>>()
+                .len()
+                != headers.len()
+            || !expressions.len().is_multiple_of(headers.len())
+            || quasis.len() != expressions.len() + 1
+        {
+            return None;
+        }
+        let mut rows = Vec::new();
+        for (index, cells) in expressions.chunks(headers.len()).enumerate() {
+            let mut fields = Vec::new();
+            for (column, cell) in cells.iter().enumerate() {
+                let cell = (*cell)?;
+                let separator = text(quasis[index * headers.len() + column + 1]?)?;
+                let last = column + 1 == headers.len();
+                if (!last && separator.trim() != "|") || (last && !separator.trim().is_empty()) {
+                    return None;
+                }
+                if last
+                    && index * headers.len() + column + 1 < expressions.len()
+                    && !separator.contains('\n')
+                {
+                    return None;
+                }
+                fields.push((headers[column].to_owned(), cell));
+            }
+            rows.push(TableRow {
+                index,
+                value: Row::Fields(fields),
+            });
+        }
+        Some(rows)
+    }
+
     /// Binds a callback's parameters to one row's cells, with whether every parameter is bound;
     /// `None` when a parameter's shape is not one this reads (a default, a rest element, a nested
     /// pattern) or a cell cannot be written in where it is read.
@@ -359,6 +470,37 @@ impl Normalizer<'_> {
         let undefined = || "g:undefined".to_owned();
         let mut bound = HashMap::new();
         match row {
+            Row::Fields(properties) => {
+                if properties
+                    .iter()
+                    .any(|(_, cell)| self.row_scalar(*cell).is_none())
+                {
+                    return None;
+                }
+                let Some(&parameter) = parameters.first() else {
+                    return Some((bound, true));
+                };
+                if tree.kind(parameter) != "ObjectPattern" {
+                    return None;
+                }
+                for property in tree.list(parameter, "properties").into_iter().flatten() {
+                    if tree.kind(property) != "Property" || tree.flag(property, "computed") {
+                        return None;
+                    }
+                    let binding = tree.child(property, "value")?;
+                    if tree.kind(binding) != "Identifier" {
+                        return None;
+                    }
+                    let key = property_name(tree, property)?;
+                    let symbol = self.unwritten_parameter(binding)?;
+                    let value = match properties.iter().find(|(name, _)| name == key) {
+                        Some((_, node)) => self.cell(symbol, *node, structural)?,
+                        None if OBJECT_PROTOTYPE.contains(&key) => return None,
+                        None => undefined(),
+                    };
+                    bound.insert(symbol, value);
+                }
+            }
             Row::Spread(cells) => {
                 for (index, &parameter) in parameters.iter().enumerate() {
                     if tree.kind(parameter) != "Identifier" {
@@ -425,6 +567,9 @@ impl Normalizer<'_> {
     /// A cell that reads a binding something reassigns is not written in either: the row holds the
     /// value it had when the test registered, which the binding may no longer hold when it runs.
     fn cell(&mut self, symbol: SymbolId, cell: NodeId, structural: bool) -> Option<String> {
+        if let Some(value) = self.row_scalar(cell) {
+            return self.scalar_form(&value, structural);
+        }
         let tree = self.tree;
         let reassigned = std::iter::once(cell)
             .chain(tree.descendants(cell))

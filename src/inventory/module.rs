@@ -127,7 +127,7 @@ pub(super) fn analyse(
         imported_unreadable_fixture: false,
     };
     module.redeclared = module.redeclarations();
-    module.evaluates = module.has_direct_eval();
+    module.evaluates = super::direct_eval(parsed);
     module.rewritten_globals = module.global_writes();
     module.collect_origins(modules, depth);
     let found = module.registrations();
@@ -1244,20 +1244,6 @@ impl<'s> Module<'s> {
             .flat_map(|binding| bound_symbols(tree, &self.parsed.scopes, binding))
             .filter(|&symbol| !seen.insert(symbol))
             .collect()
-    }
-
-    /// Whether the module calls the global `eval`, which runs in the caller's scope.
-    fn has_direct_eval(&self) -> bool {
-        let tree = self.tree;
-        tree.nodes()
-            .filter(|&node| tree.kind(node) == "CallExpression")
-            .filter_map(|node| tree.child(node, "callee"))
-            .map(|callee| tree.inner(callee))
-            .any(|callee| {
-                tree.kind(callee) == "Identifier"
-                    && tree.text(callee, "name") == Some("eval")
-                    && self.read(callee).is_none()
-            })
     }
 
     /// The names the module writes through the global object, in an assignment, a pattern, a

@@ -51,7 +51,7 @@ impl<'a> Entry<'a> {
                 path: self.case.declaration_path(self.path).to_path_buf(),
                 span: self.case.span,
             },
-            self.case.row,
+            self.case.gate_row(),
         )
     }
 
@@ -86,7 +86,7 @@ impl Ord for Entry<'_> {
         self.declaration()
             .cmp(&other.declaration())
             .then_with(|| self.case.span.cmp(&other.case.span))
-            .then_with(|| self.case.row.cmp(&other.case.row))
+            .then_with(|| self.case.gate_row().cmp(&other.case.gate_row()))
             .then_with(|| self.path.cmp(other.path))
     }
 }
@@ -207,6 +207,8 @@ fn run_all(
 
     budget_exhausted |= !names::run(files, config, &mut budget, &mut findings);
     budget_exhausted |= !rows::run(files, config, &mut budget, &mut findings);
+    budget_exhausted |= !rows::run(suites, config, &mut budget, &mut findings);
+    rows::cover_suites(&mut findings, files);
     let (parameterized, reported) = parameters::run(files, config, &mut budget, &mut findings);
     budget_exhausted |= !parameterized;
     budget_exhausted |= !near::run(files, config, &reported, &mut budget, &mut findings);
@@ -414,7 +416,7 @@ fn declarations<'a>(rule: Rule, members: &[Entry<'a>]) -> Vec<DeclarationClaim<'
                 member.case.declaration_path(member.path),
                 member.case.span.start_byte,
                 (rule == Rule::DuplicateEachRow)
-                    .then_some(member.case.row)
+                    .then_some(member.case.gate_row())
                     .flatten(),
                 if rule == Rule::CrossFileDuplicate {
                     member.case.declaration_path(member.path)

@@ -192,7 +192,7 @@ pub(super) fn run(
         return (twins, false);
     }
     let (entries, groups) = keyed(files, |entry| {
-        (!entry.case.inert && entry.case.exclusion.is_none())
+        (!entry.case.inert && entry.case.exclusion.is_none() && entry.case.row.is_none())
             .then(|| Some((entry.path, entry.case.name.as_ref()?, entry.case.key)))
             .flatten()
     });
@@ -259,7 +259,7 @@ fn descendants(finding: &Finding, tests: &Files) -> Vec<GateCase> {
                                     path: path.clone(),
                                     span: case.span,
                                 },
-                                case.row,
+                                case.gate_row(),
                             )
                         })
                 })
