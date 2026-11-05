@@ -350,6 +350,7 @@ fn non_hoisted_mocks_are_found_only_through_stable_vitest_bindings() {
         // Vitest hoists from the top level of an in-source guard's block as from the module's.
         "import { vi } from 'vitest'; if (import.meta.vitest) { vi.mock('./dep'); vi.unmock('./x') }",
         "import { vi } from 'vitest'; function f() { if (import.meta.vitest) { vi.mock('./dep') } }",
+        "import { vi } from 'vitest'; if ((import.meta.vitest)) { vi.mock('./dep') }",
         "import { vi as tools } from 'other'; tools.mock('./dep');",
     ] {
         let found = inventory_of(source, &[], false).0;

@@ -297,8 +297,9 @@ impl<'s> Module<'s> {
             .then_some(parent)
     }
 
-    /// Whether `call` is a statement directly inside the block of an `if (import.meta.vitest)
-    /// { ... }`, which Vitest hoists from as it does from the module's top level.
+    /// Whether `call` is a statement directly inside the block of an in-source guard,
+    /// `if (import.meta.<in-source member>) { ... }`, which the framework hoists from as it does
+    /// from the module's top level.
     fn in_source_statement(&self, call: NodeId) -> bool {
         let tree = self.tree;
         let Some(statement) = tree
@@ -318,25 +319,33 @@ impl<'s> Module<'s> {
         }) else {
             return false;
         };
-        tree.child(guard, "test").is_some_and(|test| {
-            tree.kind(test) == "MemberExpression"
-                && !tree.flag(test, "computed")
-                && tree
-                    .child(test, "property")
-                    .and_then(|property| tree.text(property, "name"))
-                    == Some("vitest")
-                && tree.child(test, "object").is_some_and(|object| {
-                    tree.kind(object) == "MetaProperty"
-                        && tree
-                            .child(object, "meta")
-                            .and_then(|meta| tree.text(meta, "name"))
-                            == Some("import")
-                        && tree
-                            .child(object, "property")
-                            .and_then(|property| tree.text(property, "name"))
-                            == Some("meta")
-                })
-        })
+        let Some(member) = self.setting.dialect.in_source_member else {
+            return false;
+        };
+        tree.child(guard, "test")
+            .map(|test| tree.inner(test))
+            .is_some_and(|test| {
+                tree.kind(test) == "MemberExpression"
+                    && !tree.flag(test, "computed")
+                    && tree
+                        .child(test, "property")
+                        .and_then(|property| tree.text(property, "name"))
+                        == Some(member)
+                    && tree
+                        .child(test, "object")
+                        .map(|object| tree.inner(object))
+                        .is_some_and(|object| {
+                            tree.kind(object) == "MetaProperty"
+                                && tree
+                                    .child(object, "meta")
+                                    .and_then(|meta| tree.text(meta, "name"))
+                                    == Some("import")
+                                && tree
+                                    .child(object, "property")
+                                    .and_then(|property| tree.text(property, "name"))
+                                    == Some("meta")
+                        })
+            })
     }
 
     /// Whether a `vi.mock`, hoisted or in place, has a factory whose behavior is not written
