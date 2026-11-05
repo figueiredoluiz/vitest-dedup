@@ -58,7 +58,8 @@ pub enum Exclusion {
     /// A package manifest the file's imports need could not be read, so what they import is
     /// unknown.
     UnreadableManifest,
-    /// A non-hoisted Vitest mock changes dynamic imports at the point it runs.
+    /// A Vitest mock runs where it is written, or a hoisted one is nested where Vitest refuses
+    /// the file.
     NonHoistedMock,
     /// A hoisted mock factory is not written as an inline function.
     UnreadableMockFactory,
@@ -146,7 +147,8 @@ impl Exclusion {
             )),
             Self::NonHoistedMock => Some((
                 ExclusionReason::UnresolvedContext,
-                "a non-hoisted Vitest mock can change dynamic imports at the point it runs",
+                "a Vitest mock runs where it is written, or is nested where Vitest refuses the file, so no \
+                 file-wide mock state applies",
             )),
             Self::UnreadableMockFactory => Some((
                 ExclusionReason::MockFactoryUnreadable,

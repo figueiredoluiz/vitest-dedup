@@ -197,20 +197,28 @@ pub(super) fn analyse(
 type Found = (NodeId, Span, SiteKind, Vec<String>, Provenance);
 
 impl<'s> Module<'s> {
-    /// Whether this module reaches Vitest's mock APIs through a stable API binding where they
-    /// run in place: a `doMock`/`doUnmock` anywhere, or a `mock`/`unmock` Vitest does not hoist
-    /// outside a top-level statement.
+    /// Whether this module reaches Vitest's mock APIs through a stable API binding in a way the
+    /// file-wide model cannot answer: a `doMock`/`doUnmock` anywhere, a `mock`/`unmock` Vitest
+    /// does not hoist outside a top-level statement, or one it hoists from anywhere but the top
+    /// level or from inside another hoisted call, which makes Vitest refuse the file at load.
     ///
-    /// These calls affect imports when they run, unlike hoisted `vi.mock` and `vi.unmock`; the
-    /// next core does not model that dynamic-import state, so the corpus refuses the file rather
-    /// than comparing tests under an invented shared context.
+    /// The first two affect imports when they run, and the next core does not model that
+    /// dynamic-import state; the last has no runtime context at all. The corpus refuses the file
+    /// rather than comparing tests under an invented shared context.
     fn non_hoisted_mock(&self) -> bool {
         self.tree.nodes().any(|call| match self.mock_call(call) {
             Some(MockCall::Dynamic) => !self.unreachable(call),
             Some(MockCall::InPlace) => {
                 !self.unreachable(call) && self.top_level_statement(call).is_none()
             }
-            Some(MockCall::Hoisted) | None => false,
+            // Vitest refuses the file whenever it hoists a call from anywhere but the top level,
+            // reachable or not, or from inside another call it hoists.
+            Some(MockCall::Hoisted) => {
+                self.inside_hoisted_call(call)
+                    || (self.top_level_statement(call).is_none() && !self.in_source_statement(call))
+            }
+            // A helper Vitest hoists (`vi.hoisted`) refuses the file the same way when nested.
+            None => self.hoisted_by_spelling(call) && self.inside_hoisted_call(call),
         })
     }
 
@@ -280,6 +288,21 @@ impl<'s> Module<'s> {
                 .is_some_and(|name| self.setting.dialect.hoists(name))
     }
 
+    /// Whether `node` lies inside a call the framework hoists by its spelling alone
+    /// (`vi.mock`, `vitest.unmock`, `vi.hoisted`), whatever that call's binding.
+    fn inside_hoisted_call(&self, node: NodeId) -> bool {
+        self.tree
+            .ancestors(node)
+            .any(|outer| self.hoisted_by_spelling(outer))
+    }
+
+    /// Whether the framework hoists `call` by its spelling alone, whatever its binding.
+    fn hoisted_by_spelling(&self, call: NodeId) -> bool {
+        self.member_call(call).is_some_and(|(object, member)| {
+            self.setting.dialect.hoisted_member(member) && self.hoisting_spelling(call, object)
+        })
+    }
+
     /// The module-top-level expression statement whose expression is `call`, if there is one.
     fn top_level_statement(&self, call: NodeId) -> Option<NodeId> {
         let tree = self.tree;
@@ -289,6 +312,57 @@ impl<'s> Module<'s> {
         }
         (tree.kind(parent) == "ExpressionStatement" && tree.parent(parent) == Some(tree.root()))
             .then_some(parent)
+    }
+
+    /// Whether `call` is a statement directly inside the block of an in-source guard,
+    /// `if (import.meta.<in-source member>) { ... }`, which the framework hoists from as it does
+    /// from the module's top level.
+    fn in_source_statement(&self, call: NodeId) -> bool {
+        let tree = self.tree;
+        let Some(statement) = tree
+            .outer_parent(call)
+            .filter(|&parent| tree.kind(parent) == "ExpressionStatement")
+        else {
+            return false;
+        };
+        let Some(block) = tree
+            .parent(statement)
+            .filter(|&block| tree.kind(block) == "BlockStatement")
+        else {
+            return false;
+        };
+        let Some(guard) = tree.parent(block).filter(|&guard| {
+            tree.kind(guard) == "IfStatement" && tree.child(guard, "consequent") == Some(block)
+        }) else {
+            return false;
+        };
+        let Some(member) = self.setting.dialect.in_source_member else {
+            return false;
+        };
+        tree.child(guard, "test")
+            .map(|test| tree.inner(test))
+            .is_some_and(|test| {
+                tree.kind(test) == "MemberExpression"
+                    && !tree.flag(test, "computed")
+                    && tree
+                        .child(test, "property")
+                        .and_then(|property| tree.text(property, "name"))
+                        == Some(member)
+                    && tree
+                        .child(test, "object")
+                        .map(|object| tree.inner(object))
+                        .is_some_and(|object| {
+                            tree.kind(object) == "MetaProperty"
+                                && tree
+                                    .child(object, "meta")
+                                    .and_then(|meta| tree.text(meta, "name"))
+                                    == Some("import")
+                                && tree
+                                    .child(object, "property")
+                                    .and_then(|property| tree.text(property, "name"))
+                                    == Some("meta")
+                        })
+            })
     }
 
     /// Whether a `vi.mock`, hoisted or in place, has a factory whose behavior is not written

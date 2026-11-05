@@ -8420,7 +8420,7 @@
           "rule": "cross-file-duplicate",
           "locations": [
             "renamed.test.ts:3",
-            "vi.test.ts:3"
+            "vi.test.ts:4"
           ]
         }
       ],
@@ -8429,6 +8429,107 @@
       "blindUnderCurrent": [
         "renamed.test.ts"
       ]
+    },
+    {
+      "name": "vitest-api-nested-mock-refused",
+      "path": "vitest-api-nested-mock-refused",
+      "rule": "cross-file-duplicate",
+      "role": "negative",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-05",
+      "expectedTests": 2,
+      "expectedIncomplete": true,
+      "expectedUnresolved": 2,
+      "expectedFindings": [],
+      "expectedAbsent": [
+        {
+          "rule": "cross-file-duplicate",
+          "titles": [
+            "reads",
+            "reads"
+          ]
+        }
+      ],
+      "blindUnderCurrent": [
+        "one.test.ts",
+        "two.test.ts"
+      ],
+      "expectedIncompleteNext": true,
+      "expectedUnresolvedNext": 2
+    },
+    {
+      "name": "vitest-api-hoisted-guard-mock-refused",
+      "path": "vitest-api-hoisted-guard-mock-refused",
+      "rule": "duplicate-test",
+      "role": "negative",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-05",
+      "expectedTests": 2,
+      "expectedIncomplete": true,
+      "expectedUnresolved": 2,
+      "expectedFindings": [],
+      "expectedAbsent": [
+        {
+          "rule": "duplicate-test",
+          "titles": [
+            "reads the mock",
+            "reads the mock, again"
+          ]
+        }
+      ],
+      "blindUnderCurrent": [
+        "case.test.ts"
+      ]
+    },
+    {
+      "name": "vitest-api-hoisted-in-mock-refused",
+      "path": "vitest-api-hoisted-in-mock-refused",
+      "rule": "duplicate-test",
+      "role": "negative",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-05",
+      "expectedTests": 2,
+      "expectedIncomplete": true,
+      "expectedUnresolved": 2,
+      "expectedFindings": [],
+      "expectedAbsent": [
+        {
+          "rule": "duplicate-test",
+          "titles": [
+            "reads the mock",
+            "reads the mock, again"
+          ]
+        }
+      ],
+      "blindUnderCurrent": [
+        "case.test.ts"
+      ]
+    },
+    {
+      "name": "vitest-api-in-source-guard-mock",
+      "path": "vitest-api-in-source-guard-mock",
+      "rule": "duplicate-test",
+      "role": "positive",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-05",
+      "expectedTests": 2,
+      "expectedIncomplete": false,
+      "expectedUnresolved": 0,
+      "expectedFindings": [
+        {
+          "rule": "duplicate-test",
+          "severity": "error",
+          "titles": [
+            "reads the mock",
+            "reads the mock, again"
+          ]
+        }
+      ],
+      "expectedAbsent": []
     },
     {
       "name": "vitest-api-namespace-dynamic",

@@ -123,6 +123,7 @@ pub static DIALECT: Dialect = Dialect {
         },
     ],
     hoisting_objects: &["vi", "vitest"],
+    hoisted_helpers: &["hoisted"],
     assertions: &[AssertionEntry {
         name: "expect",
         label: "expect",
