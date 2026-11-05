@@ -3873,6 +3873,121 @@
       "expectedAbsent": []
     },
     {
+      "name": "parameterization-candidate-config-bindings",
+      "path": "parameterization-candidate-config-bindings",
+      "rule": "parameterization-candidate",
+      "role": "variant",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-04",
+      "expectedTests": 2,
+      "expectedIncomplete": false,
+      "expectedUnresolved": 0,
+      "expectedFindings": [
+        {
+          "rule": "parameterization-candidate",
+          "severity": "warning",
+          "titles": [
+            "first",
+            "second"
+          ]
+        }
+      ],
+      "expectedAbsent": []
+    },
+    {
+      "name": "config-binding-import-meta-refused",
+      "path": "config-binding-import-meta-refused",
+      "rule": "parameterization-candidate",
+      "role": "variant",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-05",
+      "expectedTests": 2,
+      "expectedIncomplete": true,
+      "expectedUnresolved": 0,
+      "expectedFindings": [
+        {
+          "rule": "parameterization-candidate",
+          "severity": "warning",
+          "titles": [
+            "import meta first",
+            "import meta second"
+          ]
+        }
+      ],
+      "expectedAbsent": []
+    },
+    {
+      "name": "config-binding-suffix-tail-refused",
+      "path": "config-binding-suffix-tail-refused",
+      "rule": "parameterization-candidate",
+      "role": "variant",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-05",
+      "expectedTests": 2,
+      "expectedIncomplete": true,
+      "expectedUnresolved": 0,
+      "expectedFindings": [
+        {
+          "rule": "parameterization-candidate",
+          "severity": "warning",
+          "titles": [
+            "suffix first",
+            "suffix second"
+          ]
+        }
+      ],
+      "expectedAbsent": []
+    },
+    {
+      "name": "config-binding-runtime-type-import-refused",
+      "path": "config-binding-runtime-type-import-refused",
+      "rule": "parameterization-candidate",
+      "role": "variant",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-05",
+      "expectedTests": 2,
+      "expectedIncomplete": true,
+      "expectedUnresolved": 0,
+      "expectedFindings": [
+        {
+          "rule": "parameterization-candidate",
+          "severity": "warning",
+          "titles": [
+            "runtime type first",
+            "runtime type second"
+          ]
+        }
+      ],
+      "expectedAbsent": []
+    },
+    {
+      "name": "parameterization-candidate-direct-config-type-tail",
+      "path": "parameterization-candidate-direct-config-type-tail",
+      "rule": "parameterization-candidate",
+      "role": "variant",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-05",
+      "expectedTests": 2,
+      "expectedIncomplete": false,
+      "expectedUnresolved": 0,
+      "expectedFindings": [
+        {
+          "rule": "parameterization-candidate",
+          "severity": "warning",
+          "titles": [
+            "direct first",
+            "direct second"
+          ]
+        }
+      ],
+      "expectedAbsent": []
+    },
+    {
       "name": "parameterization-candidate-jsx-prop-value",
       "path": "parameterization-candidate-jsx-prop-value",
       "rule": "parameterization-candidate",
