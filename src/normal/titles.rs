@@ -44,6 +44,25 @@ pub(crate) fn argument(
     read(parsed, node, 0, &mut 256, bindings, &mut Limit::charged())
 }
 
+/// A title read without the comparison limit, every string it copies counted against `budget`:
+/// the title, and the bytes reading it copied. A runner caller's direct titles are read this way,
+/// so the planner can charge their reading, not only their result, to its work budget.
+pub(crate) fn title_within(
+    parsed: &Parsed,
+    node: NodeId,
+    budget: usize,
+) -> Option<(String, usize)> {
+    let mut limit = Limit {
+        charged: false,
+        copied: true,
+        left: budget,
+    };
+    match read(parsed, node, 0, &mut 256, &HashMap::new(), &mut limit)? {
+        Value::String(text) => Some((text, budget - limit.left)),
+        _ => None,
+    }
+}
+
 /// How much string text one read may still copy; see [`MAX_TEXT_BYTES`]. One budget serves the
 /// whole read, so naming a `const` many times spends it as many times.
 #[derive(Debug)]

@@ -157,20 +157,6 @@ fn closed_batch(
             return None;
         }
     }
-    for site in found
-        .sites
-        .iter()
-        .filter(|site| site.kind == SiteKind::Registers(Registers::Test))
-    {
-        let arguments = tree.list(site.node, "arguments");
-        if !site.chain.is_empty()
-            || arguments.len() != 2
-            || normal::titles::title(parsed, site.node).is_none()
-            || !arguments[1].is_some_and(|argument| tree.is_function(tree.inner(argument)))
-        {
-            return None;
-        }
-    }
     let owner = run.sources.relative(path, setting.root)?;
     let mut planner = Planner {
         setting,
@@ -183,6 +169,26 @@ fn closed_batch(
         left: 2000,
         work: 0,
     };
+    for site in found
+        .sites
+        .iter()
+        .filter(|site| site.kind == SiteKind::Registers(Registers::Test))
+    {
+        let arguments = tree.list(site.node, "arguments");
+        if !site.chain.is_empty()
+            || arguments.len() != 2
+            || !arguments[1].is_some_and(|argument| tree.is_function(tree.inner(argument)))
+        {
+            return None;
+        }
+        // Collection evaluates the title, so it must run no code. A title too long to compare is
+        // still inert: read without that limit, within the batch's work budget.
+        if normal::titles::title(parsed, site.node).is_none() {
+            let (_, spent) = arguments[0]
+                .and_then(|title| normal::titles::title_within(parsed, title, planner.left()))?;
+            planner.charge(spent)?;
+        }
+    }
     let mut expansions = Vec::new();
     let mut checked_bindings = HashSet::new();
     for call in calls {
@@ -273,6 +279,9 @@ struct Module<'a> {
     parsed: &'a Parsed,
 }
 
+/// The work one expansion batch may do, in bytes read or rendered.
+const MAX_WORK: usize = 8 * 1024 * 1024;
+
 /// One atomic expansion batch shares its source, work, admission and recursion bounds.
 struct Planner<'a> {
     setting: Setting<'a>,
@@ -290,7 +299,12 @@ impl Planner<'_> {
     /// Refuse work before a duplicated argument or a rendered frame can amplify it further.
     fn charge(&mut self, cost: usize) -> Option<()> {
         self.work = self.work.saturating_add(cost);
-        (self.work <= 8 * 1024 * 1024).then_some(())
+        (self.work <= MAX_WORK).then_some(())
+    }
+
+    /// The work the batch may still do.
+    fn left(&self) -> usize {
+        MAX_WORK.saturating_sub(self.work)
     }
 
     /// Resolve and bind a call from its actual lexical environment, charging export hops too.
