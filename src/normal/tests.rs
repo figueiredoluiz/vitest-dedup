@@ -293,6 +293,44 @@ fn jsx_whitespace_and_empty_templates_are_what_they_render() {
     );
 }
 
+/// A `const` literal is that literal only while its value fits the text limit, measured in value
+/// bytes: an escaped value whose form is longer still fits. Past it the constant is named by its
+/// declaration: equal long constants still match each other, but no longer the literal spelled out.
+#[test]
+fn a_long_const_literal_is_named_by_its_declaration() {
+    let fits = "0".repeat(crate::lang::limits::MAX_TEXT_BYTES);
+    let long = format!("{fits}0");
+    let escaped = r"\x01".repeat(1_000);
+    check(
+        &format!(
+            "{HEADER}const A = '{fits}'\n\
+             const B = '{long}'\n\
+             const C = '{long}'\n\
+             const E = '{escaped}'\n\
+             const T = `{long}`\n\
+             const U = `{long}`\n\
+             test('a', () => {{ expect(A).toBe(1) }})\n\
+             test('a-spelled', () => {{ expect('{fits}').toBe(1) }})\n\
+             test('b', () => {{ expect(B).toBe(1) }})\n\
+             test('c', () => {{ expect(C).toBe(1) }})\n\
+             test('b-spelled', () => {{ expect('{long}').toBe(1) }})\n\
+             test('e', () => {{ expect(E).toBe(1) }})\n\
+             test('e-spelled', () => {{ expect('{escaped}').toBe(1) }})\n\
+             test('t', () => {{ expect(T).toBe(1) }})\n\
+             test('u', () => {{ expect(U).toBe(1) }})\n\
+             test('t-spelled', () => {{ expect(`{long}`).toBe(1) }})"
+        ),
+        &[],
+        &[
+            ("a", "a-spelled"),
+            ("b", "c"),
+            ("e", "e-spelled"),
+            ("t", "u"),
+        ],
+        &[("b", "b-spelled"), ("t", "t-spelled")],
+    );
+}
+
 /// What a test reads outside itself is named by its declaration, never by its spelling.
 #[test]
 fn identities_follow_declarations() {

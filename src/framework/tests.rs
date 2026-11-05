@@ -426,3 +426,61 @@ fn long_dollar_values_render_truncated_as_vitest_displays_them() {
         None
     );
 }
+
+/// A pattern past 4,096 bytes renders nothing in any mode, even where substitution would shrink
+/// it under the output limit; one at the limit still renders.
+#[test]
+fn a_pattern_past_the_title_limit_renders_nothing() {
+    for render in [DIALECT.render_title, DIALECT.render_display_title] {
+        assert_eq!(
+            render(&"%#".repeat(2_048), &[], None, 0),
+            Some("0".repeat(2_048))
+        );
+        assert_eq!(render(&"%#".repeat(2_049), &[], None, 0), None);
+    }
+    let row = |pattern: &str| {
+        (DIALECT.render_values)(pattern, &[], None, 0, crate::framework::TitleMode::Row)
+    };
+    assert_eq!(row(&"%#".repeat(2_048)), Some("0".repeat(2_048)));
+    assert_eq!(row(&"%#".repeat(2_049)), None);
+}
+
+/// Rendering a hostile title gives what the limits allow: 90 cut values stay under the output
+/// limit, and whole values past it render nothing.
+#[test]
+fn hostile_title_rendering_stays_within_the_limits() {
+    let (long, short) = hostile_titles();
+    assert_eq!(long(), Some(format!("{}… ", "0".repeat(39)).repeat(90)));
+    assert_eq!(short(), None);
+}
+
+/// The work [`hostile_title_rendering_stays_within_the_limits`] does is bounded by the limits, not
+/// by the values: each `$` reads at most 41 units of its value, and a rendering stops once it
+/// passes the output limit. Each shape takes seconds in a debug build when either bound is lost.
+/// Wall time depends on the machine, so this runs on request, as the revert proof does.
+#[test]
+#[ignore = "timing: run with --ignored"]
+fn hostile_title_rendering_does_bounded_work() {
+    let (long, short) = hostile_titles();
+    let started = std::time::Instant::now();
+    assert!(long().is_some());
+    for _ in 0..2_000 {
+        assert_eq!(short(), None);
+    }
+    let elapsed = started.elapsed();
+    assert!(elapsed.as_secs() < 3, "{elapsed:?}");
+}
+
+/// Two display renderings: 90 `$n` over a 16 MiB value, and 1,365 `$n` over 40-unit values.
+fn hostile_titles() -> (impl Fn() -> Option<String>, impl Fn() -> Option<String>) {
+    let display = |value: String, pattern: String| {
+        let fields =
+            serde_json::Map::from_iter([("n".to_owned(), serde_json::Value::String(value))]);
+        let row = serde_json::Value::Object(fields.clone());
+        move || (DIALECT.render_display_title)(&pattern, &[Some(row.clone())], Some(&fields), 0)
+    };
+    (
+        display("0".repeat(16 << 20), "$n ".repeat(90)),
+        display("0".repeat(40), "$n ".repeat(1_365)),
+    )
+}

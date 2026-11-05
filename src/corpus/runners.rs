@@ -325,8 +325,7 @@ impl Planner<'_> {
         }
         let mut actual = Vec::new();
         for argument in arguments {
-            let value =
-                normal::titles::value_with_bindings(parsed, argument?, 0, &mut 256, values)?;
+            let value = normal::titles::argument(parsed, argument?, values)?;
             self.charge(serde_json::to_vec(&value).ok()?.len())?;
             actual.push(value);
         }

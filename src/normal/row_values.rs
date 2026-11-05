@@ -1,6 +1,7 @@
 //! Bounded primitive proofs shared by row binding, equality and title inputs.
 
 use super::{Normalizer, Setting, Structure};
+use crate::lang::limits::MAX_TEXT_BYTES;
 use crate::lang::{Declaration, Field, Imported, NodeId, Parsed, Scalar, SymbolId};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -75,6 +76,11 @@ struct Reader<'a, 'proof> {
     setting: Setting<'a>,
     budget: usize,
     bytes: usize,
+    /// Whether the text being read is supplied by a `const`, an import or a bound value, which
+    /// every reader copies again; see [`MAX_TEXT_BYTES`].
+    supplied: bool,
+    /// The supplied text this read may still copy.
+    text_left: usize,
     active: HashSet<(PathBuf, String)>,
     imports_safe: &'proof mut dyn FnMut() -> bool,
 }
@@ -339,6 +345,8 @@ impl Normalizer<'_> {
             setting: self.setting,
             budget: 256,
             bytes: 0,
+            supplied: false,
+            text_left: MAX_TEXT_BYTES,
             active: HashSet::new(),
             imports_safe: &mut imports_safe,
         }
@@ -474,7 +482,10 @@ impl Reader<'_, '_> {
                     Scalar::BigInt(if digits.is_empty() { "0" } else { digits }.into())
                 } else {
                     match tree.field_of(node, "value") {
-                        Field::Value(serde_json::Value::String(v)) => Scalar::String(v.clone()),
+                        Field::Value(serde_json::Value::String(v)) => {
+                            self.spend(v.len())?;
+                            Scalar::String(v.clone())
+                        }
                         Field::Value(serde_json::Value::Bool(v)) => Scalar::Bool(*v),
                         Field::Value(serde_json::Value::Number(v)) => Scalar::Number(v.as_f64()?),
                         Field::Value(serde_json::Value::Null)
@@ -496,6 +507,9 @@ impl Reader<'_, '_> {
                     };
                 };
                 if let Some(value) = bound.get(&symbol) {
+                    if let Scalar::String(text) = value {
+                        self.text_left = self.text_left.checked_sub(text.len())?;
+                    }
                     return Some(value.clone());
                 }
                 self.binding(parsed, path, symbol, Some(node), bound)?
@@ -537,12 +551,11 @@ impl Reader<'_, '_> {
                 let text = fields
                     .iter()
                     .find_map(|(key, value)| match (&**key, value) {
-                        ("cooked", Field::Value(serde_json::Value::String(text))) => {
-                            Some(text.clone())
-                        }
+                        ("cooked", Field::Value(serde_json::Value::String(text))) => Some(text),
                         _ => None,
                     })?;
-                Scalar::String(text)
+                self.spend(text.len())?;
+                Scalar::String(text.clone())
             }
             "MemberExpression" => self.member(parsed, path, node, bound)?,
             _ => return None,
@@ -551,6 +564,22 @@ impl Reader<'_, '_> {
             Scalar::String(text) if text.contains('\u{fffd}') || text.len() > 65_536 => None,
             _ => Some(result),
         }
+    }
+
+    /// Spends `bytes` of string text when what is read is supplied text.
+    fn spend(&mut self, bytes: usize) -> Option<()> {
+        if self.supplied {
+            self.text_left = self.text_left.checked_sub(bytes)?;
+        }
+        Some(())
+    }
+
+    /// Runs `read` over text a `const` or an import supplies.
+    fn supplying(&mut self, read: impl FnOnce(&mut Self) -> Option<Scalar>) -> Option<Scalar> {
+        let outer = std::mem::replace(&mut self.supplied, true);
+        let value = read(self);
+        self.supplied = outer;
+        value
     }
 
     /// A const read must be after initialization and cannot cross a switch-case declaration.
@@ -585,7 +614,8 @@ impl Reader<'_, '_> {
                         return None;
                     }
                 }
-                self.read(parsed, path, tree.child(*declaration, "init")?, bound)
+                let init = tree.child(*declaration, "init")?;
+                self.supplying(|reader| reader.read(parsed, path, init, bound))
             }
             Declaration::Import {
                 import,
@@ -608,7 +638,7 @@ impl Reader<'_, '_> {
                     .exports
                     .sources
                     .resolve(path, source, self.setting.root)?;
-                self.exported(&file, name)
+                self.supplying(|reader| reader.exported(&file, name))
             }
             _ => None,
         }
@@ -678,7 +708,9 @@ impl Reader<'_, '_> {
             if matches!(name, "__proto__" | "toString" | "valueOf") {
                 return None;
             }
-            let value = self.read(parsed, path, tree.child(property, "value")?, bound)?;
+            // Every property is read, and a `const` object supplies them to every reader again.
+            let value_node = tree.child(property, "value")?;
+            let value = self.supplying(|reader| reader.read(parsed, path, value_node, bound))?;
             own.insert(name);
             if name == key {
                 selected = Some(value);
@@ -700,6 +732,9 @@ impl Reader<'_, '_> {
     fn exported(&mut self, file: &Path, name: &str) -> Option<Scalar> {
         let key = (file.to_owned(), name.to_owned());
         if let Some(value) = self.setting.exports.values.borrow().get(&key) {
+            if let Some(Scalar::String(text)) = value {
+                self.spend(text.len())?;
+            }
             return value.clone();
         }
         if self.active.len() >= 16 || !self.active.insert(key.clone()) {

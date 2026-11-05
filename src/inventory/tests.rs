@@ -764,6 +764,28 @@ fn titles_are_read_when_the_source_spells_them() {
     assert_eq!(titles, [Some("plain"), Some("template"), None, None]);
 }
 
+/// A title past the text limit is not read: every test a suite holds copies its title.
+#[test]
+fn a_title_past_the_text_limit_is_not_read() {
+    let at = "0".repeat(crate::lang::limits::MAX_TEXT_BYTES);
+    let (found, _) = inventory_of(
+        &format!(
+            "import {{ describe, test }} from 'vitest'\n\
+             describe('{at}', () => {{}})\n\
+             describe('{at}0', () => {{}})\n\
+             test(`{at}0`, () => {{}})"
+        ),
+        &[],
+        false,
+    );
+    let titles: Vec<_> = found
+        .sites
+        .iter()
+        .map(|site| site.title.as_ref().map(String::len))
+        .collect();
+    assert_eq!(titles, [Some(at.len()), None, None]);
+}
+
 #[test]
 fn hooks_carry_their_timing_and_registration_values_are_recorded() {
     let (found, _) = inventory_of(

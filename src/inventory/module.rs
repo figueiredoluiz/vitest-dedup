@@ -1847,24 +1847,15 @@ impl<'s> Module<'s> {
     fn title(&self, call: NodeId) -> Option<String> {
         let tree = self.tree;
         let first = tree.inner(tree.list(call, "arguments").first().copied()??);
+        // Every test the suite holds copies its title, so a long one is not read.
+        if !crate::lang::limits::text_fits(tree, first) {
+            return None;
+        }
         match tree.kind(first) {
             "Literal" => tree.text(first, "value").map(str::to_owned),
             "TemplateLiteral" if tree.list(first, "expressions").is_empty() => {
                 let quasi = tree.list(first, "quasis").first().copied()??;
-                match tree.field_of(quasi, "value") {
-                    crate::lang::Field::Object(fields) => {
-                        fields
-                            .iter()
-                            .find_map(|(key, field)| match (&**key, field) {
-                                (
-                                    "cooked",
-                                    crate::lang::Field::Value(serde_json::Value::String(text)),
-                                ) => Some(text.clone()),
-                                _ => None,
-                            })
-                    }
-                    _ => None,
-                }
+                crate::lang::limits::cooked(tree, quasi).map(str::to_owned)
             }
             _ => None,
         }

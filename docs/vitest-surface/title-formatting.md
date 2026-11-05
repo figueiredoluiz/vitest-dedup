@@ -145,7 +145,11 @@ a string or an array is not truncated at all.
 **What this analyzer does with that:** a string within the budget
 (`taskTitleValueFormatTruncate`, 40 by default) renders in full, as the measured `×38` to `×40` and
 `'😀'×20` rows do; a string past it is not proven and stays unrendered, as are composites under
-`%o`, `%s` of a plain object and the tagged-template row's assembled object.
+`%o`, `%s` of a plain object and the tagged-template row's assembled object. A title, a rendered
+title, or the text `const`s and a runner's parameters supply to one title or table row, past
+4,096 bytes in all, is not read: the title or cell stays unknown. In a test body such a `const`
+is compared by its declaration rather than by its text. A string written in place, such as a
+table cell, is read at any length, and a template up to 65,536 bytes.
 
 A rendered title is therefore a claim about the runtime string, and title comparison never decides
 a finding on its own: the body and context still see the full values.

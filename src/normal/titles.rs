@@ -1,6 +1,7 @@
 //! Bounded literal values for names, independent of callback normalization.
 
 use super::{form, Row};
+use crate::lang::limits::{cooked, MAX_TEXT_BYTES};
 use crate::lang::{property_name, Declaration, Field, NodeId, Parsed, SymbolId, Tree};
 use serde_json::{Map, Value};
 use std::collections::HashMap;
@@ -22,16 +23,122 @@ pub(crate) fn title_with_bindings(
         return tree
             .child(node, "id")
             .and_then(|id| tree.text(id, "name"))
+            .filter(|name| name.len() <= MAX_TEXT_BYTES)
             .map(str::to_owned);
     }
-    match value_with_bindings(parsed, node, 0, &mut 256, bindings)? {
-        Value::String(text) => Some(text),
+    // Numbers a template substitutes are not counted as they are read, so the title is measured
+    // whole as well.
+    match read(parsed, node, 0, &mut 256, bindings, &mut Limit::title())? {
+        Value::String(text) if text.len() <= MAX_TEXT_BYTES => Some(text),
         _ => None,
+    }
+}
+
+/// A runner call's argument: read whole, because the runner charges what it keeps to its own
+/// invocation budget. A title or row that later reads it as a binding is limited there.
+pub(crate) fn argument(
+    parsed: &Parsed,
+    node: NodeId,
+    bindings: &HashMap<SymbolId, Value>,
+) -> Option<Value> {
+    read(parsed, node, 0, &mut 256, bindings, &mut Limit::charged())
+}
+
+/// How much string text one read may still copy; see [`MAX_TEXT_BYTES`]. One budget serves the
+/// whole read, so naming a `const` many times spends it as many times.
+#[derive(Debug)]
+struct Limit {
+    /// Read whole: the caller charges what it keeps to its own budget.
+    charged: bool,
+    /// Whether what is read here is copied by every reader: a title, or what a `const` supplies.
+    copied: bool,
+    /// The copied text this read may still take.
+    left: usize,
+}
+
+impl Limit {
+    /// A title: every test, row and nested test copies it.
+    fn title() -> Self {
+        Self {
+            charged: false,
+            copied: true,
+            left: MAX_TEXT_BYTES,
+        }
+    }
+
+    /// A value written in place, which a `const` or binding it names may still supply.
+    fn in_place() -> Self {
+        Self {
+            charged: false,
+            copied: false,
+            left: MAX_TEXT_BYTES,
+        }
+    }
+
+    /// A runner argument, which the runner charges to its invocation budget.
+    fn charged() -> Self {
+        Self {
+            charged: true,
+            copied: false,
+            left: MAX_TEXT_BYTES,
+        }
+    }
+
+    /// Spends text the source spells where it is read: only when that text is copied.
+    fn spelled(&mut self, bytes: usize) -> Option<()> {
+        if self.copied {
+            self.supplied(bytes)?;
+        }
+        Some(())
+    }
+
+    /// Spends text a `const` or binding supplies, which every reader copies again.
+    fn supplied(&mut self, bytes: usize) -> Option<()> {
+        if !self.charged {
+            self.left = self.left.checked_sub(bytes)?;
+        }
+        Some(())
+    }
+}
+
+/// The string text a value holds, keys included: what copying it copies.
+fn text_bytes(value: &Value) -> usize {
+    match value {
+        Value::String(text) => text.len(),
+        Value::Array(values) => values.iter().map(text_bytes).sum(),
+        Value::Object(fields) => fields
+            .iter()
+            .map(|(key, value)| key.len() + text_bytes(value))
+            .sum(),
+        _ => 0,
     }
 }
 
 /// The values one read of a row may visit.
 const ROW_VISITS: usize = 256;
+
+/// The longest template built, however it is read. What a template copies for every reader is
+/// counted against [`MAX_TEXT_BYTES`] as well.
+const MAX_TEMPLATE_BYTES: usize = 65_536;
+
+/// One read of a row: the values it may visit and the copied text it may take, shared by every
+/// cell so that naming a `const` in many cells spends the row's one budget.
+pub(crate) struct RowRead {
+    /// Values left to visit.
+    visits: usize,
+    /// Copied text left to take.
+    limit: Limit,
+}
+
+impl RowRead {
+    /// A fresh read of one row.
+    pub(crate) fn new() -> Self {
+        Self {
+            visits: ROW_VISITS,
+            limit: Limit::in_place(),
+        }
+    }
+}
 
 /// Literal printf arguments and named fields. Array rows supply positional title arguments even
 /// when the callback receives the row whole. Unknown cells remain distinct from missing ones.
@@ -40,13 +147,13 @@ pub(crate) fn row(
     row: &Row,
     whole_rows: bool,
 ) -> (Vec<Option<Value>>, Option<Map<String, Value>>) {
-    let mut budget = ROW_VISITS;
+    let mut read = RowRead::new();
     match row {
         Row::Fields(properties) => {
             let fields = properties
                 .iter()
                 .filter_map(|(key, node)| {
-                    value(parsed, *node, 0, &mut budget).map(|v| (key.clone(), v))
+                    value(parsed, *node, 0, &mut read).map(|v| (key.clone(), v))
                 })
                 .collect();
             (vec![None], Some(fields))
@@ -54,7 +161,7 @@ pub(crate) fn row(
         Row::Spread(cells) => (
             cells
                 .iter()
-                .map(|&cell| value(parsed, cell, 0, &mut budget))
+                .map(|&cell| value(parsed, cell, 0, &mut read))
                 .collect(),
             None,
         ),
@@ -65,20 +172,26 @@ pub(crate) fn row(
                 return (
                     tree.list(node, "elements")
                         .into_iter()
-                        .map(|cell| cell.and_then(|cell| value(parsed, cell, 0, &mut budget)))
+                        .map(|cell| cell.and_then(|cell| value(parsed, cell, 0, &mut read)))
                         .collect(),
                     None,
                 );
             }
-            let whole = value(parsed, node, 0, &mut budget);
+            let left = read.limit.left;
+            let whole = value(parsed, node, 0, &mut read);
             // A whole-row table titles a null row with no items, not with `null`.
             if whole_rows && whole == Some(Value::Null) {
                 return (Vec::new(), None);
             }
             let fields = match whole.as_ref().and_then(Value::as_object) {
                 Some(fields) => Some(fields.clone()),
-                // A whole read that failed may have spent the budget; the field read gets its own.
-                None => readable_fields(parsed, node, &mut { ROW_VISITS }),
+                // The field read replaces a whole read that failed, which may have spent its
+                // visits and text: it starts from what the row had, not from what that read left.
+                None => {
+                    read.visits = ROW_VISITS;
+                    read.limit.left = left;
+                    readable_fields(parsed, node, &mut read)
+                }
             };
             (vec![whole], fields)
         }
@@ -91,7 +204,7 @@ pub(crate) fn row(
 fn readable_fields(
     parsed: &Parsed,
     node: NodeId,
-    budget: &mut usize,
+    read: &mut RowRead,
 ) -> Option<Map<String, Value>> {
     let tree = &parsed.tree;
     if tree.kind(node) != "ObjectExpression" {
@@ -99,7 +212,7 @@ fn readable_fields(
     }
     let mut fields = Map::new();
     for (name, field) in plain_properties(tree, node)? {
-        match value(parsed, field, 1, budget) {
+        match value(parsed, field, 1, read) {
             Some(value) => fields.insert(name.to_owned(), value),
             None => fields.remove(name),
         };
@@ -113,12 +226,20 @@ pub(super) fn value(
     parsed: &Parsed,
     node: NodeId,
     depth: usize,
-    budget: &mut usize,
+    read: &mut RowRead,
 ) -> Option<Value> {
-    value_with_bindings(parsed, node, depth, budget, &HashMap::new())
+    self::read(
+        parsed,
+        node,
+        depth,
+        &mut read.visits,
+        &HashMap::new(),
+        &mut read.limit,
+    )
 }
 
 /// Read a bounded literal value with caller bindings; nested lexical bindings keep their IDs.
+#[cfg(test)]
 pub(crate) fn value_with_bindings(
     parsed: &Parsed,
     node: NodeId,
@@ -126,18 +247,41 @@ pub(crate) fn value_with_bindings(
     budget: &mut usize,
     bindings: &HashMap<SymbolId, Value>,
 ) -> Option<Value> {
+    read(
+        parsed,
+        node,
+        depth,
+        budget,
+        bindings,
+        &mut Limit::in_place(),
+    )
+}
+
+/// A bounded literal value with caller bindings under `limit`; nested lexical bindings keep their
+/// IDs. Each string the limit counts is measured before it is copied.
+fn read(
+    parsed: &Parsed,
+    node: NodeId,
+    depth: usize,
+    budget: &mut usize,
+    bindings: &HashMap<SymbolId, Value>,
+    limit: &mut Limit,
+) -> Option<Value> {
     if depth >= 32 || *budget == 0 {
         return None;
     }
     *budget -= 1;
     let tree = &parsed.tree;
     let node = tree.inner(node);
-    let mut child = |node| value_with_bindings(parsed, node, depth + 1, budget, bindings);
+    let mut child =
+        |node, limit: &mut Limit| read(parsed, node, depth + 1, budget, bindings, limit);
     match tree.kind(node) {
         "Literal" => match tree.field_of(node, "value") {
-            Field::Value(value @ (Value::String(_) | Value::Bool(_) | Value::Number(_))) => {
-                Some(value.clone())
+            Field::Value(Value::String(text)) => {
+                limit.spelled(text.len())?;
+                Some(Value::String(text.clone()))
             }
+            Field::Value(value @ (Value::Bool(_) | Value::Number(_))) => Some(value.clone()),
             Field::Value(Value::Null) if tree.text(node, "raw") == Some("null") => {
                 Some(Value::Null)
             }
@@ -149,6 +293,7 @@ pub(crate) fn value_with_bindings(
                 .symbol_at(tree.span(node).start)
                 .and_then(|symbol| bindings.get(&symbol))
             {
+                limit.supplied(text_bytes(value))?;
                 return Some(value.clone());
             }
             let symbol = parsed
@@ -165,11 +310,19 @@ pub(crate) fn value_with_bindings(
             {
                 return None;
             }
-            let value = child(tree.child(declaration, "init")?)?;
-            (!value.is_object() && !value.is_array()).then_some(value)
+            // Every read of a `const` copies what it supplies again, from the read's one budget.
+            let init = tree.child(declaration, "init")?;
+            let (spelled, left) = (std::mem::replace(&mut limit.copied, true), limit.left);
+            let value = child(init, limit).filter(|value| !value.is_object() && !value.is_array());
+            limit.copied = spelled;
+            // A refused value keeps nothing, so it spends nothing.
+            if value.is_none() {
+                limit.left = left;
+            }
+            value
         }
         "UnaryExpression" => {
-            let number = child(tree.child(node, "argument")?)?.as_f64()?;
+            let number = child(tree.child(node, "argument")?, limit)?.as_f64()?;
             let result = match tree.text(node, "operator")? {
                 "+" => number,
                 "-" => -number,
@@ -181,21 +334,15 @@ pub(crate) fn value_with_bindings(
             let expressions = tree.list(node, "expressions");
             let mut text = String::new();
             for (index, quasi) in tree.list(node, "quasis").into_iter().enumerate() {
-                let Field::Object(fields) = tree.field_of(quasi?, "value") else {
+                let cooked = cooked(tree, quasi?)?;
+                // A substitution is measured with the text that always follows it.
+                if text.len() + cooked.len() > MAX_TEMPLATE_BYTES {
                     return None;
-                };
-                let cooked = fields
-                    .iter()
-                    .find_map(|(key, field)| match (&**key, field) {
-                        ("cooked", Field::Value(Value::String(text))) => Some(text.as_str()),
-                        _ => None,
-                    })?;
+                }
+                limit.spelled(cooked.len())?;
                 text.push_str(cooked);
                 if let Some(expression) = expressions.get(index) {
-                    text.push_str(&string(&child((*expression)?)?)?);
-                }
-                if text.len() > 65_536 {
-                    return None;
+                    text.push_str(&string(&child((*expression)?, limit)?)?);
                 }
             }
             Some(Value::String(text))
@@ -204,7 +351,7 @@ pub(crate) fn value_with_bindings(
             .list(node, "elements")
             .into_iter()
             .map(|element| match element {
-                Some(element) => child(element),
+                Some(element) => child(element, limit),
                 None => Some(Value::Null),
             })
             .collect::<Option<Vec<_>>>()
@@ -212,7 +359,8 @@ pub(crate) fn value_with_bindings(
         "ObjectExpression" => {
             let mut fields = Map::new();
             for (name, field) in plain_properties(tree, node)? {
-                fields.insert(name.to_owned(), child(field)?);
+                limit.spelled(name.len())?;
+                fields.insert(name.to_owned(), child(field, limit)?);
             }
             Some(Value::Object(fields))
         }
