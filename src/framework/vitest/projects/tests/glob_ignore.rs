@@ -275,3 +275,34 @@ fn a_literal_pattern_its_ignore_names_matches_nothing() {
         assert_eq!(project_dirs(&set, directory.path()), expected, "{ignore}");
     }
 }
+
+/// Every ASCII character an ignore alternative refuses is named in the configuration guide's
+/// globals section, so a newly refused character cannot go undocumented.
+#[test]
+fn every_refused_ignore_character_is_documented() {
+    let guide = include_str!("../../../../../docs/configuration.md");
+    let start = guide
+        .find("### Globals")
+        .expect("the guide has a globals section");
+    let section = &guide[start..];
+    let section = &section[..section[3..]
+        .find("\n#")
+        .map_or(section.len(), |end| end + 3)];
+    let refused: Vec<char> = (b'!'..=b'~')
+        .map(char::from)
+        .filter(|c| !ignore_spelling_is_read(&format!("pkg/a{c}b")))
+        .collect();
+    assert!(refused.len() >= 10, "only {refused:?} are refused");
+    for c in refused {
+        let named = match c {
+            '\\' => "backslash".to_owned(),
+            '[' | ']' => "`[...]`".to_owned(),
+            '{' | '}' => "brace".to_owned(),
+            c => format!("`{c}`"),
+        };
+        assert!(
+            section.contains(&named),
+            "{c:?} is refused but the guide does not name {named}"
+        );
+    }
+}

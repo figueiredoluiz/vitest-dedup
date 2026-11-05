@@ -120,9 +120,11 @@ named with a fix; see [Missing prerequisites](incomplete-runs.md#missing-prerequ
 
 `globals: true` is detected from the resolved config. A project list built with `glob.sync` from
 the `glob` package is read when its pattern is a string literal and its only option is a literal
-`ignore` of plain relative ASCII patterns; an ignore pattern that is absolute, has a `.`, `..` or
-empty segment, a trailing `/`, two `**` segments in a row, a backslash, `?`, `[...]`, or a brace
-that is not a comma list leaves the list unresolved. On macOS and Windows an ignore pattern matches regardless of case, as glob's does
+`ignore` of plain relative ASCII patterns; an ignore pattern that is absolute or not ASCII, has a
+`.`, `..` or empty segment, a trailing `/`, `**` inside a segment or two `**` segments in a row, a
+backslash, `?`, `!`, `(`, `)`, `:`, `[...]`, or a brace that is not a comma list leaves the list
+unresolved (an optional `?(...)` group is expanded first). On macOS and Windows an ignore pattern
+matches regardless of case, as glob's does
 there. A project config file that only forwards another one (`export { default } from './shared'`,
 or an import exported again as the default), with no other runtime imports, is read as that config,
 from the project's own directory. Imported config literals may carry a simple TypeScript-only
