@@ -74,16 +74,234 @@ fn uncertain_text(dialect: &Dialect, text: &str) -> bool {
             .any(|fragment| text.contains(fragment))
 }
 
+/// Only a direct non-invoking matcher on a runtime framework import consumes a data subject.
+fn assertion_input(normalizer: &Normalizer, call: NodeId, callee: NodeId, subject: NodeId) -> bool {
+    let tree = normalizer.tree;
+    let callee = tree.inner(callee);
+    if tree.kind(callee) != "Identifier" {
+        return false;
+    }
+    let imported = match normalizer.scopes.symbol_at(tree.span(callee).start) {
+        None => false,
+        Some(symbol) => {
+            let symbol = normalizer.scopes.symbol(symbol);
+            if symbol.references.iter().any(|r| r.write) {
+                return false;
+            }
+            let crate::lang::Declaration::Import {
+                import,
+                specifier,
+                imported: crate::lang::Imported::Named(name),
+            } = &symbol.declaration
+            else {
+                return false;
+            };
+            tree.text(*import, "importKind") != Some("type")
+                && tree.text(*specifier, "importKind") != Some("type")
+                && normalizer.setting.dialect.assertion(name).is_some()
+                && tree
+                    .child(*import, "source")
+                    .and_then(|source| tree.text(source, "value"))
+                    .is_some_and(|source| normalizer.setting.dialect.is_api_module(source))
+        }
+    };
+    if !imported
+        || tree
+            .list(call, "arguments")
+            .first()
+            .copied()
+            .flatten()
+            .is_none_or(|argument| tree.inner(argument) != tree.inner(subject))
+    {
+        return false;
+    }
+    let mut head = call;
+    for _ in 0..16 {
+        let Some(member) = tree.outer_parent(head) else {
+            return false;
+        };
+        if tree.kind(member) != "MemberExpression"
+            || tree.flag(member, "computed")
+            || tree
+                .child(member, "object")
+                .map(|object| tree.inner(object))
+                != Some(tree.inner(head))
+        {
+            return false;
+        }
+        let name = tree
+            .child(member, "property")
+            .and_then(|property| tree.text(property, "name"));
+        if name == Some("not") {
+            head = member;
+            continue;
+        }
+        if !matches!(
+            name,
+            Some(
+                "toBe" | "toBeTruthy" | "toBeFalsy" | "toBeDefined" | "toBeUndefined" | "toBeNull"
+            )
+        ) {
+            return false;
+        }
+        return tree.outer_parent(member).is_some_and(|call| {
+            tree.kind(call) == "CallExpression"
+                && tree.child(call, "callee").map(|callee| tree.inner(callee)) == Some(member)
+        });
+    }
+    false
+}
+
+/// Adds the recorded uses of one immutable binding within the selector proof's work bound.
+fn append_binding_uses(
+    normalizer: &Normalizer,
+    binding: NodeId,
+    pending: &mut Vec<NodeId>,
+    visited: usize,
+) -> bool {
+    let Some(symbol) = normalizer
+        .scopes
+        .symbol_at(normalizer.tree.span(binding).start)
+    else {
+        return false;
+    };
+    for reference in &normalizer.scopes.symbol(symbol).references {
+        let Some(read) = reference.node.filter(|_| !reference.write) else {
+            return false;
+        };
+        pending.push(read);
+        if pending.len() + visited > 256 {
+            return false;
+        }
+    }
+    true
+}
+
+/// Takes the next node not yet visited by this walk, retaining the worklist's order.
+fn next_unseen(pending: &mut Vec<NodeId>, seen: &mut HashSet<NodeId>) -> Option<NodeId> {
+    while let Some(node) = pending.pop() {
+        if seen.insert(node) {
+            return Some(node);
+        }
+    }
+    None
+}
+
+/// A selected value is data only while its recorded uses never invoke it as an operation.
+/// Follow immutable aliases as well: `const f = values[0]; f()` still selects a callee.
+fn data_read(normalizer: &mut Normalizer, node: NodeId) -> bool {
+    if normalizer.structure.direct_eval {
+        return false;
+    }
+    let tree = normalizer.tree;
+    let mut pending = vec![node];
+    let mut seen = HashSet::new();
+    while let Some(node) = next_unseen(&mut pending, &mut seen) {
+        if seen.len() > 256 {
+            return false;
+        }
+        let Some(parent) = tree.outer_parent(node) else {
+            return false;
+        };
+        let is = |field| {
+            tree.child(parent, field)
+                .is_some_and(|child| tree.inner(child) == tree.inner(node))
+        };
+        match tree.kind(parent) {
+            "CallExpression" => {
+                if tree
+                    .child(parent, "callee")
+                    .is_none_or(|callee| !assertion_input(normalizer, parent, callee, node))
+                {
+                    return false;
+                }
+            }
+            "LogicalExpression"
+            | "ConditionalExpression"
+            | "SequenceExpression"
+            | "AwaitExpression"
+            | "BinaryExpression"
+            | "UnaryExpression"
+            | "TemplateLiteral" => {
+                if normalizer.row_scalar(parent).is_none() {
+                    return false;
+                }
+                pending.push(parent);
+            }
+            "VariableDeclarator" if is("init") => {
+                let Some(binding) = tree.child(parent, "id") else {
+                    return false;
+                };
+                if tree.kind(binding) != "Identifier"
+                    || tree.parent(parent).and_then(|p| tree.text(p, "kind")) != Some("const")
+                    || tree
+                        .ancestors(parent)
+                        .any(|p| tree.kind(p) == "ExportNamedDeclaration")
+                {
+                    return false;
+                }
+                if !append_binding_uses(normalizer, binding, &mut pending, seen.len()) {
+                    return false;
+                }
+            }
+            "ExpressionStatement" => {}
+            _ => return false,
+        }
+    }
+    true
+}
+
+/// Only numeric member inputs used as data may vary; method and object-definition keys stay exact.
+fn data_index(normalizer: &mut Normalizer, node: NodeId) -> bool {
+    let tree = normalizer.tree;
+    tree.kind(node) == "MemberExpression"
+        && tree.flag(node, "computed")
+        && tree.child(node, "property").is_some_and(|property| {
+            tree.kind(tree.inner(property)) == "Literal"
+                && matches!(value(tree, tree.inner(property), "value"), Value::Number(_))
+        })
+        && normalizer.row_scalar(node).is_some()
+        && data_read(normalizer, node)
+}
+
+/// A literal can be one row value only when its allocation is in the callback's own execution.
+fn once_in_callback(tree: &Tree, node: NodeId, root: crate::lang::Span) -> bool {
+    for parent in tree.ancestors(node) {
+        if tree.kind(parent) == "VariableDeclarator"
+            && tree
+                .child(parent, "id")
+                .is_none_or(|id| tree.kind(id) != "Identifier")
+        {
+            return false;
+        }
+        if matches!(
+            tree.kind(parent),
+            "ForStatement"
+                | "ForOfStatement"
+                | "ForInStatement"
+                | "WhileStatement"
+                | "DoWhileStatement"
+                | "ClassBody"
+        ) {
+            return false;
+        }
+        if tree.is_function(parent) {
+            return tree.span(parent) == root
+                || tree
+                    .child(parent, "body")
+                    .is_some_and(|body| tree.span(body) == root);
+        }
+    }
+    false
+}
+
 /// Source-sensitive matchers, unknown selectors and potentially lossy text refuse consolidation.
 /// Local dependency reads and aliases share one graph; cycles are visited once.
 pub(super) fn parameterization_uncertain(normalizer: &Normalizer, node: NodeId) -> bool {
     let tree = normalizer.tree;
     let mut pending = vec![node];
     let mut seen = HashSet::new();
-    while let Some(node) = pending.pop() {
-        if !seen.insert(node) {
-            continue;
-        }
+    while let Some(node) = next_unseen(&mut pending, &mut seen) {
         if tree.kind(node) == "ImportExpression"
             && (tree
                 .child(node, "source")
@@ -250,8 +468,8 @@ fn tagged(tree: &Tree, literal: NodeId) -> bool {
 }
 
 /// Whether a function body reads the function's own `this`, `arguments`, `super` or `new.target`.
-pub(super) fn binds_this(tree: &Tree, node: NodeId) -> bool {
-    crate::lang::uses_receiver(tree, node)
+pub(super) fn binds_this(tree: &Tree, scopes: &crate::lang::Scopes, node: NodeId) -> bool {
+    crate::lang::uses_receiver(tree, scopes, node)
 }
 
 /// JSX text as it renders: lines trimmed where they meet a line break, blank lines dropped.
@@ -358,6 +576,18 @@ impl Normalizer<'_> {
             // reader's: two reads of it read the same code.
             self.truncated |= !self.resolving;
             return self.write_deep(node, walk, out);
+        }
+        if walk.structural
+            && !walk.trace
+            && walk.in_type == 0
+            && matches!(self.tree.kind(node), "ObjectExpression" | "ArrayExpression")
+            && once_in_callback(self.tree, node, walk.root)
+            && self.literal_row_data(node, &walk.substitutions)
+        {
+            if let Some(shape) = self.row_data_shape(node, &walk.substitutions) {
+                out.push_str(&shape);
+                return;
+            }
         }
         self.nesting += 1;
         self.write_kind(node, walk, out);
@@ -524,7 +754,7 @@ impl Normalizer<'_> {
             && !tree.flag(node, "generator")
             && tree
                 .child(node, "body")
-                .is_some_and(|body| !binds_this(tree, body));
+                .is_some_and(|body| !binds_this(tree, self.scopes, body));
         out.push('(');
         out.push_str(if arrow {
             "ArrowFunctionExpression"
@@ -588,7 +818,8 @@ impl Normalizer<'_> {
         let literal = keys.iter().any(|(key, field)| {
             property_key(key) && matches!(field, Field::Node(child) if literal_key(*child))
         });
-        if computed && literal {
+        let data_index = walk.structural && !walk.trace && data_index(self, node);
+        if computed && literal && !data_index {
             computed = false;
         }
         for (key, field) in keys {
@@ -604,6 +835,8 @@ impl Normalizer<'_> {
                 && tree.span(node).start == walk.root.start
             {
                 out.push_str("[]");
+            } else if data_index && &**key == "property" {
+                out.push_str("L<number>");
             } else if let Some(child) = child.filter(|child| {
                 property_key(key) && !computed && tree.kind(*child) != "PrivateIdentifier"
             }) {

@@ -525,7 +525,7 @@ fn parameters(
     }
     if tree
         .child(function, "body")
-        .is_some_and(|body| lang::uses_receiver(tree, body))
+        .is_some_and(|body| lang::uses_receiver(tree, &parsed.scopes, body))
     {
         return Err(Refusal::Callable);
     }

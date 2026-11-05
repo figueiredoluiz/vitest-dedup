@@ -16,6 +16,73 @@ fn first(parsed: &Parsed, kind: &str) -> super::NodeId {
         .unwrap_or_else(|| panic!("no {kind}"))
 }
 
+/// Class keys execute in the enclosing frame; field values and ordinary methods bind their own.
+#[test]
+fn class_receiver_evaluation_frames() {
+    for (body, expected) in [
+        ("class C { [arguments[0]]() {} }", true),
+        ("class C { [this.name]() {} }", true),
+        ("class C extends arguments[0] {}", true),
+        ("class C { field = this }", false),
+        ("class C { static field = this }", false),
+        ("class C { static { void this } }", false),
+        ("class C { method() { return arguments[0] } }", false),
+        ("class C { field = () => this }", false),
+        ("class C { [(() => arguments[0])()]() {} }", true),
+        (
+            "class C { [(function () { return arguments[0] })()]() {} }",
+            false,
+        ),
+        ("({ [arguments[0]]: 1 })", true),
+        ("({ arguments: 1 })", false),
+        ("value.arguments", false),
+        ("({ arguments })", true),
+        ("arguments: while (false) { break arguments }", false),
+        ("const arguments = 1", false),
+    ] {
+        let source = format!("function callback() {{ {body} }}");
+        let parsed = parsed(&source);
+        let function = first(&parsed, "FunctionDeclaration");
+        let body = parsed.tree.child(function, "body").unwrap();
+        assert_eq!(
+            super::uses_receiver(&parsed.tree, &parsed.scopes, body),
+            expected,
+            "{source}"
+        );
+    }
+}
+
+/// Serializing the parser's number to JSON and back must preserve its exact IEEE value.
+#[test]
+fn numeric_literals_preserve_their_ieee_value() {
+    for spelling in [
+        "201562347225087.63",
+        "201562347225087.62",
+        "9007199254740993",
+        "1.0000000000000002",
+        "2.2250738585072014e-308",
+        "1.7976931348623157e308",
+    ] {
+        let parsed = parsed(&format!("const input = {spelling};"));
+        let literals: Vec<_> = parsed
+            .tree
+            .nodes()
+            .filter(|&node| parsed.tree.kind(node) == "Literal")
+            .collect();
+        assert_eq!(literals.len(), 1, "{spelling}");
+        let super::Field::Value(serde_json::Value::Number(value)) =
+            parsed.tree.field_of(literals[0], "value")
+        else {
+            panic!("not a number: {spelling}")
+        };
+        assert_eq!(
+            value.as_f64().unwrap().to_bits(),
+            spelling.parse::<f64>().unwrap().to_bits(),
+            "{spelling}"
+        );
+    }
+}
+
 #[test]
 fn the_tree_is_the_estree_serialization_with_parents() {
     let parsed = parsed("describe('é', () => { it('a', () => {}) })");

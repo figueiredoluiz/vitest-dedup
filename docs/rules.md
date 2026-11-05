@@ -36,6 +36,12 @@ a direct member read when its sole use safely accounts for the whole pattern. De
 alone does not make a body eligible for a behavior finding, and an extra binding alone does
 not establish strict subsumption. These comparisons remain review prompts.
 
+Parameterization candidates retain the identity of shared helpers. Unknown computed dependencies
+withhold consolidation. Numeric data indexes whose immutable value is proved primitive can become
+table inputs when their consumers are proved primitive expressions or non-invoking comparisons.
+Unknown calls, selected operations and escaping values remain significant, including through a
+local alias. Source-sensitive assertions and uncertain module identities also withhold consolidation.
+
 ## Parameterized rows
 
 Repeated-row claims require proven input values, equal rendered titles and equivalent callback
@@ -44,7 +50,9 @@ zero, bigint and non-finite numbers. Immutable scalar constants can cross explic
 and re-exports; mutable bindings, erased declarations, cyclic value reads and dependencies with
 mocking capability remain unknown. Namespace or dynamic-import capability also withholds imported
 value proofs because Vitest module objects can be rewritten. A local literal object's member is readable only while the
-object has no writes, aliases or escaping uses.
+object has no writes, aliases or escaping uses. The same proof reads present indices and `length`
+from local literal arrays of primitive values; holes, spreads, missing indices and unproved cells
+remain unknown.
 
 Rectangular tagged tables with unique static headers followed by a newline support primitive cells and flat
 destructuring; effectful cells or unsupported bindings leave the row unresolved. Tagged callbacks

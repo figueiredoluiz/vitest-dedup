@@ -518,7 +518,8 @@ impl<'s> Normalizer<'s> {
     }
 
     /// The flat form with runtime literal values replaced by their kinds. Outside declarations,
-    /// property names, static module specifiers and type-level values retain their exact identities.
+    /// operation names, static module specifiers and type-level values retain their exact identities.
+    /// Numeric member inputs can vary only when their uses keep them as data, not selected callees.
     pub fn shape(
         &mut self,
         node: NodeId,
@@ -612,7 +613,7 @@ impl<'s> Normalizer<'s> {
         };
         let interchangeable = tree
             .child(function, "body")
-            .is_some_and(|body| !form::binds_this(tree, body))
+            .is_some_and(|body| !form::binds_this(tree, self.scopes, body))
             && !tree.flag(function, "generator");
         match interchangeable {
             true => CallbackForm::Interchangeable,
@@ -625,7 +626,7 @@ impl<'s> Normalizer<'s> {
 
     /// Whether a body reads the function's own `this`, `arguments`, `super` or `new.target`.
     pub fn binds_this(&self, body: NodeId) -> bool {
-        form::binds_this(self.tree, body)
+        form::binds_this(self.tree, self.scopes, body)
     }
 
     /// The dialect every form reads its framework knowledge from.

@@ -467,6 +467,219 @@ fn parameterization_owned_computed_keys() {
     only_candidate(corpus, ["retain zero", "retain one"]);
 }
 
+/// Data selectors vary, while selected operations retain their exact source and key.
+#[test]
+fn parameterization_owned_data_selectors() {
+    let source =
+        include_str!("../../../fixtures/duplicates/parameterization-data-selectors.test.ts");
+    let corpus = eligible(source, 10);
+    assert!(
+        corpus.tests[2..4]
+            .iter()
+            .all(|case| case.parameterization_key.is_some()),
+        "{:#?}",
+        corpus.tests
+    );
+    assert!(corpus.tests[8..]
+        .iter()
+        .all(|case| case.parameterization_key.is_none()));
+    let candidates: Vec<_> = owned_findings("a.test.ts", corpus)
+        .findings
+        .into_iter()
+        .filter(|finding| finding.rule == Rule::ParameterizationCandidate)
+        .map(|finding| finding.titles)
+        .collect();
+    assert_eq!(candidates, [vec!["index zero", "index one"]]);
+}
+
+/// Selected callable paths stay distinct while primitive selector data retain consolidation.
+#[test]
+fn parameterization_owned_selector_operation_routes() {
+    let source =
+        include_str!("../../../fixtures/duplicates/parameterization-selector-operations.test.ts");
+    let corpus = eligible(source, 32);
+    let findings = owned_findings("a.test.ts", corpus).findings;
+    assert_eq!(findings.len(), 2, "{findings:#?}");
+    for titles in [
+        ["primitive zero", "primitive one"],
+        ["field zero", "field one"],
+    ] {
+        assert!(
+            findings
+                .iter()
+                .any(|finding| finding.rule == Rule::ParameterizationCandidate
+                    && finding.titles == titles),
+            "{findings:#?}"
+        );
+    }
+}
+
+/// Whole data cells consolidate without erasing repeated own-primitive reads from exact bodies.
+#[test]
+fn parameterization_owned_row_data() {
+    let source = include_str!("../../../fixtures/duplicates/parameterization-row-data.test.ts");
+    let corpus = eligible(source, 10);
+    let findings = owned_findings("a.test.ts", corpus).findings;
+    assert_eq!(findings.len(), 5, "{findings:#?}");
+    for (rule, titles) in [
+        (Rule::ParameterizationCandidate, ["object a", "object b"]),
+        (
+            Rule::ParameterizationCandidate,
+            ["bound expected", "literal expected"],
+        ),
+        (Rule::DuplicateTest, ["repeated first", "repeated second"]),
+        (
+            Rule::ParameterizationCandidate,
+            ["concat expression", "concat literal"],
+        ),
+        (
+            Rule::ParameterizationCandidate,
+            ["manual retention table", "manual retention direct"],
+        ),
+    ] {
+        assert!(
+            findings
+                .iter()
+                .any(|finding| finding.rule == rule && finding.titles == titles),
+            "{findings:#?}"
+        );
+    }
+}
+
+/// A readable original literal may exceed the parser's budget after canonical escaping.
+#[test]
+fn parameterization_owned_large_literal_shape_fallback() {
+    let source =
+        include_str!("../../../fixtures/duplicates/parameterization-large-literal.test.ts");
+    let corpus = eligible(source, 4);
+    let findings = owned_findings("a.test.ts", corpus).findings;
+    assert_eq!(findings.len(), 2, "{findings:#?}");
+    for (rule, titles) in [
+        (
+            Rule::ParameterizationCandidate,
+            ["long literal", "short literal"],
+        ),
+        (Rule::DuplicateTest, ["retained first", "retained second"]),
+    ] {
+        assert!(
+            findings
+                .iter()
+                .any(|finding| finding.rule == rule && finding.titles == titles),
+            "{findings:#?}"
+        );
+    }
+}
+
+/// Whole row values and their manual callback spelling share a consolidation representation.
+#[test]
+fn parameterization_retains_manual_composite_inputs() {
+    let source = format!("{HEADER}const check = value => value.a; test.each([[{{ a: 1 }}]])('table', value => expect(check(value)).toBe(1)); test('manual', () => expect(check({{ a: 2 }})).toBe(2));");
+    only_candidate(eligible(&source, 2), ["table", "manual"]);
+}
+
+/// Resolving a primitive inside a composite cannot erase which external binding supplied it.
+#[test]
+fn parameterization_literal_data_retains_external_provenance() {
+    let source = format!("{HEADER}const first = {{ value: 1 }}; const second = {{ value: 2 }}; test('first', () => expect([first.value]).toEqual([1])); test('second', () => expect([second.value]).toEqual([2]));");
+    let corpus = eligible(&source, 2);
+    assert!(owned_findings("a.test.ts", corpus).findings.is_empty());
+}
+
+/// Fresh cells cannot be written twice where identity, aliases or a write can observe them.
+#[test]
+fn parameterization_keeps_row_allocation_observers() {
+    for body in [
+        "expect(value === value).toBe(true)",
+        "const alias = value; expect(alias === value).toBe(true)",
+        "value.a++; expect(value.a).toBe(2)",
+        "expect(value.nested === value.nested).toBe(true)",
+        "expect(value.missing).toBe(value.missing)",
+        "expect(value.toString()).toBe(value.toString())",
+    ] {
+        let source = format!("{HEADER}test.each([{{ label: 'a', value: {{ a: 1, nested: {{}} }} }}])('a', ({{ value }}) => {{ {body} }}); test.each([{{ label: 'b', value: {{ a: 1, nested: {{}} }} }}])('b', ({{ value }}) => {{ {body} }});");
+        let corpus = eligible(&source, 2);
+        assert_ne!(corpus.tests[0].key, corpus.tests[1].key, "{source}");
+        assert!(
+            !owned_findings("a.test.ts", corpus)
+                .findings
+                .iter()
+                .any(|finding| finding.rule == Rule::DuplicateTest),
+            "{source}"
+        );
+    }
+}
+
+/// The callback's extra invocation inputs cannot disappear when repeated cells become readable.
+#[test]
+fn parameterization_retains_invocation_observers() {
+    let source =
+        include_str!("../../../fixtures/duplicates/parameterization-invocation-observers.test.ts");
+    let findings = owned_findings("a.test.ts", eligible(source, 16)).findings;
+    assert_eq!(findings.len(), 5, "{findings:#?}");
+    for titles in [
+        ["property first", "property second"],
+        ["member first", "member second"],
+    ] {
+        assert!(
+            findings
+                .iter()
+                .any(|finding| finding.rule == Rule::DuplicateTest && finding.titles == titles),
+            "{findings:#?}"
+        );
+    }
+    assert!(
+        findings
+            .iter()
+            .any(|finding| finding.rule == Rule::DuplicateTest
+                && finding.titles == ["class field first", "class field second"]),
+        "{findings:#?}"
+    );
+    assert!(
+        findings
+            .iter()
+            .any(|finding| finding.rule == Rule::DuplicateTest
+                && finding.titles == ["function first", "function second"]),
+        "{findings:#?}"
+    );
+    assert!(
+        findings
+            .iter()
+            .any(|finding| finding.rule == Rule::ParameterizationCandidate
+                && finding.titles == ["retained one", "retained two"]),
+        "{findings:#?}"
+    );
+}
+
+/// A selected function cannot become data by passing through an alias or expression container.
+#[test]
+fn parameterization_preserves_selected_operations() {
+    for body in [
+        "expect(functions[INDEX]()).toBe(INDEX)",
+        "const selected = functions[INDEX]; expect(selected()).toBe(INDEX)",
+        "const first = functions[INDEX]; const selected = first; expect(selected()).toBe(INDEX)",
+        "const selected = functions[INDEX] || (() => 0); expect(selected()).toBe(INDEX)",
+        "const selected = [functions[INDEX]]; expect(selected[0]()).toBe(INDEX)",
+        "const selected = { run: functions[INDEX] }; expect(selected.run()).toBe(INDEX)",
+        "expect(functions[INDEX].call(null)).toBe(INDEX)",
+        "expect(functions[INDEX].apply(null, [])).toBe(INDEX)",
+        "expect(functions[INDEX][`call`](null)).toBe(INDEX)",
+        "const selected = functions[INDEX].bind(null); expect(selected()).toBe(INDEX)",
+        "const invoke = fn => fn(); expect(invoke(functions[INDEX])).toBe(INDEX)",
+        "const invoke = function(fn) { return arguments[0]() }; expect(invoke(functions[INDEX])).toBe(INDEX)",
+        "expect(opaque(functions[INDEX])).toBe(INDEX)",
+        "const invoke = fn => fn[`call`](null); expect(invoke(functions[INDEX])).toBe(INDEX)",
+    ] {
+        let source = format!("{HEADER}const functions = [() => 0, () => 1]; test('zero', () => {{ {} }}); test('one', () => {{ {} }});", body.replace("INDEX", "0"), body.replace("INDEX", "1"));
+        let corpus = eligible(&source, 2);
+        let candidates: Vec<_> = owned_findings("a.test.ts", corpus)
+            .findings
+            .into_iter()
+            .filter(|finding| finding.rule == Rule::ParameterizationCandidate)
+            .collect();
+        assert!(candidates.is_empty(), "{source}\n{candidates:#?}");
+    }
+}
+
 /// Custom snapshot names and unknown destructuring keys cannot hide source-sensitive assertions.
 #[test]
 fn parameterization_owned_custom_snapshots() {

@@ -3814,7 +3814,7 @@
     {
       "name": "near-duplicate-test-bound-data",
       "path": "near-duplicate-test-bound-data",
-      "rule": "near-duplicate-test",
+      "rule": "parameterization-candidate",
       "role": "positive",
       "origin": "synthetic",
       "verdict": "generated",
@@ -3824,7 +3824,7 @@
       "expectedUnresolved": 0,
       "expectedFindings": [
         {
-          "rule": "near-duplicate-test",
+          "rule": "parameterization-candidate",
           "severity": "warning",
           "titles": [
             "passes one value through",

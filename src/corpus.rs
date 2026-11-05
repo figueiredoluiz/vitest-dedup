@@ -1014,7 +1014,7 @@ fn read_parsed(
                     .any(|row| matches!(row.value, normal::Row::Fields(_)))
             }) && function
                 .and_then(|function| tree.child(function, "body"))
-                .is_some_and(|body| crate::lang::uses_receiver(tree, body));
+                .is_some_and(|body| crate::lang::uses_receiver(tree, &parsed.scopes, body));
             let parameters = parameters.filter(|_| !observes_tagged_input);
             let rows = match &modifiers.rows {
                 None => vec![(HashMap::new(), false, String::new())],
