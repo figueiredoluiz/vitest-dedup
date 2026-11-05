@@ -22,6 +22,20 @@ fn only_candidate(corpus: FileCorpus, titles: [&str; 2]) {
     assert_eq!(findings[0].titles, titles);
 }
 
+/// Requires every expected duplicate pair and rejects any other finding.
+fn only_duplicates(corpus: FileCorpus, expected: &[[&str; 2]]) {
+    let findings = owned_findings("a.test.ts", corpus).findings;
+    assert_eq!(findings.len(), expected.len(), "{findings:#?}");
+    for titles in expected {
+        assert!(
+            findings
+                .iter()
+                .any(|finding| finding.rule == Rule::DuplicateTest && finding.titles == *titles),
+            "{findings:#?}"
+        );
+    }
+}
+
 /// Extracts a pair, proves both are eligible, then checks the final rule outcome.
 fn pair(left: &str, right: &str, expected: usize) {
     let source = format!("{HEADER}test('left', {left}); test('right', {right});");
@@ -607,6 +621,47 @@ fn parameterization_keeps_row_allocation_observers() {
             "{source}"
         );
     }
+}
+
+/// Tagged lexical observers retain their existing unresolved policy and safe control.
+#[test]
+fn table_tagged_lexical_observers_keep_the_existing_uncertainty() {
+    let source =
+        include_str!("../../../fixtures/oracle/row-value-tables/tagged-lexical-observers.test.ts");
+    let corpus = counted_corpus(source, "a.test.ts", 6, 4);
+    assert!(corpus
+        .tests
+        .iter()
+        .filter(|case| case.exclusion.is_some())
+        .all(|case| case.exclusion == Some(Exclusion::UnprovedTableRow)));
+    only_duplicates(corpus, &[["tagged control first", "tagged control second"]]);
+}
+
+/// Lexical arrow observations do not depend on the callback's unused table arguments.
+#[test]
+fn table_lexical_observers_do_not_consume_row_inputs() {
+    let source = include_str!("../../../fixtures/duplicates/table-lexical-observers.test.ts");
+    only_duplicates(
+        eligible(source, 4),
+        &[
+            ["lexical this first", "lexical this second"],
+            ["lexical arguments first", "lexical arguments second"],
+        ],
+    );
+}
+
+/// Invocation inputs remain significant without disabling safe zero-parameter duplicates.
+#[test]
+fn table_invocation_observers_preserve_unbound_inputs() {
+    let source = include_str!("../../../fixtures/duplicates/table-invocation-observers.test.ts");
+    only_duplicates(
+        eligible(source, 22),
+        &[
+            ["same input first", "same input second"],
+            ["unused input first", "unused input second"],
+            ["nested frame first", "nested frame second"],
+        ],
+    );
 }
 
 /// The callback's extra invocation inputs cannot disappear when repeated cells become readable.

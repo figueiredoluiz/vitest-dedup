@@ -3,6 +3,7 @@
   "files": {
     "wrapped-mutations.test.ts": { "tasks": 10, "wrapperSites": [], "next": {} },
     "tagged-arguments.test.ts": { "tasks": 6, "wrapperSites": [], "next": { "reasons": ["unresolved-context"], "testsExcluded": 4 } },
+    "tagged-lexical-observers.test.ts": { "tasks": 6, "wrapperSites": [], "next": { "reasons": ["unresolved-context"], "testsExcluded": 4 } },
     "own-options.test.ts": { "tasks": 9, "wrapperSites": [], "next": {} },
     "tagged-header.test.ts": { "tasks": 4, "wrapperSites": [], "next": {} },
     "concise-effects.test.ts": { "tasks": 15, "wrapperSites": [], "next": { "reasons": ["order-dependent-state"], "testsExcluded": 1 } },

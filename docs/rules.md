@@ -54,6 +54,10 @@ object has no writes, aliases or escaping uses. The same proof reads present ind
 from local literal arrays of primitive values; holes, spreads, missing indices and unproved cells
 remain unknown.
 
+Ordinary function callbacks keep table inputs significant when they read `this` or `arguments`,
+including callbacks without named parameters or with empty destructuring patterns. Arrow callbacks
+inherit these values from their surrounding scope.
+
 Rectangular tagged tables with unique static headers followed by a newline support primitive cells and flat
 destructuring; effectful cells or unsupported bindings leave the row unresolved. Tagged callbacks
 that read `this` or `arguments` also remain unresolved. Suite tables
