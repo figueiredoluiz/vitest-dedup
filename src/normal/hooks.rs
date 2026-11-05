@@ -270,14 +270,15 @@ impl Normalizer<'_> {
             if key == "__proto__" {
                 return None;
             }
-            keys.push(key.to_owned());
+            let value = tree.inner(tree.child(item, "value")?);
+            if primitive(tree, value) {
+                keys.push(key.to_owned());
+            }
         }
         for reference in &binding.references {
             let node = reference.node?;
             let (_, current, use_of) = self.member_chain(node)?;
-            if tree.kind(use_of) == "CallExpression"
-                && tree.inner(tree.child(use_of, "callee")?) == current
-            {
+            if self.called_as_receiver(current, use_of)? {
                 return None;
             }
             if tree.kind(use_of) == "UnaryExpression"
@@ -287,6 +288,30 @@ impl Normalizer<'_> {
             }
         }
         Some(keys)
+    }
+
+    /// Whether the chain's value is invoked: a call callee or a tagged-template tag, including
+    /// through parentheses and optional chains. The invocation binds the receiver as `this`.
+    fn called_as_receiver(&self, current: NodeId, use_of: NodeId) -> Option<bool> {
+        let tree = self.tree;
+        let mut current = current;
+        let mut use_of = use_of;
+        for _ in 0..64 {
+            match tree.kind(use_of) {
+                "CallExpression" => {
+                    return Some(tree.inner(tree.child(use_of, "callee")?) == current)
+                }
+                "TaggedTemplateExpression" => {
+                    return Some(tree.inner(tree.child(use_of, "tag")?) == current)
+                }
+                "ChainExpression" | "ParenthesizedExpression" => {
+                    current = use_of;
+                    use_of = tree.outer_parent(use_of)?;
+                }
+                _ => return Some(false),
+            }
+        }
+        Some(false)
     }
 
     /// The static member chain a reference sits under: its segments, the chain's outermost

@@ -329,6 +329,18 @@ fn hook_property_writes_pair_over_a_proven_receiver() {
     assert!(findings(&source(&route("audit.__proto__.x = 1;")), 1).is_empty());
     // A method call on the receiver exposes it as `this`, which can install a setter.
     assert!(findings(&source(&route("audit.install();")), 1).is_empty());
+    // The same holds for the invocation forms that keep the receiver.
+    for call in ["audit.install``;", "(audit?.install)();"] {
+        assert!(findings(&source(&route(call)), 1).is_empty(), "{call}");
+    }
+    // A coercion of an object-valued property runs its `valueOf`.
+    let coercing = "const audit = { mode: { valueOf() { queue() } } };";
+    let coercing_hooks = "beforeEach(() => { value = 1 }); beforeEach(() => { value = 1 });";
+    assert!(findings(
+        &format!("{IMPORTS} let value = 0; {coercing} {coercing_hooks} test('reads', () => {{ expect(+audit.mode).toBe(0) }});"),
+        1
+    )
+    .is_empty());
     // A `var` receiver can be redeclared: the second initializer replaces the proven literal
     // without a write reference.
     let redeclared = format!(
@@ -360,6 +372,11 @@ fn hook_plain_member_exemption_needs_receiver_discipline() {
         "{IMPORTS} let value = 0; {receiver} {hooks} test('reads', () => {{ expect(audit.mode).toBe('') }});"
     );
     assert_eq!(findings(&read, 1).len(), 1);
+    // Coercing a primitive-valued property runs no user code.
+    let numeric = format!(
+        "{IMPORTS} let value = 0; const audit = {{ mode: 1 }}; {hooks} test('reads', () => {{ expect(+audit.mode).toBe(1) }});"
+    );
+    assert_eq!(findings(&numeric, 1).len(), 1);
     // A returned property can carry a `then` the analyzer cannot see: only assertion
     // arguments are exempt from the scheduling scan.
     let returned = format!(
