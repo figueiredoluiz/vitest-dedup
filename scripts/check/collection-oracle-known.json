@@ -106,6 +106,13 @@
       "reason": "The hook follows an exit the suite callback always takes at collection; its declaration is recorded, and Vitest never registers it."
     },
     {
+      "dir": "fixtures/recall/inert-flow-finally-return",
+      "path": "run.test.ts",
+      "kind": "extra-hook",
+      "item": "beforeEach@run.test.ts:16",
+      "reason": "The hook follows an exit the suite callback always takes at collection; its declaration is recorded, and Vitest never registers it."
+    },
+    {
       "dir": "fixtures/recall/helper-inert-registration-callback",
       "path": "run.test.ts",
       "kind": "extra-hook",

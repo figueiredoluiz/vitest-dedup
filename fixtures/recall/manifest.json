@@ -10171,6 +10171,72 @@
       ]
     },
     {
+      "name": "inert-flow-getter-test",
+      "path": "inert-flow-getter-test",
+      "rule": "duplicate-test",
+      "role": "negative",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-05",
+      "expectedTests": 2,
+      "expectedIncomplete": false,
+      "expectedUnresolved": 0,
+      "expectedFindings": [],
+      "expectedAbsent": [
+        {
+          "rule": "duplicate-test",
+          "titles": [
+            "suite-a > reads",
+            "suite-b > reads"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "inert-flow-custom-iterable",
+      "path": "inert-flow-custom-iterable",
+      "rule": "duplicate-test",
+      "role": "negative",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-05",
+      "expectedTests": 2,
+      "expectedIncomplete": false,
+      "expectedUnresolved": 0,
+      "expectedFindings": [],
+      "expectedAbsent": [
+        {
+          "rule": "duplicate-test",
+          "titles": [
+            "suite-a > reads",
+            "suite-b > reads"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "inert-flow-finally-return",
+      "path": "inert-flow-finally-return",
+      "rule": "duplicate-test",
+      "role": "negative",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-05",
+      "expectedTests": 2,
+      "expectedIncomplete": false,
+      "expectedUnresolved": 0,
+      "expectedFindings": [],
+      "expectedAbsent": [
+        {
+          "rule": "duplicate-test",
+          "titles": [
+            "suite-a > reads",
+            "suite-b > reads"
+          ]
+        }
+      ]
+    },
+    {
       "name": "cross-file-import-query-namespace",
       "path": "cross-file-import-query-namespace",
       "origin": "synthetic",
@@ -10238,6 +10304,28 @@
       "expectedAbsent": []
     },
     {
+      "name": "inert-flow-unreachable-var",
+      "path": "inert-flow-unreachable-var",
+      "rule": "duplicate-test",
+      "role": "negative",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-05",
+      "expectedTests": 2,
+      "expectedIncomplete": false,
+      "expectedUnresolved": 0,
+      "expectedFindings": [],
+      "expectedAbsent": [
+        {
+          "rule": "duplicate-test",
+          "titles": [
+            "suite-a > reads",
+            "suite-b > reads"
+          ]
+        }
+      ]
+    },
+    {
       "name": "duplicate-test-import-project-path-package",
       "path": "duplicate-test-import-project-path-package",
       "rule": "duplicate-test",
@@ -10255,6 +10343,72 @@
           "titles": [
             "local",
             "packaged"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "inert-flow-patched-array-iterator",
+      "path": "inert-flow-patched-array-iterator",
+      "rule": "duplicate-test",
+      "role": "negative",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-05",
+      "expectedTests": 2,
+      "expectedIncomplete": false,
+      "expectedUnresolved": 0,
+      "expectedFindings": [],
+      "expectedAbsent": [
+        {
+          "rule": "duplicate-test",
+          "titles": [
+            "suite-a > reads",
+            "suite-b > reads"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "inert-flow-switch-case-constant",
+      "path": "inert-flow-switch-case-constant",
+      "rule": "duplicate-test",
+      "role": "negative",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-05",
+      "expectedTests": 2,
+      "expectedIncomplete": false,
+      "expectedUnresolved": 0,
+      "expectedFindings": [],
+      "expectedAbsent": [
+        {
+          "rule": "duplicate-test",
+          "titles": [
+            "a > with",
+            "b > without"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "inert-flow-ambient-constant",
+      "path": "inert-flow-ambient-constant",
+      "rule": "duplicate-test",
+      "role": "negative",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-05",
+      "expectedTests": 2,
+      "expectedIncomplete": false,
+      "expectedUnresolved": 0,
+      "expectedFindings": [],
+      "expectedAbsent": [
+        {
+          "rule": "duplicate-test",
+          "titles": [
+            "suite-a > reads",
+            "suite-b > reads"
           ]
         }
       ]

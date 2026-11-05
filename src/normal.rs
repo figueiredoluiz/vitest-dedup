@@ -6,6 +6,7 @@
 //! node being normalized is named by its declaration, never evaluated: see [`Normalizer::external`].
 //! A test's key and its context are assembled from the pieces here.
 
+mod completion;
 mod form;
 mod hooks;
 pub(crate) use form::{MAX_CLASS_RENDER_BYTES, UNSCOPED_PRIVATE};
