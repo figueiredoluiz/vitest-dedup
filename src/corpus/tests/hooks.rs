@@ -372,6 +372,17 @@ fn hook_property_writes_pair_over_a_proven_receiver() {
         1
     )
     .is_empty());
+    // A duplicate key's later initializer wins at runtime.
+    let duplicated = "const audit = { mode: 0, mode: { valueOf() { queue() } } };";
+    assert!(findings(&format!("{IMPORTS} {duplicated} {hook} {hook} {TEST}"), 1).is_empty());
+    // A destructuring target writes the property with an unproven value, however nested.
+    for target in [
+        "([audit.mode] = [make()]);",
+        "({ x: [audit.mode] } = make());",
+        "for ([audit.mode] of make()) {}",
+    ] {
+        assert!(findings(&source(&route(target)), 1).is_empty(), "{target}");
+    }
     // A receiver without the tracked key would write through an inherited accessor the
     // file cannot see.
     let empty = "const audit = {}; ";

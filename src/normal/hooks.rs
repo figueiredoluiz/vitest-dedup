@@ -221,6 +221,26 @@ impl Normalizer<'_> {
         stable.then_some((symbol, name.to_owned()))
     }
 
+    /// Whether this node is the left-hand pattern of an assignment or a `for`/`for`-`in` head:
+    /// a destructuring target writes its value with whatever the right-hand side produces.
+    fn in_assignment_left(&self, node: NodeId) -> Option<bool> {
+        let tree = self.tree;
+        let mut current = node;
+        loop {
+            let Some(parent) = tree.outer_parent(current) else {
+                return Some(false);
+            };
+            if matches!(
+                tree.kind(parent),
+                "AssignmentExpression" | "ForOfStatement" | "ForInStatement"
+            ) {
+                let left = tree.child(parent, "left")?;
+                return Some(tree.inner(left) == current);
+            }
+            current = parent;
+        }
+    }
+
     /// Every module-wide write to `receiver.<name>` is a plain `=` of one primitive literal,
     /// or there is no write at all: the property the initializer declares is the value every
     /// read sees.
@@ -234,8 +254,14 @@ impl Normalizer<'_> {
             if segments.len() != 1 || segments[0] != name {
                 continue;
             }
+            // A destructuring target writes the property with an unproven value.
+            let direct = tree.kind(use_of) == "AssignmentExpression"
+                && tree.inner(tree.child(use_of, "left")?) == current;
+            if !direct && self.in_assignment_left(use_of)? {
+                return None;
+            }
             match tree.kind(use_of) {
-                "AssignmentExpression" if tree.inner(tree.child(use_of, "left")?) == current => {
+                "AssignmentExpression" if direct => {
                     if tree.text(use_of, "operator") != Some("=") {
                         return None;
                     }
@@ -322,6 +348,10 @@ impl Normalizer<'_> {
                 return None;
             }
             let value = tree.inner(tree.child(item, "value")?);
+            if keys.iter().any(|known| known == key) {
+                // A duplicate key's later initializer wins at runtime.
+                return None;
+            }
             if primitive(tree, value) {
                 keys.push(key.to_owned());
             }
