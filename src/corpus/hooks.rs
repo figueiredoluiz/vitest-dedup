@@ -339,12 +339,17 @@ fn closed_scope(
         if !site.chain.is_empty() {
             // Only a suite table whose rows normalization proved its population closes: an empty
             // proof runs the callback zero times, a populated one runs it once per row as an
-            // ordinary suite invocation. Any other chained callee keeps the refusal.
-            return match tables.get(&site.node) {
-                Some(TableRows::Empty) => true,
-                Some(TableRows::Populated) => !uncertain(site),
-                Some(TableRows::Unproven) | None => false,
-            };
+            // ordinary suite invocation. The rows argument still evaluates at registration, so
+            // only an inert one can hide no registration, and any other chained callee keeps the
+            // refusal.
+            let rows = tree
+                .child(call, "callee")
+                .and_then(|callee| tree.list(callee, "arguments").into_iter().next().flatten());
+            return matches!(
+                tables.get(&site.node),
+                Some(TableRows::Empty | TableRows::Populated)
+            ) && !uncertain(site)
+                && rows.is_some_and(|rows| normalizer.hook_registration_inert(rows));
         }
         if matches!(site.kind, SiteKind::Wrapper(_)) {
             return admitted_calls.contains(&site.node);

@@ -229,7 +229,57 @@ impl Normalizer<'_> {
                 return None;
             }
         }
+        // Every use of the receiver is a static member read or a member-path write: a bare value
+        // can grow properties elsewhere, and a method call exposes the receiver as `this`, which
+        // can install a setter no global-object scan sees.
+        let binding = self.scopes.symbol(symbol);
+        for reference in &binding.references {
+            let node = reference.node?;
+            let (_, current, use_of) = self.member_chain(node)?;
+            if tree.kind(use_of) == "CallExpression"
+                && tree.inner(tree.child(use_of, "callee")?) == current
+            {
+                return None;
+            }
+            if tree.kind(use_of) == "UnaryExpression"
+                && tree.text(use_of, "operator") == Some("delete")
+            {
+                return None;
+            }
+        }
         Some((symbol, name))
+    }
+
+    /// The static member chain a reference sits under: its segments, the chain's outermost
+    /// member, and the node that uses the chain's value. A computed access, a `__proto__`
+    /// segment or a bare use (no member at all) refuses.
+    fn member_chain(&self, node: NodeId) -> Option<(Vec<&str>, NodeId, NodeId)> {
+        let tree = self.tree;
+        let mut current = node;
+        let mut segments: Vec<&str> = Vec::new();
+        loop {
+            let parent = tree.outer_parent(current)?;
+            if tree.kind(parent) == "MemberExpression"
+                && tree.inner(tree.child(parent, "object")?) == current
+            {
+                if tree.flag(parent, "computed") {
+                    return None;
+                }
+                let segment = tree.text(tree.inner(tree.child(parent, "property")?), "name")?;
+                if segment == "__proto__" {
+                    return None;
+                }
+                segments.push(segment);
+                current = parent;
+            } else {
+                break;
+            }
+        }
+        if segments.is_empty() {
+            return None;
+        }
+        let use_of = tree.outer_parent(current)?;
+        Some((segments, current, use_of))
     }
 
     /// One own-property write over a proven plain receiver, valued by every module-wide write
@@ -238,38 +288,13 @@ impl Normalizer<'_> {
     fn plain_write(&self, member: NodeId) -> Option<String> {
         let tree = self.tree;
         let (symbol, name) = self.plain_member(member)?;
-        // Every use of the receiver is a static member read or a member-path write; the tracked
-        // path keeps one literal value across the module.
+        // The tracked path keeps one literal value across the module.
         let binding = self.scopes.symbol(symbol);
         let mut written = Vec::new();
         for reference in &binding.references {
             let node = reference.node?;
-            let mut current = node;
-            let mut segments: Vec<&str> = Vec::new();
-            loop {
-                let parent = tree.outer_parent(current)?;
-                if tree.kind(parent) == "MemberExpression"
-                    && tree.inner(tree.child(parent, "object")?) == current
-                {
-                    if tree.flag(parent, "computed") {
-                        return None;
-                    }
-                    let segment = tree.text(tree.inner(tree.child(parent, "property")?), "name")?;
-                    if segment == "__proto__" {
-                        return None;
-                    }
-                    segments.push(segment);
-                    current = parent;
-                } else {
-                    break;
-                }
-            }
-            if segments.is_empty() {
-                // The receiver escapes as a value.
-                return None;
-            }
+            let (segments, current, use_of) = self.member_chain(node)?;
             let tracked = segments.len() == 1 && segments[0] == name;
-            let use_of = tree.outer_parent(current)?;
             match tree.kind(use_of) {
                 "AssignmentExpression"
                     if tracked && tree.inner(tree.child(use_of, "left")?) == current =>
@@ -488,6 +513,10 @@ impl Normalizer<'_> {
                             .is_some_and(|value| self.hook_registration_inert(value))
                 })
             }),
+            "ArrayExpression" => tree
+                .list(node, "elements")
+                .into_iter()
+                .all(|item| item.is_some_and(|item| self.hook_registration_inert(item))),
             "EmptyStatement" => true,
             _ => false,
         }

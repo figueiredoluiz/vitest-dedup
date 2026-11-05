@@ -327,9 +327,34 @@ fn hook_property_writes_pair_over_a_proven_receiver() {
     assert!(findings(&source(&route("audit[key] = 'x';")), 1).is_empty());
     // A `__proto__` segment replaces the receiver's prototype.
     assert!(findings(&source(&route("audit.__proto__.x = 1;")), 1).is_empty());
+    // A method call on the receiver exposes it as `this`, which can install a setter.
+    assert!(findings(&source(&route("audit.install();")), 1).is_empty());
     // Differing values are a barrier, not a pair.
     let other = "beforeEach(() => { audit.mode = 'secondary' });";
     assert!(findings(&format!("{IMPORTS} {receiver} {hook} {other} {TEST}"), 1).is_empty());
+}
+
+/// The scheduling scan's plain-receiver exemption holds only over the same receiver discipline:
+/// a receiver handed out as a value can grow a getter or setter later.
+#[test]
+fn hook_plain_member_exemption_needs_receiver_discipline() {
+    let receiver = "const audit = { mode: '' };";
+    let hooks = "beforeEach(() => { value = 1 }); beforeEach(() => { value = 1 });";
+    // The exemption covers reading a member of the proven receiver.
+    let read = format!(
+        "{IMPORTS} let value = 0; {receiver} {hooks} test('reads', () => {{ expect(audit.mode).toBe('') }});"
+    );
+    assert_eq!(findings(&read, 1).len(), 1);
+    // Handing the receiver to a call lets the callee rewrite its properties.
+    let escaped = format!(
+        "{IMPORTS} let value = 0; {receiver} function route() {{ configure(audit); }} {hooks} test('reads', () => {{ expect(audit.mode).toBe('') }});"
+    );
+    assert!(findings(&escaped, 1).is_empty());
+    // A method call on the receiver exposes it as `this`.
+    let method = format!(
+        "{IMPORTS} let value = 0; {receiver} function route() {{ audit.install(); }} {hooks} test('reads', () => {{ expect(audit.mode).toBe('') }});"
+    );
+    assert!(findings(&method, 1).is_empty());
 }
 
 /// Different and opaque work block a pair; removing the barrier keeps the positive.
@@ -477,6 +502,12 @@ fn suite_table_hooks_pair_when_rows_are_proven() {
         "{IMPORTS} let value = 0; describe.each([1])('s', () => {{ {hook} describe('inner', () => {{ {hook} {TEST} }}); }});"
     );
     assert_eq!(findings(&nested, 1).len(), 1);
+    // A rows argument that calls while evaluating can register hooks; the table refuses, and
+    // with it the file scope, so the file-scope pair beside it never becomes eligible.
+    let calling = format!(
+        "{IMPORTS} let value = 0; {hook} {hook} describe.each([registerObserver()])('s', () => {{ test('observes', () => {{ expect(value).toBe(1) }}); }}); test('plain', () => {{ expect(value).toBe(1) }});"
+    );
+    assert!(findings(&calling, 2).is_empty());
     // A tagged-template table and a suite wrapped in a loop keep the ordinary refusal.
     for shape in [
         format!("{IMPORTS} let value = 0; describe.each`row ${{1}}`(() => {{ {hook} {hook} {TEST} }});"),
