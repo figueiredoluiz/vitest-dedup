@@ -22,7 +22,7 @@ pub use rows::{Modifiers, Row, TableRow};
 use crate::framework::{Dialect, HookTiming};
 use crate::inventory::Inventory;
 use crate::lang::{Declaration, Name, NodeId, Parsed, Scopes, Span, SymbolId, Tree};
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::{Path, PathBuf};
@@ -436,6 +436,8 @@ pub struct Normalizer<'s> {
     hook_writes: HashMap<SymbolId, Option<String>>,
     /// Dynamic lexical evaluation would invalidate the recorded write set.
     hook_eval: Option<bool>,
+    /// A member write or define-property call rooted at the global `Object` or `Reflect`.
+    hook_pollution: Cell<Option<bool>>,
     /// Potentially deferred runtime callbacks, computed once independently of lifecycle queries.
     hook_scheduling: Option<Vec<hooks::DeferredCallback>>,
     /// While a declaration's dependencies are listed, the outside bindings its walks read.
@@ -472,6 +474,7 @@ impl<'s> Normalizer<'s> {
             externals: HashMap::new(),
             hook_writes: HashMap::new(),
             hook_eval: None,
+            hook_pollution: Cell::new(None),
             hook_scheduling: None,
             discovering: None,
             resolving: false,

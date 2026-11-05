@@ -1,6 +1,29 @@
 {
   "files": {
-    "cases.test.ts": { "tasks": 10, "wrapperSites": [], "next": {} },
-    "reset-stub.test.ts": { "tasks": 2, "wrapperSites": [], "next": {} }
+    "cases.test.ts": {
+      "tasks": 10,
+      "wrapperSites": [],
+      "next": {}
+    },
+    "reset-stub.test.ts": {
+      "tasks": 2,
+      "wrapperSites": [],
+      "next": {}
+    },
+    "table-constant-twin.test.ts": {
+      "tasks": 4,
+      "wrapperSites": [],
+      "next": {}
+    },
+    "property-constant-twin.test.ts": {
+      "tasks": 1,
+      "wrapperSites": [],
+      "next": {}
+    },
+    "before-all-constant-twin.test.ts": {
+      "tasks": 2,
+      "wrapperSites": [],
+      "next": {}
+    }
   }
 }

@@ -59,6 +59,10 @@ impl Normalizer<'_> {
                             | "SpreadElement" => true,
                             "CallExpression" | "MemberExpression" => {
                                 !self.synchronous_assertion_node(node)
+                                    // A member of a proven plain receiver runs no getter, so it
+                                    // defers nothing either read or written.
+                                    && !(tree.kind(node) == "MemberExpression"
+                                        && self.plain_member(node).is_some())
                             }
                             _ if tree.is_function(node) => {
                                 tree.flag(node, "async")
@@ -121,44 +125,247 @@ impl Normalizer<'_> {
                 && tree.text(expression, "operator") == Some("=")
             {
                 let target = tree.inner(tree.child(expression, "left")?);
-                if tree.kind(target) != "Identifier" {
-                    return None;
-                }
-                let symbol = self.scopes.symbol_at(tree.span(target).start)?;
-                let binding = self.scopes.symbol(symbol);
-                let Declaration::Variable(declaration) = binding.declaration else {
-                    return None;
-                };
-                // A lexical cell has no setter. Parameters, globals, imports, consts and properties
-                // cannot borrow this proof, nor can a callback-local temporary be useful setup.
-                if tree.span(callback).contains(binding.span)
-                    || tree.text(tree.parent(declaration)?, "kind") != Some("let")
-                    || tree.flag(tree.parent(declaration)?, "declare")
-                {
-                    return None;
-                }
                 let value = tree.inner(tree.child(expression, "right")?);
-                if !primitive(tree, value) {
-                    return None;
-                }
-                let raw = tree.text(value, "raw")?;
-                let fixed = if let Some(value) = self.hook_writes.get(&symbol) {
-                    value.as_deref() == Some(raw)
-                } else {
-                    let value = self.hook_write_value(symbol);
-                    let fixed = value.as_deref() == Some(raw);
-                    self.hook_writes.insert(symbol, value);
-                    fixed
+                let effect = match tree.kind(target) {
+                    "Identifier" => self.lexical_write_effect(callback, target, value)?,
+                    "MemberExpression" => self.plain_write(target)?,
+                    _ => return None,
                 };
-                if !fixed {
-                    return None;
-                }
-                effects.push(format!("write:{symbol:?}:{raw}"));
+                effects.push(effect);
             } else {
                 return None;
             }
         }
         (!effects.is_empty()).then(|| serde_json::to_string(&effects).expect("strings serialize"))
+    }
+
+    /// An overwrite of one lexical cell, or no proof.
+    fn lexical_write_effect(
+        &mut self,
+        callback: NodeId,
+        target: NodeId,
+        value: NodeId,
+    ) -> Option<String> {
+        let tree = self.tree;
+        if !primitive(tree, value) {
+            return None;
+        }
+        let symbol = self.scopes.symbol_at(tree.span(target).start)?;
+        let binding = self.scopes.symbol(symbol);
+        let Declaration::Variable(declaration) = binding.declaration else {
+            return None;
+        };
+        // A lexical cell has no setter. Parameters, globals, imports, consts and properties
+        // cannot borrow this proof, nor can a callback-local temporary be useful setup.
+        if tree.span(callback).contains(binding.span)
+            || tree.text(tree.parent(declaration)?, "kind") != Some("let")
+            || tree.flag(tree.parent(declaration)?, "declare")
+        {
+            return None;
+        }
+        let raw = tree.text(value, "raw")?;
+        let fixed = if let Some(value) = self.hook_writes.get(&symbol) {
+            value.as_deref() == Some(raw)
+        } else {
+            let value = self.hook_write_value(symbol);
+            let fixed = value.as_deref() == Some(raw);
+            self.hook_writes.insert(symbol, value);
+            fixed
+        };
+        fixed.then(|| format!("write:{symbol:?}:{raw}"))
+    }
+
+    /// One data property of a proven plain receiver: no getter can run when it is read or
+    /// written, so the expression defers nothing and the write carries no user code. The
+    /// receiver is a lexical binding assigned nowhere whose only value is a plain object
+    /// literal — own data properties, static keys, no `__proto__`.
+    fn plain_member(&self, member: NodeId) -> Option<(SymbolId, &str)> {
+        let tree = self.tree;
+        if tree.flag(member, "computed") {
+            return None;
+        }
+        let object = tree.inner(tree.child(member, "object")?);
+        if tree.kind(object) != "Identifier" {
+            return None;
+        }
+        let property = tree.inner(tree.child(member, "property")?);
+        let name = tree.text(property, "name")?;
+        if name == "__proto__" || self.prototype_polluted() {
+            return None;
+        }
+        let symbol = self.scopes.symbol_at(tree.span(object).start)?;
+        let binding = self.scopes.symbol(symbol);
+        let Declaration::Variable(declaration) = binding.declaration else {
+            return None;
+        };
+        // A `declare`d receiver has no initializer to prove.
+        if tree.flag(tree.parent(declaration)?, "declare") {
+            return None;
+        }
+        // The receiver is assigned nowhere, so the initializer's object literal is its only
+        // value.
+        if binding.references.iter().any(|reference| reference.write) {
+            return None;
+        }
+        let init = tree.inner(tree.child(declaration, "init")?);
+        if tree.kind(init) != "ObjectExpression" {
+            return None;
+        }
+        for item in tree.list(init, "properties") {
+            let item = tree.inner(item?);
+            if tree.kind(item) != "Property"
+                || tree.text(item, "kind") != Some("init")
+                || tree.flag(item, "computed")
+            {
+                return None;
+            }
+            let key = tree.inner(tree.child(item, "key")?);
+            let key = if tree.kind(key) == "Identifier" {
+                tree.text(key, "name")?
+            } else {
+                tree.text(key, "value")?
+            };
+            if key == "__proto__" {
+                return None;
+            }
+        }
+        Some((symbol, name))
+    }
+
+    /// One own-property write over a proven plain receiver, valued by every module-wide write
+    /// to the same path, or no proof. A receiver local to the hook callback never reaches this:
+    /// its declaration is a statement the statement-shape check refuses first.
+    fn plain_write(&self, member: NodeId) -> Option<String> {
+        let tree = self.tree;
+        let (symbol, name) = self.plain_member(member)?;
+        // Every use of the receiver is a static member read or a member-path write; the tracked
+        // path keeps one literal value across the module.
+        let binding = self.scopes.symbol(symbol);
+        let mut written = Vec::new();
+        for reference in &binding.references {
+            let node = reference.node?;
+            let mut current = node;
+            let mut segments: Vec<&str> = Vec::new();
+            loop {
+                let parent = tree.outer_parent(current)?;
+                if tree.kind(parent) == "MemberExpression"
+                    && tree.inner(tree.child(parent, "object")?) == current
+                {
+                    if tree.flag(parent, "computed") {
+                        return None;
+                    }
+                    let segment = tree.text(tree.inner(tree.child(parent, "property")?), "name")?;
+                    if segment == "__proto__" {
+                        return None;
+                    }
+                    segments.push(segment);
+                    current = parent;
+                } else {
+                    break;
+                }
+            }
+            if segments.is_empty() {
+                // The receiver escapes as a value.
+                return None;
+            }
+            let tracked = segments.len() == 1 && segments[0] == name;
+            let use_of = tree.outer_parent(current)?;
+            match tree.kind(use_of) {
+                "AssignmentExpression"
+                    if tracked && tree.inner(tree.child(use_of, "left")?) == current =>
+                {
+                    // The tracked write keeps one primitive value across the module.
+                    if tree.text(use_of, "operator") != Some("=") {
+                        return None;
+                    }
+                    let right = tree.inner(tree.child(use_of, "right")?);
+                    if !primitive(tree, right) {
+                        return None;
+                    }
+                    written.push(tree.text(right, "raw")?);
+                }
+                "UpdateExpression"
+                    if tracked && tree.inner(tree.child(use_of, "argument")?) == current =>
+                {
+                    return None;
+                }
+                "UnaryExpression" if tree.text(use_of, "operator") == Some("delete") => {
+                    return None;
+                }
+                _ => {}
+            }
+        }
+        let raw = written.first()?;
+        written
+            .iter()
+            .all(|other| other == raw)
+            .then(|| format!("pwrite:{symbol:?}:{name}:{raw}"))
+    }
+
+    /// A member write or define-property call rooted at the global `Object` or `Reflect` could
+    /// give the receiver's prototype a setter.
+    fn prototype_polluted(&self) -> bool {
+        if self.hook_pollution.get().is_none() {
+            let tree = self.tree;
+            let mut polluted = false;
+            'scan: for node in tree.nodes() {
+                let global = |member: NodeId| -> Option<bool> {
+                    // The chain's root decides: `Object.prototype.__defineSetter__` reaches the
+                    // global through `Object.prototype`.
+                    let mut current = tree.inner(tree.child(member, "object")?);
+                    while tree.kind(current) == "MemberExpression" {
+                        current = tree.inner(tree.child(current, "object")?);
+                    }
+                    if tree.kind(current) != "Identifier" {
+                        return None;
+                    }
+                    let name = tree.text(current, "name")?;
+                    Some(
+                        matches!(name, "Object" | "Reflect")
+                            && self.scopes.is_global_at(tree.span(current).start),
+                    )
+                };
+                polluted = match tree.kind(node) {
+                    "AssignmentExpression" => tree
+                        .child(node, "left")
+                        .map(|left| tree.inner(left))
+                        .and_then(|left| (tree.kind(left) == "MemberExpression").then_some(left))
+                        .is_some_and(|left| global(left) == Some(true)),
+                    "CallExpression" => tree
+                        .child(node, "callee")
+                        .map(|callee| tree.inner(callee))
+                        .and_then(|callee| {
+                            (tree.kind(callee) == "MemberExpression"
+                                && !tree.flag(callee, "computed"))
+                            .then_some(callee)
+                        })
+                        .is_some_and(|callee| {
+                            global(callee) == Some(true)
+                                && tree
+                                    .child(callee, "property")
+                                    .and_then(|property| tree.text(property, "name"))
+                                    .is_some_and(|name| {
+                                        matches!(
+                                            name,
+                                            "defineProperty"
+                                                | "defineProperties"
+                                                | "__defineSetter__"
+                                                | "__defineGetter__"
+                                                | "set"
+                                        )
+                                    })
+                        }),
+                    _ => polluted,
+                };
+                if polluted {
+                    break 'scan;
+                }
+            }
+            self.hook_pollution.set(Some(polluted));
+        }
+        self.hook_pollution
+            .get()
+            .expect("pollution facts initialized")
     }
 
     /// Only a directly imported framework assertion and its synchronous member chain qualify.

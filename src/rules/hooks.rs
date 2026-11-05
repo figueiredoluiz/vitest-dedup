@@ -55,15 +55,17 @@ pub(super) fn run(
                     if outer.key.is_none() || outer.key != inner.key {
                         break;
                     }
-                    if !same_execution(outer, inner)
-                        || outer.span == inner.span
-                        || (outer.scope != inner.scope
-                            && !match outer.timing {
-                                HookTiming::BeforeEach => each_uniform.0,
-                                HookTiming::AfterEach => each_uniform.1,
-                                _ => false,
-                            })
-                    {
+                    // Per-test phases cross scopes when the whole chain's phase is uniform; a
+                    // nested `beforeAll` too, but only over constant writes, which the
+                    // module-wide write set licenses — every other effect re-dirties in between.
+                    let cross_scope = outer.scope != inner.scope
+                        && !match outer.timing {
+                            HookTiming::BeforeEach => each_uniform.0,
+                            HookTiming::AfterEach => each_uniform.1,
+                            HookTiming::BeforeAll => constant_writes(&outer.key),
+                            _ => false,
+                        };
+                    if cross_scope || outer.span == inner.span {
                         continue;
                     }
                     let location = |hook: &Hook| Location {
@@ -124,8 +126,13 @@ pub(super) fn run(
     (exhausted, false)
 }
 
-/// Once-per-suite phases in distinct scopes may have test execution between them.
-fn same_execution(outer: &Hook, inner: &Hook) -> bool {
-    outer.scope == inner.scope
-        || matches!(outer.timing, HookTiming::BeforeEach | HookTiming::AfterEach)
+/// A nested `beforeAll` re-establishes what its ancestor already established when the written
+/// cells cannot change in between: every proven effect is a constant lexical write. Reset,
+/// property and opaque effects re-dirty and refuse.
+fn constant_writes(key: &Option<String>) -> bool {
+    key.as_deref().is_some_and(|key| {
+        serde_json::from_str::<Vec<String>>(key).is_ok_and(|effects| {
+            !effects.is_empty() && effects.iter().all(|effect| effect.starts_with("write:"))
+        })
+    })
 }

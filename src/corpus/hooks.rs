@@ -6,7 +6,7 @@ use crate::inventory::{Inventory, Label, Site, SiteKind};
 use crate::lang::{Lines, NodeId, Parsed};
 use crate::model::{Position, Span};
 use crate::normal::{Normalizer, Structure};
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 /// One hook declaration, retained even when its body cannot license a redundancy claim.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -35,6 +35,66 @@ pub struct Hooks {
     pub declarations: Vec<Hook>,
     /// Indices into declarations, in outer-to-inner registration order.
     pub chains: Vec<Vec<usize>>,
+}
+
+/// What a suite table's rows normalization proves about its callback's population. Only a bare
+/// table callee (`describe.each`/`describe.for`) reaches the proof: any other chained modifier
+/// keeps the refusal.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TableRows {
+    /// Proven zero rows: the callback never runs, so nothing inside it registers.
+    Empty,
+    /// Proven at least one row: the callback runs once per row as an ordinary suite invocation.
+    Populated,
+    /// Unread rows, a chained modifier, or not a table: the population is unknown.
+    Unproven,
+}
+
+/// A suite table's rows proof, by its registering call. Absent: not a table, or a chained shape
+/// this proof does not reach.
+fn table_rows(
+    found: &Inventory,
+    structure: &Structure,
+    parsed: &Parsed,
+    normalizer: &mut Normalizer<'_>,
+) -> (HashMap<NodeId, TableRows>, HashSet<NodeId>) {
+    let tree = &parsed.tree;
+    let members: HashMap<NodeId, NodeId> = found
+        .sites
+        .iter()
+        .filter_map(|site| Some((site.node, site.member?)))
+        .collect();
+    let mut tables = HashMap::new();
+    for (site, callee) in found
+        .sites
+        .iter()
+        .filter(|site| site.kind == SiteKind::Registers(Registers::Suite))
+        .filter_map(|site| Some((site, tree.child(site.node, "callee")?)))
+    {
+        let modifiers = normalizer.modifiers(callee, members.get(&site.node).copied());
+        // `untabled` holds every chain step outside the table; a bare table leaves only the
+        // registration's root, and an inert member (`skip`, `todo`) never runs.
+        let proof = match modifiers.rows {
+            Some(rows) if !modifiers.inert && modifiers.untabled.split('.').count() <= 1 => {
+                if rows.is_empty() {
+                    TableRows::Empty
+                } else {
+                    TableRows::Populated
+                }
+            }
+            _ => TableRows::Unproven,
+        };
+        tables.insert(site.node, proof);
+    }
+    // Suite callbacks whose table proved empty never run, so nothing declared inside one, at any
+    // depth, registers.
+    let dead: HashSet<NodeId> = structure
+        .suites
+        .iter()
+        .filter(|(_, &call)| tables.get(&call) == Some(&TableRows::Empty))
+        .map(|(&scope, _)| scope)
+        .collect();
+    (tables, dead)
 }
 
 /// Collects chains only for ordinary, comparable tests under scopes closed to unknown registration.
@@ -71,9 +131,13 @@ pub(super) fn collect(
     }
     let tree = &parsed.tree;
     let sites: HashMap<_, _> = found.sites.iter().map(|site| (site.node, site)).collect();
+    let (tables, dead) = table_rows(found, structure, parsed, normalizer);
     if std::iter::once(None)
         .chain(structure.suites.keys().copied().map(Some))
-        .any(|scope| !closed_scope(scope, parsed, &sites, normalizer, admitted_calls))
+        .any(|scope| {
+            !scope.is_some_and(|scope| dead.contains(&scope))
+                && !closed_scope(scope, parsed, &sites, normalizer, admitted_calls, &tables)
+        })
     {
         return result;
     }
@@ -96,6 +160,13 @@ pub(super) fn collect(
         let Some(&scope) = scopes.get(&site.node) else {
             continue;
         };
+        // A hook under a proven-empty table never registers.
+        if normalizer
+            .suites_around(site.node)
+            .is_some_and(|around| around.iter().any(|scope| dead.contains(scope)))
+        {
+            continue;
+        }
         let arguments = tree.list(site.node, "arguments");
         let callback = arguments
             .first()
@@ -229,9 +300,12 @@ fn closed_scope(
     sites: &HashMap<NodeId, &Site>,
     normalizer: &Normalizer<'_>,
     admitted_calls: &[NodeId],
+    tables: &HashMap<NodeId, TableRows>,
 ) -> bool {
     let tree = &parsed.tree;
     let statements = match scope {
+        // The caller skips proven-empty table scopes: their callbacks never run, so their
+        // statements close vacuously and contribute no declarations.
         Some(scope) => {
             if tree
                 .child(scope, "body")
@@ -262,8 +336,15 @@ fn closed_scope(
         let Some(site) = sites.get(&call) else {
             return false;
         };
-        if !site.chain.is_empty() || uncertain(site) {
-            return false;
+        if !site.chain.is_empty() {
+            // Only a suite table whose rows normalization proved its population closes: an empty
+            // proof runs the callback zero times, a populated one runs it once per row as an
+            // ordinary suite invocation. Any other chained callee keeps the refusal.
+            return match tables.get(&site.node) {
+                Some(TableRows::Empty) => true,
+                Some(TableRows::Populated) => !uncertain(site),
+                Some(TableRows::Unproven) | None => false,
+            };
         }
         if matches!(site.kind, SiteKind::Wrapper(_)) {
             return admitted_calls.contains(&site.node);
