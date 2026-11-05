@@ -355,7 +355,7 @@ fn closed_scope(
                 .flatten()
                 .map(|arg| tree.inner(arg))
                 .filter(|arg| tree.is_function(*arg))
-                .all(|arg| callback_parameters_inert(tree, normalizer, arg));
+                .all(|arg| callback_parameters_inert(tree, arg));
             return matches!(
                 tables.get(&site.node),
                 Some(TableRows::Empty | TableRows::Populated)
@@ -371,33 +371,14 @@ fn closed_scope(
     })
 }
 
-/// A table callback's parameter defaults evaluate when each generated suite binds its row:
-/// only inert initializers can hide no hook.
-fn callback_parameters_inert(
-    tree: &crate::lang::Tree,
-    normalizer: &Normalizer<'_>,
-    callback: NodeId,
-) -> bool {
+/// A table callback's binding operation must evaluate nothing: destructuring reads the row's
+/// properties, a default runs its initializer, and a computed key runs its expression — only
+/// plain identifier parameters bind without any of that.
+fn callback_parameters_inert(tree: &crate::lang::Tree, callback: NodeId) -> bool {
     tree.list(callback, "params")
         .into_iter()
         .flatten()
-        .all(|param| {
-            // The binding operation evaluates a default's initializer and a computed key:
-            // those are the whole set, so only inert ones can hide no hook.
-            std::iter::once(param)
-                .chain(tree.descendants(param))
-                .all(|node| {
-                    if tree.kind(node) == "Property" && tree.flag(node, "computed") {
-                        return tree
-                            .child(node, "key")
-                            .is_some_and(|key| normalizer.hook_registration_inert(key));
-                    }
-                    tree.kind(node) != "AssignmentPattern"
-                        || tree
-                            .child(node, "right")
-                            .is_some_and(|right| normalizer.hook_registration_inert(right))
-                })
-        })
+        .all(|param| tree.kind(param) == "Identifier")
 }
 
 /// Every row of the table's array is a primitive literal: a row object's properties are read
