@@ -80,6 +80,18 @@ impl Sources {
             .then_some(file)
     }
 
+    /// How a static import names its module in a key: the file it resolves to, root-relative so
+    /// one tree keys alike wherever it lies, or its spelling when it resolves to none, each tagged
+    /// so a project path never reads as a package spelling. The resolver drops a `?query` or
+    /// `#fragment` that Vite still loads differently, so it is kept.
+    pub(crate) fn module_key(&self, from: &Path, specifier: &str, root: &Path) -> String {
+        let Some(file) = self.resolve_file(from, specifier, root) else {
+            return format!("spelled:{specifier}");
+        };
+        let module = self.relative(&file, root).unwrap_or(file);
+        format!("file:{}{}", module.display(), query(specifier))
+    }
+
     /// Resolve any project file, isolating every resolver metadata/configuration read as well.
     pub(crate) fn resolve_file(
         &self,
@@ -122,6 +134,15 @@ impl Sources {
         };
         resolve::project_file(file, root, |path| tree.canonicalize(path))
     }
+}
+
+/// The `?query` or `#fragment` ending `specifier`, which the resolver drops and Vite loads as a
+/// different module; empty when there is none. A leading `#` is a package import, not a fragment.
+pub(crate) fn query(specifier: &str) -> &str {
+    specifier
+        .char_indices()
+        .find(|&(at, c)| c == '?' || (c == '#' && at > 0))
+        .map_or("", |(at, _)| &specifier[at..])
 }
 
 /// Builtins and ignored modules are not evidence of missing project-package linkage.

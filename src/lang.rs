@@ -24,6 +24,7 @@ pub use resolve::{
 };
 pub use scalar::Scalar;
 pub use scopes::{Declaration, Imported, Name, Reference, Scopes, Symbol, SymbolId};
+pub(crate) use sources::query;
 pub use sources::{SourceKind, SourceTree, Sources};
 pub use syntax::{bound_symbols, export_name, member_name, property_name, uses_receiver};
 pub use tree::{Field, NodeId, Span, Tree};

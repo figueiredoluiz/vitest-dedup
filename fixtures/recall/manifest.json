@@ -10169,6 +10169,95 @@
           ]
         }
       ]
+    },
+    {
+      "name": "cross-file-import-query-namespace",
+      "path": "cross-file-import-query-namespace",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-05",
+      "expectedTests": 2,
+      "expectedIncomplete": false,
+      "expectedUnresolved": 0,
+      "rule": "cross-file-duplicate",
+      "role": "negative",
+      "expectedFindings": [],
+      "expectedAbsent": [
+        {
+          "rule": "cross-file-duplicate",
+          "titles": [
+            "reads",
+            "reads"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "cross-file-import-query-named",
+      "path": "cross-file-import-query-named",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-05",
+      "expectedTests": 2,
+      "expectedIncomplete": false,
+      "expectedUnresolved": 0,
+      "rule": "cross-file-duplicate",
+      "role": "negative",
+      "expectedFindings": [],
+      "expectedAbsent": [
+        {
+          "rule": "cross-file-duplicate",
+          "titles": [
+            "reads",
+            "reads"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "cross-file-import-query-same",
+      "path": "cross-file-import-query-same",
+      "rule": "cross-file-duplicate",
+      "role": "positive",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-05",
+      "expectedTests": 2,
+      "expectedIncomplete": false,
+      "expectedUnresolved": 0,
+      "expectedFindings": [
+        {
+          "rule": "cross-file-duplicate",
+          "severity": "warning",
+          "locations": [
+            "one.test.ts:5",
+            "two.test.ts:3"
+          ]
+        }
+      ],
+      "expectedAbsent": []
+    },
+    {
+      "name": "duplicate-test-import-project-path-package",
+      "path": "duplicate-test-import-project-path-package",
+      "rule": "duplicate-test",
+      "role": "negative",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-05",
+      "expectedTests": 2,
+      "expectedIncomplete": false,
+      "expectedUnresolved": 0,
+      "expectedFindings": [],
+      "expectedAbsent": [
+        {
+          "rule": "duplicate-test",
+          "titles": [
+            "local",
+            "packaged"
+          ]
+        }
+      ]
     }
   ],
   "knownFalsePositiveBaseline": 1,

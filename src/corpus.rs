@@ -590,13 +590,12 @@ fn read_parsed(
         if acts || bare_import {
             module_context.push_str(&normalizer.of(statement));
             // What a bare import runs is the file it resolves to, not its spelling.
-            if let Some(file) = tree
+            if let Some(source) = tree
                 .child(statement, "source")
                 .and_then(|source| tree.text(source, "value"))
                 .filter(|_| bare_import)
-                .and_then(|source| run.sources.resolve_file(path, source, setting.root))
             {
-                module_context.push_str(&file.display().to_string());
+                module_context.push_str(&run.sources.module_key(path, source, setting.root));
             }
             module_context.push(';');
         }
