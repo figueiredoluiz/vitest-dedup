@@ -1,4 +1,3 @@
-import { test, expect } from 'vitest';
+import { register } from './runner';
 
-test('uncertain first', () => { expect(4).toBe(4); });
-test('uncertain second', () => { expect(4).toBe(4); });
+register();
