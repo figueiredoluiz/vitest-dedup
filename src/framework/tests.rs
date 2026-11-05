@@ -33,7 +33,7 @@ const COLLISIONS: &[(&str, &str)] = &[
     ("src/behavior.rs", "test"),
     ("src/behavior/dataflow.rs", "test"),
     // The same field, in a suite statement's completions.
-    ("src/normal/completion.rs", "test"),
+    ("src/lang/completion.rs", "test"),
 ];
 
 /// The string literals in `source`, with `//` comments removed first so prose may name the API.

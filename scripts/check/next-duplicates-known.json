@@ -109,10 +109,6 @@
       "reason": "The default engine abstains on this file; the next engine compares identical text in an identical context, as decided."
     },
     {
-      "id": "recall-miss|local-helper-overloaded|duplicate-test|old body,independent",
-      "reason": "Tests a helper registers are excluded, not compared, until they are compared where the helper is called."
-    },
-    {
       "id": "recall-miss|local-helper-member-write|duplicate-test|old body,independent",
       "reason": "Tests a helper registers are excluded, not compared, until they are compared where the helper is called."
     },
@@ -131,10 +127,6 @@
     {
       "id": "recall-miss|describe-return-tail|duplicate-test|suite > first,visible",
       "reason": "False positive: a test after `return` never registers, and the inventory still counts it."
-    },
-    {
-      "id": "recall-miss|local-helper-finally-local-break|duplicate-test|hidden,visible",
-      "reason": "Tests a helper registers are excluded, not compared, until they are compared where the helper is called."
     },
     {
       "id": "recall-miss|local-helper-shadowed-undefined|duplicate-test|suite > hidden,visible",
@@ -167,10 +159,6 @@
     {
       "id": "recall-miss|helper-inert-registration-callback|duplicate-test|hooked > reads,plain > reads",
       "reason": "A hook after an unconditional exit never registers, and the suite context still reads it, so equal tests key apart."
-    },
-    {
-      "id": "recall-miss|helper-initializer-test|duplicate-test|hidden,visible",
-      "reason": "Tests a helper registers are excluded, not compared, until they are compared where the helper is called."
     },
     {
       "id": "recall-miss|helper-initializer-factories|duplicate-test|first,second",
@@ -229,10 +217,6 @@
       "reason": "The next engine counts a helper's call and the tests its file spells; the default engine inlines what the helper registers."
     },
     {
-      "id": "recall-tests|local-helper-overloaded|all|3",
-      "reason": "The next engine counts a helper's call and the tests its file spells; the default engine inlines what the helper registers."
-    },
-    {
       "id": "recall-tests|local-helper-overloaded-reassigned|all|5",
       "reason": "The next engine counts a helper's call and the tests its file spells; the default engine inlines what the helper registers."
     },
@@ -278,10 +262,6 @@
     },
     {
       "id": "recall-tests|local-helper-noniterable-destructure|all|3",
-      "reason": "The next engine counts a helper's call and the tests its file spells; the default engine inlines what the helper registers."
-    },
-    {
-      "id": "recall-tests|local-helper-finally-local-break|all|4",
       "reason": "The next engine counts a helper's call and the tests its file spells; the default engine inlines what the helper registers."
     },
     {
@@ -358,10 +338,6 @@
     },
     {
       "id": "recall-tests|helper-ignored-conditional-hook|all|3",
-      "reason": "The next engine counts a helper's call and the tests its file spells; the default engine inlines what the helper registers."
-    },
-    {
-      "id": "recall-tests|helper-initializer-test|all|3",
       "reason": "The next engine counts a helper's call and the tests its file spells; the default engine inlines what the helper registers."
     },
     {

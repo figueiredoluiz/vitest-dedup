@@ -1,8 +1,7 @@
 //! A bounded proof that repeating a synchronous hook adds no effect.
 
 use super::Normalizer;
-use crate::lang::{Declaration, Field, NodeId, Span, SymbolId};
-use serde_json::Value;
+use crate::lang::{Declaration, NodeId, Span, SymbolId};
 use std::collections::{HashMap, HashSet};
 
 /// One callback whose execution cannot establish the absence of deferred work.
@@ -288,9 +287,7 @@ impl Normalizer<'_> {
     }
 }
 
-/// Primitive values only; regular expressions allocate, and replacement-encoded text is uncertain.
-pub(super) fn primitive(tree: &crate::lang::Tree, node: NodeId) -> bool {
-    tree.kind(node) == "Literal"
-        && !matches!(tree.field_of(node, "regex"), Field::Object(_))
-        && !matches!(tree.field_of(node, "value"), Field::Value(Value::String(text)) if text.contains('\u{fffd}'))
+/// Primitive values only; see [`crate::lang::primitive`].
+fn primitive(tree: &crate::lang::Tree, node: NodeId) -> bool {
+    crate::lang::primitive(tree, node)
 }

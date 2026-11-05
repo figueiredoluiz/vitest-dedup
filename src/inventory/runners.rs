@@ -90,7 +90,8 @@ pub(crate) fn local(parsed: &Parsed, found: &Inventory, callee: NodeId) -> Resul
     let function = callable(parsed, callee, None)?;
     let parameters = parameters(parsed, function, found.direct_eval)?;
     let mut steps = Vec::new();
-    body(parsed, found, function, &mut steps, &mut 2000)?;
+    let reader = BodyReader { parsed, found };
+    reader.body(function, &mut steps, &mut 2000)?;
     Ok(Plan {
         function,
         parameters,
@@ -132,7 +133,11 @@ pub fn template(
                 let found = inventory(&at.0, &source, &parsed, setting, &mut modules);
                 let parameters = parameters(&parsed, function, found.direct_eval)?;
                 let mut steps = Vec::new();
-                body(&parsed, &found, function, &mut steps, &mut 2000)?;
+                let body = BodyReader {
+                    parsed: &parsed,
+                    found: &found,
+                };
+                body.body(function, &mut steps, &mut 2000)?;
                 let mut dependencies: Vec<_> = reader.checked.into_iter().collect();
                 dependencies.sort();
                 return Ok(Template {
@@ -457,6 +462,18 @@ fn symbol_callable(
     immutable(parsed, symbol)?;
     let tree = &parsed.tree;
     match parsed.scopes.symbol(symbol).declaration {
+        // An overloaded function is declared first by a signature; the call runs the
+        // implementation, the one declaration of the name with a body.
+        Declaration::Function(node) if tree.kind(node) == "TSDeclareFunction" => tree
+            .nodes()
+            .find(|&candidate| {
+                tree.kind(candidate) == "FunctionDeclaration"
+                    && tree.child(candidate, "id").is_some_and(|id| {
+                        parsed.scopes.name_at(tree.span(id).start)
+                            == Some(Name::Binding(Some(symbol)))
+                    })
+            })
+            .ok_or(Refusal::Callable),
         Declaration::Function(node) => Ok(node),
         Declaration::Variable(node) => {
             if tree
@@ -495,6 +512,11 @@ fn immutable(parsed: &Parsed, symbol: SymbolId) -> Result<(), Refusal> {
             parsed.tree.kind(node) == "Identifier"
                 && parsed.scopes.name_at(parsed.tree.span(node).start)
                     == Some(Name::Binding(Some(symbol)))
+                // An overload signature is erased: only the implementation declares at runtime.
+                && parsed
+                    .tree
+                    .parent(node)
+                    .is_none_or(|parent| parsed.tree.kind(parent) != "TSDeclareFunction")
         })
         .count();
     if declarations != 1 {
@@ -632,78 +654,166 @@ fn inert_value(parsed: &Parsed, node: NodeId, left: &mut usize) -> bool {
     }
 }
 
-/// Record only reachable operations; returning a registration ends this invocation's sequence.
-fn body(
-    parsed: &Parsed,
-    found: &Inventory,
-    function: NodeId,
-    steps: &mut Vec<Step>,
-    left: &mut usize,
-) -> Result<(), Refusal> {
-    let tree = &parsed.tree;
-    let root = tree.child(function, "body").ok_or(Refusal::Body)?;
-    let statements = if tree.kind(root) == "BlockStatement" {
-        tree.list(root, "body").into_iter().flatten().collect()
-    } else {
-        vec![root]
-    };
-    for statement in statements {
-        if tree.erased_declaration(statement) {
-            continue;
-        }
-        if *left == 0 {
-            return Err(Refusal::Limit);
-        }
-        *left -= 1;
-        let returns = tree.kind(statement) == "ReturnStatement";
-        let expression = match tree.kind(statement) {
-            "ExpressionStatement" => tree.child(statement, "expression").ok_or(Refusal::Body)?,
-            "ReturnStatement" => {
-                let Some(argument) = tree.child(statement, "argument") else {
-                    break;
-                };
-                argument
-            }
-            "EmptyStatement"
-            | "TSInterfaceDeclaration"
-            | "TSTypeAliasDeclaration"
-            | "FunctionDeclaration" => continue,
-            _ => statement,
+/// One module's template reader over what its inventory recorded.
+struct BodyReader<'a> {
+    parsed: &'a Parsed,
+    found: &'a Inventory,
+}
+
+impl BodyReader<'_> {
+    /// Record only reachable operations; returning a registration ends this invocation's sequence.
+    fn body(
+        &self,
+        function: NodeId,
+        steps: &mut Vec<Step>,
+        left: &mut usize,
+    ) -> Result<(), Refusal> {
+        let tree = &self.parsed.tree;
+        let root = tree.child(function, "body").ok_or(Refusal::Body)?;
+        let statements: Vec<NodeId> = if tree.kind(root) == "BlockStatement" {
+            tree.list(root, "body").into_iter().flatten().collect()
+        } else {
+            vec![root]
         };
-        let expression = tree.inner(expression);
-        let site = found
-            .sites
-            .iter()
-            .find(|site| site.node == expression)
-            .ok_or(Refusal::Body)?;
-        match site.kind {
-            SiteKind::Registers(kind) => {
-                if !site.chain.is_empty() {
-                    return Err(Refusal::Body);
-                }
-                steps.push(Step::Registration(expression, kind));
-                if kind == Registers::Suite {
-                    let arguments = tree.list(expression, "arguments");
-                    if arguments.len() != 2 {
-                        return Err(Refusal::Body);
-                    }
-                    let callback = tree.inner(arguments[1].ok_or(Refusal::Body)?);
-                    if !tree.is_function(callback) {
-                        return Err(Refusal::Body);
-                    }
-                    if !parameters(parsed, callback, found.direct_eval)?.is_empty() {
-                        return Err(Refusal::Body);
-                    }
-                    body(parsed, found, callback, steps, left)?;
-                }
+        self.sequence(&statements, steps, left).map(|_| ())
+    }
+
+    /// Read `statements` in order; whether the sequence returned, which ends the invocation.
+    fn sequence(
+        &self,
+        statements: &[NodeId],
+        steps: &mut Vec<Step>,
+        left: &mut usize,
+    ) -> Result<bool, Refusal> {
+        let tree = &self.parsed.tree;
+        for &statement in statements {
+            if tree.erased_declaration(statement) {
+                continue;
             }
-            SiteKind::Wrapper(_) => steps.push(Step::Call(expression)),
+            if *left == 0 {
+                return Err(Refusal::Limit);
+            }
+            *left -= 1;
+            let returns = tree.kind(statement) == "ReturnStatement";
+            let expression = match tree.kind(statement) {
+                "ExpressionStatement" => {
+                    tree.child(statement, "expression").ok_or(Refusal::Body)?
+                }
+                "ReturnStatement" => {
+                    let Some(argument) = tree.child(statement, "argument") else {
+                        return Ok(true);
+                    };
+                    argument
+                }
+                "EmptyStatement"
+                | "TSInterfaceDeclaration"
+                | "TSTypeAliasDeclaration"
+                | "FunctionDeclaration" => continue,
+                // A `finally` that runs nothing and ends normally leaves the block's outcome as
+                // it was; a `catch` would run only on a throw the reader does not model.
+                "TryStatement" => {
+                    let finalizer = tree.child(statement, "finalizer").ok_or(Refusal::Body)?;
+                    if tree.child(statement, "handler").is_some()
+                        || !lang::completes_inertly(tree, &self.parsed.scopes, finalizer)
+                    {
+                        return Err(Refusal::Body);
+                    }
+                    let block: Vec<NodeId> = tree
+                        .child(statement, "block")
+                        .map(|block| tree.list(block, "body").into_iter().flatten().collect())
+                        .ok_or(Refusal::Body)?;
+                    if self.sequence(&block, steps, left)? {
+                        return Ok(true);
+                    }
+                    continue;
+                }
+                "VariableDeclaration" => {
+                    self.declaration(statement, steps, left)?;
+                    continue;
+                }
+                _ => statement,
+            };
+            let expression = tree.inner(expression);
+            let site = self
+                .found
+                .sites
+                .iter()
+                .find(|site| site.node == expression)
+                .ok_or(Refusal::Body)?;
+            match site.kind {
+                SiteKind::Registers(kind) => self.registration(site, kind, steps, left)?,
+                SiteKind::Wrapper(_) => steps.push(Step::Call(expression)),
+            }
+            if returns {
+                return Ok(true);
+            }
         }
-        if returns {
-            break;
+        Ok(false)
+    }
+
+    /// A registration call, and a suite's children after it.
+    fn registration(
+        &self,
+        site: &super::Site,
+        kind: Registers,
+        steps: &mut Vec<Step>,
+        left: &mut usize,
+    ) -> Result<(), Refusal> {
+        let tree = &self.parsed.tree;
+        if !site.chain.is_empty() {
+            return Err(Refusal::Body);
+        }
+        steps.push(Step::Registration(site.node, kind));
+        if kind == Registers::Suite {
+            let arguments = tree.list(site.node, "arguments");
+            if arguments.len() != 2 {
+                return Err(Refusal::Body);
+            }
+            let callback = tree.inner(arguments[1].ok_or(Refusal::Body)?);
+            if !tree.is_function(callback) {
+                return Err(Refusal::Body);
+            }
+            if !parameters(self.parsed, callback, self.found.direct_eval)?.is_empty() {
+                return Err(Refusal::Body);
+            }
+            self.body(callback, steps, left)?;
+        }
+        Ok(())
+    }
+
+    /// A `const` whose initializer is a registration, read as that registration. A registration
+    /// function built and left unused is not admitted: building one sets state on the shared chain
+    /// and coerces its arguments. Nor is the in-source binding: an imported module may not receive
+    /// it, and a hoisted function can read its names before it is initialized.
+    fn declaration(
+        &self,
+        statement: NodeId,
+        steps: &mut Vec<Step>,
+        left: &mut usize,
+    ) -> Result<(), Refusal> {
+        let tree = &self.parsed.tree;
+        let declarations = tree.list(statement, "declarations");
+        let [Some(declarator)] = declarations.as_slice() else {
+            return Err(Refusal::Body);
+        };
+        if tree.text(statement, "kind") != Some("const") {
+            return Err(Refusal::Body);
+        }
+        let id = tree.child(*declarator, "id").ok_or(Refusal::Body)?;
+        let init = tree.inner(tree.child(*declarator, "init").ok_or(Refusal::Body)?);
+        match tree.kind(id) {
+            "Identifier" => {
+                if let Some(site) = self.found.sites.iter().find(|site| site.node == init) {
+                    return match site.kind {
+                        SiteKind::Registers(kind) => self.registration(site, kind, steps, left),
+                        SiteKind::Wrapper(_) => Err(Refusal::Body),
+                    };
+                }
+                Err(Refusal::Body)
+            }
+            _ => Err(Refusal::Body),
         }
     }
-    Ok(())
 }
 
 #[cfg(test)]
