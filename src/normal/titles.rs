@@ -34,31 +34,32 @@ pub(crate) fn title_with_bindings(
     }
 }
 
-/// A runner call's argument: read whole, because the runner charges what it keeps to its own
-/// invocation budget. A title or row that later reads it as a binding is limited there.
-pub(crate) fn argument(
+/// A value read without the comparison limit, every string it copies counted against `budget`:
+/// the value, and the bytes reading it copied. The runner planner reads a call's arguments and
+/// its caller's direct titles this way, so it can charge their reading, not only their result,
+/// to its work budget.
+pub(crate) fn value_within(
     parsed: &Parsed,
     node: NodeId,
     bindings: &HashMap<SymbolId, Value>,
-) -> Option<Value> {
-    read(parsed, node, 0, &mut 256, bindings, &mut Limit::charged())
+    budget: usize,
+) -> Option<(Value, usize)> {
+    let mut limit = Limit {
+        copied: true,
+        left: budget,
+    };
+    let value = read(parsed, node, 0, &mut 256, bindings, &mut limit)?;
+    Some((value, budget - limit.left))
 }
 
-/// A title read without the comparison limit, every string it copies counted against `budget`:
-/// the title, and the bytes reading it copied. A runner caller's direct titles are read this way,
-/// so the planner can charge their reading, not only their result, to its work budget.
+/// [`value_within`] for a title, which must be a string.
 pub(crate) fn title_within(
     parsed: &Parsed,
     node: NodeId,
     budget: usize,
 ) -> Option<(String, usize)> {
-    let mut limit = Limit {
-        charged: false,
-        copied: true,
-        left: budget,
-    };
-    match read(parsed, node, 0, &mut 256, &HashMap::new(), &mut limit)? {
-        Value::String(text) => Some((text, budget - limit.left)),
+    match value_within(parsed, node, &HashMap::new(), budget)? {
+        (Value::String(text), spent) => Some((text, spent)),
         _ => None,
     }
 }
@@ -67,8 +68,6 @@ pub(crate) fn title_within(
 /// whole read, so naming a `const` many times spends it as many times.
 #[derive(Debug)]
 struct Limit {
-    /// Read whole: the caller charges what it keeps to its own budget.
-    charged: bool,
     /// Whether what is read here is copied by every reader: a title, or what a `const` supplies.
     copied: bool,
     /// The copied text this read may still take.
@@ -79,7 +78,6 @@ impl Limit {
     /// A title: every test, row and nested test copies it.
     fn title() -> Self {
         Self {
-            charged: false,
             copied: true,
             left: MAX_TEXT_BYTES,
         }
@@ -88,16 +86,6 @@ impl Limit {
     /// A value written in place, which a `const` or binding it names may still supply.
     fn in_place() -> Self {
         Self {
-            charged: false,
-            copied: false,
-            left: MAX_TEXT_BYTES,
-        }
-    }
-
-    /// A runner argument, which the runner charges to its invocation budget.
-    fn charged() -> Self {
-        Self {
-            charged: true,
             copied: false,
             left: MAX_TEXT_BYTES,
         }
@@ -113,9 +101,7 @@ impl Limit {
 
     /// Spends text a `const` or binding supplies, which every reader copies again.
     fn supplied(&mut self, bytes: usize) -> Option<()> {
-        if !self.charged {
-            self.left = self.left.checked_sub(bytes)?;
-        }
+        self.left = self.left.checked_sub(bytes)?;
         Some(())
     }
 }

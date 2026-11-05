@@ -253,13 +253,17 @@ fn a_title_past_the_text_limit_is_unknown() {
         // limit applies to it.
         assert_eq!(read(9), Some(at.len() + 1));
         assert_eq!(read(13), None);
-        // A runner charges its arguments to its own budget, templates included.
+        // A runner argument is read within its batch's budget, every copied byte counted.
         let template = parsed.tree.list(sites[9].node, "arguments")[0].unwrap();
-        let argument = crate::normal::titles::argument(parsed, template, &HashMap::new());
+        let within = |budget| {
+            crate::normal::titles::value_within(parsed, template, &HashMap::new(), budget)
+                .map(|(value, spent)| (value.as_str().map(str::len), spent))
+        };
         assert_eq!(
-            argument.and_then(|v| v.as_str().map(str::len)),
-            Some(at.len() + 1)
+            within(at.len() + 1),
+            Some((Some(at.len() + 1), at.len() + 1))
         );
+        assert_eq!(within(at.len()), None);
     });
 }
 
