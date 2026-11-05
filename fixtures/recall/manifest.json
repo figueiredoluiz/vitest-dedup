@@ -8413,22 +8413,21 @@
       "classifiedAt": "2026-11-05",
       "expectedTests": 2,
       "expectedIncomplete": true,
-      "expectedUnresolved": 2,
+      "expectedUnresolved": 1,
       "expectedFindings": [],
       "expectedAbsent": [
         {
           "rule": "cross-file-duplicate",
           "locations": [
             "renamed.test.ts:3",
-            "vi.test.ts:3"
+            "vi.test.ts:4"
           ]
         }
       ],
       "expectedIncompleteNext": true,
-      "expectedUnresolvedNext": 2,
+      "expectedUnresolvedNext": 1,
       "blindUnderCurrent": [
-        "renamed.test.ts",
-        "vi.test.ts"
+        "renamed.test.ts"
       ]
     },
     {
