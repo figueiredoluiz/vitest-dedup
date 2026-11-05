@@ -297,6 +297,6 @@ impl Normalizer<'_> {
 }
 
 /// Primitive values only; see [`crate::lang::primitive`].
-fn primitive(tree: &crate::lang::Tree, node: NodeId) -> bool {
+pub(crate) fn primitive(tree: &crate::lang::Tree, node: NodeId) -> bool {
     crate::lang::primitive(tree, node)
 }

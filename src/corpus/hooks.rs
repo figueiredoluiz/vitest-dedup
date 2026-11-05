@@ -5,7 +5,7 @@ use crate::framework::{HookTiming, Registers};
 use crate::inventory::{Inventory, Label, Site, SiteKind};
 use crate::lang::{Lines, NodeId, Parsed};
 use crate::model::{Position, Span};
-use crate::normal::{Normalizer, Structure};
+use crate::normal::{primitive, Normalizer, Structure};
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 /// One hook declaration, retained even when its body cannot license a redundancy claim.
@@ -388,7 +388,7 @@ fn primitive_literal_rows(tree: &crate::lang::Tree, rows: NodeId) -> bool {
         && tree
             .list(rows, "elements")
             .into_iter()
-            .all(|row| row.is_some_and(|row| tree.kind(tree.inner(row)) == "Literal"))
+            .all(|row| row.is_some_and(|row| primitive(tree, tree.inner(row))))
 }
 
 /// Every registration argument is a function or literal the inertness proof covers: evaluating

@@ -17,6 +17,7 @@ mod rows;
 mod suites;
 pub(crate) mod titles;
 
+pub(crate) use hooks::primitive;
 pub use rows::{Modifiers, Row, TableRow};
 
 use crate::framework::{Dialect, HookTiming};

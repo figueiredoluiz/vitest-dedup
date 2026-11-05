@@ -416,6 +416,11 @@ fn suite_table_hooks_pair_when_rows_are_proven() {
         );
         assert!(findings(&pattern, 2).is_empty(), "{params}");
     }
+    // A regex row is an object: title formatting can read a prototype accessor for it.
+    let regex_row = format!(
+        "{IMPORTS} let value = 0; describe.each([/x/])('$probe', () => {{ {hook} {hook} {TEST} }});"
+    );
+    assert!(findings(&regex_row, 1).is_empty());
     // Object rows are read while Vitest formats the title, and an accessor among them can
     // register a hook, so only primitive-literal rows close.
     let object_rows = format!(
