@@ -289,7 +289,7 @@ impl Normalizer<'_> {
 }
 
 /// Primitive values only; regular expressions allocate, and replacement-encoded text is uncertain.
-fn primitive(tree: &crate::lang::Tree, node: NodeId) -> bool {
+pub(super) fn primitive(tree: &crate::lang::Tree, node: NodeId) -> bool {
     tree.kind(node) == "Literal"
         && !matches!(tree.field_of(node, "regex"), Field::Object(_))
         && !matches!(tree.field_of(node, "value"), Field::Value(Value::String(text)) if text.contains('\u{fffd}'))

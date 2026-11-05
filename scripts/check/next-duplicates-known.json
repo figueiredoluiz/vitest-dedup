@@ -141,14 +141,6 @@
       "reason": "False positive: a test after `return` never registers, and the inventory still counts it."
     },
     {
-      "id": "recall-miss|describe-finally-break|duplicate-test|suite > live,visible",
-      "reason": "A hook after an unconditional exit never registers, and the suite context still reads it, so equal tests key apart."
-    },
-    {
-      "id": "recall-miss|describe-label-break-tail|duplicate-test|suite > live,visible",
-      "reason": "A hook after an unconditional exit never registers, and the suite context still reads it, so equal tests key apart."
-    },
-    {
       "id": "recall-miss|local-helper-finally-local-break|duplicate-test|hidden,visible",
       "reason": "Tests a helper registers are excluded, not compared, until they are compared where the helper is called."
     },
@@ -179,18 +171,6 @@
     {
       "id": "recall-absent|nested-hook-after-exit-uncertainty|duplicate-test|run.test.ts:11,run.test.ts:20",
       "reason": "The default engine abstains on this file; the next engine compares identical text in an identical context, as decided."
-    },
-    {
-      "id": "recall-miss|labeled-break-hook-retention|duplicate-test|suite-a > reads,suite-b > reads",
-      "reason": "A hook after an unconditional exit never registers, and the suite context still reads it, so equal tests key apart."
-    },
-    {
-      "id": "recall-miss|local-break-hook-retention|duplicate-test|suite-a > reads,suite-b > reads",
-      "reason": "A hook after an unconditional exit never registers, and the suite context still reads it, so equal tests key apart."
-    },
-    {
-      "id": "recall-miss|braceless-hook-retention|duplicate-test|suite-a > reads,suite-b > reads",
-      "reason": "A hook after an unconditional exit never registers, and the suite context still reads it, so equal tests key apart."
     },
     {
       "id": "recall-absent|caught-helper-throw-hook-uncertainty|duplicate-test|run.test.ts:18,run.test.ts:27",
@@ -603,6 +583,10 @@
     {
       "id": "miss|fixtures/duplicates|behavior-depth-truncation.test.ts:41|behavior-depth-truncation.test.ts:49|near-duplicate-test",
       "reason": "A branch leaves the trace incomplete until branch partitions are modeled, so the next engine refuses this pair. The default engine compares the flattened branch."
+    },
+    {
+      "id": "recall-absent|inert-flow-patched-array-iterator|duplicate-test|run.test.ts:25,run.test.ts:34",
+      "reason": "A loop over an array literal is read as running nothing, which assumes `Array.prototype[Symbol.iterator]` is not replaced, as `.each` tables and `forEach` registration callbacks already assume; a suite that replaces it can observe the loop."
     }
   ]
 }

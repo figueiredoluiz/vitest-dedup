@@ -32,6 +32,8 @@ const COLLISIONS: &[(&str, &str)] = &[
     // The same field, in the trace walk's control flow.
     ("src/behavior.rs", "test"),
     ("src/behavior/dataflow.rs", "test"),
+    // The same field, in a suite statement's completions.
+    ("src/normal/completion.rs", "test"),
 ];
 
 /// The string literals in `source`, with `//` comments removed first so prose may name the API.

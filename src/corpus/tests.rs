@@ -5,8 +5,10 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
+mod completion;
 mod dynamic_import;
 mod export_identity;
+mod import_keys;
 mod module_meta;
 mod nc64;
 mod runners;

@@ -258,8 +258,9 @@ impl Normalizer<'_> {
                 }
                 // What a project module exports is named the way its own declarations are, so
                 // equal helpers in two modules are one identity. Inside such a module, its own
-                // imports are named by where they resolve: one module deep, never a cycle.
-                if !self.shallow_imports {
+                // imports are named by where they resolve: one module deep, never a cycle. A
+                // `?query` import loads another module than the file's own exports.
+                if !self.shallow_imports && crate::lang::query(source).is_empty() {
                     if let Some(file) =
                         self.setting
                             .exports
@@ -273,12 +274,11 @@ impl Normalizer<'_> {
                 }
                 // Anything else is the file it resolves to (a stylesheet two test files name with
                 // one spelling may be two files), or its spelling when it resolves to none.
-                let module = self
-                    .setting
-                    .exports
-                    .sources
-                    .resolve_file(self.path, source, self.setting.root)
-                    .map_or_else(|| source.to_owned(), |file| file.display().to_string());
+                let module =
+                    self.setting
+                        .exports
+                        .sources
+                        .module_key(self.path, source, self.setting.root);
                 Some(format!("import:{module}:{imported}"))
             }
             Declaration::Variable(declarator) => {

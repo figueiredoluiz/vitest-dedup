@@ -243,6 +243,8 @@ const RUST_MODULES = {
   'src/normal/suites.rs': 98,
   // Hook effect proof: measured at 99.23% (129/130 lines).
   'src/normal/hooks.rs': 99.2,
+  // Statement completions: measured at 97.65% (249/255 lines).
+  'src/normal/completion.rs': 97.6,
   'src/corpus.rs': 99,
   // Bounded suite invocations: first measured 160/173 lines (92.49%).
   'src/corpus/table_frames.rs': 92.4,

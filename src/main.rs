@@ -450,10 +450,10 @@ fn run_with_engine(
                 );
                 (finished.findings, finished.causes.any())
             };
-            // The base read records tsconfig and package gaps of its own. The base keeps its
-            // partial-baseline behavior, so its gaps are drained and dropped
-            // here — dropped, so they cannot masquerade as the current run's missing
-            // prerequisites at the main pass's drain below.
+            // The base read records no gaps here: its committed-view resolver reports an unusable
+            // tsconfig or a missing package through the revision tree, which the base outcome
+            // already reflects. The drain keeps the main pass's report to its own resolutions,
+            // whatever ran before this point.
             let _ = vitest_dedup::lang::take_tsconfig_gaps();
             let _ = vitest_dedup::lang::take_package_gaps();
             // A base run that could not see the whole tree (oversized, non-UTF-8, or skipped

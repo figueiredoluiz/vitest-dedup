@@ -337,8 +337,9 @@ pub struct Setting<'a> {
 }
 
 /// Whether reaching `statement` runs nothing: a function, type or import with bindings, or a
-/// declaration whose initializers create nothing. A class runs its decorators, computed keys and
-/// static members when declared, so it acts.
+/// declaration whose initializers create nothing, or control flow over primitives that ends where
+/// it started (see [`Normalizer::completes_inertly`]). A class runs its decorators, computed keys
+/// and static members when declared, so it acts.
 fn inert(normalizer: &Normalizer, tree: &lang::Tree, statement: NodeId) -> bool {
     match tree.kind(statement) {
         "FunctionDeclaration"
@@ -351,7 +352,7 @@ fn inert(normalizer: &Normalizer, tree: &lang::Tree, statement: NodeId) -> bool 
         "ExportNamedDeclaration" => tree
             .child(statement, "declaration")
             .is_none_or(|declaration| inert(normalizer, tree, declaration)),
-        _ => false,
+        _ => normalizer.completes_inertly(statement),
     }
 }
 
@@ -590,13 +591,12 @@ fn read_parsed(
         if acts || bare_import {
             module_context.push_str(&normalizer.of(statement));
             // What a bare import runs is the file it resolves to, not its spelling.
-            if let Some(file) = tree
+            if let Some(source) = tree
                 .child(statement, "source")
                 .and_then(|source| tree.text(source, "value"))
                 .filter(|_| bare_import)
-                .and_then(|source| run.sources.resolve_file(path, source, setting.root))
             {
-                module_context.push_str(&file.display().to_string());
+                module_context.push_str(&run.sources.module_key(path, source, setting.root));
             }
             module_context.push(';');
         }
