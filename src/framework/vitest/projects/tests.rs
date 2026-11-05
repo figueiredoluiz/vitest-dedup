@@ -3398,6 +3398,60 @@ fn read_string_literal_refuses_everything_that_is_not_one_plain_literal() {
 
 // --- Extglob translation, continued ---------------------------------------------------------
 
+/// Keep every combination at the cap and refuse both ordinary excess and usize overflow.
+#[test]
+fn extglob_expansion_count_is_bounded_without_wrapping() {
+    let expanded = expand_extglob_optional_groups("?(a)?(b)?(c)?(d)?(e)?(f)run.test.ts").unwrap();
+    assert_eq!(expanded.len(), MAX_EXTGLOB_EXPANSIONS);
+    assert_eq!(
+        expanded
+            .iter()
+            .collect::<std::collections::HashSet<_>>()
+            .len(),
+        64
+    );
+    assert_eq!(expanded.first().unwrap(), "run.test.ts");
+    assert_eq!(expanded.last().unwrap(), "abcdefrun.test.ts");
+    for count in [7, usize::BITS as usize, 2 * usize::BITS as usize] {
+        let pattern = format!("{}run.test.ts", "?(a)".repeat(count));
+        let error =
+            expand_extglob_optional_groups(&pattern).expect_err("must refuse excess combinations");
+        assert!(error.contains(&pattern), "{error}");
+        assert!(
+            error.contains("concrete alternatives, more than"),
+            "{error}"
+        );
+    }
+}
+
+/// Overflow in any discovery channel remains unknown and names the affected field.
+#[test]
+fn extglob_overflow_is_unknown_in_every_discovery_channel() {
+    let pattern = format!("{}run.test.ts", "?(a)".repeat(usize::BITS as usize));
+    let directory = tempfile::tempdir().unwrap();
+    write(directory.path(), "vitest.config.ts", &format!(
+        "export default {{ test: {{ include: ['{pattern}'], exclude: ['{pattern}'], includeSource: ['{pattern}'], benchmark: {{ include: ['{pattern}'], exclude: ['{pattern}'], includeSource: ['{pattern}'] }} }} }};"
+    ));
+    let set = resolve_projects(directory.path());
+    let project = single_project(&set);
+    for (field, value) in [
+        ("include", &project.include),
+        ("exclude", &project.exclude),
+        ("includeSource", &project.include_source),
+        ("benchmark.include", &project.benchmark_include),
+        ("benchmark.exclude", &project.benchmark_exclude),
+        ("benchmark.includeSource", &project.benchmark_include_source),
+    ] {
+        let GlobPatterns::Unknown { reason } = value else {
+            panic!("{field}: {value:?}")
+        };
+        assert!(
+            reason.contains(field) && reason.contains(&pattern),
+            "{reason}"
+        );
+    }
+}
+
 /// Verify expand extglob rejects group shapes it cannot translate soundly.
 #[test]
 fn expand_extglob_rejects_group_shapes_it_cannot_translate_soundly() {

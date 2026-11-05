@@ -1902,7 +1902,15 @@ fn expand_extglob_optional_groups(pattern: &str) -> Result<Vec<String>, String> 
         return Ok(vec![pattern.to_owned()]);
     }
 
-    let total_expansions: usize = groups.iter().map(|(_, _, alts)| alts.len()).product();
+    let total_expansions = groups
+        .iter()
+        .try_fold(1usize, |total, (_, _, alts)| total.checked_mul(alts.len()))
+        .ok_or_else(|| {
+            format!(
+                "`{pattern}` would expand into too many concrete alternatives, more than \
+                 this scan translates soundly"
+            )
+        })?;
     if total_expansions > MAX_EXTGLOB_EXPANSIONS {
         return Err(format!(
             "`{pattern}` would expand into {total_expansions} concrete alternatives, more than \
