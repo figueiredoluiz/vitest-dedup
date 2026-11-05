@@ -322,6 +322,12 @@ fn non_hoisted_mocks_are_found_only_through_stable_vitest_bindings() {
         "import { test } from 'vitest'; import { vi as tools } from 'vitest'; test('a', () => { tools.mock('./dep') });",
         "import { test, vi } from 'vitest'; test('a', () => { vi['mock']('./dep') });",
         "import { vi as tools } from 'vitest'; const mocked = tools.mock('./dep');",
+        // A hoisted call outside the top level: Vitest refuses the file, reachable or not.
+        "import { test, vi } from 'vitest'; test('a', () => { vi.mock('./dep') });",
+        "import { describe, vi } from 'vitest'; describe('s', () => { vi.unmock('./dep') });",
+        "import { vi } from 'vitest'; if (globalThis.flag) vi.mock('./dep');",
+        "import { vi } from 'vitest'; function never() { return; vi.mock('./dep') }",
+        "import { vi } from 'vitest'; const mocked = vi.mock('./dep');",
         // Optional: where Vitest runs it depends on what else in the file it hoists.
         "import { vi } from 'vitest'; vi?.mock('./dep');",
         "import { vi } from 'vitest'; vi.mock?.('./dep');",
@@ -338,7 +344,7 @@ fn non_hoisted_mocks_are_found_only_through_stable_vitest_bindings() {
         "const vi = { doMock() {} }; vi.doMock('./dep');",
         "import { vi } from 'vitest'; const { helper = { doMock() {} } } = vi; helper.doMock('./dep');",
         "import { vitest as vi } from 'vitest'; vi.mock('./dep');",
-        "import { test, vi } from 'vitest'; (vi).mock('./dep'); test('a', () => { vi.mock('./dep') });",
+        "import { test, vi } from 'vitest'; (vi).mock('./dep');",
         "import { vi as tools } from 'other'; tools.mock('./dep');",
     ] {
         let found = inventory_of(source, &[], false).0;

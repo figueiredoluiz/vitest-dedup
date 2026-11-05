@@ -8413,7 +8413,7 @@
       "classifiedAt": "2026-11-05",
       "expectedTests": 2,
       "expectedIncomplete": true,
-      "expectedUnresolved": 1,
+      "expectedUnresolved": 2,
       "expectedFindings": [],
       "expectedAbsent": [
         {
@@ -8425,10 +8425,39 @@
         }
       ],
       "expectedIncompleteNext": true,
-      "expectedUnresolvedNext": 1,
+      "expectedUnresolvedNext": 2,
       "blindUnderCurrent": [
-        "renamed.test.ts"
+        "renamed.test.ts",
+        "vi.test.ts"
       ]
+    },
+    {
+      "name": "vitest-api-nested-mock-refused",
+      "path": "vitest-api-nested-mock-refused",
+      "rule": "cross-file-duplicate",
+      "role": "negative",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-05",
+      "expectedTests": 2,
+      "expectedIncomplete": true,
+      "expectedUnresolved": 2,
+      "expectedFindings": [],
+      "expectedAbsent": [
+        {
+          "rule": "cross-file-duplicate",
+          "titles": [
+            "reads",
+            "reads"
+          ]
+        }
+      ],
+      "blindUnderCurrent": [
+        "one.test.ts",
+        "two.test.ts"
+      ],
+      "expectedIncompleteNext": true,
+      "expectedUnresolvedNext": 2
     },
     {
       "name": "vitest-api-namespace-dynamic",

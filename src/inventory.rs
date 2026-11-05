@@ -169,7 +169,8 @@ pub struct Inventory {
     /// Intrinsic direct eval may write lexical bindings without ordinary assignment references.
     pub direct_eval: bool,
     /// A `vi.doMock` or `vi.doUnmock`, or a mock call the framework does not hoist outside a
-    /// top-level statement, changes module state at its execution point.
+    /// top-level statement, changes module state at its execution point; a hoisted mock call
+    /// outside the top level makes the framework refuse the file.
     pub non_hoisted_mock: bool,
     /// Reachable top-level mock calls the framework does not hoist, in source order.
     pub in_place_mocks: Vec<InPlaceMock>,

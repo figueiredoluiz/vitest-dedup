@@ -197,20 +197,24 @@ pub(super) fn analyse(
 type Found = (NodeId, Span, SiteKind, Vec<String>, Provenance);
 
 impl<'s> Module<'s> {
-    /// Whether this module reaches Vitest's mock APIs through a stable API binding where they
-    /// run in place: a `doMock`/`doUnmock` anywhere, or a `mock`/`unmock` Vitest does not hoist
-    /// outside a top-level statement.
+    /// Whether this module reaches Vitest's mock APIs through a stable API binding in a way the
+    /// file-wide model cannot answer: a `doMock`/`doUnmock` anywhere, a `mock`/`unmock` Vitest
+    /// does not hoist outside a top-level statement, or one it hoists from anywhere but the top
+    /// level, which makes Vitest refuse the file at load.
     ///
-    /// These calls affect imports when they run, unlike hoisted `vi.mock` and `vi.unmock`; the
-    /// next core does not model that dynamic-import state, so the corpus refuses the file rather
-    /// than comparing tests under an invented shared context.
+    /// The first two affect imports when they run, and the next core does not model that
+    /// dynamic-import state; the last has no runtime context at all. The corpus refuses the file
+    /// rather than comparing tests under an invented shared context.
     fn non_hoisted_mock(&self) -> bool {
         self.tree.nodes().any(|call| match self.mock_call(call) {
             Some(MockCall::Dynamic) => !self.unreachable(call),
             Some(MockCall::InPlace) => {
                 !self.unreachable(call) && self.top_level_statement(call).is_none()
             }
-            Some(MockCall::Hoisted) | None => false,
+            // Vitest refuses the file whenever it hoists a call from anywhere but the top level,
+            // reachable or not.
+            Some(MockCall::Hoisted) => self.top_level_statement(call).is_none(),
+            None => false,
         })
     }
 
