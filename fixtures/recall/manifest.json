@@ -5816,9 +5816,7 @@
           ]
         }
       ],
-      "expectedAbsent": [],
-      "expectedIncompleteNext": true,
-      "expectedUnresolvedNext": 3
+      "expectedAbsent": []
     },
     {
       "name": "local-helper-return-describe",
@@ -5981,9 +5979,7 @@
             "visible"
           ]
         }
-      ],
-      "expectedIncompleteNext": true,
-      "expectedUnresolvedNext": 3
+      ]
     },
     {
       "name": "describe-return-tail",
@@ -6276,9 +6272,7 @@
           ]
         }
       ],
-      "expectedAbsent": [],
-      "expectedIncompleteNext": true,
-      "expectedUnresolvedNext": 3
+      "expectedAbsent": []
     },
     {
       "name": "local-helper-const-describe-scope",
@@ -6370,9 +6364,7 @@
           ]
         }
       ],
-      "expectedAbsent": [],
-      "expectedIncompleteNext": true,
-      "expectedUnresolvedNext": 3
+      "expectedAbsent": []
     },
     {
       "name": "local-helper-const-tdz",
@@ -6620,9 +6612,7 @@
           ]
         }
       ],
-      "expectedAbsent": [],
-      "expectedIncompleteNext": true,
-      "expectedUnresolvedNext": 4
+      "expectedAbsent": []
     },
     {
       "name": "duplicate-each-row-global-constants",
@@ -10412,6 +10402,92 @@
           ]
         }
       ]
+    },
+    {
+      "name": "local-helper-two-calls",
+      "path": "local-helper-two-calls",
+      "rule": "duplicate-test",
+      "role": "positive",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-05",
+      "expectedTests": 3,
+      "expectedIncomplete": false,
+      "expectedUnresolved": 0,
+      "expectedFindings": [
+        {
+          "rule": "duplicate-test",
+          "severity": "error",
+          "titles": [
+            "check 1",
+            "one"
+          ]
+        }
+      ],
+      "expectedAbsent": [
+        {
+          "rule": "duplicate-test",
+          "titles": [
+            "check 2",
+            "one"
+          ]
+        },
+        {
+          "rule": "duplicate-test",
+          "titles": [
+            "check 1",
+            "check 2"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "local-helper-late-constant",
+      "path": "local-helper-late-constant",
+      "rule": "duplicate-test",
+      "role": "negative",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-05",
+      "expectedTests": 3,
+      "expectedIncomplete": true,
+      "expectedUnresolved": 3,
+      "expectedFindings": [],
+      "expectedAbsent": [
+        {
+          "rule": "duplicate-test",
+          "titles": [
+            "hidden 1",
+            "hidden 1"
+          ]
+        }
+      ],
+      "blindUnderCurrent": [
+        "run.test.ts"
+      ]
+    },
+    {
+      "name": "local-helper-cross-file",
+      "path": "local-helper-cross-file",
+      "rule": "cross-file-duplicate",
+      "role": "positive",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-05",
+      "expectedTests": 2,
+      "expectedIncomplete": false,
+      "expectedUnresolved": 0,
+      "expectedFindings": [
+        {
+          "rule": "cross-file-duplicate",
+          "severity": "warning",
+          "locations": [
+            "direct.test.ts:3",
+            "helper.test.ts:7"
+          ]
+        }
+      ],
+      "expectedAbsent": []
     }
   ],
   "knownFalsePositiveBaseline": 1,

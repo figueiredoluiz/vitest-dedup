@@ -466,11 +466,14 @@ fn read_parsed(
     } else {
         runners::Batch::default()
     };
-    let admitted: std::collections::HashSet<_> = expanded
+    let mut admitted: std::collections::HashSet<_> = expanded
         .calls
         .iter()
         .map(|expansion| expansion.call)
         .collect();
+    if let Some(frame) = &frame {
+        admitted.extend(frame.registrations.iter().copied());
+    }
     let tree = &parsed.tree;
     let lines = Lines::new(source);
     // Registration bindings seed both ordinary and suite-row invocations in the same way.
@@ -694,11 +697,11 @@ fn read_parsed(
         .filter(|site| site.kind == SiteKind::Registers(Registers::Suite))
         .map(|site| (site.node, site.provenance))
         .collect();
-    for site in found
-        .sites
-        .iter()
-        .filter(|site| site.kind == SiteKind::Registers(Registers::Test))
-    {
+    // A same-file helper's template registers through its admitted calls, which carry its cases.
+    for site in found.sites.iter().filter(|site| {
+        site.kind == SiteKind::Registers(Registers::Test)
+            && !expanded.templates.contains(&site.node)
+    }) {
         let suite_frames = table_frames::around(
             path,
             parsed,
@@ -1223,6 +1226,7 @@ fn read_parsed(
         .filter(|site| {
             site.kind == SiteKind::Wrapper(Reach::Tasks)
                 && !admitted.contains(&site.node)
+                && !expanded.templates.contains(&site.node)
                 && !unregistered(&mut normalizer, site.node)
         })
         .map(|site| site.position)

@@ -747,11 +747,13 @@ test('spread', ...[() => { expect(1).toBe(1); }]);
 test('kept', () => { expect(1).toBe(1); });
 ",
     );
+    // A `let` helper may be reassigned before the call, so its effects stay unproved; a
+    // `function` or `const` helper called here would be expanded instead.
     write(
         directory.path(),
         "wrapped.test.ts",
         "import { test, expect } from 'vitest';
-function suite() { test('inner', () => { expect(1).toBe(1); }); }
+let suite = () => { test('inner', () => { expect(1).toBe(1); }); };
 suite();
 test('kept', () => { expect(1).toBe(1); });
 ",
