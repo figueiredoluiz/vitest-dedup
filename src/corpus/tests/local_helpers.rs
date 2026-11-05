@@ -238,7 +238,13 @@ fn the_in_source_binding_is_not_admitted_in_a_helper() {
     let source = "const register = () => {\nconst { test, expect } = import.meta.vitest\n\
                   test('first', () => { expect(1).toBe(1) })\ntest('second', () => { expect(1).toBe(1) })\n}\nregister()\n";
     let tests = by_title(source);
-    assert!(tests.values().all(|test| test.exclusion.is_some()));
+    // Both tests the helper writes are read and excluded; an empty result would satisfy `all`.
+    for title in ["first", "second"] {
+        let test = tests
+            .get(title)
+            .unwrap_or_else(|| panic!("no test {title}: {tests:?}"));
+        assert!(test.exclusion.is_some(), "{title} is compared");
+    }
 }
 
 /// An overloaded helper runs its implementation; reassigning it refuses.
