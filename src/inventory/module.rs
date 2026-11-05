@@ -261,8 +261,30 @@ impl<'s> Module<'s> {
             // triggers the transform, so where it runs is not known.
             Mocking::Hoisted if self.optional_call(call) => MockCall::Dynamic,
             Mocking::Hoisted if self.hoisting_spelling(call, object) => MockCall::Hoisted,
+            // Only the hoisting transform rewrites an `import()` target to its path; in place,
+            // the call throws when the module loads.
+            Mocking::Hoisted if self.imported_mock_target(call) => MockCall::Dynamic,
             Mocking::Hoisted => MockCall::InPlace,
         })
+    }
+
+    /// Whether the call's first argument is an `import()` or an awaited one.
+    fn imported_mock_target(&self, call: NodeId) -> bool {
+        let tree = self.tree;
+        tree.list(call, "arguments")
+            .into_iter()
+            .flatten()
+            .next()
+            .map(|target| tree.inner(target))
+            .map(|target| {
+                if tree.kind(target) == "AwaitExpression" {
+                    tree.child(target, "argument")
+                        .map_or(target, |argument| tree.inner(argument))
+                } else {
+                    target
+                }
+            })
+            .is_some_and(|target| tree.kind(target) == "ImportExpression")
     }
 
     /// Whether `call` or its callee member is optional (`vi?.mock()`, `vi.mock?.()`).

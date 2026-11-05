@@ -8323,6 +8323,31 @@
       ]
     },
     {
+      "name": "vitest-api-renamed-mock-import-target",
+      "path": "vitest-api-renamed-mock-import-target",
+      "rule": "duplicate-test",
+      "role": "negative",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-05",
+      "expectedTests": 2,
+      "expectedIncomplete": true,
+      "expectedUnresolved": 2,
+      "expectedFindings": [],
+      "expectedAbsent": [
+        {
+          "rule": "duplicate-test",
+          "titles": [
+            "reads the mock",
+            "reads the mock, again"
+          ]
+        }
+      ],
+      "blindUnderCurrent": [
+        "case.test.ts"
+      ]
+    },
+    {
       "name": "vitest-api-spelled-vi-alias",
       "path": "vitest-api-spelled-vi-alias",
       "rule": "cross-file-duplicate",

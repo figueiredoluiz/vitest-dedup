@@ -335,6 +335,9 @@ fn non_hoisted_mocks_are_found_only_through_stable_vitest_bindings() {
         "import { vi } from 'vitest'; vi.unmock((() => { if (import.meta.vitest) { vi.mock('./x') } return './dep' })());",
         "import { vi } from 'vitest'; vi.hoisted(() => { if (import.meta.vitest) { vi.mock('./x') } });",
         "import { vi } from 'vitest'; vi.mock('./dep', () => vi.hoisted(() => ({})));",
+        // In place, an `import()` target is not rewritten to its path, and the call throws.
+        "import { vi as tools } from 'vitest'; tools.mock(import('./dep'));",
+        "import { vitest as tools } from 'vitest'; tools.unmock(await import('./dep'));",
         // Optional: where Vitest runs it depends on what else in the file it hoists.
         "import { vi } from 'vitest'; vi?.mock('./dep');",
         "import { vi } from 'vitest'; vi.mock?.('./dep');",
@@ -347,6 +350,8 @@ fn non_hoisted_mocks_are_found_only_through_stable_vitest_bindings() {
     for source in [
         "import { vi } from 'vitest'; vi.mock('./dep', () => ({}));",
         "import { vi } from 'vitest'; vi.unmock('./dep');",
+        "import { vi } from 'vitest'; vi.mock(import('./dep'), () => ({}));",
+        "import { vi } from 'vitest'; vi.mock(await import('./dep'));",
         "import { doMock } from 'other'; doMock('./dep');",
         "const vi = { doMock() {} }; vi.doMock('./dep');",
         "import { vi } from 'vitest'; const { helper = { doMock() {} } } = vi; helper.doMock('./dep');",

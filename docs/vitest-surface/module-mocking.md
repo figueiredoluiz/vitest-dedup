@@ -28,8 +28,10 @@ import such as `vi as tools`, a namespace member, a string key `vi['mock']`) is 
 and runs where it is written, after the static imports. As a top-level statement it is part of
 the file's context at its position: such files compare with each other, never with a hoisted
 `vi.mock` or a file without the call. Anywhere else it excludes the file from comparison, as
-`vi.doMock` does. An optional call (`vi?.mock`) also excludes the file: Vitest hoists it or
-rejects it depending on what else the file contains. A key read from a variable (`vi[name]`)
+`vi.doMock` does. So does such a call with an `import()` target
+(`tools.mock(import('./dep'))`): only Vitest's hoisting transform rewrites that target to a
+path, and without it the call throws. An optional call (`vi?.mock`) also excludes the file:
+Vitest hoists it or rejects it depending on what else the file contains. A key read from a variable (`vi[name]`)
 is not read as a mock call; the analyzer keeps the statement in the context as written. Vitest
 leaves it in place unless the variable is itself named `mock`, `unmock` or `hoisted` and another
 call triggers the transform: `vi[mock](...)` is then hoisted ahead of the variable's
