@@ -440,7 +440,7 @@ pub struct Normalizer<'s> {
     hook_pollution: Cell<Option<bool>>,
     /// The receiver-wide plain-object proof, resolved once per symbol: the scheduling scan asks
     /// it for every member expression in a runtime callback.
-    hook_receiver_plain: RefCell<HashMap<SymbolId, bool>>,
+    hook_receiver_plain: RefCell<HashMap<SymbolId, Option<Vec<String>>>>,
     /// Potentially deferred runtime callbacks, computed once independently of lifecycle queries.
     hook_scheduling: Option<Vec<hooks::DeferredCallback>>,
     /// While a declaration's dependencies are listed, the outside bindings its walks read.

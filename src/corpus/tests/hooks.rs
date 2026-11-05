@@ -340,6 +340,10 @@ fn hook_property_writes_pair_over_a_proven_receiver() {
         1
     )
     .is_empty());
+    // A receiver without the tracked key would write through an inherited accessor the
+    // file cannot see.
+    let empty = "const audit = {}; ";
+    assert!(findings(&format!("{IMPORTS} {empty} {hook} {hook} {TEST}"), 1).is_empty());
     // Differing values are a barrier, not a pair.
     let other = "beforeEach(() => { audit.mode = 'secondary' });";
     assert!(findings(&format!("{IMPORTS} {receiver} {hook} {other} {TEST}"), 1).is_empty());
@@ -362,6 +366,11 @@ fn hook_plain_member_exemption_needs_receiver_discipline() {
         "{IMPORTS} let value = 0; {receiver} {hooks} test('queues', () => audit.mode); test('reads', () => {{ expect(value).toBe(1) }});"
     );
     assert!(findings(&returned, 2).is_empty());
+    // A concise arrow returns the assignment's value, which is the right-hand side.
+    let returned_assignment = format!(
+        "{IMPORTS} let value = 0; {receiver} {hooks} test('queues', () => audit.mode = value); test('reads', () => {{ expect(value).toBe(1) }});"
+    );
+    assert!(findings(&returned_assignment, 2).is_empty());
     // Handing the receiver to a call lets the callee rewrite its properties.
     let escaped = format!(
         "{IMPORTS} let value = 0; {receiver} function route() {{ configure(audit); }} {hooks} test('reads', () => {{ expect(audit.mode).toBe('') }});"
@@ -519,6 +528,11 @@ fn suite_table_hooks_pair_when_rows_are_proven() {
         "{IMPORTS} let value = 0; describe.each([1])('s', () => {{ {hook} describe('inner', () => {{ {hook} {TEST} }}); }});"
     );
     assert_eq!(findings(&nested, 1).len(), 1);
+    // The registration arguments evaluate too: a call in the title can register a hook.
+    let titled = format!(
+        "{IMPORTS} let value = 0; {hook} {hook} describe.each([1])(title(), () => {{ test('observes', () => {{ expect(value).toBe(1) }}); }}); test('plain', () => {{ expect(value).toBe(1) }});"
+    );
+    assert!(findings(&titled, 2).is_empty());
     // A rows argument that calls while evaluating can register hooks; the table refuses, and
     // with it the file scope, so the file-scope pair beside it never becomes eligible.
     let calling = format!(

@@ -201,7 +201,11 @@ impl Normalizer<'_> {
             return None;
         }
         let symbol = self.scopes.symbol_at(tree.span(object).start)?;
-        if !self.plain_receiver(symbol) {
+        // The tracked name must be one of the literal's own data properties: writing an own
+        // property shadows whatever the prototype carries, while creating an absent one would
+        // run an inherited setter the file cannot see.
+        let keys = self.plain_receiver(symbol)?;
+        if !keys.iter().any(|key| key == name) {
             return None;
         }
         Some((symbol, name))
@@ -212,16 +216,18 @@ impl Normalizer<'_> {
     /// value is a plain object literal, and whose every use is a static member read or a
     /// member-path write. A bare value can grow properties elsewhere, and a method call
     /// exposes the receiver as `this`, which can install a setter no global-object scan sees.
-    fn plain_receiver(&self, symbol: SymbolId) -> bool {
+    fn plain_receiver(&self, symbol: SymbolId) -> Option<Vec<String>> {
         if let Some(plain) = self.hook_receiver_plain.borrow().get(&symbol) {
-            return *plain;
+            return plain.clone();
         }
-        let plain = self.plain_receiver_checked(symbol).is_some();
-        self.hook_receiver_plain.borrow_mut().insert(symbol, plain);
+        let plain = self.plain_receiver_checked(symbol);
+        self.hook_receiver_plain
+            .borrow_mut()
+            .insert(symbol, plain.clone());
         plain
     }
 
-    fn plain_receiver_checked(&self, symbol: SymbolId) -> Option<()> {
+    fn plain_receiver_checked(&self, symbol: SymbolId) -> Option<Vec<String>> {
         let tree = self.tree;
         let binding = self.scopes.symbol(symbol);
         let Declaration::Variable(declaration) = binding.declaration else {
@@ -246,6 +252,7 @@ impl Normalizer<'_> {
         if tree.kind(init) != "ObjectExpression" {
             return None;
         }
+        let mut keys = Vec::new();
         for item in tree.list(init, "properties") {
             let item = tree.inner(item?);
             if tree.kind(item) != "Property"
@@ -263,6 +270,7 @@ impl Normalizer<'_> {
             if key == "__proto__" {
                 return None;
             }
+            keys.push(key.to_owned());
         }
         for reference in &binding.references {
             let node = reference.node?;
@@ -278,7 +286,7 @@ impl Normalizer<'_> {
                 return None;
             }
         }
-        Some(())
+        Some(keys)
     }
 
     /// The static member chain a reference sits under: its segments, the chain's outermost
@@ -440,8 +448,9 @@ impl Normalizer<'_> {
         false
     }
 
-    /// Whether this node is the direct target of an assignment: the assigned value is the
-    /// literal on the right, never the member's own value.
+    /// Whether this node is the direct target of an assignment whose value the callback
+    /// discards: the assigned value is the literal on the right, never the member's own value,
+    /// and a statement assignment cannot return it.
     fn assignment_target(&self, node: NodeId) -> bool {
         let tree = self.tree;
         tree.outer_parent(node).is_some_and(|parent| {
@@ -449,6 +458,9 @@ impl Normalizer<'_> {
                 && tree
                     .child(parent, "left")
                     .is_some_and(|left| tree.inner(left) == node)
+                && tree
+                    .outer_parent(parent)
+                    .is_some_and(|use_of| tree.kind(use_of) == "ExpressionStatement")
         })
     }
 

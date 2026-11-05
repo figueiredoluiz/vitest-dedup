@@ -345,23 +345,36 @@ fn closed_scope(
             let rows = tree
                 .child(call, "callee")
                 .and_then(|callee| tree.list(callee, "arguments").into_iter().next().flatten());
+            // The rows argument and every registration argument evaluate at registration, so
+            // only inert ones can hide no hook.
             return matches!(
                 tables.get(&site.node),
                 Some(TableRows::Empty | TableRows::Populated)
             ) && !uncertain(site)
-                && rows.is_some_and(|rows| normalizer.hook_registration_inert(rows));
+                && rows.is_some_and(|rows| normalizer.hook_registration_inert(rows))
+                && inert_registration_arguments(tree, normalizer, call);
         }
         if matches!(site.kind, SiteKind::Wrapper(_)) {
             return admitted_calls.contains(&site.node);
         }
-        let arguments = tree.list(call, "arguments");
-        !arguments.is_empty()
-            && arguments.into_iter().all(|arg| {
-                arg.is_some_and(|arg| {
-                    let arg = tree.inner(arg);
-                    (tree.is_function(arg) || tree.kind(arg) == "Literal")
-                        && normalizer.hook_registration_inert(arg)
-                })
-            })
+        inert_registration_arguments(tree, normalizer, call)
     })
+}
+
+/// Every registration argument is a function or literal the inertness proof covers: evaluating
+/// anything else at registration time can hide a hook.
+fn inert_registration_arguments(
+    tree: &crate::lang::Tree,
+    normalizer: &Normalizer<'_>,
+    call: NodeId,
+) -> bool {
+    let arguments = tree.list(call, "arguments");
+    !arguments.is_empty()
+        && arguments.into_iter().all(|arg| {
+            arg.is_some_and(|arg| {
+                let arg = tree.inner(arg);
+                (tree.is_function(arg) || tree.kind(arg) == "Literal")
+                    && normalizer.hook_registration_inert(arg)
+            })
+        })
 }
