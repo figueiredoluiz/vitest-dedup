@@ -4,7 +4,6 @@ use super::{Setting, TestCase};
 use crate::framework::{Chain, Registers};
 use crate::inventory::{Inventory, Label, SiteKind};
 use crate::lang::{Lines, NodeId, Parsed};
-use crate::model::{Position, Span};
 use crate::normal::{self, digest, Normalizer, Structure};
 use std::collections::HashMap;
 
@@ -154,39 +153,295 @@ pub(super) fn collect(
         }
         context.push(normalizer.of(site.node));
         let key = digest(&serde_json::to_string(&context).expect("strings serialize"));
-        let position = |byte| {
-            let (line, column) = lines.position(source, byte);
-            Position { line, column }
-        };
-        suites.push(TestCase {
-            views: None,
-            origin: None,
-            span: Span {
-                start: position(site.span.start),
-                end: position(site.span.end),
-                start_byte: site.span.start,
-                end_byte: site.span.end,
-            },
-            title: names.last().cloned(),
-            full_title: Some(names.join(" > ")),
-            name: Some(names),
-            key,
-            module_key: 0,
-            body: 0,
-            parameterization_key: None,
-            trace: Vec::new(),
-            ordinary_events: 0,
-            trace_complete: false,
-            similarity_key: 0,
-            subsumption_key: None,
-            callback_form: normal::CallbackForm::Interchangeable,
-            row: None,
-            row_class: None,
-            inert: false,
-            bodyless: false,
-            exclusion: None,
-        });
+        let mut suite = super::unkeyed_case(
+            super::at_span(&lines, source, site.span.start, site.span.end),
+            names.last().cloned(),
+            None,
+        );
+        suite.full_title = Some(names.join(" > "));
+        suite.name = Some(names);
+        suite.key = key;
+        suites.push(suite);
     }
     suites.sort_by_key(|suite| suite.span.start_byte);
     suites
+}
+
+/// Repeated suite rows are row claims, not whole-suite equivalence admissions.
+pub(super) fn table_rows(
+    path: &std::path::Path,
+    parsed: &Parsed,
+    found: &Inventory,
+    structure: &Structure,
+    tests: &[TestCase],
+    setting: normal::Setting,
+    source: &str,
+) -> Vec<TestCase> {
+    let tree = &parsed.tree;
+    let lines = Lines::new(source);
+    let mut cases = Vec::new();
+    if found.direct_eval
+        || found.non_hoisted_mock
+        || found.unreadable_mock_factory
+        || found.unreadable_fixture
+    {
+        return cases;
+    }
+    for site in found
+        .sites
+        .iter()
+        .filter(|s| s.kind == SiteKind::Registers(Registers::Suite))
+    {
+        if site
+            .labels
+            .iter()
+            .any(|label| !matches!(label, Label::RegistrationBody))
+            || !normal::row_identity::suite_prefix_known(parsed, site.node, site.provenance)
+        {
+            continue;
+        }
+        let Some(callee) = tree.child(site.node, "callee") else {
+            continue;
+        };
+        let mut normalizer = Normalizer::new(path, parsed, setting, structure);
+        let modifiers = normalizer.modifiers(callee, site.member);
+        let Some(rows) = modifiers.rows else {
+            continue;
+        };
+        let Some(body) = normalizer
+            .callback(site.node)
+            .filter(|c| c.inline)
+            .and_then(|c| c.function)
+        else {
+            continue;
+        };
+        let children = tests
+            .iter()
+            .filter(|c| site.span.start <= c.span.start_byte && c.span.end_byte <= site.span.end)
+            .collect::<Vec<_>>();
+        if children.is_empty() || children.iter().any(|c| c.exclusion.is_some()) {
+            continue;
+        }
+        let Some(pattern) = normal::titles::title(parsed, site.node) else {
+            continue;
+        };
+        for (parent_ordinal, frame) in
+            super::table_frames::around(path, parsed, structure, setting, site.node, found)
+                .into_iter()
+                .enumerate()
+        {
+            if !frame.proven {
+                continue;
+            }
+            let mut normalizer = Normalizer::new(path, parsed, setting, structure)
+                .for_suite_values(frame.values.clone());
+            if !normalizer.active_suite(
+                callee,
+                &tree
+                    .list(site.node, "arguments")
+                    .into_iter()
+                    .flatten()
+                    .collect::<Vec<_>>(),
+            ) || !pure_registration(tree, &mut normalizer, site.node)
+                || !closed_collection(parsed, found, &mut normalizer, body, 16)
+            {
+                continue;
+            }
+            let Some(scopes) = normalizer.suites_around(site.node) else {
+                continue;
+            };
+            let prefix = scopes
+                .iter()
+                .map(|scope| {
+                    let call = *structure.suites.get(scope)?;
+                    frame
+                        .names
+                        .get(&call)
+                        .cloned()
+                        .unwrap_or_else(|| normal::titles::title(parsed, call))
+                })
+                .collect::<Option<Vec<_>>>();
+            let Some(prefix) = prefix else {
+                continue;
+            };
+            for row in &rows {
+                let Some(row_class) =
+                    normal::row_identity::identity(&mut normalizer, &row.value, body)
+                else {
+                    continue;
+                };
+                let Some((bound, every)) = normalizer.bind_row(
+                    &tree
+                        .list(body, "params")
+                        .into_iter()
+                        .flatten()
+                        .collect::<Vec<_>>(),
+                    &row.value,
+                ) else {
+                    continue;
+                };
+                let Some(title) = normalizer.render_table_title(
+                    parsed,
+                    &pattern,
+                    row,
+                    modifiers.whole_rows,
+                    crate::framework::TitleMode::Row,
+                ) else {
+                    continue;
+                };
+                let mut name = prefix.clone();
+                name.push(title.clone());
+                let normal = normalizer.substituted(body, bound, every);
+                let mut case = super::unkeyed_case(
+                    super::at_span(&lines, source, site.span.start, site.span.end),
+                    Some(title),
+                    None,
+                );
+                case.full_title = Some(name.join(" > "));
+                case.name = Some(name);
+                case.row = Some(row.index);
+                let stride = rows
+                    .iter()
+                    .map(|r| r.index)
+                    .max()
+                    .and_then(|n| n.checked_add(1))
+                    .unwrap_or(1);
+                case.runtime_row = parent_ordinal
+                    .checked_mul(stride)
+                    .and_then(|base| base.checked_add(row.index));
+                if case.runtime_row.is_none() {
+                    continue;
+                }
+                case.suite_rows = frame.rows.clone();
+                case.row_class = Some(digest(&row_class));
+                case.body = digest(&normal);
+                case.key = digest(&format!("{}|{}", modifiers.untabled, normal));
+                case.inert = modifiers.inert || frame.inert;
+                cases.push(case);
+            }
+        }
+    }
+    cases
+}
+
+/// Collection-time statements must be inert declarations or closed test/suite registrations.
+fn closed_collection(
+    parsed: &Parsed,
+    found: &Inventory,
+    normalizer: &mut Normalizer<'_>,
+    body: NodeId,
+    depth: usize,
+) -> bool {
+    if depth == 0 {
+        return false;
+    }
+    let tree = &parsed.tree;
+    if tree
+        .child(body, "body")
+        .is_none_or(|body| tree.kind(body) != "BlockStatement")
+    {
+        return false;
+    }
+    normalizer
+        .body_statements(body)
+        .into_iter()
+        .all(|statement| {
+            if crate::inventory::runners::inert_declaration(parsed, statement) {
+                return true;
+            }
+            let Some(call) = tree
+                .child(statement, "expression")
+                .filter(|_| tree.kind(statement) == "ExpressionStatement")
+                .map(|n| tree.inner(n))
+            else {
+                return false;
+            };
+            let Some(site) = found.sites.iter().find(|s| s.node == call) else {
+                return false;
+            };
+            if !pure_registration(tree, normalizer, call) {
+                return false;
+            }
+            match site.kind {
+                SiteKind::Registers(Registers::Test) => true,
+                SiteKind::Registers(Registers::Suite) => normalizer
+                    .callback(call)
+                    .filter(|c| c.inline)
+                    .and_then(|c| c.function)
+                    .is_some_and(|f| closed_collection(parsed, found, normalizer, f, depth - 1)),
+                _ => false,
+            }
+        })
+}
+
+/// A registration's options and table construction must execute no unknown project expression.
+fn pure_registration(
+    tree: &crate::lang::Tree,
+    normalizer: &mut Normalizer<'_>,
+    call: NodeId,
+) -> bool {
+    let Some(callee) = tree.child(call, "callee") else {
+        return false;
+    };
+    tree.list(call, "arguments")
+        .into_iter()
+        .flatten()
+        .all(|arg| {
+            let arg = tree.inner(arg);
+            matches!(
+                tree.kind(arg),
+                "ArrowFunctionExpression" | "FunctionExpression"
+            ) || pure_input(tree, normalizer, arg, 32)
+        })
+        && std::iter::once(callee)
+            .chain(tree.descendants(callee))
+            .filter(|&n| matches!(tree.kind(n), "CallExpression" | "TaggedTemplateExpression"))
+            .all(|call| {
+                let inputs = if tree.kind(call) == "TaggedTemplateExpression" {
+                    let Some(quasi) = tree.child(call, "quasi") else {
+                        return false;
+                    };
+                    tree.list(quasi, "expressions")
+                } else {
+                    tree.list(call, "arguments")
+                };
+                inputs
+                    .into_iter()
+                    .flatten()
+                    .all(|arg| pure_input(tree, normalizer, arg, 32))
+            })
+}
+
+/// A bounded literal input is inert only when each of its evaluated children is also inert.
+fn pure_input(
+    tree: &crate::lang::Tree,
+    normalizer: &mut Normalizer<'_>,
+    node: NodeId,
+    depth: usize,
+) -> bool {
+    if depth == 0 {
+        return false;
+    }
+    if normalizer.row_scalar(node).is_some() {
+        return true;
+    }
+    let node = tree.inner(node);
+    match tree.kind(node) {
+        "ArrayExpression" => tree
+            .list(node, "elements")
+            .into_iter()
+            .all(|n| n.is_some_and(|n| pure_input(tree, normalizer, n, depth - 1))),
+        "ObjectExpression" => tree.list(node, "properties").into_iter().all(|p| {
+            p.is_some_and(|p| {
+                tree.kind(p) == "Property"
+                    && !tree.flag(p, "computed")
+                    && !tree.flag(p, "method")
+                    && tree.text(p, "kind") == Some("init")
+                    && tree
+                        .child(p, "value")
+                        .is_some_and(|v| pure_input(tree, normalizer, v, depth - 1))
+            })
+        }),
+        _ => false,
+    }
 }

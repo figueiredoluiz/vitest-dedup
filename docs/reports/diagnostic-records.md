@@ -41,7 +41,7 @@ Consumers must dispatch on the record's version and engine rather than compare h
 engines or runs built with different toolchains.
 
 Owned test records carry declaration coordinates, an optional `registrationFile`, a rendered title
-when known, a zero-based `row` when applicable, `comparable`, `exclusion`, `traceComplete` and
+when known, a zero-based written `row` when applicable, `comparable`, `exclusion`, `traceComplete` and
 `ordinaryEvents`. `comparisonKeys` contains the actual owned keys:
 
 | Key | Comparison evidence |
@@ -53,6 +53,11 @@ when known, a zero-based `row` when applicable, `comparable`, `exclusion`, `trac
 | `subsumption` | Context admitted for directional trace comparison. |
 | `name` | Proven full title segments. |
 | `rowClass` | Proven row identity used with name and exact body/context keys. |
+
+Inside expanded suite tables, `runtimeRow` distinguishes each invocation of the same test
+declaration, combining enclosing suite rows with its own test row. It is `null` outside suite
+tables; `row` continues to identify the written test-table row. Runtime ordinals are local to
+one declaration and run, and are the row coordinates used by the quality gate.
 
 Keys without proof are `null`. Excluded tests still receive a record, preserving known suite
 prefixes and supported test-row title rendering, but carry no body-comparison proof. Rule eligibility also depends on the recorded trace facts, registration/declaration identity,

@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "minimumCases": 216,
   "knownMissBaseline": 0,
-  "minimumRecall": 0.782,
+  "minimumRecall": 0.839,
   "recallDestination": 1,
   "cases": [
     {

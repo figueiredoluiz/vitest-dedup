@@ -11,6 +11,7 @@ mod hooks;
 pub(crate) use form::{MAX_CLASS_RENDER_BYTES, UNSCOPED_PRIVATE};
 mod identity;
 pub(crate) mod row_identity;
+mod row_values;
 mod rows;
 mod suites;
 pub(crate) mod titles;
@@ -36,6 +37,8 @@ pub fn digest(text: &str) -> u64 {
 #[derive(Debug, Default)]
 pub struct Exports {
     sources: crate::lang::Sources,
+    /// Primitive export proofs share the same source authority as declaration identities.
+    values: RefCell<crate::memory::RetainedMap<(PathBuf, String), Option<crate::lang::Scalar>>>,
     known: RefCell<crate::memory::RetainedMap<(PathBuf, String), Option<String>>>,
 }
 
@@ -79,6 +82,8 @@ pub struct HookBody {
 /// What registration-time structure the normal form of a module depends on.
 #[derive(Clone, Debug, Default)]
 pub struct Structure {
+    /// Framework setup utilities could replace imported module values.
+    pub setup_access: bool,
     /// The inventory cannot license readonly substitutions in the presence of direct eval.
     pub direct_eval: bool,
     /// Suite callbacks, by the registering call that receives each.
@@ -101,6 +106,7 @@ impl Structure {
         use crate::framework::Registers;
         use crate::inventory::SiteKind;
         let mut structure = Structure {
+            setup_access: inventory.setup_access,
             direct_eval: inventory.direct_eval,
             registration_values: inventory.registration_values.clone(),
             ..Structure::default()
@@ -411,6 +417,10 @@ impl InvocationValue {
 
 /// Normalizes the nodes of one module.
 pub struct Normalizer<'s> {
+    /// Proven enclosing suite-row inputs, keyed only by this module's symbols.
+    row_values: HashMap<SymbolId, crate::lang::Scalar>,
+    /// Import setup safety is independent of which scalar or suite row is read first.
+    scalar_imports_safe: Option<bool>,
     path: &'s Path,
     tree: &'s Tree,
     scopes: &'s Scopes,
@@ -449,6 +459,8 @@ impl<'s> Normalizer<'s> {
         structure: &'s Structure,
     ) -> Self {
         Self {
+            row_values: HashMap::new(),
+            scalar_imports_safe: None,
             path,
             tree: &parsed.tree,
             scopes: &parsed.scopes,
@@ -970,7 +982,12 @@ impl crate::memory::HeapBytes for Exports {
     /// Retained export identities include owned paths, exported names and cached text.
     fn heap_bytes(&self) -> usize {
         // The owning Run charges the shared catalog, not each cache alias.
-        let Self { known, sources: _ } = self;
+        let Self {
+            known,
+            values,
+            sources: _,
+        } = self;
         crate::memory::HeapBytes::heap_bytes(&*known.borrow())
+            + crate::memory::HeapBytes::heap_bytes(&*values.borrow())
     }
 }

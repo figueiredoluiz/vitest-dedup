@@ -7,6 +7,50 @@ use std::fs;
 
 mod registration;
 
+/// Literal and local reads avoid the import graph; the first import still proves and caches it.
+#[test]
+fn nc64_import_safety_waits_for_an_import_binding() {
+    let source = include_str!("../../fixtures/oracle/row-value-tables/literal-imports.test.ts");
+    let values = include_str!("../../fixtures/oracle/row-value-tables/scalar-values.ts");
+    with_normalizer(
+        source,
+        &[("scalar-values.ts", values)],
+        false,
+        |normalizer, tree, _| {
+            let read = |name| {
+                tree.nodes()
+                    .filter(|&node| {
+                        tree.kind(node) == "Identifier" && tree.text(node, "name") == Some(name)
+                    })
+                    .last()
+                    .unwrap()
+            };
+            let literal = tree
+                .nodes()
+                .find(|&node| tree.kind(node) == "Literal" && tree.text(node, "raw") == Some("1"))
+                .unwrap();
+            let identity = |normalizer: &mut Normalizer, node| {
+                normalizer.row_scalar(node).map(|v| v.identity())
+            };
+            assert_eq!(identity(normalizer, literal).as_deref(), Some("number:1"));
+            assert_eq!(
+                identity(normalizer, read("local")).as_deref(),
+                Some("number:1")
+            );
+            assert_eq!(normalizer.scalar_imports_safe, None);
+            assert_eq!(
+                identity(normalizer, read("NUMBER")).as_deref(),
+                Some("number:1")
+            );
+            assert_eq!(normalizer.scalar_imports_safe, Some(true));
+            assert_eq!(
+                identity(normalizer, read("NUMBER")).as_deref(),
+                Some("number:1")
+            );
+        },
+    );
+}
+
 /// Runs `with` on a normalizer over `main` (written as `a.test.tsx`) in a project holding `files`,
 /// with the tree and the inventory it was read with.
 fn with_normalizer<T>(

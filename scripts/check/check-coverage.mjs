@@ -236,12 +236,18 @@ const RUST_MODULES = {
   'src/normal/identity.rs': 90,
   'src/normal/rows.rs': 90,
   'src/normal/row_identity.rs': 95,
+  // Primitive and readonly literal-input proofs: first measured 604/667 lines (90.55%).
+  'src/normal/row_values.rs': 90.5,
   'src/normal/titles.rs': 93,
   // Active suite admission: measured at 98.08% (51/52 lines).
   'src/normal/suites.rs': 98,
   // Hook effect proof: measured at 99.23% (129/130 lines).
   'src/normal/hooks.rs': 99.2,
   'src/corpus.rs': 99,
+  // Bounded suite invocations: first measured 160/173 lines (92.49%).
+  'src/corpus/table_frames.rs': 92.4,
+  // Owned primitive representations: all 29 instrumented lines exercised.
+  'src/lang/scalar.rs': 100,
   // Retained next-engine ownership: first measured at 100% (165/165 lines).
   'src/corpus/memory.rs': 100,
   // Initial owned-record measurements; existing module floors are unchanged.

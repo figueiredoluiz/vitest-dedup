@@ -22,6 +22,13 @@ impl Normalizer<'_> {
         if let Some(substitute) = walk.substitutions.get(&symbol) {
             return substitute.clone();
         }
+        if let Some(value) = self.row_values.get(&symbol) {
+            return self
+                .scalar_form(value, walk.structural && (walk.trace || walk.in_type == 0))
+                .unwrap_or_else(|| {
+                    format!("suite-value:{}:{}", self.path.display(), value.identity())
+                });
+        }
         if let Some(value) = self.registration_bindings.get(&symbol) {
             return if walk.structural && (walk.trace || walk.in_type == 0) {
                 value.shape.clone()

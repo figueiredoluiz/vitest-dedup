@@ -8,6 +8,7 @@ use std::path::Path;
 mod dynamic_import;
 mod export_identity;
 mod module_meta;
+mod nc64;
 mod runners;
 
 /// The corpus of each of `tests` (paths among `files`), read in one run.

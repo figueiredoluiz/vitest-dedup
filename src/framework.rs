@@ -135,6 +135,35 @@ pub type RenderTitle = fn(
     usize,
 ) -> Option<String>;
 
+/// A title input with JSON construction kept separate from non-JSON primitives.
+#[derive(Clone, Debug)]
+pub enum TitleValue {
+    /// A literal JSON construction supplied by the existing title reader.
+    Json(serde_json::Value),
+    /// A proven primitive, including undefined, bigint and non-finite numbers.
+    Scalar(crate::lang::Scalar),
+}
+
+/// Which title proof the caller needs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TitleMode {
+    /// A name safe to compare.
+    Comparison,
+    /// A possibly truncated report label.
+    Display,
+    /// A name coupled with exact row-value identity.
+    Row,
+}
+
+/// Typed row-title rendering, with unknown cells retained independently of undefined.
+pub type RenderValues = fn(
+    &str,
+    &[Option<TitleValue>],
+    Option<&std::collections::HashMap<String, TitleValue>>,
+    usize,
+    TitleMode,
+) -> Option<String>;
+
 /// An assertion entry point: the base the framework's assertions hang off, and the chain members
 /// around it whose presence changes what the assertion claims.
 #[derive(Debug)]
@@ -162,8 +191,8 @@ pub struct Dialect {
     /// Renders a row title for reports: as `render_title`, with long values cut as the
     /// framework's default display limit cuts them, so never a name to compare.
     pub render_display_title: RenderTitle,
-    /// The bounded title proof used by row comparison while broader rendering is being ported.
-    pub render_row_title: RenderTitle,
+    /// Renders primitive row values without encoding special values as JSON sentinels.
+    pub render_values: RenderValues,
     /// Modules whose imports are the API.
     pub api_modules: &'static [&'static str],
     /// The `import.meta` member that carries the API in source files, when the framework has one.
