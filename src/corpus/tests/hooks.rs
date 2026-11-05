@@ -323,6 +323,13 @@ fn hook_property_writes_pair_over_a_proven_receiver() {
     assert!(findings(&format!("{IMPORTS} {local} {local} {TEST}"), 1).is_empty());
     // A non-literal write on the tracked path has no value to keep.
     assert!(findings(&source(&route("audit.mode = compute();")), 1).is_empty());
+    // A write to a sibling path leaves the tracked property alone.
+    let sibling = "const audit = { mode: '', other: 1 };";
+    assert_eq!(
+        findings(&format!("{IMPORTS} {sibling} function route() {{ audit.other = 2; }} {hook} {hook} test('reads', () => {{ expect(audit.mode).toBe('primary') }});"), 1)
+            .len(),
+        1
+    );
     // A computed access on the receiver anywhere keeps its use unknown.
     assert!(findings(&source(&route("audit[key] = 'x';")), 1).is_empty());
     // A `__proto__` segment replaces the receiver's prototype.
@@ -341,6 +348,19 @@ fn hook_property_writes_pair_over_a_proven_receiver() {
         1
     )
     .is_empty());
+    // A destructured binding's initializer is not the receiver's value.
+    let destructured = format!(
+        "{IMPORTS} const {{ audit }} = {{ audit: source, mode: 0 }}; function route() {{ return audit.mode; }} {hook} {hook} {TEST}"
+    );
+    assert!(findings(&destructured, 1).is_empty());
+    // A later write can replace the primitive the initializer declared, so a coercion of the
+    // read is only exempt when the path's whole write history keeps one primitive.
+    let rewritten = format!(
+        "{IMPORTS} let value = 0; {receiver} {hook} {hook} test('rewrites', () => {{ audit.mode = make(); expect(+audit.mode).toBe(0) }}); test('reads', () => {{ expect(value).toBe(1) }});"
+    );
+    assert!(findings(&rewritten, 2).is_empty());
+    // Any differing write to the path refuses the exemption, primitive or not: the proof
+    // keeps one literal value across the module.
     // A `var` receiver can be redeclared: the second initializer replaces the proven literal
     // without a write reference.
     let redeclared = format!(

@@ -68,7 +68,7 @@ impl Normalizer<'_> {
                                     // keeps the callback deferred.
                                     && !(tree.kind(node) == "MemberExpression"
                                         && self.plain_member(node).is_some()
-                                        && (self.assertion_argument(node)
+                                        && (self.assertion_argument(node).unwrap_or(false)
                                             || self.assignment_target(node)))
                             }
                             _ if tree.is_function(node) => {
@@ -186,7 +186,7 @@ impl Normalizer<'_> {
     /// written, so the expression defers nothing and the write carries no user code. The
     /// receiver is a lexical binding assigned nowhere whose only value is a plain object
     /// literal — own data properties, static keys, no `__proto__`.
-    fn plain_member(&self, member: NodeId) -> Option<(SymbolId, &str)> {
+    fn plain_member(&self, member: NodeId) -> Option<(SymbolId, String)> {
         let tree = self.tree;
         if tree.flag(member, "computed") {
             return None;
@@ -208,7 +208,54 @@ impl Normalizer<'_> {
         if !keys.iter().any(|key| key == name) {
             return None;
         }
-        Some((symbol, name))
+        // A later write can replace the primitive the initializer declared, so the read is
+        // only as safe as the path's whole write history.
+        let stable = {
+            let mut cache = self.hook_member_plain.borrow_mut();
+            *cache
+                .entry(symbol)
+                .or_default()
+                .entry(name.to_owned())
+                .or_insert_with(|| self.stable_path_value(symbol, name).is_some())
+        };
+        stable.then_some((symbol, name.to_owned()))
+    }
+
+    /// Every module-wide write to `receiver.<name>` is a plain `=` of one primitive literal,
+    /// or there is no write at all: the property the initializer declares is the value every
+    /// read sees.
+    fn stable_path_value(&self, symbol: SymbolId, name: &str) -> Option<()> {
+        let tree = self.tree;
+        let binding = self.scopes.symbol(symbol);
+        let mut raw: Option<&str> = None;
+        for reference in &binding.references {
+            let node = reference.node?;
+            let (segments, current, use_of) = self.member_chain(node)?;
+            if segments.len() != 1 || segments[0] != name {
+                continue;
+            }
+            match tree.kind(use_of) {
+                "AssignmentExpression" if tree.inner(tree.child(use_of, "left")?) == current => {
+                    if tree.text(use_of, "operator") != Some("=") {
+                        return None;
+                    }
+                    let right = tree.inner(tree.child(use_of, "right")?);
+                    if !primitive(tree, right) {
+                        return None;
+                    }
+                    let next = tree.text(right, "raw")?;
+                    if raw.is_some_and(|prior| prior != next) {
+                        return None;
+                    }
+                    raw = Some(next);
+                }
+                "UpdateExpression" if tree.inner(tree.child(use_of, "argument")?) == current => {
+                    return None;
+                }
+                _ => {}
+            }
+        }
+        Some(())
     }
 
     /// The receiver-wide half of the plain-object proof, resolved once per symbol: a lexical
@@ -233,9 +280,13 @@ impl Normalizer<'_> {
         let Declaration::Variable(declaration) = binding.declaration else {
             return None;
         };
-        // A `declare`d receiver has no initializer to prove, and a `var` can be redeclared:
-        // the second initializer replaces the proven literal without a write reference.
-        if tree.flag(tree.parent(declaration)?, "declare")
+        // A destructured binding's initializer is not the receiver's value; a `declare`d one
+        // has no initializer to prove; and a `var` can be redeclared, its second initializer
+        // replacing the proven literal without a write reference.
+        if tree
+            .child(declaration, "id")
+            .is_none_or(|id| tree.kind(id) != "Identifier")
+            || tree.flag(tree.parent(declaration)?, "declare")
             || matches!(
                 tree.text(tree.parent(declaration)?, "kind"),
                 Some("var") | None
@@ -296,7 +347,7 @@ impl Normalizer<'_> {
         let tree = self.tree;
         let mut current = current;
         let mut use_of = use_of;
-        for _ in 0..64 {
+        loop {
             match tree.kind(use_of) {
                 "CallExpression" => {
                     return Some(tree.inner(tree.child(use_of, "callee")?) == current)
@@ -311,7 +362,6 @@ impl Normalizer<'_> {
                 _ => return Some(false),
             }
         }
-        Some(false)
     }
 
     /// The static member chain a reference sits under: its segments, the chain's outermost
@@ -352,40 +402,11 @@ impl Normalizer<'_> {
     fn plain_write(&self, member: NodeId) -> Option<String> {
         let tree = self.tree;
         let (symbol, name) = self.plain_member(member)?;
-        // The tracked path keeps one literal value across the module.
-        let binding = self.scopes.symbol(symbol);
-        let mut written = Vec::new();
-        for reference in &binding.references {
-            let node = reference.node?;
-            let (segments, current, use_of) = self.member_chain(node)?;
-            let tracked = segments.len() == 1 && segments[0] == name;
-            match tree.kind(use_of) {
-                "AssignmentExpression"
-                    if tracked && tree.inner(tree.child(use_of, "left")?) == current =>
-                {
-                    // The tracked write keeps one primitive value across the module.
-                    if tree.text(use_of, "operator") != Some("=") {
-                        return None;
-                    }
-                    let right = tree.inner(tree.child(use_of, "right")?);
-                    if !primitive(tree, right) {
-                        return None;
-                    }
-                    written.push(tree.text(right, "raw")?);
-                }
-                "UpdateExpression"
-                    if tracked && tree.inner(tree.child(use_of, "argument")?) == current =>
-                {
-                    return None;
-                }
-                _ => {}
-            }
-        }
-        let raw = written.first()?;
-        written
-            .iter()
-            .all(|other| other == raw)
-            .then(|| format!("pwrite:{symbol:?}:{name}:{raw}"))
+        // The hook's own write is one of the path's proven assignments; its value is the key.
+        let assignment = tree.outer_parent(member)?;
+        let right = tree.inner(tree.child(assignment, "right")?);
+        let raw = tree.text(right, "raw")?;
+        Some(format!("pwrite:{symbol:?}:{name}:{raw}"))
     }
 
     /// A member write or define-property call rooted at the global `Object` or `Reflect` could
@@ -458,19 +479,19 @@ impl Normalizer<'_> {
     /// the assertion consumes the value, so nothing awaits or retains it for the analyzer's
     /// purposes. A member used as a callee, a return value or a plain call argument does not
     /// qualify.
-    fn assertion_argument(&self, node: NodeId) -> bool {
+    fn assertion_argument(&self, node: NodeId) -> Option<bool> {
         let tree = self.tree;
         let mut current = node;
-        while let Some(parent) = tree.outer_parent(current) {
+        loop {
+            let parent = tree.outer_parent(current)?;
             if tree.kind(parent) == "CallExpression" {
-                return tree
-                    .child(parent, "callee")
-                    .is_some_and(|callee| tree.inner(callee) != current)
-                    && self.synchronous_assertion_node(parent);
+                let callee = tree.child(parent, "callee")?;
+                return Some(
+                    tree.inner(callee) != current && self.synchronous_assertion_node(parent),
+                );
             }
             current = parent;
         }
-        false
     }
 
     /// Whether this node is the direct target of an assignment whose value the callback
