@@ -18,7 +18,8 @@
 // With `--baseline-binary` the same corpus is also run through an older binary and each expectation
 // is classed as retained, newly satisfied, corrected, regressed, a new forbidden finding or still
 // unmet, with findings nobody labelled compared the same way. A case the baseline cannot be run or
-// read on (a crash, an old report schema, no extracted tests) is `unavailable`, never zero findings.
+// read on (a crash, an old report schema, no extracted tests, no result within
+// `BASELINE_TIMEOUT_MS`) is `unavailable`, never zero findings.
 // `--baseline-ref` names the commit the baseline was built from, so cases whose labels or files
 // differ from it are totalled apart from detector changes. `--fail-on-regression` exits 1 on a
 // regression or an unavailable case (one new or changed since the baseline stays data).
@@ -41,6 +42,13 @@ import { observeRecallCase } from './lib/recall-runner.mjs'
 import { defaultBinary } from './lib/run-analyzer.mjs'
 
 const here = fileURLToPath(new URL('.', import.meta.url))
+
+/**
+ * How long one baseline case may run. A previous release may lack a bound the candidate has (0.9.0
+ * expands an overflowing extglob without limit and exhausts a CI runner's memory in under a
+ * minute); the candidate itself is never limited, so its own hang still fails the command.
+ */
+export const BASELINE_TIMEOUT_MS = 20_000
 const DEFAULT_ROOT = resolve(here, '..', '..', 'fixtures', 'recall')
 
 /** Options that take a value, and the option each sets. */
@@ -122,10 +130,11 @@ export function runCli(
   const options = parseArguments(argv)
   const labels = readRecallManifest(options.root)
   /** Runs one case through `binary` and evaluates it; the same description serves both binaries. */
-  const evaluateWith = (binary, caseLabel, extraArguments, evaluation) => {
+  const evaluateWith = (binary, caseLabel, extraArguments, evaluation, timeoutMs) => {
     const testCase = { name: caseLabel.name, path: caseLabel.path, arguments: caseLabel.arguments }
     const own = labels.expectations.filter((expectation) => expectation.caseName === caseLabel.name)
-    return evaluateCase(caseLabel, own, observe({ binary, root: options.root, testCase, extraArguments }), evaluation)
+    const observed = observe({ binary, root: options.root, testCase, extraArguments, timeoutMs })
+    return evaluateCase(caseLabel, own, observed, evaluation)
   }
   const cases = labels.cases.map((caseLabel) => evaluateWith(options.binary, caseLabel, ['--emit-test-fingerprints']))
   const report = buildReport({ binary: options.binary, root: options.root, labels, cases })
@@ -134,7 +143,8 @@ export function runCli(
   if (options.baseline !== null) {
     const baselines = labels.cases.map((caseLabel) => {
       try {
-        return { evaluated: evaluateWith(options.baseline, caseLabel, [], { requireTestRecords: false, allowPendingZeroTests: false }) }
+        const evaluation = { requireTestRecords: false, allowPendingZeroTests: false }
+        return { evaluated: evaluateWith(options.baseline, caseLabel, [], evaluation, BASELINE_TIMEOUT_MS) }
       } catch (error) {
         // The binary's own path says nothing the reader does not already know.
         return { unavailable: String(error.message).split('\n')[0].split(options.baseline).join('the baseline binary') }
