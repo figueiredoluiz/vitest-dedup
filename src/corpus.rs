@@ -1429,6 +1429,60 @@ fn read_parsed(
         // expanded case and a hand-written twin in one suite key together. Expanded hooks need
         // no rewrite here; hooks::collect scopes them by the caller's own suites_around.
         let scopes = normalizer.suites_around(expansion.call).unwrap_or_default();
+        // The invocation's lifecycle context: the caller hooks its suite chain and file scope
+        // run before it, in registration order, then the invocation's own hooks. Two calls
+        // under different setups key apart even when their bodies are identical.
+        let in_scope: Vec<(u32, crate::framework::HookTiming, NodeId)> = found
+            .sites
+            .iter()
+            .filter(|site| matches!(site.kind, SiteKind::Registers(Registers::Hook(_))))
+            .filter(|site| {
+                normalizer
+                    .suites_around(site.node)
+                    .and_then(|around| around.last().copied())
+                    .is_none_or(|scope| scopes.contains(&scope))
+            })
+            .filter_map(|site| match site.kind {
+                SiteKind::Registers(Registers::Hook(timing)) => {
+                    Some((tree.span(site.node).start, timing, site.node))
+                }
+                _ => None,
+            })
+            .collect();
+        let mut context: Vec<(u32, String)> = in_scope
+            .iter()
+            .map(|&(position, timing, node)| {
+                let callback = tree
+                    .list(node, "arguments")
+                    .first()
+                    .copied()
+                    .flatten()
+                    .map(|argument| tree.inner(argument))
+                    .filter(|&argument| tree.is_function(argument));
+                let key = callback.and_then(|callback| normalizer.hook_effects(callback));
+                (
+                    position,
+                    format!("{:?}\u{1}{}", timing, key.as_deref().unwrap_or("unknown")),
+                )
+            })
+            .collect();
+        context.sort_by_key(|(position, _)| *position);
+        for imported in &expansion.hooks {
+            context.push((
+                tree.span(expansion.call).start,
+                format!(
+                    "{:?}\u{1}{}",
+                    imported.hook.timing,
+                    imported.hook.key.as_deref().unwrap_or("unknown")
+                ),
+            ));
+        }
+        context.sort_by_key(|(position, _)| *position);
+        let context = context
+            .into_iter()
+            .map(|(_, part)| part)
+            .collect::<Vec<_>>()
+            .join("\u{1}");
         if !scopes.is_empty() {
             let names: Option<Vec<String>> = scopes
                 .iter()
@@ -1465,14 +1519,13 @@ fn read_parsed(
                 }
             }
         }
+        if !context.is_empty() {
+            contextualize_imported_tests(&mut expansion_tests, &context);
+        }
         tests.extend(expansion_tests);
         helper_sources.extend(expansion.sources);
         imported_hooks.extend(expansion.hooks);
         imported_diagnostic_hooks.extend(expansion.diagnostic_hooks);
-    }
-    let imported_context = lifecycle_context(&imported_hooks);
-    if !imported_context.is_empty() {
-        contextualize_imported_tests(&mut tests, &imported_context);
     }
     let hooks = hooks::collect(
         parsed,
@@ -1555,22 +1608,6 @@ fn read_parsed(
         containers,
         parse_errors: parsed.parse_errors,
     })
-}
-
-/// Context surrounding imported registrations belongs to their executions, even though their
-/// declarations were normalized in another module.
-fn lifecycle_context(imported: &[runners::ImportedHook]) -> String {
-    let context: Vec<_> = imported
-        .iter()
-        .map(|imported| {
-            format!(
-                "{:?}\u{1}{}",
-                imported.hook.timing,
-                imported.hook.key.as_deref().unwrap_or("unknown")
-            )
-        })
-        .collect();
-    context.join("\u{1}")
 }
 
 /// Prevent tests under an imported lifecycle from borrowing equivalence across another caller.

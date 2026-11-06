@@ -179,7 +179,7 @@ pub(super) fn carry(suite: &mut Finding, severity: Severity, cases: Vec<GateCase
         covers.locations = covers
             .cases
             .iter()
-            .map(|(location, _)| location.clone())
+            .map(|(location, ..)| location.clone())
             .collect();
         covers.locations.dedup();
     }
@@ -287,6 +287,7 @@ fn descendants(
                                     span: case.span,
                                 },
                                 case.gate_row(),
+                                0,
                             )
                         })
                 })

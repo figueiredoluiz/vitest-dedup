@@ -46,7 +46,9 @@ struct Entry<'a> {
 impl<'a> Entry<'a> {
     /// The runtime case this entry is, as the quality gate counts it; `None` for a case outside
     /// the gate's denominator (a todo a name finding still names), so the numerator never counts
-    /// what the denominator leaves out.
+    /// what the denominator leaves out. Two invocations of one template are two runtime cases, so
+    /// the identity carries the invocation: the caller file (digested) and the call position, `0`
+    /// for a case the file spells itself.
     fn gate_case(self) -> Option<GateCase> {
         self.case.gate_eligible().then(|| {
             (
@@ -55,17 +57,30 @@ impl<'a> Entry<'a> {
                     span: self.case.span,
                 },
                 self.case.gate_row(),
+                self.case.origin.as_ref().map_or(0, |origin| {
+                    origin
+                        .call
+                        .wrapping_add(origin.registration_files.first().map_or(0, |path| {
+                            crate::normal::digest(&path.display().to_string()) as u32
+                        }))
+                }),
             )
         })
     }
 
     /// Source identity is independent of the caller that happens to register this execution,
     /// except that two invocations of one template are two runtime cases: the invocation
-    /// discriminates them, so equal-argument calls pair as the duplicates they are.
-    fn declaration(self) -> (&'a Path, u32, u32) {
+    /// discriminates them -- by caller file and call position, since a byte offset is only
+    /// unique within its own module -- so equal-argument calls pair as the duplicates they are.
+    fn declaration(self) -> (&'a Path, u32, &'a Path, u32) {
         (
             self.case.declaration_path(self.path),
             self.case.span.start_byte,
+            self.case
+                .origin
+                .as_ref()
+                .and_then(|origin| origin.registration_files.first())
+                .map_or(self.path, |path| path.as_path()),
             self.case.origin.as_ref().map_or(0, |origin| origin.call),
         )
     }
@@ -295,34 +310,19 @@ fn one_per_body(group: &[usize], entries: &[Entry<'_>]) -> Vec<usize> {
         .collect()
 }
 
-/// Keeps at most one member per file: a relationship inside one file is `duplicate-test`'s claim,
-/// whether or not that rule is enabled.
+/// Keeps at most one member per file and per declaration: a relationship inside one file is
+/// `duplicate-test`'s claim, whether or not that rule is enabled. With declarations keyed per
+/// invocation, a repeated execution across callers is its own member and pairs directly.
 fn one_per_file(group: &[usize], entries: &[Entry<'_>]) -> Vec<usize> {
     let mut files = BTreeSet::new();
     let mut declarations = BTreeSet::new();
-    let mut selected = Vec::new();
-    for &index in group {
-        let entry = entries[index];
-        if !files.contains(entry.path) && !declarations.contains(&entry.declaration()) {
-            files.insert(entry.path);
-            declarations.insert(entry.declaration());
-            selected.push(index);
-        }
-    }
-    if let [first] = selected.as_slice() {
-        let first = entries[*first];
-        let another_owner = group.iter().copied().find(|&index| {
-            entries[index].declaration() == first.declaration() && entries[index].path != first.path
-        });
-        let another_source = group.iter().copied().find(|&index| {
-            entries[index].declaration() != first.declaration() && entries[index].path == first.path
-        });
-        if let (Some(left), Some(right)) = (another_owner, another_source) {
-            selected = vec![left, right];
-            selected.sort_by(|&left, &right| entries[left].cmp(&entries[right]));
-        }
-    }
-    selected
+    group
+        .iter()
+        .copied()
+        .filter(|&index| {
+            files.insert(entries[index].path) && declarations.insert(entries[index].declaration())
+        })
+        .collect()
 }
 
 /// A matching group reduced to the entries a finding names: each kept entry with every entry of

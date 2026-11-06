@@ -190,7 +190,11 @@ fn closed_batch(
                                 .get(1)
                                 .and_then(|argument| *argument)
                                 .map(|argument| tree.inner(argument))
-                                .filter(|&argument| tree.is_function(argument))
+                                .filter(|&argument| {
+                                    tree.is_function(argument)
+                                        && !tree.flag(argument, "async")
+                                        && !tree.flag(argument, "generator")
+                                })
                                 .and_then(|callback| tree.child(callback, "body"))
                                 .filter(|&body| tree.kind(body) == "BlockStatement")
                                 .map(|body| {

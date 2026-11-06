@@ -1060,7 +1060,9 @@ pub struct Finding {
 }
 
 /// One runtime case, as the quality gate counts it: its declaration's location and its table row.
-pub type GateCase = (Location, Option<usize>);
+/// The trailing figure discriminates invocations: two calls of one template are two runtime
+/// cases over one written declaration,  when the file spells the case itself.
+pub type GateCase = (Location, Option<usize>, u32);
 
 /// What reporting a copied block once removed: the highest severity among the child findings it
 /// replaced, and their locations at that severity. Copying a whole block must not pass a gate

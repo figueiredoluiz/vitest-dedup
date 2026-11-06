@@ -114,8 +114,8 @@ fn suite_case_index_preserves_rows_and_file_identity() {
     assert!(finding
         .cases
         .iter()
-        .all(|(location, _)| location.path == std::path::Path::new("a.test.ts")));
-    assert!(finding.cases.iter().any(|(_, row)| *row == Some(7)));
+        .all(|(location, ..)| location.path == std::path::Path::new("a.test.ts")));
+    assert!(finding.cases.iter().any(|(_, row, ..)| *row == Some(7)));
     assert_eq!(gate(result.findings, false), (true, 4));
     let missing = run_with_suites(&files[0..1], &suites, &suite_only(), &[]);
     assert_eq!(missing.findings.len(), 1);
@@ -243,7 +243,7 @@ fn carried_children_keep_the_highest_severity() {
     let at = |line| {
         let mut location = suite.locations[0].clone();
         location.span.start.line = line;
-        vec![(location, None)]
+        vec![(location, None, 0)]
     };
     let (one, two, three) = (at(1), at(2), at(3));
     crate::rules::suites::carry(&mut suite, Severity::Warning, one);

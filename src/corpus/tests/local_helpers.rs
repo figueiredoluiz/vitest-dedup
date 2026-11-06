@@ -400,3 +400,97 @@ fn two_equal_calls_in_one_suite_pair() {
     .count();
     assert_eq!(findings, 1);
 }
+
+/// Two calls under different caller setups key apart even when their bodies are identical:
+/// the invocation's lifecycle context composes the caller hooks its suite chain runs.
+#[test]
+fn caller_setup_context_keeps_equal_bodies_apart() {
+    let header = "import { describe, test, expect, beforeEach } from 'vitest'\n";
+    let helper =
+        "function reads() {\n  test('reads ready', () => {\n    expect(ready).toBe(1)\n  })\n}\n";
+    let source = format!(
+        "{header}let ready = 0\n{helper}describe('plain', () => {{\n  reads()\n}})\ndescribe('setup', () => {{\n  beforeEach(() => {{\n    ready = 1\n  }})\n  reads()\n}})\n"
+    );
+    let tests = by_title(&source);
+    assert!(tests["reads ready"].exclusion.is_none());
+    // Both cases stay comparable; the differing setups keep their keys apart.
+    let plain = &tests["reads ready"];
+    let corpus = corpora(&[("a.test.ts", &source)], &["a.test.ts"]).remove(0);
+    let findings = owned_findings("a.test.ts", corpus)
+        .findings
+        .into_iter()
+        .filter(|finding| finding.rule == Rule::DuplicateTest)
+        .count();
+    assert_eq!(
+        findings, 0,
+        "the plain and hooked invocations do not pair {plain:?}"
+    );
+}
+
+/// A generator suite callback never runs its body, so a call inside it registers nothing and
+/// the file keeps its exclusions.
+#[test]
+fn a_generator_suite_callback_keeps_the_file_unexpanded() {
+    let header = "import { describe, test, expect } from 'vitest'\n";
+    let helper = "function makeTest(label: string) {\n  test(`${label}`, () => {\n    expect(1).toBe(1)\n  })\n}\n";
+    let source =
+        format!("{header}{helper}describe('generator', function* () {{\n  makeTest('x')\n}})\n");
+    assert!(by_title(&source)
+        .values()
+        .all(|test| test.exclusion.is_some()));
+}
+
+/// Two identical callers of one runner pair across the files: the invocation identity carries
+/// the caller file, so equal byte offsets in two modules do not collapse them.
+#[test]
+fn identical_callers_pair_across_files() {
+    let runner = "import { test, expect } from 'vitest'\nexport function run() {\n  test('from the runner', () => {\n    expect(1).toBe(1)\n  })\n}\n";
+    let caller = "import { run } from './runner'\nrun()\n";
+    let corpora = corpora(
+        &[
+            ("runner.ts", runner),
+            ("a.test.ts", caller),
+            ("b.test.ts", caller),
+        ],
+        &["a.test.ts", "b.test.ts"],
+    );
+    assert!(corpora
+        .iter()
+        .flat_map(|corpus| corpus.tests.iter())
+        .all(|test| test.exclusion.is_none()));
+    let outcome = owned_outcome(
+        corpora
+            .into_iter()
+            .enumerate()
+            .map(|(index, corpus)| (["a.test.ts", "b.test.ts"][index], corpus))
+            .collect(),
+    );
+    assert_eq!(
+        outcome
+            .findings
+            .iter()
+            .filter(|finding| finding.rule == Rule::CrossFileDuplicate)
+            .count(),
+        1,
+        "{:?}",
+        outcome.findings
+    );
+}
+
+/// The quality gate counts both invocations of one template as the two runtime cases they are.
+#[test]
+fn the_gate_counts_each_invocation() {
+    let header = "import { describe, test, expect } from 'vitest'\n";
+    let helper = "function makeTest(label: string) {\n  test(`${label} works`, () => {\n    expect(1).toBe(1)\n  })\n}\n";
+    let source = format!(
+        "{header}{helper}describe('s', () => {{\n  makeTest('shared')\n  makeTest('shared')\n}})\n"
+    );
+    let corpus = corpora(&[("a.test.ts", &source)], &["a.test.ts"]).remove(0);
+    let outcome = owned_findings("a.test.ts", corpus);
+    let finding = outcome
+        .findings
+        .iter()
+        .find(|finding| finding.rule == Rule::DuplicateTest)
+        .expect("the pair fires");
+    assert_eq!(finding.cases.len(), 2, "both invocations are counted");
+}
