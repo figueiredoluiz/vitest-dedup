@@ -87,7 +87,7 @@ test('regressed cases are named, with a cap', () => {
 })
 
 test('a case name is written as literal text and cannot plant a second section', () => {
-  const hostile = `evil\`\n${END_MARKER}\n${START_MARKER}\n## Recall corpus comparison`
+  const hostile = `evil\`\n${END_MARKER}\n${START_MARKER}\n## Detection changes since v0.5.1`
   assert.doesNotMatch(literal(hostile), /[`\n<>]/)
   assert.equal(literal('duplicate-test-in-source'), 'duplicate-test-in-source')
   assert.equal(literal('x'.repeat(300)).length, 120)
@@ -101,6 +101,12 @@ test('with no earlier release the section says so rather than staying silent', (
   const section = renderSection({ comparison: null, version: '0.1.0', previousTag: null, cases: 0 })
   assert.match(section, /no earlier release of vitest-dedup to compare v0\.1\.0 with/)
   assert.doesNotMatch(section, /\| Expectations retained/)
+  assert.match(section, /^## Detection changes$/m)
+})
+
+test('the section is headed by the release it compares with', () => {
+  const section = renderSection({ comparison: comparison(), version: '0.6.0', previousTag: 'v0.5.1', cases: 119 })
+  assert.equal(section.split('\n')[1], '## Detection changes since v0.5.1')
 })
 
 test('the section replaces an earlier one, so a retried publish keeps exactly one', () => {
@@ -114,10 +120,12 @@ test('the section replaces an earlier one, so a retried publish keeps exactly on
   assert.equal(replaced.split(START_MARKER).length - 1, 1)
   assert.match(replaced, /Cases with a regression/)
   assert.doesNotMatch(replaced, /\*\*Expectations regressed\*\* \(a wanted finding lost\) \| 0/)
-  assert.ok(replaced.startsWith(START_MARKER), 'the section leads the notes')
+  assert.ok(replaced.startsWith(generated), 'the list of changes comes first')
+  assert.ok(replaced.trimEnd().endsWith(END_MARKER), 'the section closes the notes')
   assert.equal(upsertSection(null, first), first, 'an empty body is just the section')
   const doubled = upsertSection(`${first}\n${first}\n${generated}`, second)
   assert.equal(doubled.split(START_MARKER).length - 1, 1, 'a body that somehow holds two collapses to one')
+  assert.equal(doubled, `${generated}\n\n${second}`, 'a section published first moves after the changes')
 })
 
 test('notes that would exceed the size limit give way to the section, once, however often it is applied', () => {
@@ -125,7 +133,7 @@ test('notes that would exceed the size limit give way to the section, once, howe
   const huge = 'x'.repeat(MAX_NOTES_LENGTH - 10)
   const once = upsertSection(huge, section)
   assert.ok(once.length <= MAX_NOTES_LENGTH, `${once.length} characters`)
-  assert.ok(once.startsWith(START_MARKER) && once.includes('cut to fit'))
+  assert.ok(once.trimEnd().endsWith(END_MARKER) && once.includes('cut to fit'))
   assert.equal(upsertSection(once, section), once, 'a retry changes nothing')
   assert.equal(once.split('cut to fit').length - 1, 1)
   const fits = 'y'.repeat(1000)
