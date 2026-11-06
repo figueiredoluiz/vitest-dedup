@@ -1091,6 +1091,87 @@
       ]
     },
     {
+      "name": "duplicate-test-bench-vitest4-hook-reset",
+      "path": "duplicate-test-bench-vitest4-hook-reset",
+      "rule": "duplicate-test",
+      "role": "negative",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-06",
+      "expectedTests": 2,
+      "expectedIncomplete": true,
+      "expectedUnresolved": 2,
+      "expectedFindings": [],
+      "expectedAbsent": [
+        {
+          "rule": "duplicate-test",
+          "titles": [
+            "counts up",
+            "counts again"
+          ]
+        }
+      ],
+      "blindUnderCurrent": [
+        "count.bench.ts"
+      ]
+    },
+    {
+      "name": "duplicate-test-bench-vitest-range",
+      "path": "duplicate-test-bench-vitest-range",
+      "rule": "duplicate-test",
+      "role": "negative",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-06",
+      "expectedTests": 2,
+      "expectedIncomplete": true,
+      "expectedUnresolved": 2,
+      "expectedFindings": [],
+      "expectedAbsent": [
+        {
+          "rule": "duplicate-test",
+          "titles": [
+            "parses a short document",
+            "reads a small config"
+          ]
+        }
+      ],
+      "blindUnderCurrent": [
+        "parse.bench.ts"
+      ]
+    },
+    {
+      "name": "parameterization-candidate-bench-vitest4",
+      "path": "parameterization-candidate-bench-vitest4",
+      "rule": "parameterization-candidate",
+      "role": "positive",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-06",
+      "expectedTests": 2,
+      "expectedIncomplete": false,
+      "expectedUnresolved": 0,
+      "expectedFindings": [
+        {
+          "rule": "parameterization-candidate",
+          "severity": "warning",
+          "titles": [
+            "serializes a small object",
+            "serializes a larger object"
+          ]
+        }
+      ],
+      "expectedAbsent": [
+        {
+          "rule": "duplicate-test",
+          "titles": [
+            "serializes a small object",
+            "serializes a larger object"
+          ]
+        }
+      ]
+    },
+    {
       "name": "duplicate-test-concurrency-modifiers",
       "path": "duplicate-test-concurrency-modifiers",
       "rule": "duplicate-test",

@@ -100,8 +100,19 @@ fn representatives(group: &[usize], entries: &[Entry<'_>]) -> Vec<usize> {
     members
 }
 
-/// Suggests a table while explicitly preserving the coverage of every literal case.
+/// Suggests a table while explicitly preserving the coverage of every literal case. Benchmarks
+/// (only ever grouped with benchmarks) have no `bench.each`, and a `test.each` table would stop
+/// measuring them, so their advice is a loop of `bench` calls.
 fn message(members: &[Entry<'_>]) -> String {
+    if members.iter().all(|member| member.case.benchmark) {
+        return format!(
+            "{} benchmarks share identical structure but differ only in literal values; register \
+             them from one loop of `bench(...)` calls over those values, keeping every case as \
+             its own benchmark (there is no `bench.each`, and a `test.each` table would not be \
+             measured)",
+            members.len()
+        );
+    }
     format!(
         "{} tests share identical structure but differ only in literal values; consolidate into \
          one `test.each` table that keeps every case as its own row",

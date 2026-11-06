@@ -46,7 +46,11 @@ local alias. Source-sensitive assertions and uncertain module identities also wi
 
 A top-level `bench` is compared on the same terms as a test, by every rule, but only with other
 benchmarks: a benchmark and a test never pair, even with equal bodies or titles. Options such as
-`iterations` are part of what a benchmark measures, so they keep two benchmarks apart.
+`iterations` are part of what a benchmark measures, so they keep two benchmarks apart. Vitest runs
+no hook around a benchmark, so a `beforeEach` that resets shared state does not make it safe for
+benchmarks to read. A `parameterization-candidate` between benchmarks advises one loop of
+`bench(...)` calls over the varying values, since there is no `bench.each` and a `test.each`
+table would not be measured.
 
 A benchmark is compared only where it runs: in a file `benchmark.include` collects, in a project
 whose installed Vitest, or the `vitest` version its nearest `package.json` declares, is 4. Vitest 5

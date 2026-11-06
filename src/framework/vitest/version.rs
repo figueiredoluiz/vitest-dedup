@@ -111,15 +111,25 @@ impl Source {
     }
 }
 
-/// The one major a version or range admits: `4.1.12`, `^4.1.0`, `~4.1`, `4.x`, `=4`. A range
-/// spanning majors, a tag, a protocol (`workspace:`, `npm:`, `catalog:`) or a comparator is `None`.
+/// The one major a version or range admits: `4.1.12`, `^4.1.0`, `~4.1`, `4.x`, `=4`,
+/// `4.0.0-beta.1`. The whole text is read: a set of ranges (`||`, a space, a hyphen range), a
+/// comparator, a tag or a protocol (`workspace:`, `npm:`, `catalog:`) is `None`.
 fn major(range: &str) -> Option<u64> {
     let range = range.trim();
-    let range = range
-        .strip_prefix(['^', '~', '='])
-        .unwrap_or(range)
-        .trim_start_matches('v');
-    let mut parts = range.split('-').next()?.split('.');
+    let range = range.strip_prefix(['^', '~', '=']).unwrap_or(range);
+    let range = range.strip_prefix('v').unwrap_or(range);
+    // A prerelease or build suffix follows the version core, and must be identifiers only: a space,
+    // `||` or a comparator after it is another range. Before it, the core's parts reject them.
+    let (core, suffix) = range.split_at(range.find(['-', '+']).unwrap_or(range.len()));
+    if !suffix.is_empty()
+        && (suffix.len() == 1
+            || !suffix[1..]
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'+')))
+    {
+        return None;
+    }
+    let mut parts = core.split('.');
     let major = parts.next()?;
     if major.is_empty() || !major.bytes().all(|byte| byte.is_ascii_digit()) {
         return None;
@@ -149,6 +159,13 @@ mod tests {
             ("=4.0.0", Some(4)),
             ("v4.0.0", Some(4)),
             ("4.0.0-beta.1", Some(4)),
+            ("4.1.0+build.7", Some(4)),
+            ("^4.0.0-beta.1 || ^5.0.0", None),
+            ("4.0.0-beta.1||5", None),
+            ("4.0.0 - 5.0.0", None),
+            ("^4.0.0 ^5.0.0", None),
+            ("4.0.0-", None),
+            ("4.0.0-beta!", None),
             ("5.0.5", Some(5)),
             (">=4", None),
             ("4 || 5", None),

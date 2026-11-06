@@ -990,7 +990,7 @@ fn read_parsed(
                 tests.extend(excluded(Exclusion::RegisteredInsideFunction));
                 continue;
             };
-            if function.is_some_and(|function| normalizer.order_dependent(function)) {
+            if function.is_some_and(|function| normalizer.order_dependent(function, !benchmark)) {
                 tests.extend(excluded(Exclusion::OrderDependentState));
                 continue;
             }

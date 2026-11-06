@@ -57,7 +57,7 @@ const MIN_FILES_COMPARED = 374
 const MIN_TESTS_COMPARED = 842
 const MIN_HOOK_SITES_COMPARED = 95
 // Benchmarks Vitest 4 collected from the cases that declare it.
-const MIN_BENCHMARKS_COMPARED = 16
+const MIN_BENCHMARKS_COMPARED = 20
 // The same floor for the registration sites, which are compared with the
 // line Vitest places each collected test and suite on.
 const MIN_SITE_FILES_COMPARED = 546

@@ -107,6 +107,8 @@ test('only a manifest pinning Vitest 4 is read with Vitest 4', () => {
     assert.equal(declare({ devDependencies: { vitest: '^5.0.0' } }), false)
     assert.equal(declare({ devDependencies: { vitest: '>=4' } }), false)
     assert.equal(declare({ devDependencies: { vitest: '40.0.0' } }), false)
+    assert.equal(declare({ devDependencies: { vitest: '^4.0.0-beta.1 || ^5.0.0' } }), false)
+    assert.equal(declare({ devDependencies: { vitest: '4.0.0-beta.1' } }), true)
     assert.equal(declare({}), false)
   } finally {
     rmSync(dir, { recursive: true, force: true })

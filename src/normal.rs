@@ -749,9 +749,10 @@ impl<'s> Normalizer<'s> {
     /// way that depends on what it held before, or a suite body writes at registration: equal
     /// text then observes different values depending on which tests ran first or in which copy.
     /// A binding every body starts from the same value of is not such state: one the body assigns
-    /// before reading it, or one a before-each hook around it assigns. Writes through a method
-    /// call or a property (`list.push`) are not seen.
-    pub fn order_dependent(&self, body: NodeId) -> bool {
+    /// before reading it, or, when `hooks_run`, one a before-each hook around it assigns. Writes
+    /// through a method call or a property (`list.push`) are not seen. A benchmark passes
+    /// `hooks_run: false`: Vitest 4 runs no hook around one, so a hook's reset protects nothing.
+    pub fn order_dependent(&self, body: NodeId, hooks_run: bool) -> bool {
         let tree = self.tree;
         let own = tree.span(body);
         // Only what the body reads: every identifier in it, resolved once.
@@ -767,7 +768,7 @@ impl<'s> Normalizer<'s> {
             let symbol = self.scopes.symbol(id);
             if own.contains(symbol.span)
                 || self.assigned_first(id, body)
-                || self.reset_before_each(id, own)
+                || (hooks_run && self.reset_before_each(id, own))
             {
                 return false;
             }

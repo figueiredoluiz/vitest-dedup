@@ -91,3 +91,50 @@ fn a_benchmark_name_collides_only_with_benchmarks() {
         0
     );
 }
+
+/// Vitest 4 runs no hook around a benchmark, so a before-each reset does not make shared state
+/// safe for one: two benchmarks counting the same binding are order-dependent, as two tests are
+/// only without the hook.
+#[test]
+fn a_hook_reset_does_not_protect_a_benchmark() {
+    let shape = |kind: &str| {
+        format!(
+            "import {{ beforeEach }} from 'vitest'\nlet count = 0\nbeforeEach(() => {{ count = 0 }})\n\
+             {kind}('a', () => {{ count += 1; String(count) }})\n\
+             {kind}('b', () => {{ count += 1; String(count) }})\n"
+        )
+    };
+    let (benches, _) = read(&shape("bench"), true);
+    assert_eq!(benches["a"].exclusion, Some(Exclusion::OrderDependentState));
+    assert_eq!(benches["b"].exclusion, Some(Exclusion::OrderDependentState));
+    let (tests, _) = read(&shape("test"), true);
+    assert!(tests["a"].exclusion.is_none(), "{:?}", tests["a"].exclusion);
+}
+
+/// Benchmarks that differ only in a literal are told to register from a loop of `bench` calls,
+/// never to move into a `test.each` table, which would stop measuring them.
+#[test]
+fn a_benchmark_parameterization_keeps_them_benchmarks() {
+    let message = |kind: &str| {
+        let (_, corpus) = read(
+            &format!(
+                "{kind}('a', () => {{ JSON.stringify({{ a: 1 }}) }})\n\
+                 {kind}('b', () => {{ JSON.stringify({{ a: 2 }}) }})\n"
+            ),
+            true,
+        );
+        owned_findings("speed.bench.ts", corpus)
+            .findings
+            .into_iter()
+            .find(|finding| finding.rule == crate::model::Rule::ParameterizationCandidate)
+            .map(|finding| finding.message)
+            .unwrap_or_else(|| panic!("no parameterization finding for {kind}"))
+    };
+    let bench = message("bench");
+    assert!(bench.contains("loop of `bench(...)` calls"), "{bench}");
+    assert!(
+        !bench.contains("consolidate into one `test.each` table"),
+        "{bench}"
+    );
+    assert!(message("test").contains("consolidate into one `test.each` table"));
+}

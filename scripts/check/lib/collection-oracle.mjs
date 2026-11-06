@@ -239,7 +239,8 @@ export function declaresVitest4(absoluteDir) {
   const range = ['dependencies', 'devDependencies', 'peerDependencies']
     .map((field) => manifest[field]?.vitest)
     .find((value) => typeof value === 'string')
-  return range !== undefined && /^[\^~=]?v?4(?:\.|$)/.test(range.trim())
+  // The whole range must admit one major: `^4.0.0-beta.1 || ^5.0.0` also admits Vitest 5.
+  return range !== undefined && /^[\^~=]?v?4(?:\.(?:\d+|x|\*)){0,2}(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(range.trim())
 }
 
 /**
