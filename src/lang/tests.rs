@@ -305,6 +305,36 @@ fn a_lone_surrogate_is_spelled_as_the_string_reader_spells_it() {
     assert_eq!(spell_lone_surrogates(r#""A""#), r#""A""#);
 }
 
+/// Module resolution decodes real Unicode filenames but never aliases a lone surrogate to one.
+#[test]
+fn nc65_resolution_does_not_map_surrogates_to_real_replacement_paths() {
+    let (_directory, root) = project(&[
+        ("main.test.ts", ""),
+        ("�d800.ts", "export const x = 1"),
+        ("�fffd.ts", "export const x = 2"),
+    ]);
+    let from = root.join("main.test.ts");
+    let sources = super::Sources::default();
+    let invalid = super::text::from_utf16("./".encode_utf16().chain([0xd800]));
+    assert!(sources.resolve(&from, &invalid, &root).is_none());
+    for path in ["./�d800", "./�fffd"] {
+        assert_eq!(
+            sources
+                .resolve(&from, &super::text::from_utf8(path), &root)
+                .map(|file| file.canonicalize().unwrap()),
+            Some(
+                root.join(format!("{}.ts", &path[2..]))
+                    .canonicalize()
+                    .unwrap()
+            )
+        );
+        assert_eq!(
+            resolve(&from, path, &root),
+            sources.resolve(&from, &super::text::from_utf8(path), &root)
+        );
+    }
+}
+
 /// A project directory with `files`, returned with its root.
 fn project(files: &[(&str, &str)]) -> (tempfile::TempDir, PathBuf) {
     let dir = tempfile::tempdir().unwrap();

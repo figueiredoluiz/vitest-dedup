@@ -16,6 +16,7 @@ mod scalar;
 mod scopes;
 mod sources;
 mod syntax;
+pub mod text;
 mod tree;
 
 pub use completion::completes_inertly;

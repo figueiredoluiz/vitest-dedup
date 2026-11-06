@@ -65,7 +65,7 @@ fn assert_modes(records: &[Value], tests: u64, accepted: u64, new: u64) {
         assert!(finding["fingerprint"]
             .as_str()
             .unwrap()
-            .starts_with("vitestDedupFingerprint/v2:"));
+            .starts_with("vitestDedupFingerprint/v3:"));
     }
 }
 

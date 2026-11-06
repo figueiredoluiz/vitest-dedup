@@ -259,7 +259,7 @@ fn file_baselines_compose_with_changed_scope_and_suppression() {
     assert_eq!(code, 0, "{stderr}");
     summary(&records, 2);
     let stored: Value = serde_json::from_str(&std::fs::read_to_string(&baseline).unwrap()).unwrap();
-    assert_eq!(stored["fingerprintVersion"], "vitestDedupFingerprint/v2");
+    assert_eq!(stored["fingerprintVersion"], "vitestDedupFingerprint/v3");
     let (code, records, stderr) = run(dir.path(), &["--baseline", path, "--changed-since", "HEAD"]);
     assert_eq!(code, 0, "{stderr}");
     let sum = summary(&records, 2);

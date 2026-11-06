@@ -2,42 +2,17 @@
 //!
 //! oxc stores string literal values and template cooked text as WTF-8, which can hold lone
 //! surrogates that a Rust `str` cannot. Every reader of those values goes through this module, so
-//! all of them agree on one text: a value without a lone surrogate is its UTF-8, and a value with one
-//! is spelled as earlier oxc releases spelled it, each lone surrogate as `\u{FFFD}` followed by its
-//! code unit in four lowercase hex digits, and each literal U+FFFD as `\u{FFFD}fffd`. Titles,
-//! fingerprints and specifiers therefore stay exactly what they were.
+//! all of them use the lossless representation in [`super::text`].
 
 use oxc_ast::ast::StringLiteral;
 use std::borrow::Cow;
-use std::fmt::Write as _;
-
-/// Spells a WTF-8 value as text (see the module documentation). One macro so both entry points
-/// share the encoding without naming `oxc_str`'s type, which no direct dependency exports.
-macro_rules! wtf8_text {
-    ($value:expr) => {{
-        let value = $value;
-        match value.as_str() {
-            Some(text) => Cow::Borrowed(text),
-            None => {
-                let mut text = String::with_capacity(value.len());
-                for code_point in value.chars() {
-                    match code_point.to_char() {
-                        Some('\u{FFFD}') => text.push_str("\u{FFFD}fffd"),
-                        Some(character) => text.push(character),
-                        None => {
-                            let _ = write!(text, "\u{FFFD}{:04x}", code_point.to_u32());
-                        }
-                    }
-                }
-                Cow::Owned(text)
-            }
-        }
-    }};
-}
 
 /// The text of a string literal's value.
 pub(crate) fn string_text<'a>(literal: &StringLiteral<'a>) -> Cow<'a, str> {
-    wtf8_text!(literal.value)
+    match literal.value.as_str() {
+        Some(value) => super::text::from_utf8(value),
+        None => Cow::Owned(super::text::from_utf16(literal.value.encode_utf16())),
+    }
 }
 
 #[cfg(test)]
@@ -88,17 +63,16 @@ mod tests {
     }
 
     #[test]
-    /// Text without a lone surrogate is the value itself, borrowed, U+FFFD included.
+    /// Plain text is borrowed; the encoding introducer is always escaped.
     fn plain_text_is_borrowed_unchanged() {
         assert_eq!(string("'plain'"), ("plain".to_owned(), true));
-        assert_eq!(string("'\\uFFFD'"), ("\u{FFFD}".to_owned(), true));
+        assert_eq!(string("'\\uFFFD'"), ("\u{FFFD}fffd".to_owned(), false));
         assert_eq!(string("'\\uD83D\\uDE00'"), ("\u{1F600}".to_owned(), true));
     }
 
     #[test]
-    /// A lone surrogate is spelled `\u{FFFD}` plus its code unit in lowercase hex, and in such a
-    /// string a literal U+FFFD is spelled `\u{FFFD}fffd`, as oxc 0.154 spelled both.
-    fn lone_surrogates_keep_the_earlier_spelling() {
+    /// Lone surrogate tokens preserve their code unit and cannot consume a literal introducer.
+    fn lone_surrogates_keep_their_code_units() {
         assert_eq!(string("'\\uD800'"), ("\u{FFFD}d800".to_owned(), false));
         assert_eq!(string("'a\\uDC01b'"), ("a\u{FFFD}dc01b".to_owned(), false));
         assert_eq!(

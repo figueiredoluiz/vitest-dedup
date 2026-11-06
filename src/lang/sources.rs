@@ -99,6 +99,8 @@ impl Sources {
         specifier: &str,
         root: &Path,
     ) -> Option<PathBuf> {
+        let specifier = super::text::to_utf8(specifier)?;
+        let specifier = specifier.as_ref();
         let Some(tree) = &self.0 else {
             return resolve::resolve_file(from, specifier, root);
         };

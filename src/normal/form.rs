@@ -65,13 +65,12 @@ fn static_selector(tree: &Tree, node: NodeId) -> bool {
         || (tree.kind(node) == "TemplateLiteral" && tree.list(node, "expressions").is_empty())
 }
 
-/// Known source-sensitive names and potentially lossy text cannot establish consolidation.
+/// Known source-sensitive names cannot establish consolidation.
 fn uncertain_text(dialect: &Dialect, text: &str) -> bool {
-    text.contains('\u{fffd}')
-        || dialect
-            .source_keyed_matchers
-            .iter()
-            .any(|fragment| text.contains(fragment))
+    dialect
+        .source_keyed_matchers
+        .iter()
+        .any(|fragment| text.contains(fragment))
 }
 
 /// Only a direct non-invoking matcher on a runtime framework import consumes a data subject.

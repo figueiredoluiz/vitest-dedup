@@ -29,8 +29,8 @@ fn write(root: &Path, name: &str, contents: impl AsRef<[u8]>) {
     std::fs::write(path, contents).unwrap();
 }
 
-/// Runs the binary over `root` with the JSON reporter, then again with JSONL.
-fn analyze(root: &Path, flags: &[&str]) -> Run {
+/// Read one JSON report without forcing JavaScript title code units into Rust Unicode strings.
+fn json_report(root: &Path, flags: &[&str]) -> String {
     let output = tempfile::tempdir().unwrap();
     let prefix = output.path().join("report");
     let _json_run = assert_cmd::Command::cargo_bin("vitest-dedup")
@@ -41,7 +41,12 @@ fn analyze(root: &Path, flags: &[&str]) -> Run {
         .args(flags)
         .output()
         .unwrap();
-    let json_text = std::fs::read_to_string(prefix.with_extension("json")).unwrap();
+    std::fs::read_to_string(prefix.with_extension("json")).unwrap()
+}
+
+/// Runs the binary over `root` with the JSON reporter, then again with JSONL.
+fn analyze(root: &Path, flags: &[&str]) -> Run {
+    let json_text = json_report(root, flags);
     let jsonl_run = assert_cmd::Command::cargo_bin("vitest-dedup")
         .unwrap()
         .arg(root)
@@ -1338,19 +1343,27 @@ fn a_hostile_file_name_is_sanitized_in_every_report() {
 /// leaves unresolved, so neither an empty read nor a mass exclusion passes.
 #[test]
 fn the_analyzer_reads_the_owned_fixtures() {
+    // The corpus includes lone-surrogate titles. Deserialize only the population this check
+    // verifies: serde_json::Value cannot represent every JavaScript string in the findings.
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Population {
+        files_analyzed: u64,
+        tests_analyzed: u64,
+        unresolved_tests: u64,
+        excluded_files: Vec<Value>,
+    }
     let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures");
-    let run = analyze(&fixtures, &[]);
-    let count = |field: &str| run.json[field].as_u64().unwrap();
-    assert!(count("filesAnalyzed") >= 580, "{}", count("filesAnalyzed"));
-    assert!(count("testsAnalyzed") >= 1250, "{}", count("testsAnalyzed"));
-    let unresolved = count("unresolvedTests");
+    let run: Population = serde_json::from_str(&json_report(&fixtures, &[])).unwrap();
+    assert!(run.files_analyzed >= 580, "{}", run.files_analyzed);
+    assert!(run.tests_analyzed >= 1250, "{}", run.tests_analyzed);
+    let unresolved = run.unresolved_tests;
     assert!(
-        unresolved > 0 && unresolved * 5 <= count("testsAnalyzed"),
+        unresolved > 0 && unresolved * 5 <= run.tests_analyzed,
         "{unresolved}"
     );
-    let failed: Vec<_> = run.json["excludedFiles"]
-        .as_array()
-        .unwrap()
+    let failed: Vec<_> = run
+        .excluded_files
         .iter()
         .filter(|entry| {
             ["extraction-failed", "source-limit"].contains(&entry["reason"].as_str().unwrap())

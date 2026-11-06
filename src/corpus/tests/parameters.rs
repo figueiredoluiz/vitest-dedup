@@ -472,12 +472,14 @@ fn parameterization_owned_computed_keys() {
     let source =
         include_str!("../../../fixtures/duplicates/parameterization-computed-keys.test.ts");
     let corpus = eligible(source, 8);
-    assert!(corpus.tests[..6]
+    assert!(corpus
+        .tests
         .iter()
         .all(|case| case.parameterization_key.is_some()));
-    assert!(corpus.tests[6..]
-        .iter()
-        .all(|case| case.parameterization_key.is_none()));
+    assert_ne!(
+        corpus.tests[6].parameterization_key,
+        corpus.tests[7].parameterization_key
+    );
     only_candidate(corpus, ["retain zero", "retain one"]);
 }
 

@@ -690,7 +690,7 @@ fn duplicate_test_message(members: &[Entry<'_>]) -> String {
     let inert: Vec<String> = members
         .iter()
         .filter(|member| member.case.inert)
-        .map(title)
+        .map(|member| crate::lang::text::display(&title(member)).into_owned())
         .collect();
     if !inert.is_empty() {
         message.push_str(&format!(

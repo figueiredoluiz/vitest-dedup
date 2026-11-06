@@ -6,6 +6,47 @@
   "recallDestination": 1,
   "cases": [
     {
+      "name": "lossless-string-messages",
+      "path": "lossless-string-messages",
+      "rule": "duplicate-test",
+      "role": "positive",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-06",
+      "expectedTests": 4,
+      "expectedIncomplete": false,
+      "expectedUnresolved": 0,
+      "expectedFindings": [
+        { "rule": "duplicate-test", "severity": "error", "titles": ["\ud800", "\ud800"] },
+        { "rule": "duplicate-test", "severity": "error", "titles": ["\ud800", "�d800"] },
+        { "rule": "duplicate-test", "severity": "error", "titles": ["�d800", "�d800"] },
+        { "rule": "duplicate-test-name", "severity": "warning", "titles": ["\ud800", "\ud800"] },
+        { "rule": "duplicate-test-name", "severity": "warning", "titles": ["�d800", "�d800"] }
+      ],
+      "expectedAbsent": []
+    },
+    {
+      "name": "lossless-string-identity",
+      "path": "lossless-string-identity",
+      "rule": "duplicate-test",
+      "role": "positive",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-06",
+      "expectedTests": 8,
+      "expectedIncomplete": false,
+      "expectedUnresolved": 0,
+      "expectedFindings": [
+        { "rule": "duplicate-test", "severity": "error", "titles": ["retains the first surrogate body", "retains the second surrogate body"] },
+        { "rule": "parameterization-candidate", "severity": "warning", "titles": ["reads a surrogate code unit", "reads replacement character text"] }
+      ],
+      "expectedAbsent": [
+        { "rule": "duplicate-test", "titles": ["reads a surrogate code unit", "reads replacement character text"] },
+        { "rule": "duplicate-each-row", "titles": ["distinct value row 0", "distinct value row 1"] },
+        { "rule": "duplicate-each-row", "titles": ["distinct key row 0", "distinct key row 1"] }
+      ]
+    },
+    {
       "name": "suite-case-file-index",
       "path": "suite-case-file-index",
       "rule": "duplicate-suite",

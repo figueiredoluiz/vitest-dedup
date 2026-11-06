@@ -44,6 +44,10 @@ local alias. Source-sensitive assertions and uncertain module identities also wi
 
 ## Parameterized rows
 
+String values and property keys retain their JavaScript UTF-16 code units, including lone
+surrogates. A lone `\uD800` differs from the literal text `\uFFFDd800`; valid surrogate pairs
+equal the corresponding Unicode character. This identity also applies to static test titles.
+
 Repeated-row claims require proven input values, equal rendered titles and equivalent callback
 and setup context within one declaration. Primitive proofs preserve JavaScript types, negative
 zero, bigint and non-finite numbers. Immutable scalar constants can cross explicit named exports

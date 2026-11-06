@@ -89,7 +89,8 @@ impl Tree {
     }
 
     /// The tree an ESTree JSON value spells, or `None` when the value is not a node.
-    pub(super) fn from_json(value: Value) -> Option<Self> {
+    pub(super) fn from_json(mut value: Value) -> Option<Self> {
+        restore_syntax_text(&mut value, "");
         let mut tree = Tree {
             nodes: Vec::new(),
             at: HashMap::new(),
@@ -226,7 +227,8 @@ impl Tree {
         }
     }
 
-    /// The string in field `key`.
+    /// The string in field `key`. Literal values use [`super::text`]'s lossless encoding;
+    /// syntax metadata and raw source retain ordinary Unicode text.
     pub fn text(&self, id: NodeId, key: &str) -> Option<&str> {
         match self.field_of(id, key) {
             Field::Value(Value::String(text)) => Some(text),
@@ -294,5 +296,24 @@ impl Tree {
             self.kind(id),
             "FunctionDeclaration" | "FunctionExpression" | "ArrowFunctionExpression"
         )
+    }
+}
+
+/// Only literal values and cooked template text are semantic strings. Oxc's raw source,
+/// identifiers and metadata keep their original Unicode spelling after the JSON transport.
+fn restore_syntax_text(value: &mut Value, key: &str) {
+    match value {
+        Value::String(text) if !matches!(key, "value" | "cooked") => {
+            if let Some(std::borrow::Cow::Owned(decoded)) = super::text::to_utf8(text) {
+                *text = decoded;
+            }
+        }
+        Value::Array(items) => items
+            .iter_mut()
+            .for_each(|item| restore_syntax_text(item, key)),
+        Value::Object(fields) => fields
+            .iter_mut()
+            .for_each(|(key, value)| restore_syntax_text(value, key)),
+        _ => {}
     }
 }

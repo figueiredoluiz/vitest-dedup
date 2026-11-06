@@ -35,7 +35,7 @@ ryu-js = "1.0.3"
 tempfile = "=3.27.0"
 subprocess = "=1.2.1"
 serde = { version = "1.0", features = ["derive"] }
-serde_json = { version = "1.0", features = ["preserve_order", "unbounded_depth", "float_roundtrip"] }
+serde_json = { version = "1.0", features = ["preserve_order", "unbounded_depth", "float_roundtrip", "raw_value"] }
 
 # OS memory readers live in the binary to keep the library free of unsafe code.
 # libc is already locked transitively; Unix builds use it for peak RSS and current residency.

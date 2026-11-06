@@ -7,6 +7,25 @@ use std::fs;
 
 mod registration;
 
+/// Scalar readers keep a canonical owned string even when a pair joins across operands.
+#[test]
+fn nc65_scalar_concatenation_keeps_canonical_code_units() {
+    let source = include_str!("../../fixtures/oracle/lossless-strings/joined.test.ts");
+    with_normalizer(source, &[], false, |normalizer, tree, _| {
+        let read = tree
+            .nodes()
+            .filter(|&node| {
+                tree.kind(node) == "Identifier" && tree.text(node, "name") == Some("key")
+            })
+            .last()
+            .unwrap();
+        let Some(crate::lang::Scalar::String(value)) = normalizer.row_scalar(read) else {
+            panic!("proved primitive")
+        };
+        assert_eq!(value, "😀");
+    });
+}
+
 /// Literal and local reads avoid the import graph; the first import still proves and caches it.
 #[test]
 fn nc64_import_safety_waits_for_an_import_binding() {

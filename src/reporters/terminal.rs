@@ -233,7 +233,7 @@ impl TerminalReporter {
                                 ),
                                 "94",
                             ),
-                            terminal_safe(title)
+                            terminal_safe(&crate::lang::text::display(title))
                         )?;
                     }
                     writeln!(writer, "    action: {}", suggested_action(rule))?;

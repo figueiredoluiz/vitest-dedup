@@ -69,14 +69,13 @@ pub(super) fn render_values(
 ) -> Option<String> {
     let truncate = mode == TitleMode::Display;
     if mode == TitleMode::Row
-        && (pattern.contains('\u{fffd}')
-            || (pattern.contains("%i")
-                && arguments.iter().flatten().any(|value| {
-                    matches!(
-                        value,
-                        TitleValue::Json(Value::String(_)) | TitleValue::Scalar(Scalar::String(_))
-                    )
-                })))
+        && pattern.contains("%i")
+        && arguments.iter().flatten().any(|value| {
+            matches!(
+                value,
+                TitleValue::Json(Value::String(_)) | TitleValue::Scalar(Scalar::String(_))
+            )
+        })
     {
         return None;
     }
@@ -166,7 +165,7 @@ pub(super) fn render_values(
                     fields?.get(&field)?
                 };
                 let rendered = scalar_typed(value)?;
-                if !truncate && rendered.encode_utf16().nth(40).is_some() {
+                if !truncate && crate::lang::text::units(&rendered).nth(40).is_some() {
                     return None;
                 }
                 text.push_str(&truncated(&rendered));
@@ -177,7 +176,7 @@ pub(super) fn render_values(
         text.push(c);
         position += 1;
     }
-    (text.len() <= MAX_TEXT_BYTES).then_some(text)
+    (text.len() <= MAX_TEXT_BYTES).then(|| crate::lang::text::canonical(text))
 }
 
 /// The scalar display shared by positional and named typed values, borrowing a string.
@@ -238,17 +237,17 @@ fn format_typed(value: Option<&TitleValue>, directive: char) -> Option<String> {
 /// A `$` substitution as Vitest displays it: past 40 UTF-16 units, the first 39 and `…`, never
 /// keeping half of a surrogate pair. Reads at most 41 units, however long the value.
 fn truncated(value: &str) -> Cow<'_, str> {
-    if value.encode_utf16().nth(40).is_none() {
+    if crate::lang::text::units(value).nth(40).is_none() {
         return Cow::Borrowed(value);
     }
-    let mut kept: Vec<u16> = value.encode_utf16().take(39).collect();
+    let mut kept: Vec<u16> = crate::lang::text::units(value).take(39).collect();
     if kept
         .last()
         .is_some_and(|unit| (0xD800..0xDC00).contains(unit))
     {
         kept.pop();
     }
-    Cow::Owned(format!("{}…", String::from_utf16_lossy(&kept)))
+    Cow::Owned(format!("{}…", crate::lang::text::from_utf16(kept)))
 }
 
 /// The plain spelling shared by scalar string and named-field substitutions, borrowing a string.
@@ -276,7 +275,9 @@ fn format(value: Option<&Value>, directive: char) -> Option<Cow<'_, str>> {
     };
     match directive {
         's' => scalar(value),
-        'j' if value.is_string() => Some(Cow::Owned(value.to_string())),
+        'j' if value.is_string() => Some(Cow::Owned(
+            crate::lang::text::from_utf8(&crate::lang::text::json(value.as_str()?)).into_owned(),
+        )),
         'j' => scalar(value),
         'o' if !value.is_string() => scalar(value),
         'd' | 'i' | 'f' => {

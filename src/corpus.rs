@@ -195,12 +195,12 @@ pub struct TestCase {
     pub views: Option<Box<records::Views>>,
     /// The registering call.
     pub span: Span,
-    /// The title, when the source spells it.
+    /// The title in [`crate::lang::text`]'s lossless encoding, when the source spells it.
     pub title: Option<String>,
     /// The suite path joined with the title the way a report spells a participant, when every
-    /// segment is a literal the source spells.
+    /// segment is a literal the source spells. Retains the same lossless encoding as `title`.
     pub full_title: Option<String>,
-    /// Proven title segments for name comparison, distinct from display text or raw patterns.
+    /// Proven lossless title segments for name comparison, distinct from display text or raw patterns.
     /// None when any segment, row rendering or registration multiplicity is unknown.
     pub name: Option<Vec<String>>,
     /// Which row of its table, when it has one.

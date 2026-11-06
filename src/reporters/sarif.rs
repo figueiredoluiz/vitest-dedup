@@ -13,7 +13,7 @@
 //!       "message": { "text": "2 tests have identical bodies under an equivalent context" },
 //!       "locations": [{ "physicalLocation": { ... }, "message": { "text": "suite > a" } }],
 //!       "relatedLocations": [{ "physicalLocation": { ... }, "message": { "text": "suite > b" } }],
-//!       "partialFingerprints": { "vitestDedupFingerprint/v2": "vitestDedupFingerprint/v2:0123456789abcdef" },
+//!       "partialFingerprints": { "vitestDedupFingerprint/v3": "vitestDedupFingerprint/v3:0123456789abcdef" },
 //!       "properties": { "verdict": "redundant", "inert": [false, false], "baselined": false }
 //!     }]
 //!   }]
@@ -353,7 +353,7 @@ fn sarif_location(location: &Location, title: &str, inert: bool) -> Value {
                 "endColumn": location.span.end.column,
             },
         },
-        "message": { "text": report_safe(title) },
+        "message": { "text": report_safe(&crate::lang::text::display(title)) },
         "properties": { "inert": inert },
     })
 }

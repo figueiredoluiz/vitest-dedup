@@ -320,7 +320,7 @@ fn render_card(finding: &Finding, sources: &BTreeMap<PathBuf, String>) -> String
             html_escape(&forward_slash_path(&location.path)),
             location.span.start.line,
             location.span.start.column,
-            html_escape(title),
+            html_escape(&crate::lang::text::display(title)),
             snippet_html(sources, location),
         ));
     }
@@ -477,7 +477,7 @@ fn report_data(result: &AnalysisResult) -> serde_json::Value {
                         "column": location.span.start.column,
                     })
                 }).collect::<Vec<_>>(),
-                "titles": finding.titles.iter().map(|title| report_safe(title)).collect::<Vec<_>>(),
+                "titles": finding.titles.iter().map(|title| report_safe(&crate::lang::text::display(title))).collect::<Vec<_>>(),
             });
             if !finding.registration_files.is_empty() {
                 entry["registrationFiles"] = serde_json::json!(report_registration_files(finding));
