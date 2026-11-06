@@ -1,7 +1,7 @@
 //! Gitignore-aware discovery of Vitest test files.
 //!
-//! This module never reads a byte of a file's contents beyond its metadata: classification is
-//! extension-based and existence-based only. Parsing is `frontend`'s job, and keeping this module
+//! Source classification is extension-based and existence-based only; ignore rules are read
+//! through a bounded loader. Parsing is `frontend`'s job, and keeping this module
 //! ignorant of parsing is what lets `frontend` be swapped without touching discovery.
 //!
 //! # In-source testing (`includeSource` and `benchmark.includeSource`)
@@ -36,6 +36,9 @@ use globset::GlobSet;
 use ignore::WalkBuilder;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
+
+mod ignores;
 
 /// Format walker-owned paths relative to the root, retaining the underlying failure cause.
 fn relative_walk_error(error: &ignore::Error, root: &Path) -> String {
@@ -422,11 +425,16 @@ pub fn discover(config: &Config, project_set: Option<&ProjectSet>) -> Result<Dis
 
     let root = config.root.clone();
     let walk_excludes = exclude.clone();
+    let ignores = Arc::new(Mutex::new(ignores::Ignores::new(
+        &config.root,
+        inside_repository(&config.root),
+    )));
+    let walk_ignores = Arc::clone(&ignores);
     let mut builder = WalkBuilder::new(&config.root);
     builder
-        .standard_filters(true)
-        .add_custom_ignore_filename(VITEST_DEDUP_IGNORE_FILENAME)
-        .require_git(inside_repository(&config.root))
+        // Automatic ignore loading opens unchecked paths, including ancestors, before filters.
+        // Our filter compiles only bounded owned bytes and handles hidden/whitelist precedence.
+        .standard_filters(false)
         // Symlinks are classified as their own file type rather than followed, so a symlink loop
         // is inert by construction -- there is no recursive descent to loop through.
         .follow_links(false)
@@ -439,7 +447,9 @@ pub fn discover(config: &Config, project_set: Option<&ProjectSet>) -> Result<Dis
             // Pruning an excluded directory here, before the walker descends into it, is not
             // just an optimization: it also means a broken or permission-denied subtree under
             // e.g. node_modules never surfaces as a traversal error.
-            !walk_excludes.is_match(relative) && !walk_excludes.is_match(directory_form)
+            !walk_excludes.is_match(relative)
+                && !walk_excludes.is_match(directory_form)
+                && walk_ignores.lock().unwrap().keep(entry)
         });
     let walker = builder.build();
 
@@ -631,6 +641,12 @@ pub fn discover(config: &Config, project_set: Option<&ProjectSet>) -> Result<Dis
 
     result.files.sort();
     result.skipped.sort();
+    let mut ignores = ignores.lock().unwrap();
+    if !ignores.errors.is_empty() {
+        result.incomplete = true;
+        result.traversal_failed = true;
+        result.errors.append(&mut ignores.errors);
+    }
     result.errors.sort();
     Ok(result)
 }
@@ -1011,7 +1027,7 @@ mod tests {
 
     /// Load default configuration for a discovery fixture root, panicking on invalid fixture
     /// configuration.
-    fn load(root: &Path) -> Config {
+    pub(super) fn load(root: &Path) -> Config {
         Config::load(root, ConfigOverrides::default()).unwrap()
     }
 

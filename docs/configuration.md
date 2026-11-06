@@ -36,6 +36,15 @@ files are not git's and are read from every ancestor directory. Outside any repo
 `.gitignore` in the ancestor directories applies. A rule that names the analyzed directory itself
 does not remove it.
 
+Repository ignore inputs must be regular files, not symlinks or special files. User-configured
+global ignore files may be symlinks to regular files; the same limits apply to their targets.
+Non-file global paths (for example `/dev/null`) are skipped without reading, as before.
+Each file is limited to
+1 MiB, 8,192 lines, 4,096 patterns and 8 KiB per line; one discovery may read at most 8 MiB
+and 32,768 lines of ignore and repository-pointer inputs. A refused or malformed ignore file
+produces a diagnostic and marks discovery incomplete. Its rules are not applied; readable tests
+remain discoverable using the other valid rules and configured include/exclude globs.
+
 ## Quality gate
 
 `threshold` is compared with the share of eligible runtime cases that sit in an error-severity

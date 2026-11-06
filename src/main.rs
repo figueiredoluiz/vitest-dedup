@@ -2570,6 +2570,165 @@ mod tests {
         )
     }
 
+    /// Refused ignore contents remain visible as a failed read without losing readable positives.
+    #[test]
+    fn bounded_ignore_inputs_reach_the_cli_summary() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("fixtures/recall/ignore-input-bounded");
+        let (code, stdout, stderr) = run_cli(
+            &root,
+            &["--reporters", "jsonl", "--fail-on-incomplete=reads"],
+        );
+        let records: Vec<serde_json::Value> = stdout
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        let summary = records
+            .iter()
+            .find(|record| record["type"] == "summary")
+            .unwrap();
+        assert_eq!(summary["testsAnalyzed"], 2);
+        assert_eq!(summary["unresolvedTests"], 0);
+        assert_eq!(summary["incomplete"], true);
+        assert_eq!(summary["incompleteCauses"]["discoveryFailed"], true);
+        assert!(records
+            .iter()
+            .any(|record| record["rule"] == "duplicate-test"));
+        assert_eq!(code, Some(2));
+        assert!(stderr.contains("ignore line exceeds 8 KiB"), "{stderr}");
+    }
+
+    /// A user-managed global link honors its rules without turning a valid run incomplete.
+    #[test]
+    #[cfg(unix)]
+    fn bounded_global_ignore_symlink_reaches_the_cli() {
+        let source = include_str!("../fixtures/recall/ignore-input-bounded/a.test.ts");
+        let directory = single_file_project("a.test.ts", source);
+        let root = directory.path();
+        std::fs::create_dir(root.join(".git")).unwrap();
+        std::fs::write(root.join("ignored.test.ts"), source).unwrap();
+        std::fs::write(root.join("rules"), "ignored.test.ts\n").unwrap();
+        let link = root.join("global-ignore");
+        std::os::unix::fs::symlink(root.join("rules"), &link).unwrap();
+        let config = root.join("global-config");
+        let prefix = root.join("report");
+        for (global, tests) in [(link.as_path(), 2), (std::path::Path::new("/dev/null"), 4)] {
+            std::fs::write(
+                &config,
+                format!("[core]\n excludesFile = {}\n", global.display()),
+            )
+            .unwrap();
+            assert_cmd::Command::cargo_bin("vitest-dedup")
+                .unwrap()
+                .arg(root)
+                .args(["--reporters", "json", "--output"])
+                .arg(&prefix)
+                .arg("--fail-on-incomplete=reads")
+                .env("GIT_CONFIG_GLOBAL", &config)
+                .assert()
+                .code(1);
+            let report = read_json_report(&prefix);
+            assert_eq!(report["testsAnalyzed"], tests);
+            assert_eq!(report["unresolvedTests"], 0);
+            assert_eq!(report["incomplete"], false);
+            assert!(report["findings"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|finding| finding["rule"] == "duplicate-test"));
+        }
+    }
+
+    /// An independent repository stays complete despite unusable Git rules above its boundary.
+    #[test]
+    fn bounded_ancestor_git_ignores_preserve_the_complete_cli_result() {
+        let parent = tempfile::tempdir().unwrap();
+        let root = parent.path().join("project");
+        std::fs::create_dir_all(root.join(".git")).unwrap();
+        std::fs::write(
+            root.join("a.test.ts"),
+            include_str!("../fixtures/recall/ignore-input-bounded/a.test.ts"),
+        )
+        .unwrap();
+        std::fs::write(parent.path().join(".gitignore"), "#".repeat(8193)).unwrap();
+        let (_, report) = run_json_with_stderr(&root, ExitCode::QualityGateFailed);
+        assert_eq!(
+            (
+                report["testsAnalyzed"].as_u64(),
+                report["incomplete"].as_bool()
+            ),
+            (Some(2), Some(false))
+        );
+        assert_eq!(report["findings"].as_array().unwrap().len(), 1);
+        assert_eq!(report["findings"][0]["rule"], "duplicate-test");
+    }
+
+    /// Absent repository markers keep the owned duplicate positive complete in strict mode.
+    #[test]
+    #[cfg(unix)]
+    fn bounded_unresolvable_git_markers_preserve_complete_cli_results() {
+        let directory = single_file_project(
+            "a.test.ts",
+            include_str!("../fixtures/recall/ignore-input-bounded/a.test.ts"),
+        );
+        let root = directory.path();
+        for target in ["missing", ".git"] {
+            std::os::unix::fs::symlink(target, root.join(".git")).unwrap();
+            let (_, report) = run_json_with_stderr(root, ExitCode::QualityGateFailed);
+            assert_eq!(report["testsAnalyzed"], 2);
+            assert_eq!(report["unresolvedTests"], 0);
+            assert_eq!(report["incomplete"], false);
+            let findings = report["findings"].as_array().unwrap();
+            assert_eq!(findings.len(), 1);
+            assert_eq!(findings[0]["rule"], "duplicate-test");
+            let (code, _, _) = run_cli(root, &["--fail-on-incomplete=reads"]);
+            assert_eq!(code, Some(ExitCode::QualityGateFailed.code()));
+            std::fs::remove_file(root.join(".git")).unwrap();
+        }
+    }
+
+    /// Significant spaces in both metadata pointers preserve Git exclusions and owned positives.
+    #[test]
+    #[cfg(unix)]
+    fn bounded_metadata_paths_preserve_the_cli_and_git_result() {
+        let source = include_str!("../fixtures/recall/ignore-input-bounded/a.test.ts");
+        for ending in ["", "\n", "\r\n"] {
+            for common in [false, true] {
+                let directory = single_file_project("a.test.ts", source);
+                let root = directory.path();
+                git(root, &["init", "--quiet"]);
+                std::fs::write(root.join("ignored.test.ts"), source).unwrap();
+                let metadata = root.join(" metadata ");
+                std::fs::rename(root.join(".git"), &metadata).unwrap();
+                std::fs::write(
+                    root.join(".git"),
+                    format!("gitdir: {}{ending}", metadata.display()),
+                )
+                .unwrap();
+                let excludes = if common {
+                    let shared = root.join(" shared ");
+                    std::fs::rename(&metadata, &shared).unwrap();
+                    std::fs::create_dir(&metadata).unwrap();
+                    std::fs::copy(shared.join("HEAD"), metadata.join("HEAD")).unwrap();
+                    std::fs::write(metadata.join("commondir"), format!("../ shared {ending}"))
+                        .unwrap();
+                    shared
+                } else {
+                    metadata
+                };
+                std::fs::write(excludes.join("info/exclude"), "ignored.test.ts\n").unwrap();
+                git(root, &["check-ignore", "--no-index", "ignored.test.ts"]);
+                let (_, report) = run_json_with_stderr(root, ExitCode::QualityGateFailed);
+                assert_eq!(report["testsAnalyzed"], 2, "{ending:?}, common={common}");
+                assert_eq!(report["unresolvedTests"], 0);
+                assert_eq!(report["incomplete"], false);
+                let findings = report["findings"].as_array().unwrap();
+                assert_eq!(findings.len(), 1);
+                assert_eq!(findings[0]["rule"], "duplicate-test");
+            }
+        }
+    }
+
     /// Read and parse the JSON file for an output prefix, panicking with path context on
     /// failure.
     fn read_json_report(prefix: &std::path::Path) -> serde_json::Value {
