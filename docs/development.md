@@ -113,8 +113,8 @@ cases, tests analyzed, required pairs and recall keep an empty read from passing
 the same source supplies the corpus expectations. CI runs both checks.
 
 The name rule compares proven title segments in one file and renders supported
-literal table titles. It preserves the corpus's existing exclusions, including empty callbacks and
-todos. Unknown title values, unsupported formatting and suite-table titles do not anchor name
+literal table titles. Empty callbacks and todos keep their names, since a name never reads the
+callback; every other exclusion is preserved. Unknown title values, unsupported formatting and suite-table titles do not anchor name
 findings. Distinct rendered titles across copied tables remain separate findings.
 
 The suite rule compares complete inline blocks with matching literal title paths,

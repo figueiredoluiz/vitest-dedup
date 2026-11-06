@@ -1378,7 +1378,8 @@ fn name_findings_preserve_titles_severity_and_suppression() {
     );
     assert_eq!(result.json["testsAnalyzed"], 18);
     let findings = result.json["findings"].as_array().unwrap();
-    assert_eq!(findings.len(), 4, "{}", result.json_text);
+    // Four compared collisions, and the empty and todo pairs, which collide by name only.
+    assert_eq!(findings.len(), 6, "{}", result.json_text);
     assert!(findings.iter().all(
         |finding| finding["rule"] == "duplicate-test-name" && finding["severity"] == "warning"
     ));
@@ -1387,7 +1388,7 @@ fn name_findings_preserve_titles_severity_and_suppression() {
         .iter()
         .filter(|record| record["type"] == "finding")
         .collect();
-    assert_eq!(streamed.len(), 4);
+    assert_eq!(streamed.len(), 6);
     assert_eq!(
         streamed
             .iter()
@@ -1436,7 +1437,7 @@ fn name_findings_preserve_titles_severity_and_suppression() {
     );
     assert_eq!(
         result.json["findings"].as_array().unwrap().len(),
-        3,
+        5,
         "{}",
         result.json_text
     );

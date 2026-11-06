@@ -204,7 +204,8 @@ fn excluded_records_preserve_known_suite_titles_and_positive_controls() {
         .any(|r| r["type"] == "finding" && r["rule"] == "duplicate-test"));
 }
 
-/// Early refusal siblings retain known nested titles and row rendering without name proof.
+/// Early refusal siblings retain known nested titles and row rendering. Empty and todo tests keep
+/// their name key, since only their callback is refused; a named callback has none.
 #[test]
 fn excluded_records_keep_nested_scalar_and_row_display_titles() {
     let all = records("import { describe, test, expect } from 'vitest'; const shared = () => expect(1).toBe(1); describe('outer', () => { describe('inner', () => { test('empty', () => {}); test('todo'); test('named', shared); test.each([1, 2])('row %s', () => {}); }); });", true);
@@ -223,7 +224,11 @@ fn excluded_records_keep_nested_scalar_and_row_display_titles() {
             .find(|r| r["title"] == title)
             .unwrap_or_else(|| panic!("missing {title}: {tests:?}"));
         assert_eq!(record["comparable"], false);
-        assert!(record["comparisonKeys"]["name"].is_null());
+        assert_eq!(
+            record["comparisonKeys"]["name"].is_null(),
+            title.ends_with("named"),
+            "{title}"
+        );
         assert!(record["comparisonKeys"]["duplicate"].is_null());
     }
 }

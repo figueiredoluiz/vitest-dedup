@@ -165,6 +165,12 @@ impl Exclusion {
             Self::EmptyBody | Self::NoCallback => None,
         }
     }
+
+    /// Whether a test excluded for this reason keeps its name: only its callback is refused, and
+    /// a name is read from the registration alone.
+    pub fn keeps_name(self) -> bool {
+        matches!(self, Self::EmptyBody | Self::NoCallback)
+    }
 }
 
 /// One test, one row of a test table, or a suite in the separate suite population.
@@ -815,8 +821,6 @@ fn read_parsed(
                     })
                 })
                 .unwrap_or_default();
-            let render_test_row =
-                |_: &str, row: &normal::TableRow, _| row_titles.get(&row.index)?.0.clone();
             let display_test_row =
                 |_: &str, row: &normal::TableRow, _| row_titles.get(&row.index)?.1.clone();
             let arguments: Vec<NodeId> = tree
@@ -847,7 +851,30 @@ fn read_parsed(
                 .as_ref()
                 .and_then(|modifiers| modifiers.rows.as_ref());
             empty_tables += usize::from(table_rows.is_some_and(Vec::is_empty));
-            let excluded = |exclusion| -> Vec<TestCase> {
+            // Name comparison consumes values, not display fallbacks. In particular an unread table
+            // or a suite table cannot stand for its runtime names through a raw pattern. A
+            // registration a function may run elsewhere has no name.
+            let name_prefix: Option<Vec<String>> =
+                normalizer.suites_around(site.node).and_then(|suites| {
+                    suites
+                        .iter()
+                        .map(|scope| suite_names.get(structure.suites.get(scope)?)?.clone())
+                        .collect()
+                });
+            let pattern = runners::title(parsed, site.node, frame.as_ref());
+            // The one name a registration proves, for a compared test and for one refused only
+            // for its callback alike.
+            let comparison_name = |row: Option<&normal::TableRow>| -> Option<Vec<String>> {
+                let mut segments = name_prefix.clone()?;
+                let pattern = pattern.as_deref()?;
+                segments.push(if table_site(site) {
+                    row_titles.get(&row?.index)?.0.clone()?
+                } else {
+                    pattern.to_owned()
+                });
+                Some(segments)
+            };
+            let excluded = |exclusion: Exclusion| -> Vec<TestCase> {
                 let case = |row: Option<&normal::TableRow>| {
                     let rendered = row.and_then(|row| {
                         let pattern = record.title.as_deref()?;
@@ -861,6 +888,9 @@ fn read_parsed(
                         .and_then(|base| base.checked_add(row.map_or(0, |r| r.index)));
                     if let Some(title) = rendered.as_deref().and_then(display_title) {
                         case.full_title = Some(title);
+                    }
+                    if exclusion.keeps_name() {
+                        case.name = comparison_name(row);
                     }
                     case.exclusion = Some(exclusion);
                     case
@@ -1063,13 +1093,6 @@ fn read_parsed(
                     .collect(),
             };
             let table = modifiers.rows.is_some();
-            // Name comparison consumes values, not display fallbacks. In particular an unread table
-            // or a suite table cannot stand for its runtime names through a raw pattern.
-            let name_prefix: Option<Vec<String>> = suites
-                .iter()
-                .map(|scope| suite_names.get(structure.suites.get(scope)?)?.clone())
-                .collect();
-            let pattern = runners::title(parsed, site.node, frame.as_ref());
             let row_prefix_known = suites.iter().all(|scope| {
                 structure.suites.get(scope).is_some_and(|&call| {
                     suite_provenance.get(&call).is_some_and(|&provenance| {
@@ -1103,18 +1126,8 @@ fn read_parsed(
             for (index, ((_, every, unbound), (normal_body, trace, callback_form))) in
                 rows.iter().zip(traced).enumerate()
             {
-                let name = name_prefix.clone().zip(pattern.as_deref()).and_then(
-                    |(mut segments, pattern)| {
-                        let title = if table_site(site) {
-                            let row = modifiers.rows.as_ref()?.get(index)?;
-                            render_test_row(pattern, row, modifiers.whole_rows)?
-                        } else {
-                            pattern.to_owned()
-                        };
-                        segments.push(title);
-                        Some(segments)
-                    },
-                );
+                let name =
+                    comparison_name(modifiers.rows.as_ref().and_then(|rows| rows.get(index)));
                 let full_title = table_site(site)
                     .then(|| {
                         let row = modifiers.rows.as_ref()?.get(index)?;

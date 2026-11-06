@@ -1292,6 +1292,144 @@
       ]
     },
     {
+      "name": "duplicate-test-name-empty-and-todo",
+      "path": "duplicate-test-name-empty-and-todo",
+      "rule": "duplicate-test-name",
+      "role": "positive",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-06",
+      "expectedTests": 10,
+      "expectedIncomplete": false,
+      "expectedUnresolved": 0,
+      "expectedFindings": [
+        {
+          "rule": "duplicate-test-name",
+          "severity": "warning",
+          "titles": [
+            "loads the cart",
+            "loads the cart"
+          ]
+        },
+        {
+          "rule": "duplicate-test-name",
+          "severity": "warning",
+          "titles": [
+            "saves the cart",
+            "saves the cart"
+          ]
+        },
+        {
+          "rule": "duplicate-test-name",
+          "severity": "warning",
+          "titles": [
+            "clears the cart",
+            "clears the cart"
+          ]
+        },
+        {
+          "rule": "duplicate-test-name",
+          "severity": "warning",
+          "titles": [
+            "checkout > applies a coupon",
+            "checkout > applies a coupon"
+          ]
+        },
+        {
+          "rule": "duplicate-test-name",
+          "severity": "warning",
+          "titles": [
+            "totals the cart",
+            "totals the cart"
+          ]
+        }
+      ],
+      "expectedAbsent": [
+        {
+          "rule": "duplicate-test",
+          "titles": [
+            "loads the cart",
+            "loads the cart"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "duplicate-test-name-empty-rows",
+      "path": "duplicate-test-name-empty-rows",
+      "rule": "duplicate-test-name",
+      "role": "positive",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-06",
+      "expectedTests": 8,
+      "expectedIncomplete": false,
+      "expectedUnresolved": 0,
+      "expectedFindings": [
+        {
+          "rule": "duplicate-test-name",
+          "severity": "warning",
+          "titles": [
+            "rounds 1",
+            "rounds 1"
+          ]
+        },
+        {
+          "rule": "duplicate-test-name",
+          "severity": "warning",
+          "titles": [
+            "formats a",
+            "formats a"
+          ]
+        }
+      ],
+      "expectedAbsent": [
+        {
+          "rule": "duplicate-test-name",
+          "titles": [
+            "repeats 4",
+            "repeats 4"
+          ]
+        },
+        {
+          "rule": "duplicate-each-row",
+          "titles": [
+            "repeats 4",
+            "repeats 4"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "duplicate-test-name-todo-uncertain-registration",
+      "path": "duplicate-test-name-todo-uncertain-registration",
+      "rule": "duplicate-test-name",
+      "role": "negative",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-06",
+      "expectedTests": 5,
+      "expectedIncomplete": true,
+      "expectedUnresolved": 2,
+      "expectedFindings": [],
+      "expectedAbsent": [
+        {
+          "rule": "duplicate-test-name",
+          "titles": [
+            "syncs the ledger",
+            "syncs the ledger"
+          ]
+        },
+        {
+          "rule": "duplicate-test-name",
+          "titles": [
+            "exports the ledger",
+            "exports the ledger"
+          ]
+        }
+      ]
+    },
+    {
       "name": "duplicate-test-name-globals-config",
       "path": "duplicate-test-name-globals-config",
       "rule": "duplicate-test-name",
