@@ -15,6 +15,111 @@ fn suite(line: u32, start: u32, end: u32) -> TestCase {
 /// Two suites enclosing one equivalent child each.
 type OwnedFiles = Vec<(PathBuf, Vec<TestCase>)>;
 
+/// Isolates suite accounting while retaining its error-severity quality gate.
+fn suite_only() -> Config {
+    config_with(
+        &Rule::ALL
+            .iter()
+            .map(|&rule| {
+                (
+                    rule,
+                    if rule == Rule::DuplicateSuite {
+                        Severity::Error
+                    } else {
+                        Severity::Off
+                    },
+                )
+            })
+            .collect::<Vec<_>>(),
+    )
+}
+
+/// The permanent corpus input retains suite findings without a corpus scan per copy.
+#[test]
+fn suite_case_corpus_visits_only_matching_files() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let path = root.join("fixtures/recall/suite-case-file-index/run.test.ts");
+    let corpus = crate::corpus::file(
+        &path,
+        include_str!("../../../fixtures/recall/suite-case-file-index/run.test.ts"),
+        crate::corpus::Setting {
+            dialect: &crate::framework::vitest::DIALECT,
+            globals: false,
+            root: &root,
+        },
+        &mut crate::corpus::Run::default(),
+    )
+    .unwrap();
+    assert_eq!(corpus.tests.len(), 3);
+    assert_eq!(corpus.suites.len(), 2);
+    assert!(corpus
+        .tests
+        .iter()
+        .all(|case| case.exclusion.is_none() && case.gate_eligible()));
+    assert!(corpus.suites.iter().all(|case| case.exclusion.is_none()));
+    for count in [1, 16, 128] {
+        let files: OwnedFiles = (0..count)
+            .map(|i| file(&format!("{i}/run.test.ts"), corpus.tests.clone()))
+            .collect();
+        let suites: OwnedFiles = (0..count)
+            .map(|i| file(&format!("{i}/run.test.ts"), corpus.suites.clone()))
+            .collect();
+        crate::rules::suites::DESCENDANT_FILE_VISITS.with(|visits| visits.set(0));
+        let result = run_with_suites(&files, &suites, &suite_only(), &[]);
+        assert!(!result.budget_exhausted);
+        assert_eq!(result.findings.len(), count);
+        assert!(result
+            .findings
+            .iter()
+            .all(|finding| finding.rule == Rule::DuplicateSuite && finding.cases.len() == 2));
+        assert_eq!(gate(result.findings, false), (true, count * 2));
+        let visits = crate::rules::suites::DESCENDANT_FILE_VISITS.with(|visits| visits.get());
+        assert_eq!(
+            visits,
+            count * 2,
+            "{count} files must not cause a full-corpus scan per suite copy"
+        );
+    }
+}
+
+/// Equal paths retain every entry and row, but unrelated paths and ineligible cases stay out.
+#[test]
+fn suite_case_index_preserves_rows_and_file_identity() {
+    let (mut files, suites) = population();
+    let mut row = case(3, 20, 1, 1);
+    row.runtime_row = Some(7);
+    let mut unresolved = case(4, 60, 1, 1);
+    unresolved.exclusion = Some(Exclusion::UnprovedTableRow);
+    let mut benchmark = case(5, 65, 1, 1);
+    benchmark.exclusion = Some(Exclusion::Benchmark);
+    let mut origin = case(6, 66, 1, 1);
+    origin.origin = Some(crate::corpus::Origin {
+        path: "helper.ts".into(),
+        registration_files: vec!["a.test.ts".into()],
+    });
+    let mut bodyless = case(4, 70, 1, 1);
+    bodyless.bodyless = true;
+    files.push(file(
+        "a.test.ts",
+        vec![row.clone(), row, unresolved, benchmark, origin, bodyless],
+    ));
+    files.push(file("other/a.test.ts", vec![case(5, 65, 1, 1)]));
+    files.reverse();
+    let result = run_with_suites(&files, &suites, &suite_only(), &[]);
+    assert_eq!(result.findings.len(), 1);
+    let finding = &result.findings[0];
+    assert_eq!(finding.cases.len(), 4);
+    assert!(finding
+        .cases
+        .iter()
+        .all(|(location, _)| location.path == std::path::Path::new("a.test.ts")));
+    assert!(finding.cases.iter().any(|(_, row)| *row == Some(7)));
+    assert_eq!(gate(result.findings, false), (true, 4));
+    let missing = run_with_suites(&files[0..1], &suites, &suite_only(), &[]);
+    assert_eq!(missing.findings.len(), 1);
+    assert!(missing.findings[0].cases.is_empty());
+}
+
 /// Builds separate executable and container populations.
 fn population() -> (OwnedFiles, OwnedFiles) {
     (
