@@ -166,3 +166,18 @@ fn cross_file_claim_precedes_subsumption_work() {
     assert_eq!(result.findings.len(), 1);
     assert_eq!(result.findings[0].rule, Rule::CrossFileDuplicate);
 }
+
+/// A larger test that does not run covers nothing; an inert smaller one is still claimed, since
+/// removing it loses nothing either way.
+#[test]
+fn an_inert_larger_test_covers_nothing() {
+    let inert = |case: TestCase| TestCase {
+        inert: true,
+        ..case
+    };
+    assert!(claims(vec![sample(1, &[10]), inert(sample(2, &[10, 20]))]).is_empty());
+    assert_eq!(
+        claims(vec![inert(sample(1, &[10])), sample(2, &[10, 20])]).len(),
+        1
+    );
+}

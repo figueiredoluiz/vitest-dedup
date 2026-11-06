@@ -28,6 +28,18 @@ pub struct TableRow {
     pub value: Row,
 }
 
+/// What a registration's options say about whether it is expected to fail.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Expected {
+    /// Nothing written makes it an expected failure.
+    Pass,
+    /// A literal `fails: true`.
+    Failure,
+    /// The options cannot be read for it: a spread, a computed key, a `fails` that is not a
+    /// boolean literal, or options passed as a value. Vitest may run it as an expected failure.
+    Unknown,
+}
+
 /// What a registration's callee chain says beyond scheduling.
 #[derive(Clone, Debug, Default)]
 pub struct Modifiers {
@@ -214,11 +226,13 @@ impl Normalizer<'_> {
 
     /// The options a registration passes besides its title and callback that change what it
     /// checks, and whether one of them inverts the outcome.
-    pub fn options(&mut self, arguments: &[NodeId], body: NodeId) -> (Vec<String>, bool) {
+    pub fn options(&mut self, arguments: &[NodeId], body: NodeId) -> (Vec<String>, Expected) {
         let tree = self.tree;
         let dialect = self.setting.dialect;
         let mut options = Vec::new();
         let mut fails = false;
+        // What could set `fails` without spelling it: a value, a spread, a computed key.
+        let mut unread = false;
         for &argument in arguments
             .iter()
             .skip(1)
@@ -237,32 +251,44 @@ impl Normalizer<'_> {
                             .then(|| property_name(tree, property))
                             .flatten();
                         let meaning = name.and_then(|name| dialect.chain_member(name));
-                        let enabled = self.enabled(property);
+                        let written = self.literal_bool(property);
+                        unread |= name.is_none()
+                            || (meaning == Some(Chain::ExpectedFailure) && written.is_none());
                         let scheduled = scheduling(meaning)
                             || name.is_some_and(|name| dialect.scheduling_options.contains(&name));
-                        if meaning == Some(Chain::ExpectedFailure) && enabled {
+                        if meaning == Some(Chain::ExpectedFailure) && written == Some(true) {
                             fails = true;
                         } else if !scheduled {
                             options.push(self.of(property));
                         }
                     }
                 }
-                _ => options.push(self.of(argument)),
+                _ => {
+                    unread = true;
+                    options.push(self.of(argument));
+                }
             }
         }
-        (options, fails)
+        let expected = if fails {
+            Expected::Failure
+        } else if unread {
+            Expected::Unknown
+        } else {
+            Expected::Pass
+        };
+        (options, expected)
     }
 
-    /// Whether option `property` is a literal `true`.
-    fn enabled(&self, property: NodeId) -> bool {
+    /// Option `property`'s value when it is a boolean literal.
+    fn literal_bool(&self, property: NodeId) -> Option<bool> {
         let tree = self.tree;
-        tree.child(property, "value").is_some_and(|value| {
-            tree.kind(value) == "Literal"
-                && matches!(
-                    tree.field_of(value, "value"),
-                    crate::lang::Field::Value(Value::Bool(true))
-                )
-        })
+        let value = tree.child(property, "value")?;
+        match tree.field_of(value, "value") {
+            crate::lang::Field::Value(Value::Bool(flag)) if tree.kind(value) == "Literal" => {
+                Some(*flag)
+            }
+            _ => None,
+        }
     }
 
     /// Whether an options object among `arguments` keeps the test from running, the way
@@ -282,7 +308,7 @@ impl Normalizer<'_> {
                 matches!(
                     name.and_then(|name| dialect.chain_member(name)),
                     Some(Chain::Skip | Chain::Todo)
-                ) && self.enabled(property)
+                ) && self.literal_bool(property) == Some(true)
             })
     }
 

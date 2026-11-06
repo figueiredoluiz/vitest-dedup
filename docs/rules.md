@@ -36,6 +36,11 @@ a direct member read when its sole use safely accounts for the whole pattern. De
 alone does not make a body eligible for a behavior finding, and an extra binding alone does
 not establish strict subsumption. These comparisons remain review prompts.
 
+`subsumed-test` claims a pair only when both tests are known to expect to pass and the larger one
+runs. An expected failure (`.fails`, `{ fails: true }`, a failing suite) and options that could
+set one without spelling it (`{ fails: flag }`, `{ ...options }`, options passed as a variable)
+withhold the claim, as does a larger test that is skipped or a todo.
+
 Parameterization candidates retain the identity of shared helpers. Unknown computed dependencies
 withhold consolidation. Numeric data indexes whose immutable value is proved primitive can become
 table inputs when their consumers are proved primitive expressions or non-invoking comparisons.

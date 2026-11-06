@@ -1031,6 +1031,8 @@ fn read_parsed(
                 ));
             }
             let mut suite_expects_failure = false;
+            // A suite's options that may make it an expected failure without spelling it.
+            let mut suite_outcome_unknown = false;
             for scope in &suites {
                 // An enclosing suite's run condition, table or expected failure applies to the test
                 // as well. How deep the suites nest changes nothing; only what each one adds does.
@@ -1048,10 +1050,11 @@ fn read_parsed(
                         .copied()
                         .find(|&argument| tree.inner(argument) == *scope)
                         .unwrap_or(*scope);
-                    let (suite_options, options_fail) =
+                    let (suite_options, suite_expected) =
                         normalizer.options(&suite_arguments, suite_body);
-                    let fails = suite.fails || options_fail;
+                    let fails = suite.fails || suite_expected == normal::Expected::Failure;
                     suite_expects_failure |= fails;
+                    suite_outcome_unknown |= suite_expected == normal::Expected::Unknown;
                     if suite.chain.contains('.') || fails || !suite_options.is_empty() {
                         context.push('|');
                         context.push_str(&suite.chain);
@@ -1066,14 +1069,18 @@ fn read_parsed(
                     context.push_str(statements);
                 }
             }
-            let (options, option_fails) = normalizer.options(&arguments, body);
-            let fails = if modifiers.fails || option_fails {
+            let (options, expected) = normalizer.options(&arguments, body);
+            let fails = if modifiers.fails || expected == normal::Expected::Failure {
                 ".!fails"
             } else {
                 ""
             };
-            // A larger passing test proves a smaller one's events only when both expect to pass.
-            let expects_failure = suite_expects_failure || !fails.is_empty();
+            // A larger passing test proves a smaller one's events only when both expect to pass,
+            // which options that cannot be read (`{ fails: flag }`, `{ ...o }`) do not establish.
+            let expects_failure = suite_expects_failure
+                || !fails.is_empty()
+                || suite_outcome_unknown
+                || expected == normal::Expected::Unknown;
             let options = options.join(",");
             // A row of a table the file spells out is the callback with its parameters bound to the
             // row's cells, so it compares with a test that spells those values itself.

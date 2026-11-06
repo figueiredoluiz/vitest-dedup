@@ -56,6 +56,10 @@ pub(super) fn run(
                 } else {
                     continue;
                 };
+                // A larger test that does not run (`.skip`, `.todo`) covers nothing.
+                if members[1].case.inert {
+                    continue;
+                }
                 let claim = (
                     members[0].path,
                     members[0].declaration(),

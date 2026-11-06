@@ -18,7 +18,7 @@ mod suites;
 pub(crate) mod titles;
 
 pub(crate) use hooks::primitive;
-pub use rows::{Modifiers, Row, TableRow};
+pub use rows::{Expected, Modifiers, Row, TableRow};
 
 use crate::framework::{Dialect, HookTiming};
 use crate::inventory::Inventory;

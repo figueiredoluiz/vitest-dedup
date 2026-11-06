@@ -542,8 +542,13 @@ fn modifiers(main: &str) -> Vec<(String, bool, Vec<String>, bool)> {
                     .flatten()
                     .collect();
                 let body = *arguments.last().unwrap();
-                let (options, fails) = normalizer.options(&arguments, body);
-                (modifiers.chain, modifiers.fails, options, fails)
+                let (options, expected) = normalizer.options(&arguments, body);
+                (
+                    modifiers.chain,
+                    modifiers.fails,
+                    options,
+                    expected == super::Expected::Failure,
+                )
             })
             .collect()
     })
@@ -917,6 +922,42 @@ fn suites_around_a_test_and_the_statements_holding_it() {
     });
 }
 
+/// Options that could set `fails` without spelling it leave the expected outcome unknown: a
+/// variable, a spread, a computed key, or options passed as a value. A spelled `fails` decides.
+#[test]
+fn an_unread_fails_option_leaves_the_outcome_unknown() {
+    let main = "const flag = true\nconst o = { fails: true }\nconst key = 'fails'\n\
+                test('a', { fails: flag }, () => {})\n\
+                test('b', { ...o }, () => {})\n\
+                test('c', { [key]: true }, () => {})\n\
+                test('d', o, () => {})\n\
+                test('e', { fails: false, retry: 2 }, () => {})\n\
+                test('f', { fails: true, ...o }, () => {})";
+    with_normalizer(main, &[], true, |normalizer, tree, found| {
+        let expected: Vec<_> = found
+            .sites
+            .iter()
+            .map(|site| {
+                let arguments: Vec<NodeId> = tree
+                    .list(site.node, "arguments")
+                    .into_iter()
+                    .flatten()
+                    .collect();
+                let body = *arguments
+                    .iter()
+                    .find(|&&argument| tree.is_function(argument))
+                    .unwrap();
+                normalizer.options(&arguments, body).1
+            })
+            .collect();
+        use super::Expected::{Failure, Pass, Unknown};
+        assert_eq!(
+            expected,
+            [Unknown, Unknown, Unknown, Unknown, Pass, Failure]
+        );
+    });
+}
+
 /// A timeout is not an option; an option that changes the outcome is, and `fails` inverts it.
 #[test]
 fn options_are_what_changes_what_a_test_checks() {
@@ -934,11 +975,11 @@ fn options_are_what_changes_what_a_test_checks() {
                 .unwrap();
             normalizer.options(&arguments, body)
         };
-        assert_eq!(options(0), (vec![], false));
-        let (_, fails) = options(1);
-        assert!(fails);
-        let (written, fails) = options(2);
-        assert!(!fails);
+        assert_eq!(options(0), (vec![], super::Expected::Pass));
+        let (_, expected) = options(1);
+        assert_eq!(expected, super::Expected::Failure);
+        let (written, expected) = options(2);
+        assert_eq!(expected, super::Expected::Pass, "only `fails` decides");
         assert!(!written.is_empty());
     });
 }
