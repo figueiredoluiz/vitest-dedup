@@ -373,12 +373,14 @@ fn nc65_committed_resolution_decodes_only_valid_unicode() {
         ("�d800.ts", b"export const value = 1;"),
     ]);
     let root = dir.path().canonicalize().unwrap();
-    let catalog = crate::modes::RevisionFiles::load(&root, "HEAD", None).unwrap();
-    let sources = Sources::committed(Arc::new(catalog));
+    let catalog = Arc::new(crate::modes::RevisionFiles::load(&root, "HEAD", None).unwrap());
+    let sources = Sources::committed(catalog.clone());
     let from = root.join("run.test.ts");
     assert_eq!(
-        sources.resolve_file(&from, &crate::lang::text::from_utf8("./�d800"), &root),
-        Some(root.join("�d800.ts"))
+        sources
+            .resolve_file(&from, &crate::lang::text::from_utf8("./�d800"), &root)
+            .map(|file| catalog.canonicalize(&file).unwrap()),
+        Some(catalog.canonicalize(&root.join("�d800.ts")).unwrap())
     );
     assert!(sources
         .resolve_file(

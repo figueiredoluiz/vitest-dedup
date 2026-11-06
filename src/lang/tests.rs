@@ -319,7 +319,9 @@ fn nc65_resolution_does_not_map_surrogates_to_real_replacement_paths() {
     assert!(sources.resolve(&from, &invalid, &root).is_none());
     for path in ["./�d800", "./�fffd"] {
         assert_eq!(
-            sources.resolve(&from, &super::text::from_utf8(path), &root),
+            sources
+                .resolve(&from, &super::text::from_utf8(path), &root)
+                .map(|file| file.canonicalize().unwrap()),
             Some(
                 root.join(format!("{}.ts", &path[2..]))
                     .canonicalize()
