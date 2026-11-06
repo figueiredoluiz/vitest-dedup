@@ -892,6 +892,8 @@ fn read_parsed(
                     if exclusion.keeps_name() {
                         case.name = comparison_name(row);
                     }
+                    // Vitest marks a test with no callback `todo`, whatever its chain says.
+                    case.inert |= exclusion == Exclusion::NoCallback;
                     case.exclusion = Some(exclusion);
                     case
                 };

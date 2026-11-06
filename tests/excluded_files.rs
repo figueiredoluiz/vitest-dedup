@@ -1359,6 +1359,36 @@ fn the_analyzer_reads_the_owned_fixtures() {
     assert!(failed.is_empty(), "{failed:#?}");
 }
 
+/// A todo a name finding names is marked inert, and stays out of the quality gate's numerator as it
+/// is out of its denominator; an empty test is counted in both. Over the owned recall source.
+#[test]
+fn name_findings_on_todos_mark_them_inert_and_leave_the_gate_count() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("fixtures/recall/duplicate-test-name-empty-and-todo");
+    let run = analyze(&fixture, &["--rule", "duplicate-test-name=error"]);
+    assert_eq!(run.json["testsAnalyzed"], 10);
+    let findings = run.json["findings"].as_array().unwrap();
+    assert_eq!(findings.len(), 5, "{}", run.json_text);
+    let inert = |title: &str| {
+        findings
+            .iter()
+            .find(|finding| finding["titles"][0] == title)
+            .unwrap_or_else(|| panic!("no finding {title}"))["inert"]
+            .clone()
+    };
+    assert_eq!(inert("saves the cart"), serde_json::json!([true, true]));
+    assert_eq!(inert("clears the cart"), serde_json::json!([true, true]));
+    assert_eq!(
+        inert("checkout > applies a coupon"),
+        serde_json::json!([true, false])
+    );
+    assert_eq!(inert("loads the cart"), serde_json::json!([false, false]));
+    // Five todos are not eligible; the two empty tests, the empty coupon and the totals pair are.
+    let gate = &run.json["qualityGate"];
+    assert_eq!(gate["eligibleCases"], 5);
+    assert_eq!(gate["errorCases"], 5);
+}
+
 /// The name port reaches reporters, severity gates and line suppressions over the owned source.
 #[test]
 fn name_findings_preserve_titles_severity_and_suppression() {

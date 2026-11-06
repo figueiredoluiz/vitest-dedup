@@ -251,6 +251,10 @@ fn callback_exclusions_keep_their_names() {
     assert_eq!(named("compared"), (None, name("compared")));
     assert_eq!(named("deferred"), (Some(Exclusion::NoCallback), None));
     assert_eq!(named("spread"), (Some(Exclusion::UnreadableCallback), None));
+    // Vitest marks a test with no callback `todo`, written as `.todo` or not; an empty one runs.
+    let inert = |title: &str| tests[title].inert;
+    assert!(inert("titled") && inert("todo") && inert("deferred"));
+    assert!(!inert("empty") && !inert("compared"));
 }
 
 /// A scoped mock changes dynamic imports at runtime, so no test in its file is comparable.

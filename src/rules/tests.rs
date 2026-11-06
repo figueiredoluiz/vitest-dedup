@@ -508,6 +508,13 @@ fn names_use_proven_segments_and_preserve_other_exclusions() {
         .findings;
         assert_eq!(findings.len(), 1, "{exclusion:?}");
         assert_eq!(findings[0].rule, Rule::DuplicateTestName);
+        // A todo is outside the gate's denominator, so the finding does not count it either.
+        let counted = if exclusion == Exclusion::NoCallback {
+            1
+        } else {
+            2
+        };
+        assert_eq!(findings[0].cases.len(), counted, "{exclusion:?}");
     }
     for exclusion in [
         Exclusion::UnreadableCallback,
