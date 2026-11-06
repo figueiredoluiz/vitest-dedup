@@ -6,6 +6,22 @@
   "recallDestination": 1,
   "cases": [
     {
+      "name": "wrapper-reach-chain",
+      "path": "wrapper-reach-chain",
+      "rule": "duplicate-test",
+      "role": "positive",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-06",
+      "expectedTests": 27,
+      "expectedIncomplete": true,
+      "expectedUnresolved": 25,
+      "expectedFindings": [
+        { "rule": "duplicate-test", "severity": "error", "titles": ["retains first duplicate", "retains second duplicate"] }
+      ],
+      "expectedAbsent": []
+    },
+    {
       "name": "lossless-string-messages",
       "path": "lossless-string-messages",
       "rule": "duplicate-test",

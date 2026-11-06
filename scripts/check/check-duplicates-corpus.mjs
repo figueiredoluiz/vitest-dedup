@@ -264,6 +264,9 @@ const DELIBERATE_BLIND_FILES = new Set([
   'recall/concise-suite-hook-retention/run.test.ts',
   // A local helper called with computed arguments.
   'recall/local-helper-computed-arguments/run.test.ts',
+  // The reach-scaling chain deliberately preserves registered-elsewhere uncertainty;
+  // its recall manifest separately requires the direct-test positive control.
+  'recall/wrapper-reach-chain/chain.test.ts',
 ])
 
 /**
