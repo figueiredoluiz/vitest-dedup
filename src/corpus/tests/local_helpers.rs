@@ -157,3 +157,105 @@ fn an_expanded_helper_call_is_not_module_setup_of_its_own_tests() {
     };
     assert_eq!(only(&corpora[0]), only(&corpora[1]));
 }
+
+/// Whether a helper with `body` (which registers `hidden`) is expanded, beside `prelude`.
+fn body_expanded(prelude: &str, body: &str) -> bool {
+    expanded(&format!(
+        "{prelude}\nfunction declare() {{ {body} }}\ndeclare()\ntest('visible', {BODY})\n"
+    ))
+}
+
+/// A `try` whose `finally` runs nothing leaves the block's registrations as they are; a `finally`
+/// that calls code, or a `catch`, may run what the reader does not model.
+#[test]
+fn a_try_with_an_inert_finally_is_read_as_its_block() {
+    let hidden = format!("test('hidden', {BODY})");
+    assert!(body_expanded(
+        "",
+        &format!("try {{ {hidden} }} finally {{ for (;;) {{ break }} }}")
+    ));
+    assert!(body_expanded(
+        "",
+        &format!("try {{ return {hidden} }} finally {{ }}")
+    ));
+    // Each refusal calls a helper that registers `extra`: admitted, the call would never run.
+    let o = "function other() { test('extra', () => { expect(1).toBe(1) }); return 1 }";
+    assert!(!body_expanded(
+        o,
+        &format!("try {{ {hidden} }} finally {{ other() }}")
+    ));
+    assert!(!body_expanded(
+        "",
+        &format!("try {{ {hidden} }} catch {{ }} finally {{ }}")
+    ));
+    assert!(!body_expanded(
+        o,
+        &format!("try {{ {hidden} }} finally {{ for (other(); ; ) {{ break }} }}")
+    ));
+    assert!(!body_expanded(
+        o,
+        &format!("try {{ {hidden} }} finally {{ for (; other(); ) {{ break }} }}")
+    ));
+}
+
+/// A `const` holding a registration is that registration; a `let` is not admitted.
+#[test]
+fn a_constant_holding_a_registration_is_that_registration() {
+    let hidden = format!("test('hidden', {BODY})");
+    assert!(body_expanded("", &format!("const registered = {hidden}")));
+    assert!(!body_expanded("", &format!("let registered = {hidden}")));
+}
+
+/// Building a registration function is not admitted, even unused and from literals: building one
+/// sets state on the shared test chain, and table builders coerce their arguments. Nor is a
+/// `const` holding any other call.
+#[test]
+fn a_built_registration_function_is_not_admitted() {
+    let hidden = format!("test('hidden', {BODY})");
+    for declaration in [
+        "const each = test.each([1, 2])",
+        "const each = test.skipIf(false).each([1, 2])",
+        "const tagged = test.each`v\n${1}`",
+        "const rows = test.for([1]).for([2])",
+        "const scoped = test.scoped({ n: 1 })",
+    ] {
+        assert!(
+            !body_expanded("", &format!("{declaration}\n{hidden}")),
+            "{declaration}"
+        );
+    }
+    let throws = "function fail() { throw new Error('collected') }";
+    assert!(!body_expanded(
+        throws,
+        &format!("const value = fail()\n{hidden}")
+    ));
+}
+
+/// The in-source binding is not admitted in a helper: an imported module may not receive it, and
+/// a hoisted function can read its names before it is initialized.
+#[test]
+fn the_in_source_binding_is_not_admitted_in_a_helper() {
+    let source = "const register = () => {\nconst { test, expect } = import.meta.vitest\n\
+                  test('first', () => { expect(1).toBe(1) })\ntest('second', () => { expect(1).toBe(1) })\n}\nregister()\n";
+    let tests = by_title(source);
+    // Both tests the helper writes are read and excluded; an empty result would satisfy `all`.
+    for title in ["first", "second"] {
+        let test = tests
+            .get(title)
+            .unwrap_or_else(|| panic!("no test {title}: {tests:?}"));
+        assert!(test.exclusion.is_some(), "{title} is compared");
+    }
+}
+
+/// An overloaded helper runs its implementation; reassigning it refuses.
+#[test]
+fn an_overloaded_helper_runs_its_implementation() {
+    let template =
+        format!("function declare(): void\nfunction declare() {{ test('hidden', {BODY}) }}\n");
+    assert!(expanded(&format!(
+        "{template}declare()\ntest('visible', {BODY})\n"
+    )));
+    assert!(!expanded(&format!(
+        "{template}declare = () => {{}}\ndeclare()\ntest('visible', {BODY})\n"
+    )));
+}

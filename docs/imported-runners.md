@@ -38,6 +38,15 @@ A runner qualifies when:
 - its body is a sequence of `test(title, callback)` calls with an inline callback, hook
   registrations, and calls of other runners, local or imported, that qualify in turn. A `describe`
   inside a runner is not expanded yet. Statements after an unconditional `return` do not run.
+  The sequence may also hold:
+  - a `const` holding one of those registrations (`const registered = test(...)`);
+  - a `try` without `catch` whose `finally` declares nothing, reads only literals and constants and
+    ends normally, which leaves the block's registrations as they are.
+
+A function declared with overload signatures runs its implementation. A registration function
+built inside a runner (`const each = test.each([1])`) refuses, even when it is never used:
+building one changes state Vitest's later registrations read. So does the in-source binding
+`import.meta.vitest`, which an imported module may not receive.
 
 A title may read the call's arguments when they are literals or constants the proof can evaluate.
 

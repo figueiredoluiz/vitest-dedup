@@ -6,6 +6,7 @@
 //! and knows nothing of tests.
 
 mod build;
+mod completion;
 pub(crate) mod js_text;
 pub(crate) mod limits;
 pub(crate) mod manifest_fs;
@@ -17,6 +18,8 @@ mod sources;
 mod syntax;
 mod tree;
 
+pub use completion::completes_inertly;
+pub(crate) use completion::primitive;
 pub use resolve::{
     classify_tsconfig_gap, confinement_refusals, manifest_refusals, resolve, resolve_file,
     take_confinement_refusal, take_manifest_refusal, take_package_gaps, take_tsconfig_gaps,

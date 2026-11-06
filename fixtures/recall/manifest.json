@@ -5636,9 +5636,7 @@
           ]
         }
       ],
-      "expectedAbsent": [],
-      "expectedIncompleteNext": true,
-      "expectedUnresolvedNext": 3
+      "expectedAbsent": []
     },
     {
       "name": "local-helper-overloaded-reassigned",
@@ -6193,9 +6191,7 @@
             "visible"
           ]
         }
-      ],
-      "expectedIncompleteNext": true,
-      "expectedUnresolvedNext": 4
+      ]
     },
     {
       "name": "local-helper-shadowed-undefined",
@@ -8149,9 +8145,7 @@
           ]
         }
       ],
-      "expectedAbsent": [],
-      "expectedIncompleteNext": true,
-      "expectedUnresolvedNext": 3
+      "expectedAbsent": []
     },
     {
       "name": "helper-initializer-factories",
@@ -10528,6 +10522,231 @@
         }
       ],
       "expectedAbsent": []
+    },
+    {
+      "name": "helper-factory-override-fixture",
+      "path": "helper-factory-override-fixture",
+      "rule": "duplicate-test",
+      "role": "negative",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-06",
+      "expectedTests": 3,
+      "expectedIncomplete": true,
+      "expectedUnresolved": 3,
+      "expectedFindings": [],
+      "expectedAbsent": [
+        {
+          "rule": "duplicate-test",
+          "titles": [
+            "hidden",
+            "visible"
+          ]
+        }
+      ],
+      "blindUnderCurrent": [
+        "run.test.ts"
+      ]
+    },
+    {
+      "name": "helper-factory-uninitialized-root",
+      "path": "helper-factory-uninitialized-root",
+      "rule": "duplicate-test",
+      "role": "negative",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-06",
+      "expectedTests": 3,
+      "expectedIncomplete": true,
+      "expectedUnresolved": 3,
+      "expectedFindings": [],
+      "expectedAbsent": [
+        {
+          "rule": "duplicate-test",
+          "titles": [
+            "hidden",
+            "visible"
+          ]
+        }
+      ],
+      "blindUnderCurrent": [
+        "run.test.ts"
+      ]
+    },
+    {
+      "name": "helper-factory-alias-call",
+      "path": "helper-factory-alias-call",
+      "rule": "duplicate-test",
+      "role": "negative",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-06",
+      "expectedTests": 3,
+      "expectedIncomplete": true,
+      "expectedUnresolved": 3,
+      "expectedFindings": [],
+      "expectedAbsent": [
+        {
+          "rule": "duplicate-test",
+          "titles": [
+            "hidden %s",
+            "visible"
+          ]
+        }
+      ],
+      "blindUnderCurrent": [
+        "run.test.ts"
+      ]
+    },
+    {
+      "name": "helper-in-source-before-binding",
+      "path": "helper-in-source-before-binding",
+      "rule": "duplicate-test",
+      "role": "negative",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-06",
+      "expectedTests": 4,
+      "expectedIncomplete": true,
+      "expectedUnresolved": 4,
+      "expectedFindings": [],
+      "expectedAbsent": [
+        {
+          "rule": "duplicate-test",
+          "titles": [
+            "first",
+            "second"
+          ]
+        }
+      ],
+      "blindUnderCurrent": [
+        "run.test.ts"
+      ]
+    },
+    {
+      "name": "helper-factory-chain-state",
+      "path": "helper-factory-chain-state",
+      "rule": "duplicate-test",
+      "role": "negative",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-06",
+      "expectedTests": 3,
+      "expectedIncomplete": true,
+      "expectedUnresolved": 3,
+      "expectedFindings": [],
+      "expectedAbsent": [
+        {
+          "rule": "duplicate-test",
+          "titles": [
+            "before",
+            "after"
+          ]
+        }
+      ],
+      "blindUnderCurrent": [
+        "run.test.ts"
+      ]
+    },
+    {
+      "name": "helper-factory-table-on-table",
+      "path": "helper-factory-table-on-table",
+      "rule": "duplicate-test",
+      "role": "negative",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-06",
+      "expectedTests": 3,
+      "expectedIncomplete": true,
+      "expectedUnresolved": 3,
+      "expectedFindings": [],
+      "expectedAbsent": [
+        {
+          "rule": "duplicate-test",
+          "titles": [
+            "hidden",
+            "visible"
+          ]
+        }
+      ],
+      "blindUnderCurrent": [
+        "run.test.ts"
+      ]
+    },
+    {
+      "name": "helper-factory-coerced-argument",
+      "path": "helper-factory-coerced-argument",
+      "rule": "duplicate-test",
+      "role": "negative",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-06",
+      "expectedTests": 3,
+      "expectedIncomplete": true,
+      "expectedUnresolved": 3,
+      "expectedFindings": [],
+      "expectedAbsent": [
+        {
+          "rule": "duplicate-test",
+          "titles": [
+            "hidden",
+            "visible"
+          ]
+        }
+      ],
+      "blindUnderCurrent": [
+        "run.test.ts"
+      ]
+    },
+    {
+      "name": "runner-in-source-binding",
+      "path": "runner-in-source-binding",
+      "rule": "duplicate-test",
+      "role": "negative",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-06",
+      "expectedTests": 1,
+      "expectedIncomplete": true,
+      "expectedUnresolved": 1,
+      "expectedFindings": [],
+      "expectedAbsent": [
+        {
+          "rule": "duplicate-test",
+          "titles": [
+            "first",
+            "second"
+          ]
+        }
+      ],
+      "blindUnderCurrent": [
+        "run.test.ts"
+      ]
+    },
+    {
+      "name": "runner-in-source-hoisted-read",
+      "path": "runner-in-source-hoisted-read",
+      "rule": "duplicate-test",
+      "role": "negative",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-06",
+      "expectedTests": 1,
+      "expectedIncomplete": true,
+      "expectedUnresolved": 1,
+      "expectedFindings": [],
+      "expectedAbsent": [
+        {
+          "rule": "duplicate-test",
+          "titles": [
+            "first",
+            "second"
+          ]
+        }
+      ],
+      "blindUnderCurrent": [
+        "run.test.ts"
+      ]
     }
   ],
   "knownFalsePositiveBaseline": 1,
