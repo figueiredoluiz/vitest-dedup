@@ -451,6 +451,34 @@ fn an_imported_runner_with_a_hook_inside_a_suite_refuses() {
     assert!(!expanded("describe('s', () => {\n  install()\n})\n"));
 }
 
+/// A suite opens its body to the sequence only with exactly a title and a callback that takes
+/// nothing: a third argument or a parameter default runs while the suite registers and can throw
+/// (Vitest 5.0.5 fails collecting either), so a call inside one refuses the file's expansion.
+#[test]
+fn a_suite_with_options_or_parameters_refuses_the_expansion() {
+    let header = "import { describe, test, expect } from 'vitest'\n";
+    let helper =
+        "function makeTest() {\n  test('shared', () => {\n    expect(1).toBe(1)\n  })\n}\n";
+    let plain = "describe('t', () => {\n  makeTest()\n})\n";
+    let expanded = |suite: &str| {
+        by_title(&format!("{header}{helper}{suite}{plain}"))
+            .values()
+            .any(|test| test.exclusion.is_none())
+    };
+    assert!(
+        expanded("describe('s', () => {\n  makeTest()\n})\n"),
+        "the control expands"
+    );
+    for suite in [
+        "describe('s', () => {\n  makeTest()\n}, (() => { throw new Error('boom') })())\n",
+        "describe('s', () => {\n  makeTest()\n}, 1000)\n",
+        "describe('s', ({ missing = (() => { throw new Error('boom') })() }) => {\n  makeTest()\n})\n",
+        "describe('s', (context) => {\n  makeTest()\n})\n",
+    ] {
+        assert!(!expanded(suite), "{suite}");
+    }
+}
+
 /// A helper a top-level call reaches only through another helper still reads what it reads when
 /// that call runs: a `const` declared after it is uninitialized then (Vitest 5.0.5 throws), so the
 /// file keeps its exclusions. With no top-level call, a suite-position call runs after the module

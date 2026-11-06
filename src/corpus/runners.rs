@@ -186,15 +186,19 @@ fn closed_batch(
                             && site.chain.is_empty()
                             && normal::titles::title(parsed, site.node).is_some()
                         {
+                            // Exactly a title and a callback that takes nothing: an options
+                            // argument or a parameter default is evaluated while the suite
+                            // registers, and can throw before its body runs.
                             let arguments = tree.list(site.node, "arguments");
-                            let body = arguments
-                                .get(1)
-                                .and_then(|argument| *argument)
+                            let body = (arguments.len() == 2)
+                                .then(|| arguments[1])
+                                .flatten()
                                 .map(|argument| tree.inner(argument))
                                 .filter(|&argument| {
                                     tree.is_function(argument)
                                         && !tree.flag(argument, "async")
                                         && !tree.flag(argument, "generator")
+                                        && tree.list(argument, "params").is_empty()
                                 })
                                 .and_then(|callback| tree.child(callback, "body"))
                                 .filter(|&body| tree.kind(body) == "BlockStatement")

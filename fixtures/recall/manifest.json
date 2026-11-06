@@ -11214,6 +11214,32 @@
       ]
     },
     {
+      "name": "local-helper-suite-arguments",
+      "path": "local-helper-suite-arguments",
+      "rule": "duplicate-test",
+      "role": "negative",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-06",
+      "expectedTests": 6,
+      "expectedIncomplete": true,
+      "expectedUnresolved": 6,
+      "expectedFindings": [],
+      "expectedAbsent": [
+        {
+          "rule": "duplicate-test",
+          "titles": [
+            "s > shared",
+            "t > shared"
+          ]
+        }
+      ],
+      "blindUnderCurrent": [
+        "options.test.ts",
+        "parameters.test.ts"
+      ]
+    },
+    {
       "name": "local-helper-late-constant",
       "path": "local-helper-late-constant",
       "rule": "duplicate-test",
