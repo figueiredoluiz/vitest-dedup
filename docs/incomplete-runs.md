@@ -138,7 +138,7 @@ available. First-party imported helpers use the same preflight limits. Use
 failure. Admitted extraction runs on an explicitly sized worker stack; a larger stack alone would
 not protect against unbounded input.
 
-Import analysis allows at most eight uncached import levels, 64 uncached module-analysis attempts,
+Import analysis allows at most 24 uncached import levels, 64 uncached module-analysis attempts,
 and 8 MiB of imported source per root inventory. Completed cached proofs can be reused without
 spending that work again. Reaching a limit stops further import analysis for that inventory,
 excludes the affected file's tests from comparison, and marks the run incomplete, including

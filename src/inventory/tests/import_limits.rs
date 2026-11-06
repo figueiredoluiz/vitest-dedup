@@ -1,5 +1,5 @@
 use super::*;
-use crate::inventory::{MAX_IMPORT_ANALYSES, MAX_IMPORT_SOURCE_BYTES};
+use crate::inventory::{MAX_DEPTH, MAX_IMPORT_ANALYSES, MAX_IMPORT_SOURCE_BYTES};
 
 /// Copy the permanent runtime/corpus case into an isolated project.
 fn project() -> tempfile::TempDir {
@@ -43,9 +43,9 @@ fn owned_import_cut_stops_work_and_recovers_from_nearer_root() {
         let found = read(dir.path(), &source, &mut modules);
         assert_eq!(found.sites.len(), 2);
         assert!(found.imports_limited);
-        assert_eq!(modules.work.analyses, 8);
+        assert_eq!(modules.work.analyses, MAX_DEPTH);
         assert!(modules.active.is_empty());
-        for depth in 0..8 {
+        for depth in 0..MAX_DEPTH {
             assert!(modules
                 .cache
                 .get(&(dir.path().join(format!("m{depth}.ts")), false))
@@ -60,7 +60,7 @@ fn owned_import_cut_stops_work_and_recovers_from_nearer_root() {
     let found = read(dir.path(), &near, &mut modules);
     assert_eq!((found.sites.len(), found.loads.len()), (2, 1));
     assert!(!found.imports_limited);
-    assert_eq!(modules.work.analyses, 8);
+    assert_eq!(modules.work.analyses, MAX_DEPTH);
     // Completed cache entries are evidence even when reused from a farther root.
     let found = read(dir.path(), &source, &mut modules);
     assert_eq!((found.sites.len(), found.loads.len()), (2, 1));
@@ -74,20 +74,20 @@ fn import_limits_cover_reexports_but_not_erased_imports() {
     let dir = project();
     let source = fs::read_to_string(dir.path().join("deep.test.ts")).unwrap();
     for prefix in ["export * from", "export { value } from"] {
-        for depth in 0..8 {
+        for depth in 0..MAX_DEPTH {
             fs::write(
                 dir.path().join(format!("m{depth}.ts")),
                 format!("{prefix} './m{}';\nimport './m{}';\n", depth + 1, depth + 1),
             )
             .unwrap();
         }
-        let leaf = dir.path().join("m8.ts");
+        let leaf = dir.path().join(format!("m{MAX_DEPTH}.ts"));
         fs::write(&leaf, "export const value = 1;").unwrap();
         let mut modules = Modules::default();
         let found = read(dir.path(), &source, &mut modules);
         assert_eq!(found.sites.len(), 2);
         assert!(found.imports_limited);
-        assert_eq!(modules.work.analyses, 8);
+        assert_eq!(modules.work.analyses, MAX_DEPTH);
     }
     let erased = source.replace("import './m0'", "import type { value } from './m0'");
     let mut modules = Modules::default();
@@ -181,7 +181,11 @@ fn import_cycle_retains_existing_within_bound_handling() {
 fn runner_plans_refuse_an_incomplete_import_inventory() {
     use crate::inventory::runners::{self, Refusal};
     let dir = project();
-    fs::write(dir.path().join("m8.ts"), "export const value = 1;").unwrap();
+    fs::write(
+        dir.path().join(format!("m{MAX_DEPTH}.ts")),
+        "export const value = 1;",
+    )
+    .unwrap();
     let source = "import './m0'; import { test } from 'vitest'; export function run() { test('held', () => {}); }";
     let path = dir.path().join("root.test.ts");
     let mut modules = Modules::default();
