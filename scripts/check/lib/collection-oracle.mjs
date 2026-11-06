@@ -26,6 +26,7 @@ const STUBS = join(LIB, 'collection-oracle-stubs.mjs')
 const TEST_FILES = '**/*.{test,spec}.?(c|m)[jt]s?(x)'
 // Benchmarks are collected by `vitest bench`, never by `vitest list`.
 const BENCH_FILE = /\.bench\.[cm]?[jt]sx?$/
+const BENCH_COLLECTOR = join(LIB, 'collect-benchmarks.mjs')
 // Type tests are checked by `tsc` under `--typecheck`; no runner collects them.
 const TYPE_TEST_FILE = /\.test-d\.[cm]?[jt]sx?$/
 
@@ -224,6 +225,50 @@ export function collectWithVitest(root, dir) {
   } finally {
     rmSync(work, { recursive: true, force: true })
   }
+}
+
+/**
+ * Whether `absoluteDir`'s own manifest declares a Vitest 4, the last major with a top-level `bench`.
+ * @param {string} absoluteDir The directory.
+ * @returns {boolean} Whether it does.
+ */
+export function declaresVitest4(absoluteDir) {
+  const path = join(absoluteDir, 'package.json')
+  if (!existsSync(path)) return false
+  const manifest = JSON.parse(readFileSync(path, 'utf8'))
+  const range = ['dependencies', 'devDependencies', 'peerDependencies']
+    .map((field) => manifest[field]?.vitest)
+    .find((value) => typeof value === 'string')
+  // The whole range must admit one major: `^4.0.0-beta.1 || ^5.0.0` also admits Vitest 5.
+  return range !== undefined && /^[\^~=]?v?4(?:\.(?:\d+|x|\*)){0,2}(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(range.trim())
+}
+
+/**
+ * Collects `dir`'s benchmark files with the pinned Vitest 4, when the directory declares it.
+ *
+ * @param {string} root - checkout root; `node_modules/vitest4` is resolved from it.
+ * @param {string} dir - directory to collect, relative to `root`.
+ * @returns {Map<string, {titles: string[], errors: string[]}>} per benchmark file Vitest 4
+ *   collected, keyed by path relative to `dir`; empty for a directory that does not declare Vitest 4.
+ * @throws {Error} when Vitest 4 fails, or reports an error outside any file.
+ */
+export function collectBenchmarks(root, dir) {
+  const absoluteDir = resolve(root, dir)
+  if (!declaresVitest4(absoluteDir)) return new Map()
+  const result = spawnSync(process.execPath, [BENCH_COLLECTOR, absoluteDir], {
+    cwd: root,
+    encoding: 'utf8',
+    env: oracleEnvironment(process.env, ''),
+    maxBuffer: 64 << 20,
+    timeout: 300_000,
+  })
+  if (result.error) throw result.error
+  if (result.status !== 0) {
+    throw new Error(`Vitest 4 could not collect the benchmarks in ${dir}:\n${(result.stderr ?? '').trim()}`.slice(-4000))
+  }
+  const { files, unhandled } = JSON.parse(result.stdout)
+  if (unhandled > 0) throw new Error(`Vitest 4 reported ${unhandled} error(s) outside any file in ${dir}`)
+  return new Map(Object.entries(files))
 }
 
 /**
@@ -429,10 +474,13 @@ function skipReason(path, vitest, analyzerExcluded) {
  * runtime truth, the last makes no claim. A probe that saw a different number of hook
  * registrations than the collected suites hold is a `probe-error`, which the gate fails on.
  *
+ * Benchmark files are compared with `benchmarks`, Vitest 4's collection, when it has them.
+ *
  * @returns {{compared: string[], testsCompared: number, hooksCompared: number,
- *   skipped: Map<string, object[]>, disagreements: {path: string, kind: string, item: string}[]}}
+ *   benchmarksCompared: number, skipped: Map<string, object[]>,
+ *   disagreements: {path: string, kind: string, item: string}[]}}
  */
-export function compareDirectory(vitestFiles, analyzer) {
+export function compareDirectory(vitestFiles, analyzer, benchmarks = new Map()) {
   const skipped = new Map(
     ['uncollectable', 'stubbed', 'excluded', 'outside-root', 'overlapping-projects', 'type-test', 'bench', 'undetermined-hook', 'probe-error']
       .map((k) => [k, []]),
@@ -475,9 +523,16 @@ export function compareDirectory(vitestFiles, analyzer) {
   // Unproven-title records too: no collected test is left for them to stand for.
   const uncollected = new Map(analyzer.tests)
   for (const [path, titles] of analyzer.unproven ?? []) uncollected.set(path, [...(uncollected.get(path) ?? []), ...titles])
+  let benchmarksCompared = 0
   for (const [path, titles] of uncollected) {
     if (!isModule(path)) continue
-    if (BENCH_FILE.test(path)) skipped.get('bench').push({ path, detail: `${titles.length} benchmarks` })
+    const collected = BENCH_FILE.test(path) ? benchmarks.get(path) : undefined
+    if (collected?.errors.length > 0) skipped.get('uncollectable').push({ path, detail: collected.errors[0] })
+    else if (collected !== undefined) {
+      benchmarksCompared += collected.titles.length
+      for (const item of minus(collected.titles, titles)) disagreements.push({ path, kind: 'missing-benchmark', item })
+      for (const item of minus(titles, collected.titles)) disagreements.push({ path, kind: 'extra-benchmark', item })
+    } else if (BENCH_FILE.test(path)) skipped.get('bench').push({ path, detail: `${titles.length} benchmarks` })
     else if (TYPE_TEST_FILE.test(path)) skipped.get('type-test').push({ path, detail: `${titles.length} type tests` })
     else for (const item of titles) disagreements.push({ path, kind: 'extra-test', item })
   }
@@ -508,7 +563,13 @@ export function compareDirectory(vitestFiles, analyzer) {
   for (const site of recorded) {
     if (!registered.has(site)) disagreements.push({ path: pathOf(site), kind: 'extra-hook', item: site })
   }
-  return { compared, testsCompared, testsUnproven, hooksCompared: registered.size, skipped, disagreements }
+  // A benchmark file Vitest 4 collected that the analyzer read nothing from.
+  for (const [path, collected] of benchmarks) {
+    if (uncollected.has(path) || collected.errors.length > 0) continue
+    benchmarksCompared += collected.titles.length
+    for (const item of collected.titles) disagreements.push({ path, kind: 'missing-benchmark', item })
+  }
+  return { compared, testsCompared, testsUnproven, hooksCompared: registered.size, benchmarksCompared, skipped, disagreements }
 }
 
 /**

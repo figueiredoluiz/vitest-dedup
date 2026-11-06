@@ -12,6 +12,7 @@ pub mod config;
 pub mod projects;
 mod stub;
 mod titles;
+pub mod version;
 
 /// Vitest.
 #[derive(Debug)]
@@ -147,6 +148,9 @@ pub static DIALECT: Dialect = Dialect {
         member!("override", Chain::FixtureScoping),
         member!("scoped", Chain::FixtureScoping),
     ],
+    // What Vitest 4.1.12's top-level `bench` has, measured: no `each`, `for` or `concurrent`.
+    bench_members: &["skip", "only", "todo"],
+    bench_conditions: &["skipIf", "runIf"],
     // `createTaskCollector` assigns these to every test function, extended ones included.
     test_members: &[
         "describe",

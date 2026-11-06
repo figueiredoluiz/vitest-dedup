@@ -33,6 +33,7 @@ fn runs(files: &[(&str, &str)], orders: &[&[&str]]) -> Vec<Vec<FileCorpus>> {
         dialect: &DIALECT,
         globals: false,
         root: dir.path(),
+        benchmarks: false,
     };
     orders
         .iter()
@@ -652,6 +653,7 @@ fn refusals_reach_the_caller() {
         dialect: &DIALECT,
         globals: false,
         root: dir.path(),
+        benchmarks: false,
     };
     assert_eq!(
         file(&path, "(((", setting, &mut Run::default()).err(),
@@ -922,6 +924,7 @@ fn the_engine_reports_each_file_once() {
         dialect: &DIALECT,
         globals: false,
         root: dir.path(),
+        benchmarks: false,
     };
     let mut engine = Engine::default();
     let mut read = |name: &str, source: &str, keep_sites| {
@@ -999,6 +1002,7 @@ fn the_engine_lists_blind_files_most_tests_first() {
         dialect: &DIALECT,
         globals: false,
         root: dir.path(),
+        benchmarks: false,
     };
     let mut engine = Engine::default();
     for (name, count) in [("a.test.ts", 1), ("b.test.ts", 2)] {
@@ -1028,6 +1032,7 @@ fn an_incomplete_trace_is_listed_last_and_excludes_nothing() {
         dialect: &DIALECT,
         globals: false,
         root: dir.path(),
+        benchmarks: false,
     };
     let source = "import { test, expect } from 'vitest';\n\
                   test('t', () => { if (x()) { expect(1).toBe(1); } });\n";
@@ -1058,6 +1063,7 @@ fn a_recovered_panic_drops_the_run_caches() {
         dialect: &DIALECT,
         globals: false,
         root: dir.path(),
+        benchmarks: false,
     };
     let fresh = format!("{:?}", Run::default());
     let mut engine = Engine::default();
@@ -1459,6 +1465,7 @@ fn row_names_refuse_derived_suite_prefixes() {
 
 mod suites;
 
+mod bench_admission;
 mod bindings;
 mod hooks;
 mod parameters;
@@ -1686,6 +1693,7 @@ fn historical_source_authority_survives_cache_recovery() {
         dialect: &DIALECT,
         globals: false,
         root: &root,
+        benchmarks: false,
     };
     let source="import {test,expect} from 'vitest'; import {run} from './helper'; test('a',()=>expect(run()).toBe(1));";
     let path = root.join("run.test.ts");
@@ -1896,6 +1904,7 @@ fn a_confined_module_is_re_analyzed_per_file_so_every_importer_records_the_refus
                 dialect: &DIALECT,
                 globals: false,
                 root: project.path(),
+                benchmarks: false,
             },
             false,
             Vec::new(),
@@ -1924,6 +1933,7 @@ fn optional_record_views_preserve_rows_and_charge_their_owned_storage() {
         dialect: crate::framework::current().dialect(),
         globals: false,
         root: dir.path(),
+        benchmarks: false,
     };
     let mut ordinary = Engine::default();
     let mut instrumented = Engine::default();
@@ -1988,6 +1998,7 @@ fn optional_hook_records_read_proved_chains_and_withhold_unread_callbacks() {
         dialect: crate::framework::current().dialect(),
         globals: false,
         root: dir.path(),
+        benchmarks: false,
     };
     let mut engine = Engine::default();
     let source = "import { beforeEach, describe, test, expect } from 'vitest'; let cell = 1; beforeEach(() => { cell = 0; }); describe('nested', () => { beforeEach(() => { cell = 0; }); test('reads', () => expect(cell).toBe(0)); });";

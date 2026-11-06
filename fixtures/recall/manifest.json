@@ -991,21 +991,326 @@
           "rule": "duplicate-test",
           "severity": "error",
           "titles": [
+            "parses a long document",
+            "reads a large config"
+          ]
+        }
+      ],
+      "expectedAbsent": [
+        {
+          "rule": "duplicate-test",
+          "titles": [
             "parses a short document",
             "reads a small config"
+          ]
+        }
+      ],
+      "expectedIncompleteNext": true
+    },
+    {
+      "name": "duplicate-test-bench-vitest4",
+      "path": "duplicate-test-bench-vitest4",
+      "rule": "duplicate-test",
+      "role": "positive",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-06",
+      "expectedTests": 8,
+      "expectedIncomplete": false,
+      "expectedUnresolved": 0,
+      "expectedFindings": [
+        {
+          "rule": "duplicate-test",
+          "severity": "error",
+          "titles": [
+            "parses a short document",
+            "reads a small config"
+          ]
+        },
+        {
+          "rule": "duplicate-test-name",
+          "severity": "warning",
+          "titles": [
+            "formats a row",
+            "formats a row"
+          ]
+        },
+        {
+          "rule": "duplicate-test-name",
+          "severity": "warning",
+          "titles": [
+            "measures a large config",
+            "measures a large config"
           ]
         },
         {
           "rule": "duplicate-test",
           "severity": "error",
           "titles": [
-            "parses a long document",
-            "reads a large config"
+            "parser > splits lines",
+            "lexer > splits tokens"
           ]
         }
       ],
-      "expectedAbsent": [],
-      "expectedIncompleteNext": true
+      "expectedAbsent": []
+    },
+    {
+      "name": "cross-file-duplicate-bench-vitest4",
+      "path": "cross-file-duplicate-bench-vitest4",
+      "rule": "cross-file-duplicate",
+      "role": "positive",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-06",
+      "expectedTests": 2,
+      "expectedIncomplete": false,
+      "expectedUnresolved": 0,
+      "expectedFindings": [
+        {
+          "rule": "cross-file-duplicate",
+          "severity": "warning",
+          "titles": [
+            "serializes a payload",
+            "encodes a payload"
+          ]
+        }
+      ],
+      "expectedAbsent": []
+    },
+    {
+      "name": "duplicate-test-bench-vitest4-apart",
+      "path": "duplicate-test-bench-vitest4-apart",
+      "rule": "duplicate-test",
+      "role": "negative",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-06",
+      "expectedTests": 4,
+      "expectedIncomplete": false,
+      "expectedUnresolved": 0,
+      "expectedFindings": [],
+      "expectedAbsent": [
+        {
+          "rule": "duplicate-test",
+          "titles": [
+            "sorts numbers",
+            "sorts numbers once"
+          ]
+        },
+        {
+          "rule": "duplicate-test",
+          "titles": [
+            "copies an array",
+            "copies an array again"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "duplicate-test-bench-vitest5",
+      "path": "duplicate-test-bench-vitest5",
+      "rule": "duplicate-test",
+      "role": "negative",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-06",
+      "expectedTests": 2,
+      "expectedIncomplete": true,
+      "expectedUnresolved": 2,
+      "expectedFindings": [],
+      "expectedAbsent": [
+        {
+          "rule": "duplicate-test",
+          "titles": [
+            "parses a short document",
+            "reads a small config"
+          ]
+        }
+      ],
+      "blindUnderCurrent": [
+        "parse.bench.ts"
+      ]
+    },
+    {
+      "name": "duplicate-test-bench-vitest4-hook-reset",
+      "path": "duplicate-test-bench-vitest4-hook-reset",
+      "rule": "duplicate-test",
+      "role": "negative",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-06",
+      "expectedTests": 2,
+      "expectedIncomplete": true,
+      "expectedUnresolved": 2,
+      "expectedFindings": [],
+      "expectedAbsent": [
+        {
+          "rule": "duplicate-test",
+          "titles": [
+            "counts up",
+            "counts again"
+          ]
+        }
+      ],
+      "blindUnderCurrent": [
+        "count.bench.ts"
+      ]
+    },
+    {
+      "name": "duplicate-test-bench-vitest4-setup",
+      "path": "duplicate-test-bench-vitest4-setup",
+      "rule": "duplicate-test",
+      "role": "negative",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-06",
+      "expectedTests": 2,
+      "expectedIncomplete": true,
+      "expectedUnresolved": 2,
+      "expectedFindings": [],
+      "expectedAbsent": [
+        {
+          "rule": "duplicate-test",
+          "titles": [
+            "reads the count",
+            "reads the count again"
+          ]
+        }
+      ],
+      "blindUnderCurrent": [
+        "count.bench.ts"
+      ]
+    },
+    {
+      "name": "duplicate-test-bench-vitest4-table",
+      "path": "duplicate-test-bench-vitest4-table",
+      "rule": "duplicate-test",
+      "role": "negative",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-06",
+      "expectedTests": 3,
+      "expectedIncomplete": true,
+      "expectedUnresolved": 3,
+      "expectedFindings": [],
+      "expectedAbsent": [
+        {
+          "rule": "duplicate-test",
+          "titles": [
+            "doubles numbers",
+            "doubles numbers again"
+          ]
+        }
+      ],
+      "blindUnderCurrent": [
+        "rows.bench.ts"
+      ]
+    },
+    {
+      "name": "duplicate-test-bench-vitest4-setup-reference",
+      "path": "duplicate-test-bench-vitest4-setup-reference",
+      "rule": "duplicate-test",
+      "role": "negative",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-06",
+      "expectedTests": 2,
+      "expectedIncomplete": true,
+      "expectedUnresolved": 2,
+      "expectedFindings": [],
+      "expectedAbsent": [
+        {
+          "rule": "duplicate-test",
+          "titles": [
+            "fills a buffer",
+            "fills a buffer again"
+          ]
+        }
+      ],
+      "blindUnderCurrent": [
+        "size.bench.ts"
+      ]
+    },
+    {
+      "name": "duplicate-test-bench-vitest4-concurrent",
+      "path": "duplicate-test-bench-vitest4-concurrent",
+      "rule": "duplicate-test",
+      "role": "negative",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-06",
+      "expectedTests": 3,
+      "expectedIncomplete": true,
+      "expectedUnresolved": 3,
+      "expectedFindings": [],
+      "expectedAbsent": [
+        {
+          "rule": "duplicate-test",
+          "titles": [
+            "sorts numbers",
+            "sorts numbers again"
+          ]
+        }
+      ],
+      "blindUnderCurrent": [
+        "sort.bench.ts"
+      ]
+    },
+    {
+      "name": "duplicate-test-bench-vitest-range",
+      "path": "duplicate-test-bench-vitest-range",
+      "rule": "duplicate-test",
+      "role": "negative",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-06",
+      "expectedTests": 2,
+      "expectedIncomplete": true,
+      "expectedUnresolved": 2,
+      "expectedFindings": [],
+      "expectedAbsent": [
+        {
+          "rule": "duplicate-test",
+          "titles": [
+            "parses a short document",
+            "reads a small config"
+          ]
+        }
+      ],
+      "blindUnderCurrent": [
+        "parse.bench.ts"
+      ]
+    },
+    {
+      "name": "parameterization-candidate-bench-vitest4",
+      "path": "parameterization-candidate-bench-vitest4",
+      "rule": "parameterization-candidate",
+      "role": "positive",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-06",
+      "expectedTests": 2,
+      "expectedIncomplete": false,
+      "expectedUnresolved": 0,
+      "expectedFindings": [
+        {
+          "rule": "parameterization-candidate",
+          "severity": "warning",
+          "titles": [
+            "serializes a small object",
+            "serializes a larger object"
+          ]
+        }
+      ],
+      "expectedAbsent": [
+        {
+          "rule": "duplicate-test",
+          "titles": [
+            "serializes a small object",
+            "serializes a larger object"
+          ]
+        }
+      ]
     },
     {
       "name": "duplicate-test-concurrency-modifiers",

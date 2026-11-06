@@ -24,10 +24,12 @@ from the `vitest` package root is unaffected, so the extractor treats `suite(...
   destructured from the callback argument of a regular `test`:
   `test('name', ({ bench }) => { bench(...) })`. `bench.skip`, `.only` and `.todo` are removed; use
   `test.skip`, `.only` and `.todo` on the enclosing test instead.
-- **v2-v4:** `bench` is a top-level import with its own `.skip`, `.only`, `.todo` and `.each`,
-  structurally parallel to `test`.
+- **v2-v4:** `bench` is a top-level import with its own `.skip`, `.only` and `.todo`, structurally
+  parallel to `test`. Vitest 4.1 has no `bench.each` or `bench.for`.
 
-The extractor supports **both shapes**, because the corpus contains both major versions.
+The extractor reads **both shapes**, because the corpus contains both major versions. A top-level
+`bench` is compared only in a benchmark file of a project on Vitest 4; see
+[Benchmarks](../rules.md#benchmarks).
 
 ### Interchangeability
 
@@ -47,7 +49,7 @@ with each other: `describe.only` and `test.only` are unrelated.
 | `.sequential` | test, describe | `[v5 CHANGE]` **Removed in v5** ("Removed `test.sequential`, `describe.sequential`, and `sequential` Options"). Present and meaningful in v2-v4 as the inverse of `.concurrent` (forces sequential execution inside an otherwise-concurrent suite). Extractor must still recognize it as a legal chain member for pre-v5 corpora. | UNVERIFIED |
 | `.skipIf(cond)` | test, describe | Skip when `cond` truthy, evaluated at collection time | usually leaf of chain, precedes `.each`/`.for`? UNVERIFIED ordering |
 | `.runIf(cond)` | test, describe | Inverse of `.skipIf` | same |
-| `.each(table)` | test, describe (, bench ≤v4) | Expands one declaration into N declarations, one per table row | combines with `.skip/.only/.todo/.concurrent` |
+| `.each(table)` | test, describe | Expands one declaration into N declarations, one per table row | combines with `.skip/.only/.todo/.concurrent` |
 | `.for(table)` | test, describe | Like `.each` but does not spread array rows into positional args, and gives the callback `TestContext` as its 2nd param | same combinability as `.each` |
 | `.extend(fixtures)` | test only | Returns a **new** `test`-like function bound to merged fixtures; not a modifier on an individual test, it produces a new base object that itself has `.skip/.only/.each/...` | Chains from the new object, not from `test` directly |
 | `.scoped(...)` | result of `.extend` | Deprecated in v4.1 in favor of `.override`; sets/overrides fixture values for the current suite and nested suites | Must be called at top level of a `describe` block |

@@ -210,6 +210,7 @@ const RUST_MODULES = {
   // `resolve_project_entry`, which re-does a `skip_trivia` that `split_top_level` has already
   // used to filter the element out -- it cannot be true.
   'src/framework/vitest/projects.rs': 98,
+  'src/framework/vitest/version.rs': 100,
   // The framework seam and the Vitest adapter's dialect: every runtime line is exercised by the
   // dialect's own tests and by the extractor reading it.
   'src/framework.rs': 100,
@@ -433,6 +434,7 @@ const JS_NOT_MEASURED = {
   'scripts/check/check-coverage.mjs': 'this file',
   'scripts/check/check-collection-oracle.mjs': 'gate entry point; needs a release binary and the pinned Vitest devDependency, and spawns both per directory',
   'scripts/check/lib/collection-probe-runner.mjs': 'loaded by Vitest as its test runner inside a Vitest worker, never imported by a node --test suite; the run excludes it from coverage because a spawned worker can leak it into the report, and the collection oracle gate checks it against a self-check directory',
+  'scripts/check/lib/collect-benchmarks.mjs': 'run as a child process by `collectBenchmarks`, never imported; it loads the pinned `vitest4` package and needs a directory to collect, and the collection oracle gate checks its output against the analyzer on every case that declares Vitest 4, with a floor on benchmarks compared',
   'scripts/check/check-hooks-differential.mjs': 'gate entry point; needs a release binary and the pinned Vitest devDependency, and spawns both over the generated cases',
   'scripts/check/check-duplicates-corpus.mjs': 'gate entry point; needs a release binary',
   'scripts/check/check-duplication.mjs': 'gate entry point; needs jscpd',

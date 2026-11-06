@@ -144,7 +144,7 @@ pub(super) fn collect(
             || focused
             || all_children_unrun
             || registered_conditionally
-            || normalizer.order_dependent(body)
+            || normalizer.order_dependent(body, true)
         {
             continue;
         }

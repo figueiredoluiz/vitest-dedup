@@ -758,7 +758,12 @@ fn export_forms_carry_the_identity_of_what_they_export() {
 fn order_dependent(main: &str) -> HashMap<String, bool> {
     with_normalizer(main, &[], false, |normalizer, tree, inventory| {
         test_callbacks(tree, inventory)
-            .map(|(title, callback)| (title, normalizer.order_dependent(tree.inner(callback))))
+            .map(|(title, callback)| {
+                (
+                    title,
+                    normalizer.order_dependent(tree.inner(callback), true),
+                )
+            })
             .collect()
     })
 }

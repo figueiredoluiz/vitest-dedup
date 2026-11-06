@@ -114,6 +114,7 @@
   "devDependencies": {
     "@babel/parser": "8.0.10",
     "vitest": "5.0.5",
+    "vitest4": "npm:vitest@4.1.12",
     "yaml": "2.9.1"
   }
 }

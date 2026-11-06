@@ -1,14 +1,10 @@
-// RECALL variant -- duplicate-test over `bench` declarations.
+// RECALL negative -- `bench` declarations in a test file.
 //
-// `bench` is an executable declaration (`DeclarationKind::Benchmark`, accepted by
-// `is_executable_declaration`), so two benchmarks with alpha-equal bodies under one context are
-// redundant on exactly the terms two `test`s are: running the same measurement twice measures
-// nothing new. This is the pre-v5 top-level-import spelling, which the extractor must keep
-// supporting (docs/vitest-surface.md ss1: v5 moved `bench` to a test-context fixture, and the
-// corpus contains both majors).
-//
-// The variant exists because every other duplicate-test case in this corpus uses `test`: a rule
-// that quietly stopped accepting `Benchmark` as executable would keep every one of them green.
+// The project declares Vitest 4, which collects `*.bench.ts` files in benchmark mode only. This is
+// a test file: `vitest` refuses a `bench()` call outside benchmark mode ("`bench()` is only
+// available in benchmark mode") and loads nothing from it, and `vitest bench` does not collect it.
+// So these two never run, and are never paired, though their bodies are equal. `perf.bench.ts`
+// holds the same pair where it does run.
 import { bench } from 'vitest'
 import { parse } from './parser'
 

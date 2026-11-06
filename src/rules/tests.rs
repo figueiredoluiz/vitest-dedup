@@ -39,6 +39,7 @@ fn case(line: u32, site: u32, key: u64, module_key: u64) -> TestCase {
         callback_form: crate::normal::CallbackForm::Interchangeable,
         inert: false,
         bodyless: false,
+        benchmark: false,
         exclusion: None,
     }
 }

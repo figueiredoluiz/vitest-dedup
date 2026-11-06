@@ -219,6 +219,11 @@ pub struct Dialect {
     /// `test.beforeEach`): each is the same function as the top-level export, so calling it
     /// ignores whatever was chained before it.
     pub test_members: &'static [&'static str],
+    /// The members a top-level benchmark function has, chainable in any order (`skip`, `todo`).
+    pub bench_members: &'static [&'static str],
+    /// The benchmark members that take a condition and are called before the registration
+    /// (`skipIf(c)`); nothing is chained after one.
+    pub bench_conditions: &'static [&'static str],
     /// Keys of a registration's options object that change only how a test is scheduled, never
     /// what it checks (a timeout, retries).
     pub scheduling_options: &'static [&'static str],
@@ -230,6 +235,26 @@ pub struct Dialect {
 }
 
 impl Dialect {
+    /// Whether a benchmark's callee chain (member names, `()` for a call) uses only members the
+    /// benchmark function has. Any other member is undefined, and calling it throws while the file
+    /// loads.
+    pub fn bench_chain_exists(&self, chain: &[String]) -> bool {
+        let mut previous: Option<&str> = None;
+        chain.iter().all(|member| {
+            let after_members =
+                previous.is_none_or(|previous| self.bench_members.contains(&previous));
+            let exists = if member == "()" {
+                previous.is_some_and(|previous| self.bench_conditions.contains(&previous))
+            } else {
+                after_members
+                    && (self.bench_members.contains(&member.as_str())
+                        || self.bench_conditions.contains(&member.as_str()))
+            };
+            previous = Some(member);
+            exists
+        })
+    }
+
     /// The registration `name` stands for, if any.
     pub fn registration(&self, name: &str) -> Option<&'static Registration> {
         let registrations: &'static [Registration] = self.registrations;

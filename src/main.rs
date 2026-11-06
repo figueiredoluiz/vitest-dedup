@@ -254,6 +254,8 @@ fn run_with_engine(
     // config and can diverge via `extends: false`, so a single repo-wide answer is wrong for at
     // least one project. Falls back to the single-project detector when no projects are declared.
     let projects = vitest_projects::resolve_projects(&config.root);
+    // Which Vitest each file imports, read once per directory; it decides whether `bench` exists.
+    let mut vitest_majors = vitest_dedup::framework::vitest::version::Majors::new(&config.root);
     // `resolve_projects` deliberately records why a project map is partial. Discarding that let a
     // malformed or truncated `test.projects` setup produce a map that looks complete: files fell
     // back to default matching, `incomplete` stayed false, and nothing said a project's globals or
@@ -397,6 +399,10 @@ fn run_with_engine(
                                 dialect: vitest_dedup::framework::current().dialect(),
                                 globals: resolved_globals,
                                 root: &config.root,
+                                // From the current tree, as `globals` is: config is not re-read
+                                // against the base revision.
+                                benchmarks: projects.collects_benchmarks(&path)
+                                    && vitest_majors.exports_bench(&path),
                             },
                             false,
                             Vec::new(),
@@ -753,6 +759,10 @@ fn run_with_engine(
             dialect: vitest_dedup::framework::current().dialect(),
             globals: file_globals,
             root: &config.root,
+            // An in-source candidate is not a benchmark file, whatever its glob.
+            benchmarks: file.project_globals.is_none()
+                && projects.collects_benchmarks(&file.path)
+                && vitest_majors.exports_bench(&file.path),
         };
         let relative = relativize_test_path(&file.path, &config.root);
         let read = engine.read_with_sources(

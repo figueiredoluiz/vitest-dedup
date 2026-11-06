@@ -1,7 +1,8 @@
-// Second half of the `duplicate-test-bench` case: the SAME duplicated benchmark pair, in a
-// `*.bench.ts` file. This is the regression guard for benchmark discovery: Vitest uses the
-// separate `benchmark.include` channel for these files, so mirroring only `test.include` would
-// silently omit both declarations even though the extractor and rule support them.
+// RECALL positive -- duplicate-test over `bench` declarations, on a project that declares Vitest 4.
+//
+// A `*.bench.ts` file is collected by `vitest bench` through the separate `benchmark.include`
+// channel, and Vitest 4 exports a top-level `bench`. Two benchmarks with equal bodies under one
+// context measure the same thing twice, on exactly the terms two equal tests are redundant.
 import { bench } from 'vitest'
 import { parse } from './parser'
 

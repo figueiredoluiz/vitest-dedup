@@ -61,14 +61,6 @@
       "reason": "False positive: two projects with different environments share a test. Waits on the cross-file environment key."
     },
     {
-      "id": "recall-miss|duplicate-test-bench|duplicate-test|parses a short document,reads a small config",
-      "reason": "Benchmarks are excluded until they are compared."
-    },
-    {
-      "id": "recall-miss|duplicate-test-bench|duplicate-test|parses a long document,reads a large config",
-      "reason": "Benchmarks are excluded until they are compared."
-    },
-    {
       "id": "recall-absent|framework-package-mock-call-uninstalled|duplicate-test|users.test.ts:15,users.test.ts:20",
       "reason": "The default engine abstains on this file; the next engine compares identical text in an identical context, as decided."
     },

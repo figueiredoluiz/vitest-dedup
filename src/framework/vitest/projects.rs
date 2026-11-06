@@ -461,6 +461,51 @@ impl ProjectSet {
         }
     }
 
+    /// Whether `file` is known to be collected by Vitest's benchmark channel: its governing
+    /// project's `benchmark.include`/`exclude`, or the defaults when no config exists. Anything not
+    /// known (an unreadable glob, an ambiguous project, a file no project governs under a config)
+    /// is `false`, so a caller that admits on `true` fails closed.
+    pub fn collects_benchmarks(&self, file: &Path) -> bool {
+        if !self.config_found {
+            let Ok(relative) = file.strip_prefix(&self.root) else {
+                return false;
+            };
+            let relative = relative.to_string_lossy().replace('\\', "/");
+            let globs = |patterns: &[&str]| {
+                compile_glob_set(
+                    &patterns.iter().map(|p| (*p).to_owned()).collect::<Vec<_>>(),
+                    "benchmark",
+                )
+            };
+            return match (
+                globs(DEFAULT_BENCHMARK_INCLUDE_GLOBS),
+                globs(DEFAULT_BENCHMARK_EXCLUDE_GLOBS),
+            ) {
+                (Ok(include), Ok(exclude)) => {
+                    include.is_match(&relative) && !exclude.is_match(&relative)
+                }
+                _ => false,
+            };
+        }
+        let ProjectGovernance::Governed(project) = self.governing_project(file) else {
+            return false;
+        };
+        let Ok(relative) = file.strip_prefix(&project.base_dir) else {
+            return false;
+        };
+        matches!(
+            match_glob_channel(
+                project,
+                &relative.to_string_lossy().replace('\\', "/"),
+                &project.benchmark_include,
+                &project.benchmark_exclude,
+                "benchmark.include",
+                "benchmark.exclude",
+            ),
+            FileMatch::Yes
+        )
+    }
+
     /// Whether the `test.projects`/workspace entry that resolved `file` into `project` could
     /// still be out-ranked by a later entry this scan could not resolve, under "later occurrence
     /// wins" (see the module docs' "Precedence"/"Fail closed" sections) -- and if so, why.

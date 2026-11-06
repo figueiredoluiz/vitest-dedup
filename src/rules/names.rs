@@ -25,7 +25,12 @@ pub(super) fn run(
         {
             return None;
         }
-        entry.case.name.as_ref().map(|name| (entry.path, name))
+        // A benchmark and a test of one name are different tasks, never a collision.
+        entry
+            .case
+            .name
+            .as_ref()
+            .map(|name| (entry.path, entry.case.benchmark, name))
     });
     let groups = groups
         .into_iter()

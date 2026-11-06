@@ -4632,3 +4632,42 @@ fn an_unresolved_entry_is_recorded_on_the_set() {
 mod forwarded_config;
 mod glob_budget;
 mod glob_ignore;
+
+/// A file is a benchmark file only when its governing project's benchmark channel admits it, or,
+/// with no config, the default benchmark globs do; a test-only match, an exclusion or an unreadable
+/// glob is not.
+#[test]
+fn collects_benchmarks_reads_only_the_benchmark_channel() {
+    let configured = tempfile::tempdir().unwrap();
+    write(
+        configured.path(),
+        "vitest.config.ts",
+        "export default { test: { include: ['**/*.test.ts', '**/*.perf.ts'], benchmark: { \
+         include: ['perf/**/*.perf.ts'], exclude: ['perf/skip/**'] } } }",
+    );
+    let set = resolve_projects(configured.path());
+    let at = |path: &str| set.collects_benchmarks(&configured.path().join(path));
+    assert!(at("perf/a.perf.ts"));
+    assert!(!at("perf/skip/b.perf.ts"), "excluded from the channel");
+    assert!(!at("tests/a.test.ts"), "a test file");
+    assert!(!at("other/a.perf.ts"), "a test-include match only");
+    assert!(!at("perf/a.bench.ts"), "the default glob is replaced");
+
+    let unreadable = tempfile::tempdir().unwrap();
+    write(
+        unreadable.path(),
+        "vitest.config.ts",
+        "export default { test: { benchmark: { include: makePatterns() } } }",
+    );
+    let set = resolve_projects(unreadable.path());
+    assert!(!set.collects_benchmarks(&unreadable.path().join("a.bench.ts")));
+
+    let plain = tempfile::tempdir().unwrap();
+    let set = resolve_projects(plain.path());
+    assert!(!set.config_found);
+    assert!(set.collects_benchmarks(&plain.path().join("perf/a.bench.ts")));
+    assert!(set.collects_benchmarks(&plain.path().join("b.benchmark.mjs")));
+    assert!(!set.collects_benchmarks(&plain.path().join("a.test.ts")));
+    assert!(!set.collects_benchmarks(&plain.path().join("node_modules/x/a.bench.ts")));
+    assert!(!set.collects_benchmarks(Path::new("/elsewhere/a.bench.ts")));
+}

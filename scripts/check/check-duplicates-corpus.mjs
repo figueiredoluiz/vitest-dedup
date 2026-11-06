@@ -211,10 +211,9 @@ function checkTarget(target, known, { failures, held, consumed }) {
 const NOTHING_TO_COMPARE = new Set(['no-callback', 'empty-body'])
 
 const DELIBERATE_BLIND_FILES = new Set([
-  // Benchmarks are counted, not compared.
+  // Benchmarks not known to run: no Vitest 4 declared, or a `bench` in a test file.
   'declarations/bench-legacy-toplevel.bench.ts',
   'oracle/benchmarks/speed.bench.ts',
-  'recall/duplicate-test-bench/perf.bench.ts',
   'recall/duplicate-test-bench/perf.test.ts',
   // A context the analyzer cannot resolve: a title folded from a runtime value, a scoped
   // `vi.doMock`, a body cut short at the depth cap, a guard that `eval` can rebind.
