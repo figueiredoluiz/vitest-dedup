@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 
-import { parseArguments, runCli } from './evaluate-corpus.mjs'
+import { BASELINE_TIMEOUT_MS, parseArguments, runCli } from './evaluate-corpus.mjs'
 
 /** A one-case recall root on disk. */
 function makeRoot(caseOverrides = {}) {
@@ -195,6 +195,18 @@ test('an unchanged candidate compares clean and passes --fail-on-regression', ()
   const result = runCli([paths.candidate, '--root', makeRoot(), '--baseline-binary', paths.baseline, '--fail-on-regression'], { observe, git, version: () => 'v' })
   assert.equal(result.status, 0)
   assert.match(result.lines.join('\n'), /0 regression\(s\), 0 unavailable/)
+})
+
+test('only the baseline runs under a time limit, so a candidate hang still fails the command', () => {
+  const paths = binaries()
+  const limits = []
+  const observe = (input) => {
+    limits.push([input.binary === paths.candidate ? 'candidate' : 'baseline', input.timeoutMs])
+    return satisfied(input)
+  }
+  runCli([paths.candidate, '--root', makeRoot(), '--baseline-binary', paths.baseline], { observe, git, version: () => 'v' })
+  assert.deepEqual(limits, [['candidate', undefined], ['baseline', BASELINE_TIMEOUT_MS]])
+  assert.ok(BASELINE_TIMEOUT_MS > 0 && BASELINE_TIMEOUT_MS <= 30_000)
 })
 
 test('a baseline that cannot run or be read is unavailable, fails --fail-on-regression and never reads as zero findings', () => {

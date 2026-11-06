@@ -46,20 +46,26 @@ export function isCompletedAnalysisExit(status) {
  * @param {string[]} args - CLI arguments *excluding* `--reporters jsonl`, which this function
  *   always appends as the last flags.
  * @param {Record<string, string>} [env] - variables set for the run, over the inherited ones.
+ * @param {{timeoutMs?: number}} [limits] - `timeoutMs` kills the run after that long, for a binary
+ *   that may never finish (an older release on input it does not bound).
  * @returns {{records: object[], stderr: string}} `records` is every non-blank stdout line parsed
  *   as JSON, in order. `stderr` is the raw stderr text, for callers that want to surface
  *   diagnostics (e.g. the unresolved-context warning) even on a successful run.
- * @throws {Error} if the process could not be spawned (e.g. binary missing), was killed by a
- *   signal, or exited with a code other than 0 or 1. The message names the actual exit code and
- *   includes stderr, so a crash is never confused with "zero findings" or "findings exist".
+ * @throws {Error} if the process could not be spawned (e.g. binary missing), timed out, was
+ *   killed by a signal, or exited with a code other than 0 or 1. The message names the actual exit
+ *   code and includes stderr, so a crash is never confused with "zero findings" or "findings exist".
  */
-export function runAnalyzerJsonl(binary, args, env = {}) {
+export function runAnalyzerJsonl(binary, args, env = {}, { timeoutMs } = {}) {
   const result = spawnSync(binary, [...args, '--reporters', 'jsonl'], {
     encoding: 'utf8',
     env: { ...process.env, ...env },
     maxBuffer: 256 << 20,
+    ...(timeoutMs === undefined ? {} : { timeout: timeoutMs, killSignal: 'SIGKILL' }),
   })
 
+  if (result.error?.code === 'ETIMEDOUT') {
+    throw new Error(`${binary} did not finish within ${timeoutMs / 1000} s and was stopped`)
+  }
   if (result.error) throw result.error
 
   if (!isCompletedAnalysisExit(result.status)) {
