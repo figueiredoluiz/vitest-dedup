@@ -135,8 +135,7 @@ values and shallow literal rows. Fixed-parameter arrow callbacks may ignore trai
 rest parameters, destructuring and ordinary functions retain the whole row. Unknown/effectful
 cells, nested reference values, suite tables, imported/member constants and unresolved title
 formatting remain unsupported. In particular, dollar substitutions, string `%i` conversions and
-whole null rows cannot anchor row findings yet. Strings and keys containing the replacement
-character are also refused until the owned tree exposes lossless JavaScript code-unit identity. Existing corpus exclusions still apply.
+whole null rows cannot anchor row findings yet. Existing corpus exclusions still apply.
 
 The parameterization rule groups same-file callbacks with the same literal shape,
 exact setup and modifiers, and different normalized bodies. It accounts for every row, visits
@@ -150,8 +149,6 @@ no recorded behavior event, a local dependency on a matcher name containing `Inl
 or an unresolved computed member or destructuring key are excluded. Nonliteral import sources and
 imports with options are also refused until their module identities are proved. This includes conventionally
 named custom inline-snapshot matchers; arbitrary custom matcher semantics are not modeled.
-Replacement-character text in callbacks and their local dependencies is also refused until the
-owned tree preserves JavaScript code units without display encoding.
 Row binding uses the existing proof; unsupported row values and observed class names are refused.
 
 The near-duplicate rule compares same-file tests under the same context whose behavior
