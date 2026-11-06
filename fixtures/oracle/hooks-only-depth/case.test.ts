@@ -1,4 +1,4 @@
-// Past the import depth limit a module reads as exporting nothing, so nothing above it is hooks-only.
+// Past the import depth limit, imported effects and registrations remain unknown.
 import { describe, expect, test } from 'vitest'
 import { f0 } from './m0'
 

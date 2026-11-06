@@ -167,6 +167,8 @@ pub struct InPlaceMock {
 /// What one module registers.
 #[derive(Clone, Debug, Default)]
 pub struct Inventory {
+    /// Import analysis reached a depth or aggregate work bound; its ambient effects are unknown.
+    pub imports_limited: bool,
     /// Intrinsic direct eval may write lexical bindings without ordinary assignment references.
     pub direct_eval: bool,
     /// A `vi.doMock` or `vi.doUnmock`, or a mock call the framework does not hoist outside a
@@ -288,6 +290,18 @@ const ON_LOAD: &str = "\0load";
 const UNREADABLE_FIXTURE: &str = "\0fixture";
 /// How many imports deep a module's exports are followed.
 const MAX_DEPTH: usize = 8;
+/// Uncached module analysis attempts allowed by one root inventory reading.
+const MAX_IMPORT_ANALYSES: usize = 64;
+/// Source bytes admitted to uncached import analysis by one root inventory reading.
+const MAX_IMPORT_SOURCE_BYTES: usize = 8 * 1024 * 1024;
+
+/// Work already spent by one root reading; a refusal stops its remaining import analyses.
+#[derive(Debug, Default)]
+struct ImportWork {
+    analyses: usize,
+    bytes: usize,
+    refused: bool,
+}
 
 /// Export names whose value registers when called, per project module and globals setting (a
 /// project with globals reads free names as the API), shared by every file of one run.
@@ -296,11 +310,8 @@ pub struct Modules {
     sources: crate::lang::Sources,
     cache: crate::memory::RetainedMap<(PathBuf, bool), HashMap<String, Export>>,
     active: HashSet<PathBuf>,
-    /// How many lookups the depth limit has cut short. A module whose analysis saw a cut is not
-    /// cached: read again from nearer the test file, the limit may not reach it. (A cycle is cut
-    /// too, but every member's result is cached: re-reading cycles would re-read a barrel's whole
-    /// cluster for every test file.)
-    deep_cuts: usize,
+    /// Reset for each root; incomplete ancestor proofs never enter the shared cache.
+    work: ImportWork,
 }
 
 /// What one run's inventory reads besides the module itself.
@@ -324,21 +335,29 @@ impl Modules {
     }
 
     /// The registering exports of the module at `path`, with what each may register, analysed
-    /// once unless the depth limit cut the analysis short. A cut import reads as exporting
-    /// nothing, so no hooks-only answer rests on it (see `Module::closed`).
+    /// once unless a bound cut the analysis short. An empty map after a cutoff is partial:
+    /// the root's inventory records the refusal and cannot license comparison claims.
     fn exports(&mut self, path: &Path, setting: Setting, depth: usize) -> HashMap<String, Export> {
+        if self.work.refused {
+            return HashMap::new();
+        }
         let key = (path.to_path_buf(), setting.globals);
         if let Some(found) = self.cache.get(&key) {
             return found.clone();
         }
         if depth > MAX_DEPTH {
-            self.deep_cuts += 1;
+            self.work.refused = true;
             return HashMap::new();
         }
         if !self.active.insert(path.to_path_buf()) {
             return HashMap::new();
         }
-        let cuts = self.deep_cuts;
+        if self.work.analyses >= MAX_IMPORT_ANALYSES {
+            self.active.remove(path);
+            self.work.refused = true;
+            return HashMap::new();
+        }
+        self.work.analyses += 1;
         let confined_before = crate::lang::confinement_refusals();
         let refused_before = crate::lang::manifest_refusals();
         let unread_before = UNREAD_IMPORTS.with(std::cell::Cell::get);
@@ -346,11 +365,20 @@ impl Modules {
         let exports = self
             .sources
             .read(path)
-            .and_then(|source| match crate::lang::parse(path, &source) {
-                Ok(parsed) => Some(module::analyse(path, &source, &parsed, setting, self, depth).1),
-                Err(_) => {
-                    unparsed = true;
-                    None
+            .and_then(|source| {
+                if source.len() > MAX_IMPORT_SOURCE_BYTES - self.work.bytes {
+                    self.work.refused = true;
+                    return None;
+                }
+                self.work.bytes += source.len();
+                match crate::lang::parse(path, &source) {
+                    Ok(parsed) => {
+                        Some(module::analyse(path, &source, &parsed, setting, self, depth).1)
+                    }
+                    Err(_) => {
+                        unparsed = true;
+                        None
+                    }
                 }
             })
             .unwrap_or_default();
@@ -363,7 +391,7 @@ impl Modules {
         // A module whose analysis saw a confinement refusal, a refused package manifest or a module
         // it could not parse is not cached, as with a cut: the next file re-reads it and records
         // its own refusal instead of inheriting silence.
-        if self.deep_cuts == cuts
+        if !self.work.refused
             && crate::lang::confinement_refusals() == confined_before
             && crate::lang::manifest_refusals() == refused_before
             && UNREAD_IMPORTS.with(std::cell::Cell::get) == unread_before
@@ -392,6 +420,7 @@ pub fn inventory(
     setting: Setting,
     modules: &mut Modules,
 ) -> Inventory {
+    modules.work = ImportWork::default();
     module::analyse(path, source, parsed, setting, modules, 0).0
 }
 
@@ -417,11 +446,8 @@ impl crate::memory::HeapBytes for Modules {
             sources: _,
             cache,
             active,
-            deep_cuts,
+            work: _,
         } = self;
-        cache
-            .heap_bytes()
-            .saturating_add(active.heap_bytes())
-            .saturating_add(deep_cuts.heap_bytes())
+        cache.heap_bytes().saturating_add(active.heap_bytes())
     }
 }

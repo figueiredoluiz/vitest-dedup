@@ -21,6 +21,7 @@ impl HeapBytes for Exclusion {
             | Self::UnprovedRunner
             | Self::DynamicBindings
             | Self::UnreadableImport
+            | Self::ImportLimit
             | Self::UnreadableManifest
             | Self::NonHoistedMock
             | Self::UnreadableMockFactory

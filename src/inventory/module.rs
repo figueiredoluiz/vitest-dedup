@@ -170,6 +170,7 @@ pub(super) fn analyse(
     let unreadable_fixture = direct_unreadable_fixture || module.imported_unreadable_fixture;
     let fixture_export_names = module.fixture_export_names(&unreadable_fixture_exports);
     let inventory = Inventory {
+        imports_limited: modules.work.refused,
         direct_eval: module.evaluates,
         non_hoisted_mock: module.non_hoisted_mock(),
         in_place_mocks: module.in_place_mocks(),

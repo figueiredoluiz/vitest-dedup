@@ -225,6 +225,8 @@ const DELIBERATE_BLIND_FILES = new Set([
   'mixed/mixed-loop-each-in-non-idempotent-hook-scope.test.ts',
   'oracle/truncated-body/truncated.test.ts',
   'recall/runner-eval-binding-guard/rows-unsafe.test.ts',
+  // The import-depth refusal must remain visible even with local tests to compare.
+  'recall/import-depth-cut/deep.test.ts',
   // Tests that read state a hook or another test accumulates.
   'duplicates/not-redundant-hook-accumulator.test.ts',
   'recall/suite-registration-state/a.test.ts',

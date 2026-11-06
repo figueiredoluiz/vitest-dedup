@@ -1517,6 +1517,30 @@ mod tests {
             .code(ExitCode::OperationalError.code());
     }
 
+    /// Import cutoffs remain visible in reports and strict mode, even without local tests.
+    #[test]
+    fn import_cutoff_is_incomplete_with_or_without_local_tests() {
+        let directory = tempfile::tempdir().unwrap();
+        let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("fixtures/recall/import-depth-cut");
+        for entry in std::fs::read_dir(fixture).unwrap() {
+            let entry = entry.unwrap();
+            if entry.file_type().unwrap().is_file() {
+                std::fs::copy(entry.path(), directory.path().join(entry.file_name())).unwrap();
+            }
+        }
+        for expected_tests in [4, 2] {
+            let (_, report) = run_json_with_stderr(directory.path(), ExitCode::QualityGateFailed);
+            assert_eq!(report["testsAnalyzed"], expected_tests);
+            assert_eq!(report["unresolvedTests"], expected_tests - 2);
+            assert_eq!(report["incomplete"], true);
+            assert_eq!(report["findings"].as_array().unwrap().len(), 1);
+            assert!(report.to_string().contains("helper-export-unreadable"));
+            assert_fail_on_incomplete_is_operational_error(directory.path());
+            std::fs::write(directory.path().join("deep.test.ts"), "import './m0';").unwrap();
+        }
+    }
+
     /// [`run_json`] for the tests that also assert on the diagnostic text: the same
     /// JSON-to-file report, returning stderr alongside the parsed report.
     fn run_json_with_stderr(
