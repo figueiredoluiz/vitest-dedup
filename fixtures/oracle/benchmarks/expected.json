@@ -2,14 +2,12 @@
   "files": {
     "speed.bench.ts": {
       "oracle": "not-collected",
-      "next": {},
-      "nextToday": {
+      "next": {
         "reasons": [
           "unsupported-benchmark"
         ],
         "testsExcluded": 1
-      },
-      "waitsOn": "benchmarks compared under the next engine"
+      }
     },
     "plain.test.ts": {
       "tasks": 1,

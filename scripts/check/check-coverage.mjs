@@ -208,6 +208,7 @@ const RUST_MODULES = {
   // `resolve_project_entry`, which re-does a `skip_trivia` that `split_top_level` has already
   // used to filter the element out -- it cannot be true.
   'src/framework/vitest/projects.rs': 98,
+  'src/framework/vitest/version.rs': 100,
   // The framework seam and the Vitest adapter's dialect: every runtime line is exercised by the
   // dialect's own tests and by the extractor reading it.
   'src/framework.rs': 100,

@@ -7,7 +7,7 @@ import test from 'node:test'
 import { fileURLToPath } from 'node:url'
 
 import { missingModuleStubs, wholeModuleImports } from './collection-oracle-stubs.mjs'
-import { analyzerRecordsOf, analyzerView, collectWithVitest, compareDirectory, compareSites, configSource, exclusionView, oracleEnvironment, hookSite, matchKnown, minus, oracleBinary, oracleSetupError, ownConfig, siteView, vitestInstallError, vitestView } from './collection-oracle.mjs'
+import { analyzerRecordsOf, analyzerView, collectWithVitest, compareDirectory, declaresVitest4, compareSites, configSource, exclusionView, oracleEnvironment, hookSite, matchKnown, minus, oracleBinary, oracleSetupError, ownConfig, siteView, vitestInstallError, vitestView } from './collection-oracle.mjs'
 
 /** A file the probe collected cleanly, with `over` replacing any field. */
 const collected = (over = {}) => ({
@@ -68,6 +68,49 @@ test('an unproven title stands for one unmatched collected test, and an unproven
     analyzed({ tests: { 'a.test.ts': ['real'] }, unproven: { 'a.test.ts': ['row %s'] } }),
   )
   assert.deepEqual(kinds(excess), ['extra-test a.test.ts row %s'])
+})
+
+test('benchmark files are compared with Vitest 4 when it collected them, and skipped otherwise', () => {
+  const benchmarks = new Map([
+    ['a.bench.ts', { titles: ['x', 'only vitest'], errors: [] }],
+    ['broken.bench.ts', { titles: [], errors: ['bench.each is not a function'] }],
+    ['unread.bench.ts', { titles: ['y'], errors: [] }],
+  ])
+  const analyzer = analyzed({
+    tests: { 'a.bench.ts': ['x', 'only analyzer'], 'broken.bench.ts': ['row'], 'other.bench.ts': ['z'] },
+  })
+  const result = compareDirectory(new Map(), analyzer, benchmarks)
+  assert.deepEqual(kinds(result), [
+    'missing-benchmark a.bench.ts only vitest',
+    'extra-benchmark a.bench.ts only analyzer',
+    'missing-benchmark unread.bench.ts y',
+  ])
+  assert.equal(result.benchmarksCompared, 3)
+  assert.deepEqual(result.skipped.get('uncollectable').map((e) => e.path), ['broken.bench.ts'])
+  assert.deepEqual(result.skipped.get('bench').map((e) => e.path), ['other.bench.ts'])
+  // Without Vitest 4's collection every benchmark file is skipped, as before.
+  const without = compareDirectory(new Map(), analyzer)
+  assert.equal(without.benchmarksCompared, 0)
+  assert.deepEqual(kinds(without), [])
+})
+
+test('only a manifest pinning Vitest 4 is read with Vitest 4', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'vitest-dedup-v4-'))
+  try {
+    const declare = (manifest) => {
+      writeFileSync(join(dir, 'package.json'), JSON.stringify(manifest))
+      return declaresVitest4(dir)
+    }
+    assert.equal(declaresVitest4(dir), false)
+    assert.equal(declare({ devDependencies: { vitest: '4.1.12' } }), true)
+    assert.equal(declare({ dependencies: { vitest: '^4.0.0' } }), true)
+    assert.equal(declare({ devDependencies: { vitest: '^5.0.0' } }), false)
+    assert.equal(declare({ devDependencies: { vitest: '>=4' } }), false)
+    assert.equal(declare({ devDependencies: { vitest: '40.0.0' } }), false)
+    assert.equal(declare({}), false)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
 })
 
 test('an unproven record in a file Vitest never collected is an extra test', () => {

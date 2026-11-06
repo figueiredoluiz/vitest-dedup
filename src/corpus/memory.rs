@@ -56,6 +56,7 @@ impl HeapBytes for TestCase {
             callback_form,
             inert,
             bodyless,
+            benchmark,
             exclusion,
         } = self;
         [
@@ -83,6 +84,7 @@ impl HeapBytes for TestCase {
             callback_form.heap_bytes(),
             inert.heap_bytes(),
             bodyless.heap_bytes(),
+            benchmark.heap_bytes(),
             exclusion.heap_bytes(),
         ]
         .into_iter()

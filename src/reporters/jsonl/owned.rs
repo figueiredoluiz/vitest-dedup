@@ -170,6 +170,7 @@ mod tests {
                 dialect: &crate::framework::vitest::DIALECT,
                 globals: false,
                 root: Path::new("."),
+                benchmarks: false,
             },
             &mut crate::corpus::Run::default(),
         )

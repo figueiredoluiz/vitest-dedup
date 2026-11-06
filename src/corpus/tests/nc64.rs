@@ -117,6 +117,7 @@ fn recall_project(name: &str) -> FileCorpus {
             dialect: &DIALECT,
             globals: false,
             root: &directory,
+            benchmarks: false,
         },
         &mut Run::default(),
     )

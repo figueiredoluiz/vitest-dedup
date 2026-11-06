@@ -37,7 +37,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { isDeepStrictEqual } from 'node:util'
-import { collectAnalyzer, collectWithVitest, compareDirectory, compareSites, matchKnown, oracleBinary } from './lib/collection-oracle.mjs'
+import { collectAnalyzer, collectBenchmarks, collectWithVitest, compareDirectory, compareSites, matchKnown, oracleBinary } from './lib/collection-oracle.mjs'
 import { judgeCase, readCases } from './lib/oracle-cases.mjs'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
@@ -56,6 +56,8 @@ const FIXTURE_DIRS = [
 const MIN_FILES_COMPARED = 374
 const MIN_TESTS_COMPARED = 842
 const MIN_HOOK_SITES_COMPARED = 95
+// Benchmarks Vitest 4 collected from the cases that declare it.
+const MIN_BENCHMARKS_COMPARED = 16
 // The same floor for the registration sites, which are compared with the
 // line Vitest places each collected test and suite on.
 const MIN_SITE_FILES_COMPARED = 546
@@ -145,7 +147,7 @@ function main() {
   const dirs = [...FIXTURE_DIRS, ...manifest.cases.map((c) => `fixtures/recall/${c.path}`)]
   const known = JSON.parse(readFileSync(KNOWN, 'utf8')).disagreements
 
-  const totals = { files: 0, tests: 0, unproven: 0, hooks: 0, siteFiles: 0, tasks: 0, sites: 0, unexecuted: 0 }
+  const totals = { files: 0, tests: 0, unproven: 0, hooks: 0, benchmarks: 0, siteFiles: 0, tasks: 0, sites: 0, unexecuted: 0 }
   const knownSites = JSON.parse(readFileSync(KNOWN, 'utf8')).siteDisagreements ?? []
   const foundSites = []
   // Every file not compared, per bucket, with what kept it out (Vitest's first collection error,
@@ -163,11 +165,12 @@ function main() {
     totals.sites += located.sites
     totals.unexecuted += located.unexecuted
     foundSites.push(...located.disagreements.map((d) => ({ dir, ...d })))
-    const result = compareDirectory(vitest, analyzer.titles)
+    const result = compareDirectory(vitest, analyzer.titles, collectBenchmarks(ROOT, dir))
     totals.files += result.compared.length
     totals.tests += result.testsCompared
     totals.unproven += result.testsUnproven
     totals.hooks += result.hooksCompared
+    totals.benchmarks += result.benchmarksCompared
     for (const [bucket, entries] of result.skipped) {
       if (!buckets.has(bucket)) buckets.set(bucket, [])
       buckets.get(bucket).push(...entries.map((entry) => ({ dir, ...entry })))
@@ -184,7 +187,7 @@ function main() {
   console.log(
     `collection oracle: ${dirs.length} directories, ${totals.files} files compared, ` +
       `${totals.tests} tests (${totals.unproven} with an unproven title not compared), ` +
-      `${totals.hooks} hook sites; ${found.length} disagreements ` +
+      `${totals.hooks} hook sites, ${totals.benchmarks} benchmarks (Vitest 4); ${found.length} disagreements ` +
       `(${found.length - unlisted.length} known)`,
   )
   console.log(`  not compared: ${[...buckets].map(([bucket, entries]) => `${bucket} ${entries.length}`).join(', ')}`)
@@ -212,6 +215,7 @@ function main() {
   if (totals.files < MIN_FILES_COMPARED) failures.push(`compared ${totals.files} files, floor is ${MIN_FILES_COMPARED}`)
   if (totals.tests < MIN_TESTS_COMPARED) failures.push(`compared ${totals.tests} tests, floor is ${MIN_TESTS_COMPARED}`)
   if (totals.hooks < MIN_HOOK_SITES_COMPARED) failures.push(`compared ${totals.hooks} hook sites, floor is ${MIN_HOOK_SITES_COMPARED}`)
+  if (totals.benchmarks < MIN_BENCHMARKS_COMPARED) failures.push(`compared ${totals.benchmarks} benchmarks, floor is ${MIN_BENCHMARKS_COMPARED}`)
   for (const failure of failures) console.error(`FAIL: ${failure}`)
   const belowFloor = totals.files < MIN_FILES_COMPARED || totals.tests < MIN_TESTS_COMPARED || totals.hooks < MIN_HOOK_SITES_COMPARED
   if (belowFloor) {

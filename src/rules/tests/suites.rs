@@ -46,6 +46,7 @@ fn suite_case_corpus_visits_only_matching_files() {
             dialect: &crate::framework::vitest::DIALECT,
             globals: false,
             root: &root,
+            benchmarks: false,
         },
         &mut crate::corpus::Run::default(),
     )

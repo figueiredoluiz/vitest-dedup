@@ -12,6 +12,7 @@ pub mod config;
 pub mod projects;
 mod stub;
 mod titles;
+pub mod version;
 
 /// Vitest.
 #[derive(Debug)]

@@ -12,7 +12,7 @@ Set a rule to `off`, `warning` or `error` in [configuration](configuration.md) o
 | `cross-file-duplicate` | Warning | The `duplicate-test` criteria without the single-file restriction. |
 | `subsumed-test` | Off | One test's behavior is a strict ordered subsequence of another's. Off by default: its findings are frequently distinct tests rather than redundant ones. |
 | `duplicate-suite` | Warning | A whole `describe` block is duplicated within one file, reported once instead of per test. |
-| `duplicate-each-row` | Warning | Two rows of one parameterized test, benchmark, or suite carry the same case. |
+| `duplicate-each-row` | Warning | Two rows of one parameterized test or suite carry the same case. |
 | `redundant-hook` | Warning | A lifecycle hook repeats work another hook in its execution chain already performs. |
 
 ## Verdicts
@@ -41,6 +41,18 @@ withhold consolidation. Numeric data indexes whose immutable value is proved pri
 table inputs when their consumers are proved primitive expressions or non-invoking comparisons.
 Unknown calls, selected operations and escaping values remain significant, including through a
 local alias. Source-sensitive assertions and uncertain module identities also withhold consolidation.
+
+## Benchmarks
+
+A top-level `bench` is compared on the same terms as a test, by every rule, but only with other
+benchmarks: a benchmark and a test never pair, even with equal bodies or titles. Options such as
+`iterations` are part of what a benchmark measures, so they keep two benchmarks apart.
+
+A benchmark is compared only where it runs: in a file `benchmark.include` collects, in a project
+whose installed Vitest, or the `vitest` version its nearest `package.json` declares, is 4. Vitest 5
+has no top-level `bench`, and a `bench` in a test file fails outside benchmark mode, so those, and
+any benchmark whose Vitest version is not known, are counted as `unsupported-benchmark` and not
+compared. Benchmarks are never quality-gate cases.
 
 ## Parameterized rows
 

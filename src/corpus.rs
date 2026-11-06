@@ -81,6 +81,7 @@ impl TestCase {
     /// and a todo with no callback.
     pub fn gate_eligible(&self) -> bool {
         !self.bodyless
+            && !self.benchmark
             && !matches!(
                 self.exclusion,
                 Some(Exclusion::Benchmark | Exclusion::RegisteredElsewhere | Exclusion::NoCallback)
@@ -240,6 +241,8 @@ pub struct TestCase {
     /// Whether the declaration has no callback, so Vitest reports it as a todo: decided apart from
     /// which exclusion wins, since another refusal can be recorded first.
     pub bodyless: bool,
+    /// Whether it is a benchmark: compared only with benchmarks, and outside the quality gate.
+    pub benchmark: bool,
     /// Why it is not compared, if it is not.
     pub exclusion: Option<Exclusion>,
 }
@@ -340,6 +343,9 @@ pub struct Setting<'a> {
     pub globals: bool,
     /// The analysis root.
     pub root: &'a Path,
+    /// Whether a top-level `bench` registers here: the file is collected by the benchmark channel
+    /// and imports a Vitest that exports `bench`. Otherwise a benchmark stays excluded.
+    pub benchmarks: bool,
 }
 
 /// Whether reaching `statement` runs nothing: a function, type or import with bindings, or a
@@ -415,6 +421,7 @@ fn unkeyed_case(span: Span, title: Option<String>, exclusion: Option<Exclusion>)
         callback_form: normal::CallbackForm::Interchangeable,
         inert: false,
         bodyless: false,
+        benchmark: false,
         exclusion,
     }
 }
@@ -704,10 +711,13 @@ fn read_parsed(
         .map(|site| (site.node, site.provenance))
         .collect();
     // A same-file helper's template registers through its admitted calls, which carry its cases.
+    // A benchmark the file is known to run is read exactly as a test is, and marked.
     for site in found.sites.iter().filter(|site| {
-        site.kind == SiteKind::Registers(Registers::Test)
+        (site.kind == SiteKind::Registers(Registers::Test)
+            || (setting.benchmarks && site.kind == SiteKind::Registers(Registers::Bench)))
             && !expanded.templates.contains(&site.node)
     }) {
+        let benchmark = site.kind == SiteKind::Registers(Registers::Bench);
         let suite_frames = table_frames::around(
             path,
             parsed,
@@ -769,6 +779,7 @@ fn read_parsed(
                 continue;
             }
             let mut record = unkeyed(site, None);
+            record.benchmark = benchmark;
             record.suite_rows = suite_frame.rows.clone();
             // Display identity survives every refusal; it is not a name-comparison proof.
             let display_prefix = normalizer.suites_around(site.node).and_then(|scopes| {
@@ -903,6 +914,11 @@ fn read_parsed(
                 }
             };
             let unread_callee = modifiers.is_none();
+            // Vitest 4 has no `bench.each` or `bench.for`: calling one throws while the file loads.
+            if benchmark && table_site(site) {
+                tests.extend(excluded(Exclusion::Benchmark));
+                continue;
+            }
             if suite_frame.table && (!suite_frame.proven || record.runtime_row.is_none()) {
                 tests.extend(excluded(Exclusion::UnprovedSuiteRow));
                 continue;
@@ -1257,11 +1273,11 @@ fn read_parsed(
             Some(Exclusion::RegisteredElsewhere),
         ));
     }
-    // Benchmarks run and are counted, one excluded case each, until they are compared.
+    // A benchmark the file is not known to run is counted, one excluded case each.
     for site in found
         .sites
         .iter()
-        .filter(|site| site.kind == SiteKind::Registers(Registers::Bench))
+        .filter(|site| !setting.benchmarks && site.kind == SiteKind::Registers(Registers::Bench))
     {
         if unregistered(&mut normalizer, site.node) {
             continue;
