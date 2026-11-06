@@ -872,7 +872,8 @@ fn a_shared_helper_is_read_under_each_projects_globals() {
 #[test]
 fn a_lookup_cut_by_the_depth_limit_is_not_cached() {
     let dir = tempfile::tempdir().unwrap();
-    for link in 0..10 {
+    let links = crate::inventory::MAX_DEPTH + 2;
+    for link in 0..links {
         fs::write(
             dir.path().join(format!("c{link}.ts")),
             format!("export {{ register }} from './c{}'", link + 1),
@@ -880,7 +881,7 @@ fn a_lookup_cut_by_the_depth_limit_is_not_cached() {
         .unwrap();
     }
     fs::write(
-        dir.path().join("c10.ts"),
+        dir.path().join(format!("c{links}.ts")),
         "import { test } from 'vitest'\nexport function register() { test('a', () => {}) }",
     )
     .unwrap();

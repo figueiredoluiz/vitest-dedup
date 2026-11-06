@@ -288,8 +288,9 @@ pub(crate) fn setup_access(parsed: &Parsed, setting: Setting) -> bool {
 const ON_LOAD: &str = "\0load";
 /// Export-map marker: a derived registration API carries an unreadable fixture context.
 const UNREADABLE_FIXTURE: &str = "\0fixture";
-/// How many imports deep a module's exports are followed.
-const MAX_DEPTH: usize = 8;
+/// How many imports deep a module's exports are followed. Reaching it refuses the whole root, so
+/// it sits above real import chains; the analysis and byte caps below bound the work.
+const MAX_DEPTH: usize = 24;
 /// Uncached module analysis attempts allowed by one root inventory reading.
 const MAX_IMPORT_ANALYSES: usize = 64;
 /// Source bytes admitted to uncached import analysis by one root inventory reading.
