@@ -6,6 +6,7 @@ use std::fs;
 use std::path::Path;
 
 mod export_identity;
+mod reach_scaling;
 
 /// The inventory of `main` (`a.test.ts`) in a project holding `files` besides it.
 fn inventory_of(main: &str, files: &[(&str, &str)], globals: bool) -> (Inventory, String) {

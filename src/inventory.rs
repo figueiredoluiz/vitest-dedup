@@ -11,6 +11,7 @@
 //! API names are read from the [`Dialect`]; this module spells none.
 
 mod module;
+mod reach;
 pub mod runners;
 
 use crate::framework::{Dialect, Registers};

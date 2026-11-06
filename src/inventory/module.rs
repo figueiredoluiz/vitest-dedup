@@ -1,5 +1,6 @@
 //! The inventory of one module.
 
+use super::reach::ReachIndex;
 use super::{
     Escape, Export, InPlaceMock, Inventory, Label, Modules, Provenance, Reach, Setting, Site,
     SiteKind, ON_LOAD, UNREADABLE_FIXTURE,
@@ -1233,6 +1234,7 @@ impl<'s> Module<'s> {
     fn registrations(&mut self) -> Vec<Found> {
         loop {
             let found = self.scan();
+            let reaches = ReachIndex::new(found.iter().map(|(_, span, kind, ..)| (*span, *kind)));
             let before = self.wrappers.clone();
             // Vitest calls a suite factory with its `test` API, so a call through a parameter of a
             // suite callback may register tests the inventory cannot attribute.
@@ -1240,7 +1242,7 @@ impl<'s> Module<'s> {
                 self.wrappers.insert(symbol, Reach::Tasks);
             }
             for (function, symbols) in self.functions() {
-                let Some(reach) = self.reach(self.tree.span(function), &found) else {
+                let Some(reach) = reaches.within(self.tree.span(function)) else {
                     continue;
                 };
                 for symbol in symbols {
@@ -1398,21 +1400,6 @@ impl<'s> Module<'s> {
             Declaration::Class(class) => tree.flag(class, "declare"),
             _ => false,
         }
-    }
-
-    /// What calling a function whose body is `body` may register, `None` when its body holds no
-    /// registration: hooks only when every registration in it is a hook or a hooks-only wrapper
-    /// call. Whether the body may also run anything else is [`Self::closed`].
-    fn reach(&self, body: Span, found: &[Found]) -> Option<Reach> {
-        found
-            .iter()
-            .filter(|(_, span, ..)| body.contains(*span))
-            .map(|(_, _, kind, ..)| match kind {
-                SiteKind::Registers(Registers::Hook(_))
-                | SiteKind::Wrapper(Reach::Hooks | Reach::Hook) => Reach::Hooks,
-                SiteKind::Registers(_) | SiteKind::Wrapper(Reach::Tasks) => Reach::Tasks,
-            })
-            .max()
     }
 
     /// Whether calling `function` runs nothing but hook registrations and calls of hooks-only
@@ -2019,6 +2006,7 @@ impl<'s> Module<'s> {
         found: &[Found],
     ) -> HashMap<String, Export> {
         let tree = self.tree;
+        let reaches = ReachIndex::new(found.iter().map(|(_, span, kind, ..)| (*span, *kind)));
         let spelled = self.spelled_exports();
         let dialect = self.setting.dialect;
         // The registering-only table cannot prove what an earlier opaque star omits.
@@ -2146,7 +2134,7 @@ impl<'s> Module<'s> {
                     let anonymous = (tree.is_function(declaration)
                         && tree.child(declaration, "id").is_none())
                     .then(|| {
-                        let reach = self.reach(tree.span(declaration), found)?;
+                        let reach = reaches.within(tree.span(declaration))?;
                         Some(if self.closed(declaration) {
                             reach
                         } else {

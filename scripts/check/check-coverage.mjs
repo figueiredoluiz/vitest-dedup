@@ -232,6 +232,8 @@ const RUST_MODULES = {
   'src/lang/tree.rs': 97,
   'src/inventory.rs': 96,
   'src/inventory/module.rs': 95,
+  // Indexed span containment is guarded by exhaustive queries and an owned-chain work bound.
+  'src/inventory/reach.rs': 99,
   // Runner invocation proofs: first measured at 89.52% (487/544 lines).
   'src/inventory/runners.rs': 89.5,
   'src/normal.rs': 96,
