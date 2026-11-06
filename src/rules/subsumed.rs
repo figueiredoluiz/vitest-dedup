@@ -62,14 +62,17 @@ pub(super) fn run(
                     members[1].declaration(),
                 );
                 if let Some((_, cases)) = claimed.get_mut(&claim) {
-                    cases.extend(members.iter().map(|member| member.gate_case()));
+                    cases.extend(members.iter().filter_map(|member| member.gate_case()));
                     continue;
                 }
                 claimed.insert(
                     claim,
                     (
                         findings.len(),
-                        members.iter().map(|member| member.gate_case()).collect(),
+                        members
+                            .iter()
+                            .filter_map(|member| member.gate_case())
+                            .collect(),
                     ),
                 );
                 let message = format!(

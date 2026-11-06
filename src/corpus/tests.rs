@@ -99,7 +99,8 @@ fn assert_owned_names(source: &str, path: &str, tests: usize, excluded: usize, e
     }
 }
 
-/// The same owned source the collection oracle runs: names, rows, scope and deferred exclusions.
+/// The same owned source the collection oracle runs: names, rows and scope; empty tests and todos
+/// stay excluded from comparison and still collide by name.
 #[test]
 fn owned_name_collisions_keep_distinct_rows_and_exclusions() {
     assert_owned_names(
@@ -107,7 +108,14 @@ fn owned_name_collisions_keep_distinct_rows_and_exclusions() {
         "cases.test.ts",
         18,
         4,
-        &["collision", "round 1", "round 2", "object [object Object]"],
+        &[
+            "collision",
+            "round 1",
+            "round 2",
+            "object [object Object]",
+            "held",
+            "empty",
+        ],
     );
 }
 
@@ -200,6 +208,53 @@ fn each_reason_has_one_cause() {
     assert_eq!(exclusion("options first"), None);
     assert_eq!(tests["options first"].key, tests["callback"].key);
     assert_eq!(exclusion("imported"), Some(Exclusion::NamedCallback));
+}
+
+/// A test refused only for its callback keeps the name the compared path gives; a registration a
+/// function places, or a callback a spread may hide, has none.
+#[test]
+fn callback_exclusions_keep_their_names() {
+    let tests = by_title(
+        "import { describe, expect, test } from 'vitest'\n\
+         describe('suite', () => { test('empty', () => {}); test.todo('todo') })\n\
+         test(function titled() { throw Error('never runs') })\n\
+         test.each([1])('row %i', () => {})\n\
+         test('compared', () => { expect(1).toBe(1) })\n\
+         Promise.resolve().then(() => test('deferred'))\n\
+         test('spread', ...[])\n",
+    );
+    assert_eq!(tests.len(), 7, "{:?}", tests.keys());
+    let named = |title: &str| {
+        let test = &tests[title];
+        (
+            test.exclusion,
+            test.name.as_ref().map(|name| name.join(" > ")),
+        )
+    };
+    let name = |text: &str| Some(text.to_owned());
+    assert_eq!(
+        named("empty"),
+        (Some(Exclusion::EmptyBody), name("suite > empty"))
+    );
+    assert_eq!(
+        named("todo"),
+        (Some(Exclusion::NoCallback), name("suite > todo"))
+    );
+    assert_eq!(
+        named("titled"),
+        (Some(Exclusion::NoCallback), name("titled"))
+    );
+    assert_eq!(
+        named("row %i#0"),
+        (Some(Exclusion::EmptyBody), name("row 1"))
+    );
+    assert_eq!(named("compared"), (None, name("compared")));
+    assert_eq!(named("deferred"), (Some(Exclusion::NoCallback), None));
+    assert_eq!(named("spread"), (Some(Exclusion::UnreadableCallback), None));
+    // Vitest marks a test with no callback `todo`, written as `.todo` or not; an empty one runs.
+    let inert = |title: &str| tests[title].inert;
+    assert!(inert("titled") && inert("todo") && inert("deferred"));
+    assert!(!inert("empty") && !inert("compared"));
 }
 
 /// A scoped mock changes dynamic imports at runtime, so no test in its file is comparable.

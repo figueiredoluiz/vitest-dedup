@@ -51,7 +51,7 @@ when known, a zero-based written `row` when applicable, `comparable`, `exclusion
 | `parameterization` | Supported literal-shaped consolidation under exact context. |
 | `similarity`, `eventSet` | Near-duplicate context and sorted behavior-event multiset. |
 | `subsumption` | Context admitted for directional trace comparison. |
-| `name` | Proven full title segments. |
+| `name` | Proven full title segments; also set on an empty or todo test, which is compared by name only. |
 | `rowClass` | Proven row identity used with name and exact body/context keys. |
 
 Inside expanded suite tables, `runtimeRow` distinguishes each invocation of the same test

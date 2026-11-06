@@ -5,7 +5,8 @@ use crate::config::Config;
 use crate::model::{Finding, Rule, Severity};
 use crate::pairs::PairBudget;
 
-/// Runs the name rule over the corpus's proven names, preserving every existing exclusion.
+/// Runs the name rule over the corpus's proven names. A test excluded only for its callback (an
+/// empty body, or a todo) still collides by name; every other exclusion is preserved.
 pub(super) fn run(
     files: &Files,
     config: &Config,
@@ -17,7 +18,11 @@ pub(super) fn run(
         return true;
     }
     let (entries, groups) = keyed(files, |entry| {
-        if entry.case.exclusion.is_some() {
+        if entry
+            .case
+            .exclusion
+            .is_some_and(|exclusion| !exclusion.keeps_name())
+        {
             return None;
         }
         entry.case.name.as_ref().map(|name| (entry.path, name))

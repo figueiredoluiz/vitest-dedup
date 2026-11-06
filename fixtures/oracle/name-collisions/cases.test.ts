@@ -15,7 +15,7 @@ test.each([[1], [2]])('one declaration', value => expect(value).toBeTruthy())
 test(`object ${{ a: 1 }}`, () => expect(6).toBe(6))
 test('object [object Object]', () => expect(7).toBe(7))
 test('object {a:1}', () => expect(8).toBe(8))
-// Empty/todo name collisions stay excluded until their separate task.
+// Tests with nothing to compare still collide by name.
 test.todo('held')
 test.todo('held')
 test('empty', () => {})

@@ -365,10 +365,6 @@
       "reason": "The default engine expands a `forEach` over a known array per element; the next engine counts its registration and the test beside it."
     },
     {
-      "id": "recall-miss|duplicate-test-name-function-title|duplicate-test-name|parsesAnEmptyDocument,parsesAnEmptyDocument",
-      "reason": "The functions supply titles for todos, which have no callback; the next engine excludes these cases until title comparison has separate eligibility."
-    },
-    {
       "id": "recall-tests|duplicate-suite-computed-condition|all|3",
       "reason": "The next engine reads a bracket condition as the dotted form; a suite not proven active reports its children, as `describe.skip` does. The default engine cannot read the bracket and stays as it is until it is replaced."
     },

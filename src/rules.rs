@@ -44,15 +44,19 @@ struct Entry<'a> {
 }
 
 impl<'a> Entry<'a> {
-    /// The runtime case this entry is, as the quality gate counts it.
-    fn gate_case(self) -> GateCase {
-        (
-            Location {
-                path: self.case.declaration_path(self.path).to_path_buf(),
-                span: self.case.span,
-            },
-            self.case.gate_row(),
-        )
+    /// The runtime case this entry is, as the quality gate counts it; `None` for a case outside
+    /// the gate's denominator (a todo a name finding still names), so the numerator never counts
+    /// what the denominator leaves out.
+    fn gate_case(self) -> Option<GateCase> {
+        self.case.gate_eligible().then(|| {
+            (
+                Location {
+                    path: self.case.declaration_path(self.path).to_path_buf(),
+                    span: self.case.span,
+                },
+                self.case.gate_row(),
+            )
+        })
     }
 
     /// Source identity is independent of the caller that happens to register this execution.
@@ -532,7 +536,7 @@ fn emit_where<'a>(
             members
                 .iter()
                 .flat_map(|member| &stands[member])
-                .map(|&index| entries[index].gate_case())
+                .filter_map(|&index| entries[index].gate_case())
                 .collect()
         };
         let group: Vec<usize> = reduced.iter().map(|(index, _)| *index).collect();
@@ -650,7 +654,10 @@ fn over(rule: Rule, severity: Severity, members: &[Entry<'_>], message: String) 
         inert: members.iter().map(|member| member.case.inert).collect(),
         baselined: false,
         covers: None,
-        cases: members.iter().map(|member| member.gate_case()).collect(),
+        cases: members
+            .iter()
+            .filter_map(|member| member.gate_case())
+            .collect(),
     }
 }
 

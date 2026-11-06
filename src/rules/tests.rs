@@ -482,9 +482,10 @@ fn entries_order_and_equality_follow_where_the_case_is() {
     assert!(earlier < left, "line and column order within one file");
 }
 
-/// Name collisions depend on file, title segments and distinct declarations, not callback keys.
+/// Name collisions depend on file, title segments and distinct declarations, not callback keys. A
+/// test excluded only for its callback still collides; every other exclusion is preserved.
 #[test]
-fn names_use_proven_segments_and_preserve_all_exclusions() {
+fn names_use_proven_segments_and_preserve_other_exclusions() {
     let config = config_with(&[
         (Rule::DuplicateTest, Severity::Off),
         (Rule::CrossFileDuplicate, Severity::Off),
@@ -498,9 +499,24 @@ fn names_use_proven_segments_and_preserve_all_exclusions() {
     assert_eq!(result.findings.len(), 1);
     assert_eq!(result.findings[0].rule, Rule::DuplicateTestName);
     assert_eq!(result.findings[0].titles, ["suite > name", "suite > name"]);
+    for exclusion in [Exclusion::EmptyBody, Exclusion::NoCallback] {
+        right.exclusion = Some(exclusion);
+        let findings = run(
+            &[file("a.test.ts", vec![left.clone(), right.clone()])],
+            &config,
+        )
+        .findings;
+        assert_eq!(findings.len(), 1, "{exclusion:?}");
+        assert_eq!(findings[0].rule, Rule::DuplicateTestName);
+        // A todo is outside the gate's denominator, so the finding does not count it either.
+        let counted = if exclusion == Exclusion::NoCallback {
+            1
+        } else {
+            2
+        };
+        assert_eq!(findings[0].cases.len(), counted, "{exclusion:?}");
+    }
     for exclusion in [
-        Exclusion::EmptyBody,
-        Exclusion::NoCallback,
         Exclusion::UnreadableCallback,
         Exclusion::NamedCallback,
         Exclusion::RegisteredInsideFunction,
