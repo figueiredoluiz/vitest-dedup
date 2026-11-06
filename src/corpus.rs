@@ -711,10 +711,17 @@ fn read_parsed(
         .map(|site| (site.node, site.provenance))
         .collect();
     // A same-file helper's template registers through its admitted calls, which carry its cases.
+    // Vitest 4 has no `bench.each` or `bench.for`: calling one throws while the file loads, so no
+    // benchmark in that file registers, whatever the table holds.
+    let benchmarks = setting.benchmarks
+        && !found
+            .sites
+            .iter()
+            .any(|site| site.kind == SiteKind::Registers(Registers::Bench) && table_site(site));
     // A benchmark the file is known to run is read exactly as a test is, and marked.
     for site in found.sites.iter().filter(|site| {
         (site.kind == SiteKind::Registers(Registers::Test)
-            || (setting.benchmarks && site.kind == SiteKind::Registers(Registers::Bench)))
+            || (benchmarks && site.kind == SiteKind::Registers(Registers::Bench)))
             && !expanded.templates.contains(&site.node)
     }) {
         let benchmark = site.kind == SiteKind::Registers(Registers::Bench);
@@ -914,11 +921,6 @@ fn read_parsed(
                 }
             };
             let unread_callee = modifiers.is_none();
-            // Vitest 4 has no `bench.each` or `bench.for`: calling one throws while the file loads.
-            if benchmark && table_site(site) {
-                tests.extend(excluded(Exclusion::Benchmark));
-                continue;
-            }
             if suite_frame.table && (!suite_frame.proven || record.runtime_row.is_none()) {
                 tests.extend(excluded(Exclusion::UnprovedSuiteRow));
                 continue;
@@ -977,6 +979,21 @@ fn read_parsed(
                 continue;
             }
             let (body, function) = (callback.argument, callback.function);
+            // A benchmark's options can carry `setup` and `teardown` callbacks that run around it,
+            // and their effects are not read: only plain literal options are admitted.
+            if benchmark
+                && arguments.iter().skip(1).any(|&argument| {
+                    let inner = tree.inner(argument);
+                    inner != tree.inner(body)
+                        && (!matches!(tree.kind(inner), "ObjectExpression" | "Literal")
+                            || tree.descendants(inner).any(|node| {
+                                tree.is_function(node) || tree.kind(node) == "SpreadElement"
+                            }))
+                })
+            {
+                tests.extend(excluded(Exclusion::Benchmark));
+                continue;
+            }
             let empty = function.is_some_and(|function| {
                 tree.child(function, "body").is_some_and(|body| {
                     tree.kind(body) == "BlockStatement" && tree.list(body, "body").is_empty()
@@ -1277,7 +1294,7 @@ fn read_parsed(
     for site in found
         .sites
         .iter()
-        .filter(|site| !setting.benchmarks && site.kind == SiteKind::Registers(Registers::Bench))
+        .filter(|site| !benchmarks && site.kind == SiteKind::Registers(Registers::Bench))
     {
         if unregistered(&mut normalizer, site.node) {
             continue;

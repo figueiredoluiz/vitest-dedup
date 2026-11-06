@@ -54,20 +54,54 @@ fn a_benchmark_not_known_to_run_stays_excluded() {
     assert!(!cases["a"].gate_eligible());
 }
 
-/// Vitest 4 has no `bench.each` or `bench.for`, so a table of benchmarks throws and is refused.
+/// Vitest 4 has no `bench.each` or `bench.for`: one in a file throws while it loads, so no
+/// benchmark there registers, an empty table and its valid siblings included, each still counted.
 #[test]
-fn a_benchmark_table_is_refused() {
-    for chain in ["each", "for"] {
-        let (_, corpus) = read(&format!("bench.{chain}([1, 2])('row %i', {BODY})\n"), true);
-        assert!(!corpus.tests.is_empty());
+fn a_benchmark_table_refuses_every_benchmark_in_its_file() {
+    for table in ["each([1, 2])", "for([1, 2])", "each([])"] {
+        let source = format!("bench.{table}('row %i', {BODY})\nbench('plain', {BODY})\n");
+        let (_, corpus) = read(&source, true);
+        assert_eq!(corpus.tests.len(), 2, "{table}: one case per site");
         assert!(
             corpus
                 .tests
                 .iter()
                 .all(|case| case.exclusion == Some(Exclusion::Benchmark)),
-            "{chain}"
+            "{table}: {:?}",
+            corpus
+                .tests
+                .iter()
+                .map(|case| case.exclusion)
+                .collect::<Vec<_>>()
         );
     }
+}
+
+/// A benchmark's `setup` and `teardown` run around it and may write what it reads, so options
+/// holding a function, or a spread that could, refuse; plain literal options stay compared.
+#[test]
+fn benchmark_options_with_callbacks_refuse() {
+    for options in [
+        "{ setup: () => {} }",
+        "{ teardown() {} }",
+        "{ ...shared }",
+        "shared",
+    ] {
+        let source = format!(
+            "const shared = {{}}\nbench('a', {BODY}, {options})\nbench('b', {BODY}, {options})\n"
+        );
+        let (cases, _) = read(&source, true);
+        assert_eq!(
+            cases["a"].exclusion,
+            Some(Exclusion::Benchmark),
+            "{options}"
+        );
+    }
+    let (cases, _) = read(
+        &format!("bench('a', {BODY}, {{ iterations: 2, time: 0 }})\n"),
+        true,
+    );
+    assert!(cases["a"].exclusion.is_none(), "{:?}", cases["a"].exclusion);
 }
 
 /// Two benchmarks of one name collide; a benchmark and a test of that name are different tasks.

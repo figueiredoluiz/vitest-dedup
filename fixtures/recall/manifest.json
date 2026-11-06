@@ -1116,6 +1116,56 @@
       ]
     },
     {
+      "name": "duplicate-test-bench-vitest4-setup",
+      "path": "duplicate-test-bench-vitest4-setup",
+      "rule": "duplicate-test",
+      "role": "negative",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-06",
+      "expectedTests": 2,
+      "expectedIncomplete": true,
+      "expectedUnresolved": 2,
+      "expectedFindings": [],
+      "expectedAbsent": [
+        {
+          "rule": "duplicate-test",
+          "titles": [
+            "reads the count",
+            "reads the count again"
+          ]
+        }
+      ],
+      "blindUnderCurrent": [
+        "count.bench.ts"
+      ]
+    },
+    {
+      "name": "duplicate-test-bench-vitest4-table",
+      "path": "duplicate-test-bench-vitest4-table",
+      "rule": "duplicate-test",
+      "role": "negative",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-06",
+      "expectedTests": 3,
+      "expectedIncomplete": true,
+      "expectedUnresolved": 3,
+      "expectedFindings": [],
+      "expectedAbsent": [
+        {
+          "rule": "duplicate-test",
+          "titles": [
+            "doubles numbers",
+            "doubles numbers again"
+          ]
+        }
+      ],
+      "blindUnderCurrent": [
+        "rows.bench.ts"
+      ]
+    },
+    {
       "name": "duplicate-test-bench-vitest-range",
       "path": "duplicate-test-bench-vitest-range",
       "rule": "duplicate-test",
