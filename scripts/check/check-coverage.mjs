@@ -138,6 +138,8 @@ const RUST_MODULES = {
   'src/diagnostics.rs': 98,
   'src/exclusions.rs': 100,
   'src/discovery.rs': 94,
+  // Bounded ignore loading: first measured at 96.61% (314/325 instrumented lines).
+  'src/discovery/ignores.rs': 96,
   // JavaScript string text: measured at 91.94% (57/62); the 5 uncovered lines are the `panic!`
   // arms of this file's own test helpers, reached only by a malformed test input.
   // Lowered 2026-11-04 to 90.70% (39/43): the template-text reader and its test went with the

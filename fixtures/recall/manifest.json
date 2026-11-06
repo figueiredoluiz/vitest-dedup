@@ -24,6 +24,22 @@
       ]
     },
     {
+      "name": "ignore-input-bounded",
+      "path": "ignore-input-bounded",
+      "rule": "duplicate-test",
+      "role": "positive",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-06",
+      "expectedTests": 2,
+      "expectedIncomplete": true,
+      "expectedUnresolved": 0,
+      "expectedFindings": [
+        { "rule": "duplicate-test", "severity": "error", "titles": ["bounded ignore first", "bounded ignore second"] }
+      ],
+      "expectedAbsent": []
+    },
+    {
       "name": "wrapper-reach-chain",
       "path": "wrapper-reach-chain",
       "rule": "duplicate-test",
