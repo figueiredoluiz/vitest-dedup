@@ -55,6 +55,8 @@ pub enum Exclusion {
     /// A module the file imports could not be parsed, so what it exports, and registers, is
     /// unknown.
     UnreadableImport,
+    /// Import analysis stopped at a depth or aggregate work bound.
+    ImportLimit,
     /// A package manifest the file's imports need could not be read, so what they import is
     /// unknown.
     UnreadableManifest,
@@ -145,6 +147,11 @@ impl Exclusion {
                 ExclusionReason::HelperExportUnreadable,
                 "a helper module the file imports could not be parsed, so what it exports and \
                  registers is unknown",
+            )),
+            Self::ImportLimit => Some((
+                ExclusionReason::HelperExportUnreadable,
+                "import analysis reached its depth or aggregate work limit, so imported effects \
+                 and registrations are unknown",
             )),
             Self::NonHoistedMock => Some((
                 ExclusionReason::UnresolvedContext,
@@ -491,7 +498,7 @@ fn read_parsed(
         found.loads.clear();
         found.escapes.clear();
     }
-    let expanded = if frame.is_none() {
+    let expanded = if frame.is_none() && !found.imports_limited {
         runners::expand(path, source, parsed, &found, setting, run)
     } else {
         runners::Batch::default()
@@ -940,6 +947,10 @@ fn read_parsed(
             let unread_callee = modifiers.is_none();
             if suite_frame.table && (!suite_frame.proven || record.runtime_row.is_none()) {
                 tests.extend(excluded(Exclusion::UnprovedSuiteRow));
+                continue;
+            }
+            if found.imports_limited {
+                tests.extend(excluded(Exclusion::ImportLimit));
                 continue;
             }
             if manifest_refused {
@@ -1469,6 +1480,7 @@ fn read_parsed(
             .chain(imported_diagnostic_hooks)
             .collect(),
         context_refusals: [
+            found.imports_limited.then_some(Exclusion::ImportLimit),
             found.direct_eval.then_some(Exclusion::DynamicBindings),
             // Taken once per file, after every module its reading followed.
             (frame.is_none() && inventory::take_unread_imports())

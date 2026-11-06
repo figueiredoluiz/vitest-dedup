@@ -78,6 +78,9 @@ pub(crate) struct Plan {
 
 /// Read a local callable without guessing that a function-local const has been initialized.
 pub(crate) fn local(parsed: &Parsed, found: &Inventory, callee: NodeId) -> Result<Plan, Refusal> {
+    if found.imports_limited {
+        return Err(Refusal::Limit);
+    }
     let tree = &parsed.tree;
     let symbol = parsed
         .scopes
@@ -131,6 +134,9 @@ pub fn template(
             Export::Here(function) => {
                 let mut modules = Modules::with_sources(sources.clone());
                 let found = inventory(&at.0, &source, &parsed, setting, &mut modules);
+                if found.imports_limited {
+                    return Err(Refusal::Limit);
+                }
                 let parameters = parameters(&parsed, function, found.direct_eval)?;
                 let mut steps = Vec::new();
                 let body = BodyReader {

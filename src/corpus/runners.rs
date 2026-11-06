@@ -563,7 +563,7 @@ impl Planner<'_> {
                 depth,
             )
         } else {
-            let found = self.inventory(module, run);
+            let found = self.inventory(module, run)?;
             let plan = inventory::runners::local(parsed, &found, callee).ok()?;
             self.execute(module, plan, actual, parent, run, depth - 1)
         }
@@ -692,7 +692,7 @@ impl Planner<'_> {
             }
             let mut tests = Vec::new();
             let mut hooks = Vec::new();
-            let found = self.inventory(module, run);
+            let found = self.inventory(module, run)?;
             let structure = Structure::of(parsed, &found);
             let mut hook_normalizer = Normalizer::new(
                 module.path,
@@ -748,8 +748,8 @@ impl Planner<'_> {
     }
 
     /// Read one module's registrations using the planner's shared resolution cache.
-    fn inventory(&self, module: Module<'_>, run: &mut Run) -> Inventory {
-        inventory::inventory(
+    fn inventory(&self, module: Module<'_>, run: &mut Run) -> Option<Inventory> {
+        let found = inventory::inventory(
             module.path,
             module.source,
             module.parsed,
@@ -759,7 +759,8 @@ impl Planner<'_> {
                 root: self.setting.root,
             },
             &mut run.modules,
-        )
+        );
+        (!found.imports_limited).then_some(found)
     }
 
     /// Read an imported hook's body under the invocation bindings. A runner with an opaque hook

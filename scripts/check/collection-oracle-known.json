@@ -262,6 +262,20 @@
   ],
   "siteDisagreements": [
     {
+      "dir": "fixtures/recall/import-depth-cut",
+      "path": "deep.test.ts",
+      "kind": "missing-site",
+      "item": "test@null",
+      "reason": "The owned depth-limit fixture registers hidden first in m8.ts beyond the uncached import bound. Its root must report helper-export-unreadable and remain incomplete; the unknown registration has no root-file site."
+    },
+    {
+      "dir": "fixtures/recall/import-depth-cut",
+      "path": "deep.test.ts",
+      "kind": "missing-site",
+      "item": "test@null",
+      "reason": "The owned depth-limit fixture registers hidden second in m8.ts beyond the uncached import bound. Its root must report helper-export-unreadable and remain incomplete; the unknown registration has no root-file site."
+    },
+    {
       "dir": "fixtures/recall/framework-package-parenthesised-registration",
       "path": "users.test.ts",
       "kind": "missing-site",

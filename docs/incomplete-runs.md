@@ -95,7 +95,7 @@ alone. Past the cap the files with the fewest excluded tests are left out of the
 
 | Code | Meaning |
 | --- | --- |
-| `helper-export-unreadable` | A project module the file imports could not be parsed, so what it exports and registers is unknown. |
+| `helper-export-unreadable` | A project import could not be parsed, or import analysis reached its depth or aggregate work limit, so imported effects and registrations are unknown. |
 | `helper-effects-unproved` | A runner call in the scope was not expanded (see [Imported runners](imported-runners.md#what-a-refusal-does)), so the tests around it are excluded with it. |
 | `mock-factory-unreadable` | A `vi.mock` factory could not be read. |
 | `fixture-unreadable` | A `test.extend` fixture value could not be read. |
@@ -137,6 +137,13 @@ available. First-party imported helpers use the same preflight limits. Use
 `--fail-on-incomplete=reads` (or `--fail-on-incomplete`) to make refused input an operational
 failure. Admitted extraction runs on an explicitly sized worker stack; a larger stack alone would
 not protect against unbounded input.
+
+Import analysis allows at most eight uncached import levels, 64 uncached module-analysis attempts,
+and 8 MiB of imported source per root inventory. Completed cached proofs can be reused without
+spending that work again. Reaching a limit stops further import analysis for that inventory,
+excludes the affected file's tests from comparison, and marks the run incomplete, including
+when the file has no visible local tests. Independent files remain analyzable. These limits
+produce `helper-export-unreadable` diagnostics and are covered by `--fail-on-incomplete=reads`.
 
 ## Memory budget
 
