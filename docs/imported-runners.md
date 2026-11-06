@@ -9,8 +9,9 @@ tests around it are left out of comparison rather than guessed at.
 
 - Source locations come from the runner; the registering file, governing globals and configuration
   come from the caller.
-- Each call registers its own tests, titled from its own arguments. Repeated calls of one runner
-  keep the runner's declaration identity, so they are not reported as duplicates of each other.
+- Each call registers its own tests, titled from its own arguments. Each call is a separate
+  runtime case, keyed by caller file and call position, so repeated calls with equal arguments are
+  reported as duplicates of each other; the finding names the runner's declaration for both.
 - An expanded test is compared with every other test, including the caller's own.
 - Reads of `import.meta` retain the runner's source module identity. A matching spelling in a
   different module does not establish equal metadata, even when both assertions happen to pass.
