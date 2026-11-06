@@ -11155,6 +11155,65 @@
       ]
     },
     {
+      "name": "local-helper-nested-late-constant",
+      "path": "local-helper-nested-late-constant",
+      "rule": "duplicate-test",
+      "role": "variant",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-06",
+      "expectedTests": 6,
+      "expectedIncomplete": true,
+      "expectedUnresolved": 4,
+      "expectedFindings": [
+        {
+          "rule": "duplicate-test",
+          "severity": "error",
+          "titles": [
+            "s > copy",
+            "s > late"
+          ]
+        }
+      ],
+      "expectedAbsent": [
+        {
+          "rule": "duplicate-test",
+          "titles": [
+            "late",
+            "copy"
+          ]
+        }
+      ],
+      "blindUnderCurrent": [
+        "top-level.test.ts"
+      ]
+    },
+    {
+      "name": "runner-hook-inside-suite",
+      "path": "runner-hook-inside-suite",
+      "rule": "duplicate-test",
+      "role": "negative",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-06",
+      "expectedTests": 2,
+      "expectedIncomplete": true,
+      "expectedUnresolved": 2,
+      "expectedFindings": [],
+      "expectedAbsent": [
+        {
+          "rule": "duplicate-test",
+          "titles": [
+            "a > reads",
+            "b > reads"
+          ]
+        }
+      ],
+      "blindUnderCurrent": [
+        "install.test.ts"
+      ]
+    },
+    {
       "name": "local-helper-late-constant",
       "path": "local-helper-late-constant",
       "rule": "duplicate-test",

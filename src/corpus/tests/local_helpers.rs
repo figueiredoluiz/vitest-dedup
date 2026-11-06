@@ -322,27 +322,54 @@ fn a_suite_position_call_admits_a_later_const_helper() {
         .all(|test| test.exclusion.is_some() && test.title.is_none()));
 }
 
-/// Hooks in the caller are registrations of the sequence, and a helper call beside them still
-/// expands; the helper's hook joins the suite (it must not leak to the file scope).
+/// Inert labels beside a call inside a suite keep the expansion. A caller that writes a hook, or a
+/// call inside a suite whose helper registers one, refuses: hook context reaches handwritten and
+/// expanded tests by different paths, and a hook registered in a suite governs every test there.
 #[test]
-fn caller_hooks_and_labels_keep_the_expansion() {
+fn labels_keep_the_expansion_and_hooks_refuse_it() {
     let header = "import { describe, test, expect, beforeEach } from 'vitest'\n";
-    let helper = "function install() {\n  beforeEach(() => {\n    ready = 1\n  })\n  test('reads', () => {\n    expect(ready).toBe(1)\n  })\n}\n";
-    // The caller's hook writes its own cell: one hook proof keeps the module-wide single-value
-    // write set, so a second hook writing the same cell differently would refuse it.
-    let source = format!(
-        "{header}let ready = 0\nlet other = 0\n{helper}describe('s', () => {{\n  beforeEach(() => {{\n    other = 1\n  }})\n  install()\n  test.skip('skipped', () => {{\n    expect(1).toBe(1)\n  }})\n}})\n"
+    let reads = "function reads() {\n  test('reads', () => {\n    expect(ready).toBe(1)\n  })\n}\n";
+    let labeled = format!(
+        "{header}let ready = 1\n{reads}describe('s', () => {{\n  reads()\n  test.skip('skipped', () => {{\n    expect(1).toBe(1)\n  }})\n}})\n"
     );
-    let tests = by_title(&source);
+    let tests = by_title(&labeled);
     assert!(
         tests["reads"].exclusion.is_none(),
-        "the call expands beside hooks and labels"
+        "{:?}",
+        tests["reads"].exclusion
     );
     assert_eq!(tests["reads"].full_title.as_deref(), Some("s > reads"));
     assert!(
         tests["skipped"].inert && tests["skipped"].exclusion.is_none(),
         "the inert label marks the participant, it does not exclude it",
     );
+    let install = "function install() {\n  beforeEach(() => {\n    ready = 1\n  })\n  test('reads', () => {\n    expect(ready).toBe(1)\n  })\n}\n";
+    for (name, source) in [
+        (
+            "a caller hook",
+            format!("{header}let ready = 0\n{reads}describe('s', () => {{\n  beforeEach(() => {{\n    ready = 1\n  }})\n  reads()\n}})\n"),
+        ),
+        (
+            "a top-level caller hook",
+            format!("{header}let ready = 0\n{reads}beforeEach(() => {{\n  ready = 1\n}})\ndescribe('s', () => {{\n  reads()\n}})\n"),
+        ),
+        (
+            "a helper hook inside a suite",
+            format!("{header}let ready = 0\n{install}describe('s', () => {{\n  install()\n}})\ntest('reads', () => {{\n  expect(ready).toBe(1)\n}})\n"),
+        ),
+    ] {
+        // Only a test the file writes itself, never an expanded one, is compared.
+        let corpus = corpora(&[("a.test.ts", &source)], &["a.test.ts"]).remove(0);
+        assert!(
+            corpus
+                .tests
+                .iter()
+                .filter(|test| test.exclusion.is_none())
+                .all(|test| test.origin.is_none() && test.span.start.line > 8),
+            "{name}: {:?}",
+            corpus.tests.iter().map(|t| (&t.title, t.exclusion, t.span.start.line)).collect::<Vec<_>>()
+        );
+    }
 }
 
 /// Shapes the slice refuses: a call inside a skipped suite, inside a table suite, a suite
@@ -401,29 +428,48 @@ fn two_equal_calls_in_one_suite_pair() {
     assert_eq!(findings, 1);
 }
 
-/// Two calls under different caller setups key apart even when their bodies are identical:
-/// the invocation's lifecycle context composes the caller hooks its suite chain runs.
+/// An imported runner that registers a hook, called inside a suite, refuses: the hook governs every
+/// test in that suite, which the expansion's file-wide lifecycle does not express. Called at the top
+/// level, the same runner expands.
 #[test]
-fn caller_setup_context_keeps_equal_bodies_apart() {
-    let header = "import { describe, test, expect, beforeEach } from 'vitest'\n";
-    let helper =
-        "function reads() {\n  test('reads ready', () => {\n    expect(ready).toBe(1)\n  })\n}\n";
-    let source = format!(
-        "{header}let ready = 0\n{helper}describe('plain', () => {{\n  reads()\n}})\ndescribe('setup', () => {{\n  beforeEach(() => {{\n    ready = 1\n  }})\n  reads()\n}})\n"
-    );
-    let tests = by_title(&source);
-    assert!(tests["reads ready"].exclusion.is_none());
-    // Both cases stay comparable; the differing setups keep their keys apart.
-    let plain = &tests["reads ready"];
-    let corpus = corpora(&[("a.test.ts", &source)], &["a.test.ts"]).remove(0);
-    let findings = owned_findings("a.test.ts", corpus)
-        .findings
-        .into_iter()
-        .filter(|finding| finding.rule == Rule::DuplicateTest)
-        .count();
-    assert_eq!(
-        findings, 0,
-        "the plain and hooked invocations do not pair {plain:?}"
+fn an_imported_runner_with_a_hook_inside_a_suite_refuses() {
+    let runner = "import { beforeEach, expect, test } from 'vitest'\nlet ready = 0\nexport function install() {\n  beforeEach(() => {\n    ready = 1\n  })\n  test('reads', () => {\n    expect(ready).toBe(1)\n  })\n}\n";
+    let expanded = |caller: &str| {
+        let caller = format!(
+            "import {{ describe }} from 'vitest'\nimport {{ install }} from './runner'\n{caller}"
+        );
+        corpora(
+            &[("runner.ts", runner), ("a.test.ts", &caller)],
+            &["a.test.ts"],
+        )
+        .remove(0)
+        .tests
+        .iter()
+        .any(|test| test.title.as_deref() == Some("reads") && test.exclusion.is_none())
+    };
+    assert!(expanded("install()\n"), "the top-level call expands");
+    assert!(!expanded("describe('s', () => {\n  install()\n})\n"));
+}
+
+/// A helper a top-level call reaches only through another helper still reads what it reads when
+/// that call runs: a `const` declared after it is uninitialized then (Vitest 5.0.5 throws), so the
+/// file keeps its exclusions. With no top-level call, a suite-position call runs after the module
+/// body and the same helper expands.
+#[test]
+fn a_nested_helper_reads_late_bindings_when_the_top_level_call_runs() {
+    let header = "import { describe, test, expect } from 'vitest'\n";
+    let helpers = "function run() {\n  middle()\n}\nfunction middle() {\n  test(label, () => {\n    expect(1).toBe(1)\n  })\n}\n";
+    let early = format!("{header}run()\nconst label = 'late'\n{helpers}");
+    assert!(by_title(&early)
+        .values()
+        .all(|test| test.exclusion.is_some()));
+    let suite =
+        format!("{header}describe('s', () => {{\n  run()\n}})\nconst label = 'late'\n{helpers}");
+    let tests = by_title(&suite);
+    assert!(
+        tests["late"].exclusion.is_none(),
+        "{:?}",
+        tests["late"].exclusion
     );
 }
 

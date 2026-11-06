@@ -117,8 +117,9 @@ pub(super) fn expand(
 /// The sequence recurses into bare, provably titled suite callbacks: their bodies close the same
 /// way, and a helper call inside one registers into that suite (measured: Vitest 5.0.5 runs
 /// describe callbacks after the module body, so every top-level binding is initialized there).
-/// Hooks anywhere in the caller are registrations of the sequence, read by `hooks::collect`.
-/// Also returns the sites written inside the same-file helpers the calls run.
+/// A caller that writes a hook refuses, as does a call inside a suite whose invocation registers
+/// hooks: hook context reaches handwritten and expanded tests by different paths, so it is not
+/// composed here. Also returns the sites written inside the same-file helpers the calls run.
 fn closed_batch(
     path: &Path,
     source: &str,
@@ -138,7 +139,7 @@ fn closed_batch(
             !matches!(
                 site.kind,
                 SiteKind::Registers(Registers::Test | Registers::Suite) | SiteKind::Wrapper(_)
-            ) && !matches!(site.kind, SiteKind::Registers(Registers::Hook(_)))
+            )
         })
     {
         return None;
@@ -347,6 +348,14 @@ fn closed_batch(
             run,
             8,
         )?;
+        // Hooks registered inside a suite apply to every test in it, handwritten ones included;
+        // only the file-wide imported lifecycle is composed, so a suite-position call refuses.
+        let in_suite = stated
+            .get(&call.node)
+            .is_some_and(|statement| suite_statements.contains(statement));
+        if in_suite && !invocation.hooks.is_empty() {
+            return None;
+        }
         expansions.push(Expansion {
             scheduling_safe: invocation.scheduling_safe,
             call: call.node,
@@ -418,17 +427,8 @@ fn closed_batch(
     // Only a top-level call executes during the module body, in statement order: that is the
     // early execution a `const` initializer and every top-level read must precede. A
     // suite-position call runs after the whole body (measured: Vitest 5.0.5 describe callbacks
-    // run last), so a helper with no top-level calls has no early execution to precede.
-    let top_level_callees: HashSet<u32> = calls
-        .iter()
-        .filter(|site| {
-            stated
-                .get(&site.node)
-                .is_some_and(|statement| top_level_statements.contains(statement))
-        })
-        .filter_map(|site| tree.child(site.node, "callee"))
-        .map(|callee| tree.span(tree.inner(callee)).start)
-        .collect();
+    // run last). A top-level call can reach any helper through another, so while one exists
+    // every helper is checked; a file with only suite-position calls has no early execution.
     let first_call = calls
         .iter()
         .filter(|site| {
@@ -458,12 +458,7 @@ fn closed_batch(
         {
             return None;
         }
-        if binding
-            .references
-            .iter()
-            .any(|reference| top_level_callees.contains(&reference.span.start))
-        {
-            let first_call = first_call?;
+        if let Some(first_call) = first_call {
             if helper.constant && tree.span(helper.statement).end > first_call {
                 return None;
             }

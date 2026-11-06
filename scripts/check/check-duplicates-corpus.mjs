@@ -221,6 +221,7 @@ const DELIBERATE_BLIND_FILES = new Set([
   'duplicates/not-duplicate-each-row-loop-template-title.test.ts',
   'duplicates/not-redundant-hook-describe-each-unread.test.ts',
   'duplicates/not-helper-call-in-skip-suite.test.ts',
+  'duplicates/not-helper-call-with-hooks.test.ts',
   'duplicates/not-helper-call-in-table-suite.test.ts',
   'edge/vi-domock-scoped.test.ts',
   'edge/vi-dounmock-scoped.test.ts',
