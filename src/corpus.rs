@@ -74,6 +74,21 @@ pub enum Exclusion {
 }
 
 impl TestCase {
+    /// Which execution of its declaration this case is (see [`crate::model::Invocation`]).
+    pub fn invocation(&self) -> crate::model::Invocation {
+        let origin = self.origin.as_ref()?;
+        (!origin.call.is_empty()).then(|| {
+            (
+                origin
+                    .registration_files
+                    .first()
+                    .cloned()
+                    .unwrap_or_default(),
+                origin.call.clone(),
+            )
+        })
+    }
+
     /// Runtime case identity keeps enclosing suite multiplicity separate from a written row.
     pub fn gate_row(&self) -> Option<usize> {
         self.runtime_row.or(self.row)
@@ -188,6 +203,10 @@ pub struct Origin {
     pub path: PathBuf,
     /// Caller modules whose registrations own this declaration's executions.
     pub registration_files: Vec<PathBuf>,
+    /// The registering calls that ran the template, by start byte, outermost first: two
+    /// invocations of one template with equal arguments, or two nested calls inside one, are
+    /// distinct runtime cases. Empty when the case was not produced through an invocation.
+    pub call: Vec<u32>,
 }
 
 /// One test, one row of a test table, or a suite in the separate suite population.
@@ -1419,7 +1438,52 @@ fn read_parsed(
         .map(|expansion| expansion.call)
         .collect();
     for expansion in expanded.calls {
-        tests.extend(expansion.tests);
+        let mut expansion_tests = expansion.tests;
+        // A call inside the caller's suites registers into them: its cases take the caller's
+        // suite chain exactly as an ordinary test written in the same body would, so an
+        // expanded case and a hand-written twin in one suite key together. Such a call registers
+        // no hooks (`closed_batch` refuses one that would).
+        let scopes = normalizer.suites_around(expansion.call).unwrap_or_default();
+        if !scopes.is_empty() {
+            let names: Option<Vec<String>> = scopes
+                .iter()
+                .map(|scope| {
+                    structure
+                        .suites
+                        .get(scope)
+                        .and_then(|call| suite_names.get(call))
+                        .and_then(|name| name.clone())
+                })
+                .collect();
+            let displays: Option<Vec<String>> = scopes
+                .iter()
+                .map(|scope| {
+                    structure
+                        .suites
+                        .get(scope)
+                        .and_then(|call| suite_titles.get(call))
+                        .and_then(|title| title.clone())
+                })
+                .collect();
+            // The comparison name and the display title are proved apart: a `const` title renders
+            // as a name with no literal display. A name with an unproved prefix has none.
+            for test in &mut expansion_tests {
+                test.name = match (&names, test.name.take()) {
+                    (Some(names), Some(mut segments)) => {
+                        let mut prefixed = names.clone();
+                        prefixed.append(&mut segments);
+                        Some(prefixed)
+                    }
+                    _ => None,
+                };
+                if let (Some(displays), Some(title)) = (&displays, &test.full_title) {
+                    let mut segments = displays.clone();
+                    segments.push(title.clone());
+                    test.full_title = Some(segments.join(" > "));
+                }
+            }
+        }
+        tests.extend(expansion_tests);
         helper_sources.extend(expansion.sources);
         imported_hooks.extend(expansion.hooks);
         imported_diagnostic_hooks.extend(expansion.diagnostic_hooks);

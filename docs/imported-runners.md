@@ -9,8 +9,11 @@ tests around it are left out of comparison rather than guessed at.
 
 - Source locations come from the runner; the registering file, governing globals and configuration
   come from the caller.
-- Each call registers its own tests, titled from its own arguments. Repeated calls of one runner
-  keep the runner's declaration identity, so they are not reported as duplicates of each other.
+- Each call registers its own tests, titled from its own arguments. Every test a call registers
+  is a separate runtime case for that call, keyed by its declaration, the caller file and the chain
+  of call positions (a nested call is its own execution). So the tests that repeated calls with
+  equal arguments register can be reported as duplicates of each other (under an equivalent
+  context, with the rule enabled); such a finding names the runner's declaration for both.
 - An expanded test is compared with every other test, including the caller's own.
 - Reads of `import.meta` retain the runner's source module identity. A matching spelling in a
   different module does not establish equal metadata, even when both assertions happen to pass.
@@ -21,11 +24,18 @@ tests around it are left out of comparison rather than guessed at.
 The calling file qualifies when it parses cleanly and its top level holds only imports, inert
 declarations (functions, types, literal constants), plain `test(title, callback)` calls with a
 static title (a string of any length, or a template up to 65,536 bytes) and an inline callback,
-and statement-level calls of imported runners or [same-file helpers](#same-file-helpers). A
-`describe`, a hook, a label, a module load the
-file does not import by name, or a registration function read as a value refuses the whole file's
-expansion. Every value it imports from a project module must be a
-runner the proof read.
+statement-level calls of imported runners or [same-file helpers](#same-file-helpers), and plain
+`describe` blocks (a title that renders from literals or constants, no `each`, no `skip`, no third
+argument, and a synchronous
+callback that takes no parameters) whose bodies close the same way. A call
+may sit inside such a `describe`: Vitest runs describe callbacks after the module body, so what the
+call registers joins that suite, and the tests take its suite path. A hook written anywhere in the
+calling file, a call inside a `describe` whose runner registers a hook (it would govern every test
+in that suite), any other suite in the file (a table or skipped one, one with options, callback
+parameters or a title that does not render; Vitest still runs its callback), a label the sequence
+cannot close around, a module load the file does not import by name, or a registration function
+read as a value refuses the whole file's expansion. Every value it imports from a project module must be
+a runner the proof read.
 
 A runner qualifies when:
 
@@ -58,8 +68,11 @@ A function in the calling file is expanded the same way when:
   never reassigned;
 - every use of it is a call: a statement-level call at the top level, or a call from another helper
   that qualifies;
-- a `const` helper is declared before the first top-level call, since a hoisted function called
-  above the declaration would reach it uninitialized;
+- a `const` helper, and every top-level binding a helper reads, is declared before the first
+  top-level call, since a hoisted function called above the declaration would reach it
+  uninitialized. A top-level call can reach any helper through another, so the check covers every
+  helper; a file whose calls all sit inside a `describe` has nothing to precede, since describe
+  callbacks run after the whole module body;
 - its body meets the runner rules above.
 
 A test written inside such a helper is registered once per call, titled from that call's arguments,

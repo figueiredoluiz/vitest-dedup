@@ -586,7 +586,10 @@ pub(crate) fn inert_declaration(parsed: &Parsed, node: NodeId) -> bool {
         | "TSTypeAliasDeclaration"
         | "TSDeclareFunction"
         | "EmptyStatement" => true,
-        "VariableDeclaration" => {
+        // A `using` declaration disposes its value when its scope ends, which runs code.
+        "VariableDeclaration"
+            if matches!(tree.text(node, "kind"), Some("const" | "let" | "var")) =>
+        {
             tree.list(node, "declarations")
                 .into_iter()
                 .flatten()

@@ -2,7 +2,7 @@
 
 use super::{emit, keyed, whole, Entry, Files};
 use crate::config::Config;
-use crate::model::{Finding, Rule, Severity};
+use crate::model::{Finding, GateCase, Rule, Severity};
 use crate::pairs::PairBudget;
 use std::collections::BTreeMap;
 
@@ -58,6 +58,7 @@ pub(super) fn cover_suites(findings: &mut [Finding], files: &Files) {
                             span: case.span,
                         },
                         case.gate_row(),
+                        case.invocation(),
                     ));
             }
         }
@@ -66,12 +67,12 @@ pub(super) fn cover_suites(findings: &mut [Finding], files: &Files) {
         .iter_mut()
         .filter(|f| f.rule == Rule::DuplicateEachRow)
     {
-        let mut covered = Vec::new();
+        let mut covered: Vec<GateCase> = Vec::new();
         let mut suite_claim = false;
-        for (location, row) in finding
+        for (location, row, ..) in finding
             .cases
             .iter()
-            .filter_map(|(location, row)| row.map(|row| (location, row)))
+            .filter_map(|(location, row, ..)| row.map(|row| (location, row)))
         {
             if let Some(cases) =
                 children.get(&(location.path.as_path(), location.span.start_byte, row))

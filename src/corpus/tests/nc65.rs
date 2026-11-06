@@ -109,12 +109,15 @@ fn nc65_helper_arguments_preserve_string_identity() {
         .iter()
         .filter(|f| f.rule == Rule::DuplicateTest)
         .collect();
-    // A repeated source declaration pair is reported once, across its invocation groups.
-    assert_eq!(exact.len(), 1, "{exact:?}");
-    assert_eq!(
-        exact[0].titles,
-        ["replacement call", "replacement call copy"]
-    );
+    // Each invocation is its own declaration, so the two equal-argument calls pair with each
+    // other declaration by declaration; a repeated source declaration pair (lines 4 and 5) is
+    // still one claim across invocation groups, holding the replacement pair's cases too.
+    let lines: Vec<Vec<u32>> = exact
+        .iter()
+        .map(|f| f.locations.iter().map(|l| l.span.start.line).collect())
+        .collect();
+    assert_eq!(lines, [[4, 4], [4, 5], [5, 5]], "{exact:?}");
+    assert_eq!(exact[1].cases.len(), 4, "{:?}", exact[1].cases);
 }
 
 /// Re-parsed scalar substitutions equal literal source without turning the encoding into data.

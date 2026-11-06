@@ -99,9 +99,11 @@ impl HeapBytes for Origin {
         let Self {
             path,
             registration_files,
+            call,
         } = self;
         path.heap_bytes()
             .saturating_add(registration_files.heap_bytes())
+            .saturating_add(call.capacity() * std::mem::size_of::<u32>())
     }
 }
 

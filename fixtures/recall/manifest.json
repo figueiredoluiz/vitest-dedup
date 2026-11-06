@@ -92,7 +92,14 @@
       "expectedIncomplete": false,
       "expectedUnresolved": 0,
       "expectedFindings": [
-        { "rule": "duplicate-suite", "severity": "error", "titles": ["copy", "copy"] }
+        {
+          "rule": "duplicate-suite",
+          "severity": "error",
+          "titles": [
+            "copy",
+            "copy"
+          ]
+        }
       ],
       "expectedAbsent": []
     },
@@ -111,7 +118,10 @@
         {
           "rule": "duplicate-test",
           "severity": "error",
-          "titles": ["uncertain first", "uncertain second"]
+          "titles": [
+            "uncertain first",
+            "uncertain second"
+          ]
         }
       ],
       "expectedAbsent": []
@@ -131,7 +141,10 @@
         {
           "rule": "duplicate-test",
           "severity": "error",
-          "titles": ["kept first", "kept second"]
+          "titles": [
+            "kept first",
+            "kept second"
+          ]
         }
       ],
       "expectedAbsent": []
@@ -202,23 +215,24 @@
       "name": "runner-shared-declaration-retention",
       "path": "runner-shared-declaration-retention",
       "rule": "cross-file-duplicate",
-      "role": "negative",
+      "role": "positive",
       "origin": "synthetic",
       "verdict": "generated",
-      "classifiedAt": "2026-11-02",
+      "classifiedAt": "2026-11-06",
       "expectedTests": 2,
       "expectedIncomplete": false,
       "expectedUnresolved": 0,
-      "expectedFindings": [],
-      "expectedAbsent": [
+      "expectedFindings": [
         {
           "rule": "cross-file-duplicate",
+          "severity": "warning",
           "titles": [
             "normalizes the label",
             "normalizes the label"
           ]
         }
-      ]
+      ],
+      "expectedAbsent": []
     },
     {
       "name": "runner-declaration-origin-collision",
@@ -258,7 +272,7 @@
       "role": "positive",
       "origin": "synthetic",
       "verdict": "generated",
-      "classifiedAt": "2026-11-02",
+      "classifiedAt": "2026-11-06",
       "expectedTests": 4,
       "expectedIncomplete": false,
       "expectedUnresolved": 0,
@@ -268,6 +282,38 @@
           "severity": "error",
           "titles": [
             "runner normalizes first label",
+            "runner normalizes second label"
+          ]
+        },
+        {
+          "rule": "duplicate-test",
+          "severity": "error",
+          "titles": [
+            "runner normalizes first label",
+            "runner normalizes first label"
+          ]
+        },
+        {
+          "rule": "duplicate-test",
+          "severity": "error",
+          "titles": [
+            "runner normalizes second label",
+            "runner normalizes second label"
+          ]
+        },
+        {
+          "rule": "duplicate-test-name",
+          "severity": "warning",
+          "titles": [
+            "runner normalizes first label",
+            "runner normalizes first label"
+          ]
+        },
+        {
+          "rule": "duplicate-test-name",
+          "severity": "warning",
+          "titles": [
+            "runner normalizes second label",
             "runner normalizes second label"
           ]
         }
@@ -10495,8 +10541,8 @@
           "rule": "duplicate-test",
           "severity": "error",
           "titles": [
-            "totals > doubles the value given in the first ta…",
-            "totals > doubles the value given in the second t…"
+            "totals > doubles the value given in the first ta\u2026",
+            "totals > doubles the value given in the second t\u2026"
           ]
         }
       ],
@@ -10518,8 +10564,8 @@
         {
           "rule": "duplicate-test-name",
           "titles": [
-            "checks the limit of a value long enough…",
-            "checks the limit of a value long enough…"
+            "checks the limit of a value long enough\u2026",
+            "checks the limit of a value long enough\u2026"
           ]
         }
       ]
@@ -10608,11 +10654,20 @@
       "role": "variant",
       "origin": "synthetic",
       "verdict": "generated",
-      "classifiedAt": "2026-11-05",
+      "classifiedAt": "2026-11-06",
       "expectedTests": 2,
       "expectedIncomplete": false,
       "expectedUnresolved": 0,
-      "expectedFindings": [],
+      "expectedFindings": [
+        {
+          "rule": "duplicate-test",
+          "severity": "error",
+          "titles": [
+            "parses the first sample",
+            "parses the second sample"
+          ]
+        }
+      ],
       "expectedAbsent": []
     },
     {
@@ -11060,7 +11115,7 @@
       "role": "positive",
       "origin": "synthetic",
       "verdict": "generated",
-      "classifiedAt": "2026-11-05",
+      "classifiedAt": "2026-11-06",
       "expectedTests": 3,
       "expectedIncomplete": false,
       "expectedUnresolved": 0,
@@ -11071,6 +11126,14 @@
           "titles": [
             "check 1",
             "one"
+          ]
+        },
+        {
+          "rule": "parameterization-candidate",
+          "severity": "warning",
+          "titles": [
+            "check 1",
+            "check 2"
           ]
         }
       ],
@@ -11089,6 +11152,203 @@
             "check 2"
           ]
         }
+      ]
+    },
+    {
+      "name": "local-helper-nested-late-constant",
+      "path": "local-helper-nested-late-constant",
+      "rule": "duplicate-test",
+      "role": "variant",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-06",
+      "expectedTests": 6,
+      "expectedIncomplete": true,
+      "expectedUnresolved": 4,
+      "expectedFindings": [
+        {
+          "rule": "duplicate-test",
+          "severity": "error",
+          "titles": [
+            "s > copy",
+            "s > late"
+          ]
+        }
+      ],
+      "expectedAbsent": [
+        {
+          "rule": "duplicate-test",
+          "titles": [
+            "late",
+            "copy"
+          ]
+        }
+      ],
+      "blindUnderCurrent": [
+        "top-level.test.ts"
+      ]
+    },
+    {
+      "name": "runner-hook-inside-suite",
+      "path": "runner-hook-inside-suite",
+      "rule": "duplicate-test",
+      "role": "negative",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-06",
+      "expectedTests": 2,
+      "expectedIncomplete": true,
+      "expectedUnresolved": 2,
+      "expectedFindings": [],
+      "expectedAbsent": [
+        {
+          "rule": "duplicate-test",
+          "titles": [
+            "a > reads",
+            "b > reads"
+          ]
+        }
+      ],
+      "blindUnderCurrent": [
+        "install.test.ts"
+      ]
+    },
+    {
+      "name": "local-helper-suite-arguments",
+      "path": "local-helper-suite-arguments",
+      "rule": "duplicate-test",
+      "role": "negative",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-06",
+      "expectedTests": 6,
+      "expectedIncomplete": true,
+      "expectedUnresolved": 6,
+      "expectedFindings": [],
+      "expectedAbsent": [
+        {
+          "rule": "duplicate-test",
+          "titles": [
+            "s > shared",
+            "t > shared"
+          ]
+        }
+      ],
+      "blindUnderCurrent": [
+        "options.test.ts",
+        "parameters.test.ts"
+      ]
+    },
+    {
+      "name": "local-helper-unopened-sibling-suite",
+      "path": "local-helper-unopened-sibling-suite",
+      "rule": "duplicate-test",
+      "role": "negative",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-06",
+      "expectedTests": 3,
+      "expectedIncomplete": true,
+      "expectedUnresolved": 3,
+      "expectedFindings": [],
+      "expectedAbsent": [
+        {
+          "rule": "duplicate-test",
+          "titles": [
+            "a > shared",
+            "b > shared"
+          ]
+        }
+      ],
+      "blindUnderCurrent": [
+        "side.test.ts"
+      ]
+    },
+    {
+      "name": "local-helper-const-suite-titles",
+      "path": "local-helper-const-suite-titles",
+      "rule": "duplicate-test",
+      "role": "variant",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-06",
+      "expectedTests": 2,
+      "expectedIncomplete": false,
+      "expectedUnresolved": 0,
+      "expectedFindings": [
+        {
+          "rule": "duplicate-test",
+          "severity": "error",
+          "titles": [
+            "left > shared",
+            "right > shared"
+          ]
+        }
+      ],
+      "expectedAbsent": [
+        {
+          "rule": "duplicate-test-name",
+          "titles": [
+            "left > shared",
+            "right > shared"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "local-helper-nested-invocations",
+      "path": "local-helper-nested-invocations",
+      "rule": "duplicate-test",
+      "role": "positive",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-06",
+      "expectedTests": 2,
+      "expectedIncomplete": false,
+      "expectedUnresolved": 0,
+      "expectedFindings": [
+        {
+          "rule": "duplicate-test",
+          "severity": "error",
+          "titles": [
+            "s > shared",
+            "s > shared"
+          ]
+        },
+        {
+          "rule": "duplicate-test-name",
+          "severity": "warning",
+          "titles": [
+            "s > shared",
+            "s > shared"
+          ]
+        }
+      ],
+      "expectedAbsent": []
+    },
+    {
+      "name": "local-helper-suite-using",
+      "path": "local-helper-suite-using",
+      "rule": "duplicate-test",
+      "role": "negative",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-06",
+      "expectedTests": 3,
+      "expectedIncomplete": true,
+      "expectedUnresolved": 3,
+      "expectedFindings": [],
+      "expectedAbsent": [
+        {
+          "rule": "duplicate-test",
+          "titles": [
+            "s > shared",
+            "s > shared"
+          ]
+        }
+      ],
+      "blindUnderCurrent": [
+        "using.test.ts"
       ]
     },
     {

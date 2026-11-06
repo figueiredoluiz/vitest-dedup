@@ -9,6 +9,7 @@ fn imported(source: &str, owner: &str, line: u32) -> TestCase {
     case.origin = Some(Origin {
         path: PathBuf::from(source),
         registration_files: vec![PathBuf::from(owner)],
+        call: Vec::new(),
     });
     case
 }
@@ -22,18 +23,23 @@ fn claims(files: Vec<(PathBuf, Vec<TestCase>)>, rule: Rule) -> Vec<Finding> {
         .collect()
 }
 
-/// Repeated executions never become a cross-file source duplicate.
+/// Repeated executions across callers are two runtime cases over one source declaration: the
+/// identical bodies under equivalent contexts pair across the files, exactly as two copied
+/// tests written into two files do.
 #[test]
-fn one_shared_source_cannot_pair_with_itself() {
+fn repeated_executions_across_callers_pair_across_files() {
     let files = vec![
         file("a.test.ts", vec![imported("runner.ts", "a.test.ts", 1)]),
         file("b.test.ts", vec![imported("runner.ts", "b.test.ts", 1)]),
     ];
     assert_eq!(files.iter().map(|(_, cases)| cases.len()).sum::<usize>(), 2);
-    assert!(claims(files, Rule::CrossFileDuplicate).is_empty());
+    let findings = claims(files, Rule::CrossFileDuplicate);
+    assert_eq!(findings.len(), 1, "{findings:?}");
+    assert_eq!(findings[0].registration_files.len(), 2);
 }
 
-/// A shared declaration may need its second caller to witness a distinct-source cross-file pair.
+/// A shared declaration's repeated executions pair across callers; a distinct source beside
+/// them keeps its caller provenance without gaining a twin.
 #[test]
 fn shared_sources_preserve_witnesses_and_nonrepresentative_changed_callers() {
     let files = vec![
@@ -48,12 +54,19 @@ fn shared_sources_preserve_witnesses_and_nonrepresentative_changed_callers() {
     ];
     assert_eq!(files.iter().map(|(_, cases)| cases.len()).sum::<usize>(), 3);
     let findings = claims(files, Rule::CrossFileDuplicate);
+    // The repeated a-runner executions pair across the callers; the distinct b-runner source in
+    // one caller has no twin and stays unpaired.
     assert_eq!(findings.len(), 1, "{findings:?}");
-    assert_eq!(findings[0].locations[0].path, PathBuf::from("a-runner.ts"));
-    assert_eq!(findings[0].locations[1].path, PathBuf::from("b-runner.ts"));
+    assert!(findings[0]
+        .locations
+        .iter()
+        .all(|location| location.path == Path::new("a-runner.ts")));
     assert_eq!(
-        findings[0].registration_files[0],
-        [PathBuf::from("a.test.ts"), PathBuf::from("b.test.ts")]
+        findings[0].registration_files,
+        vec![
+            vec![PathBuf::from("a.test.ts")],
+            vec![PathBuf::from("b.test.ts")]
+        ]
     );
     for path in ["a.test.ts", "b.test.ts", "a-runner.ts", "unrelated.ts"] {
         let mut scoped = findings.clone();
@@ -143,4 +156,26 @@ fn row_pairs_of_two_tables_are_one_claim_beside_imported_cases() {
     let findings = claims(files, Rule::DuplicateTest);
     assert_eq!(findings.len(), 1, "{findings:?}");
     assert_eq!(findings[0].locations.len(), 2, "{findings:?}");
+}
+
+/// Two callers running one declaration at the same call position are two runtime cases: the
+/// identity keeps the caller path and the call chain apart, never folded into one number.
+#[test]
+fn equal_call_positions_in_two_callers_are_two_cases() {
+    let at = |owner: &str| {
+        let mut case = imported("runner.ts", owner, 1);
+        case.origin.as_mut().unwrap().call = vec![42];
+        case
+    };
+    let files = vec![
+        file("a.test.ts", vec![at("a.test.ts")]),
+        file("b.test.ts", vec![at("b.test.ts")]),
+    ];
+    let findings = claims(files, Rule::CrossFileDuplicate);
+    assert_eq!(findings.len(), 1, "{findings:?}");
+    assert_eq!(findings[0].cases.len(), 2, "{:?}", findings[0].cases);
+    assert!(findings[0]
+        .cases
+        .iter()
+        .all(|(_, _, invocation)| invocation.is_some()));
 }

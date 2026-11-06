@@ -553,9 +553,11 @@ fn a_failed_sibling_call_cannot_leave_partial_expansion_records() {
     assert!(findings(corpus).is_empty());
 }
 
-/// Repetition counts executions while the remedy still identifies one source declaration pair.
+/// Repetition counts executions: two calls of one template are four runtime tests whose written
+/// pair still pairs, and each invocation pairs with its own twin across calls (distinct
+/// declarations, one per invocation).
 #[test]
-fn repeated_imported_calls_share_declaration_identity() {
+fn repeated_imported_calls_pair_per_invocation() {
     let runner =
         include_str!("../../../fixtures/recall/runner-repeated-registration-ownership/runner.ts");
     let caller =
@@ -569,15 +571,34 @@ fn repeated_imported_calls_share_declaration_identity() {
     assert!(corpus.tests.iter().all(|case| case.exclusion.is_none()));
     assert_eq!(corpus.helper_sources.len(), 1);
     let findings = findings_in(corpus, "run.test.ts");
-    assert_eq!(findings.len(), 1, "{findings:?}");
-    assert_eq!(findings[0].rule, Rule::DuplicateTest);
-    assert_eq!(findings[0].locations.len(), 2);
-    assert!(findings[0]
-        .locations
+    // The written pair, and one duplicate per template test between the two invocations.
+    assert_eq!(findings.len(), 5, "{findings:?}");
+    let duplicates: Vec<_> = findings
         .iter()
-        .all(|location| location.path == std::path::Path::new("runner.ts")));
+        .filter(|finding| finding.rule == Rule::DuplicateTest)
+        .collect();
+    assert_eq!(duplicates.len(), 3);
+    assert!(duplicates.iter().all(|finding| {
+        finding.locations.len() == 2
+            && finding
+                .locations
+                .iter()
+                .all(|location| location.path == std::path::Path::new("runner.ts"))
+    }));
+    // Each invocation twin pairs with itself across calls: the titles agree within the pair.
+    assert!(duplicates
+        .iter()
+        .any(|finding| finding.titles[0] == finding.titles[1]
+            && finding.titles[0] == "runner normalizes first label"));
+    assert!(duplicates
+        .iter()
+        .any(|finding| finding.titles[0] == finding.titles[1]
+            && finding.titles[0] == "runner normalizes second label"));
+    assert!(duplicates
+        .iter()
+        .any(|finding| finding.titles[0] != finding.titles[1]));
     assert_eq!(
-        findings[0].registration_files,
+        duplicates[0].registration_files,
         vec![vec![PathBuf::from("run.test.ts")]; 2]
     );
 }

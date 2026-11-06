@@ -5,15 +5,7 @@
       "wrapperSites": [
         "wrapper@6"
       ],
-      "next": {},
-      "nextToday": {
-        "reasons": [
-          "registered-elsewhere",
-          "helper-effects-unproved"
-        ],
-        "testsExcluded": 2
-      },
-      "waitsOn": "tests a wrapper registers compared where it is called"
+      "next": {}
     }
   }
 }

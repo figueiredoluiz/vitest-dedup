@@ -905,9 +905,9 @@ pub fn apply_inline_suppressions(
     // A kept finding can still stand for a suppressed test it does not list, such as a
     // declaration reduced behind another or a test inside a suite copy: that case is not charged.
     for finding in findings.iter_mut() {
-        finding.cases.retain(|(location, _)| !suppressed(location));
+        finding.cases.retain(|(location, ..)| !suppressed(location));
         if let Some(covers) = &mut finding.covers {
-            covers.cases.retain(|(location, _)| !suppressed(location));
+            covers.cases.retain(|(location, ..)| !suppressed(location));
         }
     }
     before - findings.len()
