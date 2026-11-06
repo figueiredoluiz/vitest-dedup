@@ -4972,6 +4972,88 @@
       "expectedAbsent": []
     },
     {
+      "name": "subsumed-test-unread-expected-failure",
+      "path": "subsumed-test-unread-expected-failure",
+      "rule": "subsumed-test",
+      "role": "negative",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-06",
+      "expectedTests": 8,
+      "expectedIncomplete": false,
+      "expectedUnresolved": 0,
+      "expectedFindings": [
+        {
+          "rule": "subsumed-test",
+          "severity": "warning",
+          "titles": [
+            "reads the name",
+            "reads the name and city"
+          ]
+        }
+      ],
+      "expectedAbsent": [
+        {
+          "rule": "subsumed-test",
+          "titles": [
+            "reads the total",
+            "reads the total, then a wrong tax"
+          ]
+        },
+        {
+          "rule": "subsumed-test",
+          "titles": [
+            "reads the sku",
+            "reads the sku, then a wrong size"
+          ]
+        },
+        {
+          "rule": "subsumed-test",
+          "titles": [
+            "inverted suite > misreads the zone",
+            "inverted suite > misreads the zone, then the code"
+          ]
+        }
+      ],
+      "arguments": [
+        "--rule",
+        "subsumed-test=warning"
+      ]
+    },
+    {
+      "name": "subsumed-test-inert-larger",
+      "path": "subsumed-test-inert-larger",
+      "rule": "subsumed-test",
+      "role": "negative",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-06",
+      "expectedTests": 4,
+      "expectedIncomplete": false,
+      "expectedUnresolved": 0,
+      "expectedFindings": [],
+      "expectedAbsent": [
+        {
+          "rule": "subsumed-test",
+          "titles": [
+            "reads the count",
+            "reads the count and total"
+          ]
+        },
+        {
+          "rule": "subsumed-test",
+          "titles": [
+            "reads the currency",
+            "reads the currency and items"
+          ]
+        }
+      ],
+      "arguments": [
+        "--rule",
+        "subsumed-test=warning"
+      ]
+    },
+    {
       "rule": "duplicate-test",
       "role": "variant",
       "origin": "synthetic",
