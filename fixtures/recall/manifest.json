@@ -6,6 +6,22 @@
   "recallDestination": 1,
   "cases": [
     {
+      "name": "suite-case-file-index",
+      "path": "suite-case-file-index",
+      "rule": "duplicate-suite",
+      "role": "positive",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-06",
+      "expectedTests": 3,
+      "expectedIncomplete": false,
+      "expectedUnresolved": 0,
+      "expectedFindings": [
+        { "rule": "duplicate-suite", "severity": "error", "titles": ["copy", "copy"] }
+      ],
+      "expectedAbsent": []
+    },
+    {
       "name": "config-extglob-overflow",
       "path": "config-extglob-overflow",
       "rule": "duplicate-test",

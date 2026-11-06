@@ -5,7 +5,15 @@ use crate::config::Config;
 use crate::model::{Covers, Finding, GateCase, Location, Rule, Severity};
 use crate::modes::{apply_inline_suppressions, InlineSuppression};
 use crate::pairs::PairBudget;
+use std::cell::OnceCell;
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::Path;
+
+#[cfg(test)]
+thread_local! {
+    /// File entries traversed while collecting suite cases on this test thread.
+    pub(super) static DESCENDANT_FILE_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
 
 /// Successfully reported suite groups. No unreported or suppressed claim covers a child.
 #[derive(Default)]
@@ -196,6 +204,8 @@ pub(super) fn run(
             .then(|| Some((entry.path, entry.case.name.as_ref()?, entry.case.key)))
             .flatten()
     });
+    // Retain every entry for an equal path; build the borrowed index only for an emitted finding.
+    let by_path = OnceCell::new();
     for group in groups {
         let group = per_declaration(whole(&group), &entries);
         if group.len() < 2 {
@@ -222,7 +232,14 @@ pub(super) fn run(
         }
         // A copy stands for the tests declared inside it, whether or not a child rule reports them.
         for finding in &mut emitted {
-            finding.cases = descendants(finding, tests);
+            let by_path = by_path.get_or_init(|| {
+                let mut index: BTreeMap<&Path, Vec<usize>> = BTreeMap::new();
+                for (position, (path, _)) in tests.iter().enumerate() {
+                    index.entry(path.as_path()).or_default().push(position);
+                }
+                index
+            });
+            finding.cases = descendants(finding, tests, by_path);
         }
         let mut visible = emitted.clone();
         let removed = apply_inline_suppressions(&mut visible, suppressions);
@@ -236,14 +253,24 @@ pub(super) fn run(
 }
 
 /// The eligible tests declared inside the suite copies `finding` names: what it stands for.
-fn descendants(finding: &Finding, tests: &Files) -> Vec<GateCase> {
+fn descendants(
+    finding: &Finding,
+    tests: &Files,
+    by_path: &BTreeMap<&Path, Vec<usize>>,
+) -> Vec<GateCase> {
     let mut cases: Vec<GateCase> = finding
         .locations
         .iter()
         .flat_map(|copy| {
-            tests
-                .iter()
-                .filter(move |(path, _)| *path == copy.path)
+            by_path
+                .get(copy.path.as_path())
+                .into_iter()
+                .flatten()
+                .map(|&index| &tests[index])
+                .inspect(|_| {
+                    #[cfg(test)]
+                    DESCENDANT_FILE_VISITS.with(|visits| visits.set(visits.get() + 1));
+                })
                 .flat_map(move |(path, declared)| {
                     declared
                         .iter()
