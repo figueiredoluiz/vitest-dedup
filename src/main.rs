@@ -2663,6 +2663,30 @@ mod tests {
         assert_eq!(report["findings"][0]["rule"], "duplicate-test");
     }
 
+    /// Absent repository markers keep the owned duplicate positive complete in strict mode.
+    #[test]
+    #[cfg(unix)]
+    fn bounded_unresolvable_git_markers_preserve_complete_cli_results() {
+        let directory = single_file_project(
+            "a.test.ts",
+            include_str!("../fixtures/recall/ignore-input-bounded/a.test.ts"),
+        );
+        let root = directory.path();
+        for target in ["missing", ".git"] {
+            std::os::unix::fs::symlink(target, root.join(".git")).unwrap();
+            let (_, report) = run_json_with_stderr(root, ExitCode::QualityGateFailed);
+            assert_eq!(report["testsAnalyzed"], 2);
+            assert_eq!(report["unresolvedTests"], 0);
+            assert_eq!(report["incomplete"], false);
+            let findings = report["findings"].as_array().unwrap();
+            assert_eq!(findings.len(), 1);
+            assert_eq!(findings[0]["rule"], "duplicate-test");
+            let (code, _, _) = run_cli(root, &["--fail-on-incomplete=reads"]);
+            assert_eq!(code, Some(ExitCode::QualityGateFailed.code()));
+            std::fs::remove_file(root.join(".git")).unwrap();
+        }
+    }
+
     /// Significant spaces in both metadata pointers preserve Git exclusions and owned positives.
     #[test]
     #[cfg(unix)]

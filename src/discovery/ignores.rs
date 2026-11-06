@@ -197,6 +197,9 @@ impl Ignores {
     fn git_directory(&mut self, directory: &Path) -> Option<PathBuf> {
         let dotgit = directory.join(".git");
         let metadata = fs::symlink_metadata(&dotgit).ok()?;
+        if metadata.file_type().is_symlink() && !dotgit.exists() {
+            return None;
+        }
         let gitdir = if metadata.is_dir() {
             dotgit
         } else {
@@ -575,6 +578,28 @@ mod tests {
         let result = discover(root);
         assert!(result.files.is_empty());
         assert!(!result.incomplete, "{:?}", result.errors);
+    }
+
+    /// Unresolvable markers are absent, while a link to existing metadata remains refused.
+    #[test]
+    #[cfg(unix)]
+    fn bounded_ignore_unresolvable_git_markers_are_absent() {
+        let dir = fixture();
+        let root = dir.path();
+        let marker = root.join(".git");
+        fs::remove_dir(&marker).unwrap();
+        for target in ["missing", ".git", "metadata"] {
+            if target == "metadata" {
+                fs::create_dir(root.join(target)).unwrap();
+            }
+            std::os::unix::fs::symlink(target, &marker).unwrap();
+            let result = discover(root);
+            assert_eq!(result.files.len(), 1);
+            assert_eq!(result.incomplete, target == "metadata", "{target}");
+            assert_eq!(result.traversal_failed, target == "metadata", "{target}");
+            assert_eq!(result.errors.is_empty(), target != "metadata", "{target}");
+            fs::remove_file(&marker).unwrap();
+        }
     }
 
     /// Metadata paths retain significant spaces with absent, Unix or Windows line endings.
