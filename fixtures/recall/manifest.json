@@ -1166,6 +1166,56 @@
       ]
     },
     {
+      "name": "duplicate-test-bench-vitest4-setup-reference",
+      "path": "duplicate-test-bench-vitest4-setup-reference",
+      "rule": "duplicate-test",
+      "role": "negative",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-06",
+      "expectedTests": 2,
+      "expectedIncomplete": true,
+      "expectedUnresolved": 2,
+      "expectedFindings": [],
+      "expectedAbsent": [
+        {
+          "rule": "duplicate-test",
+          "titles": [
+            "fills a buffer",
+            "fills a buffer again"
+          ]
+        }
+      ],
+      "blindUnderCurrent": [
+        "size.bench.ts"
+      ]
+    },
+    {
+      "name": "duplicate-test-bench-vitest4-concurrent",
+      "path": "duplicate-test-bench-vitest4-concurrent",
+      "rule": "duplicate-test",
+      "role": "negative",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-06",
+      "expectedTests": 3,
+      "expectedIncomplete": true,
+      "expectedUnresolved": 3,
+      "expectedFindings": [],
+      "expectedAbsent": [
+        {
+          "rule": "duplicate-test",
+          "titles": [
+            "sorts numbers",
+            "sorts numbers again"
+          ]
+        }
+      ],
+      "blindUnderCurrent": [
+        "sort.bench.ts"
+      ]
+    },
+    {
       "name": "duplicate-test-bench-vitest-range",
       "path": "duplicate-test-bench-vitest-range",
       "rule": "duplicate-test",

@@ -48,15 +48,17 @@ A top-level `bench` is compared on the same terms as a test, by every rule, but 
 benchmarks: a benchmark and a test never pair, even with equal bodies or titles. Options such as
 `iterations` are part of what a benchmark measures, so they keep two benchmarks apart. Vitest runs
 no hook around a benchmark, so a `beforeEach` that resets shared state does not make it safe for
-benchmarks to read. A benchmark whose options hold a callback (`setup`, `teardown`) or anything
-not a plain literal is not compared, since what those run is not read. A `parameterization-candidate` between benchmarks advises one loop of
+benchmarks to read. A benchmark is compared only when its options are plain data, literal values under written keys:
+options can hold `setup` and `teardown` callbacks that run around it, and what those run is not
+read. A `parameterization-candidate` between benchmarks advises one loop of
 `bench(...)` calls over the varying values, since there is no `bench.each` and a `test.each`
 table would not be measured.
 
 A benchmark is compared only where it runs: in a file `benchmark.include` collects, in a project
 whose installed Vitest, or the `vitest` version its nearest `package.json` declares, is 4. Vitest 5
-has no top-level `bench`, a `bench` in a test file fails outside benchmark mode, and a
-`bench.each` or `bench.for` makes Vitest 4 fail the whole file, so those, and any benchmark whose
+has no top-level `bench`, a `bench` in a test file fails outside benchmark mode, and any member
+Vitest 4's `bench` lacks (it has `skip`, `only`, `todo`, `skipIf` and `runIf`; not `each`, `for`
+or `concurrent`) makes it fail the whole file, so those, and any benchmark whose
 Vitest version is not known, are counted as `unsupported-benchmark` and not compared. Benchmarks are never quality-gate cases.
 
 ## Parameterized rows

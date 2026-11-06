@@ -58,7 +58,16 @@ fn a_benchmark_not_known_to_run_stays_excluded() {
 /// benchmark there registers, an empty table and its valid siblings included, each still counted.
 #[test]
 fn a_benchmark_table_refuses_every_benchmark_in_its_file() {
-    for table in ["each([1, 2])", "for([1, 2])", "each([])"] {
+    for table in [
+        "each([1, 2])",
+        "for([1, 2])",
+        "each([])",
+        "concurrent",
+        "sequential",
+        "fails",
+        "skipIf(false).each([1])",
+        "skipIf(false).only",
+    ] {
         let source = format!("bench.{table}('row %i', {BODY})\nbench('plain', {BODY})\n");
         let (_, corpus) = read(&source, true);
         assert_eq!(corpus.tests.len(), 2, "{table}: one case per site");
@@ -78,7 +87,8 @@ fn a_benchmark_table_refuses_every_benchmark_in_its_file() {
 }
 
 /// A benchmark's `setup` and `teardown` run around it and may write what it reads, so options
-/// holding a function, or a spread that could, refuse; plain literal options stay compared.
+/// that are not plain data (a function, a reference, a spread, a computed key, a getter) refuse;
+/// plain literal options stay compared.
 #[test]
 fn benchmark_options_with_callbacks_refuse() {
     for options in [
@@ -86,6 +96,11 @@ fn benchmark_options_with_callbacks_refuse() {
         "{ teardown() {} }",
         "{ ...shared }",
         "shared",
+        "{ setup: shared }",
+        "{ shared }",
+        "{ [shared]: 1 }",
+        "{ get time() { return 1 } }",
+        "{ iterations: -1 }",
     ] {
         let source = format!(
             "const shared = {{}}\nbench('a', {BODY}, {options})\nbench('b', {BODY}, {options})\n"
@@ -102,6 +117,27 @@ fn benchmark_options_with_callbacks_refuse() {
         true,
     );
     assert!(cases["a"].exclusion.is_none(), "{:?}", cases["a"].exclusion);
+}
+
+/// The members Vitest 4.1.12's `bench` has keep the file's benchmarks compared.
+#[test]
+fn existing_benchmark_members_keep_the_file_compared() {
+    for chain in [
+        "skip",
+        "only",
+        "todo",
+        "skip.only",
+        "skipIf(false)",
+        "runIf(true)",
+    ] {
+        let source = format!("bench.{chain}('a', {BODY})\nbench('b', {BODY})\n");
+        let (cases, _) = read(&source, true);
+        assert!(
+            cases["b"].exclusion.is_none(),
+            "{chain}: {:?}",
+            cases["b"].exclusion
+        );
+    }
 }
 
 /// Two benchmarks of one name collide; a benchmark and a test of that name are different tasks.

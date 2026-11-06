@@ -348,6 +348,23 @@ pub struct Setting<'a> {
     pub benchmarks: bool,
 }
 
+/// Whether a benchmark's option argument is plain data: a literal, or an object literal whose
+/// every property is a written key with a literal value. Anything else may hold a `setup` or
+/// `teardown` that runs around the benchmark, whose effects are not read.
+fn plain_options(tree: &lang::Tree, node: NodeId) -> bool {
+    let literal = |value: Option<NodeId>| {
+        value.is_some_and(|value| tree.kind(tree.inner(value)) == "Literal")
+    };
+    let entries = tree.list(node, "properties");
+    literal(Some(node))
+        || (tree.kind(node) == "ObjectExpression"
+            && entries.iter().all(Option::is_some)
+            && entries.into_iter().flatten().all(|entry| {
+                let written = tree.kind(entry) == "Property" && !tree.flag(entry, "computed");
+                written && literal(tree.child(entry, "value"))
+            }))
+}
+
 /// Whether reaching `statement` runs nothing: a function, type or import with bindings, or a
 /// declaration whose initializers create nothing, or control flow over primitives that ends where
 /// it started (see [`Normalizer::completes_inertly`]). A class runs its decorators, computed keys
@@ -711,13 +728,13 @@ fn read_parsed(
         .map(|site| (site.node, site.provenance))
         .collect();
     // A same-file helper's template registers through its admitted calls, which carry its cases.
-    // Vitest 4 has no `bench.each` or `bench.for`: calling one throws while the file loads, so no
-    // benchmark in that file registers, whatever the table holds.
+    // A member Vitest 4's `bench` lacks (`each`, `for`, `concurrent`, ...) throws while the file
+    // loads, so no benchmark in that file registers, whatever the call holds.
     let benchmarks = setting.benchmarks
-        && !found
-            .sites
-            .iter()
-            .any(|site| site.kind == SiteKind::Registers(Registers::Bench) && table_site(site));
+        && found.sites.iter().all(|site| {
+            site.kind != SiteKind::Registers(Registers::Bench)
+                || setting.dialect.bench_chain_exists(&site.chain)
+        });
     // A benchmark the file is known to run is read exactly as a test is, and marked.
     for site in found.sites.iter().filter(|site| {
         (site.kind == SiteKind::Registers(Registers::Test)
@@ -979,16 +996,10 @@ fn read_parsed(
                 continue;
             }
             let (body, function) = (callback.argument, callback.function);
-            // A benchmark's options can carry `setup` and `teardown` callbacks that run around it,
-            // and their effects are not read: only plain literal options are admitted.
             if benchmark
                 && arguments.iter().skip(1).any(|&argument| {
                     let inner = tree.inner(argument);
-                    inner != tree.inner(body)
-                        && (!matches!(tree.kind(inner), "ObjectExpression" | "Literal")
-                            || tree.descendants(inner).any(|node| {
-                                tree.is_function(node) || tree.kind(node) == "SpreadElement"
-                            }))
+                    inner != tree.inner(body) && !plain_options(tree, inner)
                 })
             {
                 tests.extend(excluded(Exclusion::Benchmark));
