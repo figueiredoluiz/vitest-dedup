@@ -11240,6 +11240,62 @@
       ]
     },
     {
+      "name": "local-helper-unopened-sibling-suite",
+      "path": "local-helper-unopened-sibling-suite",
+      "rule": "duplicate-test",
+      "role": "negative",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-06",
+      "expectedTests": 3,
+      "expectedIncomplete": true,
+      "expectedUnresolved": 3,
+      "expectedFindings": [],
+      "expectedAbsent": [
+        {
+          "rule": "duplicate-test",
+          "titles": [
+            "a > shared",
+            "b > shared"
+          ]
+        }
+      ],
+      "blindUnderCurrent": [
+        "side.test.ts"
+      ]
+    },
+    {
+      "name": "local-helper-const-suite-titles",
+      "path": "local-helper-const-suite-titles",
+      "rule": "duplicate-test",
+      "role": "variant",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-06",
+      "expectedTests": 2,
+      "expectedIncomplete": false,
+      "expectedUnresolved": 0,
+      "expectedFindings": [
+        {
+          "rule": "duplicate-test",
+          "severity": "error",
+          "titles": [
+            "left > shared",
+            "right > shared"
+          ]
+        }
+      ],
+      "expectedAbsent": [
+        {
+          "rule": "duplicate-test-name",
+          "titles": [
+            "left > shared",
+            "right > shared"
+          ]
+        }
+      ]
+    },
+    {
       "name": "local-helper-late-constant",
       "path": "local-helper-late-constant",
       "rule": "duplicate-test",

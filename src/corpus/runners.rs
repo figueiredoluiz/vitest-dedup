@@ -179,13 +179,16 @@ fn closed_batch(
                         } else {
                             suite_statements.insert(statement);
                         }
-                        // Only a bare suite whose title renders opens its body to the sequence:
-                        // a chained member (`skip`, `each`) changes what registering inside means,
-                        // and an unrenderable title makes the caller-side prefix unprovable.
-                        if matches!(site.kind, SiteKind::Registers(Registers::Suite))
-                            && site.chain.is_empty()
-                            && normal::titles::title(parsed, site.node).is_some()
-                        {
+                        // Every suite's callback runs while the file is collected (a skipped or
+                        // table suite's too), so a suite is admitted only when its body opens to
+                        // the sequence: a bare suite whose title renders. Any other suite leaves
+                        // collection effects unproved, and the file refuses.
+                        if matches!(site.kind, SiteKind::Registers(Registers::Suite)) {
+                            if !site.chain.is_empty()
+                                || normal::titles::title(parsed, site.node).is_none()
+                            {
+                                return None;
+                            }
                             // Exactly a title and a callback that takes nothing: an options
                             // argument or a parameter default is evaluated while the suite
                             // registers, and can throw before its body runs.

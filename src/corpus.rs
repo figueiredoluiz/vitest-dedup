@@ -1450,18 +1450,21 @@ fn read_parsed(
                         .and_then(|title| title.clone())
                 })
                 .collect();
-            if let (Some(names), Some(displays)) = (names, displays) {
-                for test in &mut expansion_tests {
-                    if let Some(segments) = &mut test.name {
+            // The comparison name and the display title are proved apart: a `const` title renders
+            // as a name with no literal display. A name with an unproved prefix has none.
+            for test in &mut expansion_tests {
+                test.name = match (&names, test.name.take()) {
+                    (Some(names), Some(mut segments)) => {
                         let mut prefixed = names.clone();
-                        prefixed.append(segments);
-                        test.name = Some(prefixed);
+                        prefixed.append(&mut segments);
+                        Some(prefixed)
                     }
-                    if let Some(title) = &test.full_title {
-                        let mut segments = displays.clone();
-                        segments.push(title.clone());
-                        test.full_title = Some(segments.join(" > "));
-                    }
+                    _ => None,
+                };
+                if let (Some(displays), Some(title)) = (&displays, &test.full_title) {
+                    let mut segments = displays.clone();
+                    segments.push(title.clone());
+                    test.full_title = Some(segments.join(" > "));
                 }
             }
         }

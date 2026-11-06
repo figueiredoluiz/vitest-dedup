@@ -25,12 +25,14 @@ The calling file qualifies when it parses cleanly and its top level holds only i
 declarations (functions, types, literal constants), plain `test(title, callback)` calls with a
 static title (a string of any length, or a template up to 65,536 bytes) and an inline callback,
 statement-level calls of imported runners or [same-file helpers](#same-file-helpers), and plain
-`describe` blocks (a literal title, no `each`, no `skip`, no third argument, and a synchronous
+`describe` blocks (a title that renders from literals or constants, no `each`, no `skip`, no third
+argument, and a synchronous
 callback that takes no parameters) whose bodies close the same way. A call
 may sit inside such a `describe`: Vitest runs describe callbacks after the module body, so what the
 call registers joins that suite, and the tests take its suite path. A hook written anywhere in the
 calling file, a call inside a `describe` whose runner registers a hook (it would govern every test
-in that suite), a table (`each`) or skipped (`skip`) suite around a call, a label the sequence
+in that suite), any other suite in the file (a table or skipped one, one with options, callback
+parameters or a title that does not render; Vitest still runs its callback), a label the sequence
 cannot close around, a module load the file does not import by name, or a registration function
 read as a value refuses the whole file's expansion. Every value it imports from a project module must be
 a runner the proof read.

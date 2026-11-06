@@ -479,6 +479,61 @@ fn a_suite_with_options_or_parameters_refuses_the_expansion() {
     }
 }
 
+/// A suite that does not open its body to the sequence still runs its callback while the file is
+/// collected (a skipped one too), so beside it no call expands: here the callback throws and Vitest
+/// collects nothing.
+#[test]
+fn an_unopened_suite_beside_calls_refuses_the_expansion() {
+    let header = "import { describe, test, expect } from 'vitest'\n";
+    let helper =
+        "function makeTest() {\n  test('shared', () => {\n    expect(1).toBe(1)\n  })\n}\n";
+    let calls =
+        "describe('a', () => {\n  makeTest()\n})\ndescribe('b', () => {\n  makeTest()\n})\n";
+    let expanded = |extra: &str| {
+        by_title(&format!("{header}{helper}{extra}{calls}"))
+            .values()
+            .any(|test| test.exclusion.is_none())
+    };
+    assert!(expanded(""), "the control expands");
+    for extra in [
+        "describe.skip('side', () => {\n  throw new Error('boom')\n})\n",
+        "describe.each([1])('side %i', () => {\n  throw new Error('boom')\n})\n",
+        "describe(String(Math.random()), () => {\n  throw new Error('boom')\n})\n",
+    ] {
+        assert!(!expanded(extra), "{extra}");
+    }
+}
+
+/// A suite title proved from a `const` names the expanded tests even with no literal display, so
+/// two calls under `left` and `right` do not collide by name.
+#[test]
+fn a_const_suite_title_prefixes_the_expanded_names() {
+    let source = "import { describe, test, expect } from 'vitest'\nconst left = 'left'\nconst right = 'right'\n\
+                  function makeTest() {\n  test('shared', () => {\n    expect(1).toBe(1)\n  })\n}\n\
+                  describe(left, () => {\n  makeTest()\n})\ndescribe(right, () => {\n  makeTest()\n})\n";
+    let corpus = corpora(&[("a.test.ts", source)], &["a.test.ts"]).remove(0);
+    let mut names: Vec<_> = corpus
+        .tests
+        .iter()
+        .filter(|test| test.exclusion.is_none())
+        .map(|test| test.name.clone())
+        .collect();
+    names.sort();
+    assert_eq!(
+        names,
+        [
+            Some(vec!["left".to_owned(), "shared".to_owned()]),
+            Some(vec!["right".to_owned(), "shared".to_owned()])
+        ]
+    );
+    let collisions = owned_findings("a.test.ts", corpus)
+        .findings
+        .iter()
+        .filter(|finding| finding.rule == Rule::DuplicateTestName)
+        .count();
+    assert_eq!(collisions, 0);
+}
+
 /// A helper a top-level call reaches only through another helper still reads what it reads when
 /// that call runs: a `const` declared after it is uninitialized then (Vitest 5.0.5 throws), so the
 /// file keeps its exclusions. With no top-level call, a suite-position call runs after the module
