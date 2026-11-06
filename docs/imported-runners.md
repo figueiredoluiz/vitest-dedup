@@ -21,11 +21,14 @@ tests around it are left out of comparison rather than guessed at.
 The calling file qualifies when it parses cleanly and its top level holds only imports, inert
 declarations (functions, types, literal constants), plain `test(title, callback)` calls with a
 static title (a string of any length, or a template up to 65,536 bytes) and an inline callback,
-and statement-level calls of imported runners or [same-file helpers](#same-file-helpers). A
-`describe`, a hook, a label, a module load the
-file does not import by name, or a registration function read as a value refuses the whole file's
-expansion. Every value it imports from a project module must be a
-runner the proof read.
+statement-level calls of imported runners or [same-file helpers](#same-file-helpers), hook
+registrations, and plain `describe` blocks (a literal title, no `each`, no `skip`) whose bodies
+close the same way. A call may sit inside such a `describe`: Vitest runs describe callbacks after
+the module body, so what the call registers joins that suite, and the tests take its suite path.
+A table (`each`) or skipped (`skip`) suite around a call, a hook or label the sequence cannot
+close around, a module load the file does not import by name, or a registration function read as
+a value refuses the whole file's expansion. Every value it imports from a project module must be
+a runner the proof read.
 
 A runner qualifies when:
 
@@ -59,7 +62,8 @@ A function in the calling file is expanded the same way when:
 - every use of it is a call: a statement-level call at the top level, or a call from another helper
   that qualifies;
 - a `const` helper is declared before the first top-level call, since a hoisted function called
-  above the declaration would reach it uninitialized;
+  above the declaration would reach it uninitialized. A call inside a `describe` runs after the
+  whole module body, so it is exempt; the top-level call is what orders the check;
 - its body meets the runner rules above.
 
 A test written inside such a helper is registered once per call, titled from that call's arguments,

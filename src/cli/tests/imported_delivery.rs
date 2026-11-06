@@ -99,8 +99,9 @@ fn helper_sources_drive_snippets_and_suppressions(environment: &[(&str, &str)]) 
         .assert()
         .code(1);
     let first = report(root);
+    // Two invocations of one template: the written pair and each invocation's twin pair.
     assert_eq!(first["testsAnalyzed"], 4);
-    assert_eq!(first["findings"].as_array().unwrap().len(), 1);
+    assert_eq!(first["findings"].as_array().unwrap().len(), 3);
     assert_eq!(first["findings"][0]["locations"][0]["path"], "runner.ts");
     assert_eq!(
         first["findings"][0]["registrationFiles"][0][0],
@@ -121,11 +122,18 @@ fn helper_sources_drive_snippets_and_suppressions(environment: &[(&str, &str)]) 
         .args(["--reporters", "json", "--output"])
         .arg(root.join("report"))
         .assert()
-        .success();
+        .code(1);
     let second = report(root);
+    // Suppressing `first` removes every finding it joins; the second invocation pair remains.
     assert_eq!(second["testsAnalyzed"], 4);
-    assert_eq!(second["findings"].as_array().unwrap().len(), 0);
-    assert_eq!(second["modes"]["suppressionsApplied"], 1);
+    assert_eq!(
+        second["findings"].as_array().unwrap().len(),
+        1,
+        "{}",
+        second["findings"]
+    );
+    // Both invocations of the suppressed template are distinct declarations.
+    assert_eq!(second["modes"]["suppressionsApplied"], 2);
 }
 
 #[test]
@@ -149,9 +157,9 @@ fn imported_findings_roundtrip_through_a_current_file_baseline() {
         .success();
     let result = report(root);
     assert_eq!(result["testsAnalyzed"], 4);
-    assert_eq!(result["findings"].as_array().unwrap().len(), 1);
+    assert_eq!(result["findings"].as_array().unwrap().len(), 3);
     assert_eq!(result["findings"][0]["baselined"], true);
-    assert_eq!(result["modes"]["baselined"], 1);
+    assert_eq!(result["modes"]["baselined"], 3);
 }
 
 #[test]
@@ -307,7 +315,11 @@ fn the_analyzer_base_pass_applies_committed_helper_suppressions() {
         .assert()
         .code(1);
     let result = report(root);
-    assert_eq!(result["findings"].as_array().unwrap().len(), 1, "{result}");
+    // The committed suppression held `first` out of the base, so the two pairs it joins are new
+    // and the second invocation pair is baselined.
+    assert_eq!(result["findings"].as_array().unwrap().len(), 3, "{result}");
+    assert_eq!(result["modes"]["newFindings"], 2, "{result}");
+    assert_eq!(result["modes"]["baselined"], 1, "{result}");
     assert_eq!(result["findings"][0]["baselined"], false, "{result}");
 }
 

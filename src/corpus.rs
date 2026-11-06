@@ -188,6 +188,10 @@ pub struct Origin {
     pub path: PathBuf,
     /// Caller modules whose registrations own this declaration's executions.
     pub registration_files: Vec<PathBuf>,
+    /// The caller's registering call, by its start byte: two invocations of one template with
+    /// equal arguments are two runtime cases, so they are distinct declarations. `0` when the
+    /// case was not produced through an invocation.
+    pub call: u32,
 }
 
 /// One test, one row of a test table, or a suite in the separate suite population.
@@ -1419,7 +1423,49 @@ fn read_parsed(
         .map(|expansion| expansion.call)
         .collect();
     for expansion in expanded.calls {
-        tests.extend(expansion.tests);
+        let mut expansion_tests = expansion.tests;
+        // A call inside the caller's suites registers into them: its cases take the caller's
+        // suite chain exactly as an ordinary test written in the same body would, so an
+        // expanded case and a hand-written twin in one suite key together. Expanded hooks need
+        // no rewrite here; hooks::collect scopes them by the caller's own suites_around.
+        let scopes = normalizer.suites_around(expansion.call).unwrap_or_default();
+        if !scopes.is_empty() {
+            let names: Option<Vec<String>> = scopes
+                .iter()
+                .map(|scope| {
+                    structure
+                        .suites
+                        .get(scope)
+                        .and_then(|call| suite_names.get(call))
+                        .and_then(|name| name.clone())
+                })
+                .collect();
+            let displays: Option<Vec<String>> = scopes
+                .iter()
+                .map(|scope| {
+                    structure
+                        .suites
+                        .get(scope)
+                        .and_then(|call| suite_titles.get(call))
+                        .and_then(|title| title.clone())
+                })
+                .collect();
+            if let (Some(names), Some(displays)) = (names, displays) {
+                for test in &mut expansion_tests {
+                    if let Some(segments) = &mut test.name {
+                        let mut prefixed = names.clone();
+                        prefixed.append(segments);
+                        test.name = Some(prefixed);
+                    }
+                    if let Some(title) = &test.full_title {
+                        let mut segments = displays.clone();
+                        segments.push(title.clone());
+                        test.full_title = Some(segments.join(" > "));
+                    }
+                }
+            }
+        }
+        tests.extend(expansion_tests);
         helper_sources.extend(expansion.sources);
         imported_hooks.extend(expansion.hooks);
         imported_diagnostic_hooks.extend(expansion.diagnostic_hooks);

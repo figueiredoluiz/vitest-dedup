@@ -99,6 +99,7 @@ impl HeapBytes for Origin {
         let Self {
             path,
             registration_files,
+            ..
         } = self;
         path.heap_bytes()
             .saturating_add(registration_files.heap_bytes())

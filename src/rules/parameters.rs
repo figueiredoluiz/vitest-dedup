@@ -8,7 +8,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 /// One declaration of a group, under the shape that grouped it.
-pub(super) type Declaration<'a> = (&'a Path, (&'a Path, u32), u64);
+pub(super) type Declaration<'a> = (&'a Path, (&'a Path, u32, u32), u64);
 
 /// The declarations of each group this rule reported.
 pub(super) type Reported<'a> = Vec<BTreeSet<Declaration<'a>>>;

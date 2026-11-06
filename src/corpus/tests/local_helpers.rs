@@ -2,6 +2,7 @@
 //! may run it elsewhere, or not run what it writes, keeps today's exclusions.
 
 use super::*;
+use crate::model::Rule;
 
 /// The cases of a file read on its own, keyed by title. The import is the fixtures' own: one that
 /// reaches setup utilities such as `vi` refuses every expansion.
@@ -258,4 +259,144 @@ fn an_overloaded_helper_runs_its_implementation() {
     assert!(!expanded(&format!(
         "{template}declare = () => {{}}\ndeclare()\ntest('visible', {BODY})\n"
     )));
+}
+
+/// A helper call inside a suite body registers into that suite: the case takes the caller's
+/// suite path exactly as an ordinary test written in the same body would, so an expanded case
+/// and a hand-written twin key together.
+#[test]
+fn a_helper_call_inside_a_suite_joins_it() {
+    let header = "import { describe, test, expect } from 'vitest'\n";
+    let helper = "function makeTest(label: string) {\n  test(`${label} works`, () => {\n    const rows = 3\n    expect(rows).toBe(3)\n  })\n}\n";
+    let with_call = format!(
+        "{header}{helper}describe('s', () => {{\n  makeTest('twin')\n  test('twin works', () => {{\n    const rows = 3\n    expect(rows).toBe(3)\n  }})\n}})\n"
+    );
+    let tests = by_title(&with_call);
+    let expanded = tests
+        .get("twin works")
+        .expect("the call's case takes the suite path");
+    assert!(expanded.exclusion.is_none());
+    assert_eq!(
+        expanded.full_title.as_deref(),
+        Some("s > twin works"),
+        "the case takes the suite path",
+    );
+    assert_eq!(
+        expanded.key, tests["twin works"].key,
+        "the hand-written twin in the same suite keys with it",
+    );
+    // Expanded versus hand-written twin in one suite is a reported pair.
+    let findings = owned_findings(
+        "a.test.ts",
+        corpora(&[("a.test.ts", &with_call)], &["a.test.ts"]).remove(0),
+    )
+    .findings
+    .into_iter()
+    .filter(|finding| finding.rule == Rule::DuplicateTest)
+    .count();
+    assert_eq!(findings, 1);
+}
+
+/// A suite-position call of a `const` helper declared after the describe statement runs after
+/// the module body, so nothing is uninitialized (measured on Vitest 5.0.5).
+#[test]
+fn a_suite_position_call_admits_a_later_const_helper() {
+    let header = "import { describe, test, expect } from 'vitest'\n";
+    let source = format!(
+        "{header}describe('s', () => {{\n  makeTest('calls late const')\n}})\nconst makeTest = (label: string) => {{\n  test(`${{label}}`, () => {{\n    expect(1).toBe(1)\n  }})\n}}\n"
+    );
+    let tests = by_title(&source);
+    assert!(tests.contains_key("calls late const"));
+    assert!(tests["calls late const"].exclusion.is_none());
+    assert_eq!(
+        tests["calls late const"].full_title.as_deref(),
+        Some("s > calls late const"),
+    );
+    // The same shape at top level keeps slice 1's refusal: the call meets the dead zone, so no
+    // title is proven and every case keeps an exclusion.
+    let top = format!(
+        "{header}makeTest('top')\nconst makeTest = (label: string) => {{\n  test(`${{label}}`, () => {{\n    expect(1).toBe(1)\n  }})\n}}\n"
+    );
+    assert!(by_title(&top)
+        .values()
+        .all(|test| test.exclusion.is_some() && test.title.is_none()));
+}
+
+/// Hooks in the caller are registrations of the sequence, and a helper call beside them still
+/// expands; the helper's hook joins the suite (it must not leak to the file scope).
+#[test]
+fn caller_hooks_and_labels_keep_the_expansion() {
+    let header = "import { describe, test, expect, beforeEach } from 'vitest'\n";
+    let helper = "function install() {\n  beforeEach(() => {\n    ready = 1\n  })\n  test('reads', () => {\n    expect(ready).toBe(1)\n  })\n}\n";
+    // The caller's hook writes its own cell: one hook proof keeps the module-wide single-value
+    // write set, so a second hook writing the same cell differently would refuse it.
+    let source = format!(
+        "{header}let ready = 0\nlet other = 0\n{helper}describe('s', () => {{\n  beforeEach(() => {{\n    other = 1\n  }})\n  install()\n  test.skip('skipped', () => {{\n    expect(1).toBe(1)\n  }})\n}})\n"
+    );
+    let tests = by_title(&source);
+    assert!(
+        tests["reads"].exclusion.is_none(),
+        "the call expands beside hooks and labels"
+    );
+    assert_eq!(tests["reads"].full_title.as_deref(), Some("s > reads"));
+    assert!(
+        tests["skipped"].inert && tests["skipped"].exclusion.is_none(),
+        "the inert label marks the participant, it does not exclude it",
+    );
+}
+
+/// Shapes the slice refuses: a call inside a skipped suite, inside a table suite, a suite
+/// declared inside the helper, and a loop or an unrenderable title inside the caller suite.
+#[test]
+fn suite_position_refusals_keep_the_exclusions() {
+    let header = "import { describe, test, expect } from 'vitest'\n";
+    let helper = "function makeTest(label: string) {\n  test(`${label}`, () => {\n    expect(1).toBe(1)\n  })\n}\n";
+    for (name, source) in [
+        (
+            "skipped suite",
+            format!("{header}{helper}describe.skip('s', () => {{\n  makeTest('x')\n}})\n"),
+        ),
+        (
+            "table suite",
+            format!("{header}{helper}describe.each([1])('s', () => {{\n  makeTest('x')\n}})\n"),
+        ),
+        (
+            "suite inside the helper",
+            format!("{header}function makeSuite() {{\n  describe('inner', () => {{\n    test('deep', () => {{\n      expect(1).toBe(1)\n    }})\n  }})\n}}\nmakeSuite()\n"),
+        ),
+        (
+            "loop inside the suite body",
+            format!("{header}{helper}describe('s', () => {{\n  for (const row of [1]) {{\n    makeTest('x')\n  }}\n}})\n"),
+        ),
+        (
+            "unrenderable suite title",
+            format!("{header}{helper}const name = makeName()\ndescribe(name, () => {{\n  makeTest('x')\n}})\n"),
+        ),
+    ] {
+        let tests = by_title(&source);
+        assert!(
+            tests.values().all(|test| test.exclusion.is_some()),
+            "{name}: every test keeps an exclusion"
+        );
+    }
+}
+
+/// Two equal-argument calls are two runtime cases of one template: they pair as the duplicates
+/// they are, one finding whose members are the two invocations.
+#[test]
+fn two_equal_calls_in_one_suite_pair() {
+    let header = "import { describe, test, expect } from 'vitest'\n";
+    let helper = "function makeTest(label: string) {\n  test(`${label} works`, () => {\n    const rows = 3\n    expect(rows).toBe(3)\n  })\n}\n";
+    let source = format!(
+        "{header}{helper}describe('s', () => {{\n  makeTest('shared')\n  makeTest('shared')\n}})\n"
+    );
+    let findings = owned_findings(
+        "a.test.ts",
+        corpora(&[("a.test.ts", &source)], &["a.test.ts"]).remove(0),
+    )
+    .findings
+    .into_iter()
+    .filter(|finding| finding.rule == Rule::DuplicateTest)
+    .count();
+    assert_eq!(findings, 1);
 }

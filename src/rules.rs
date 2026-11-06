@@ -59,11 +59,14 @@ impl<'a> Entry<'a> {
         })
     }
 
-    /// Source identity is independent of the caller that happens to register this execution.
-    fn declaration(self) -> (&'a Path, u32) {
+    /// Source identity is independent of the caller that happens to register this execution,
+    /// except that two invocations of one template are two runtime cases: the invocation
+    /// discriminates them, so equal-argument calls pair as the duplicates they are.
+    fn declaration(self) -> (&'a Path, u32, u32) {
         (
             self.case.declaration_path(self.path),
             self.case.span.start_byte,
+            self.case.origin.as_ref().map_or(0, |origin| origin.call),
         )
     }
 }
@@ -278,12 +281,7 @@ fn one_per_declaration(group: &[usize], entries: &[Entry<'_>]) -> Vec<usize> {
     group
         .iter()
         .copied()
-        .filter(|&index| {
-            seen.insert((
-                entries[index].case.declaration_path(entries[index].path),
-                entries[index].case.span.start_byte,
-            ))
-        })
+        .filter(|&index| seen.insert(entries[index].declaration()))
         .collect()
 }
 

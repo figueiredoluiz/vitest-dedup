@@ -114,8 +114,11 @@ pub(super) fn expand(
 }
 
 /// The caller is a finite root sequence; imported and same-file callables use one bounded proof.
-/// Hooks and suite/loop frames still need their own lifecycle/iteration proofs. Also returns the
-/// sites written inside the same-file helpers the calls run.
+/// The sequence recurses into bare, provably titled suite callbacks: their bodies close the same
+/// way, and a helper call inside one registers into that suite (measured: Vitest 5.0.5 runs
+/// describe callbacks after the module body, so every top-level binding is initialized there).
+/// Hooks anywhere in the caller are registrations of the sequence, read by `hooks::collect`.
+/// Also returns the sites written inside the same-file helpers the calls run.
 fn closed_batch(
     path: &Path,
     source: &str,
@@ -126,11 +129,119 @@ fn closed_batch(
 ) -> Option<(Vec<Expansion>, HashSet<NodeId>)> {
     let tree = &parsed.tree;
     let helpers = local_helpers(parsed);
+    if parsed.parse_errors != 0
+        || found.setup_access
+        || found.sites.len() > 2000
+        || !found.loads.is_empty()
+        || !found.escapes.is_empty()
+        || found.sites.iter().any(|site| {
+            !matches!(
+                site.kind,
+                SiteKind::Registers(Registers::Test | Registers::Suite) | SiteKind::Wrapper(_)
+            ) && !matches!(site.kind, SiteKind::Registers(Registers::Hook(_)))
+        })
+    {
+        return None;
+    }
+    // The closed sequence: the file root plus the callback bodies of bare suite sites whose
+    // titles render. Statements inside other shapes (a skipped or table suite, a loop) are not
+    // admitted positions, so a helper call there refuses.
+    let sites: HashMap<NodeId, &crate::inventory::Site> =
+        found.sites.iter().map(|site| (site.node, site)).collect();
+    let mut top_level_statements = HashSet::new();
+    let mut suite_statements = HashSet::new();
+    let mut registrations = HashSet::new();
+    let mut stated: HashMap<NodeId, NodeId> = HashMap::new();
+    let mut suite_bodies: Vec<Vec<NodeId>> = Vec::new();
+    let walk = |statements: &[NodeId],
+                top_level: bool,
+                top_level_statements: &mut HashSet<NodeId>,
+                suite_statements: &mut HashSet<NodeId>,
+                registrations: &mut HashSet<NodeId>,
+                stated: &mut HashMap<NodeId, NodeId>,
+                suite_bodies: &mut Vec<Vec<NodeId>>|
+     -> Option<()> {
+        for &statement in statements {
+            if tree.kind(statement) == "ImportDeclaration" {
+                continue;
+            }
+            if tree.kind(statement) == "ExpressionStatement" {
+                if let Some(expression) = tree
+                    .child(statement, "expression")
+                    .map(|node| tree.inner(node))
+                {
+                    if let Some(&site) = sites.get(&expression) {
+                        registrations.insert(site.node);
+                        stated.insert(site.node, statement);
+                        if top_level {
+                            top_level_statements.insert(statement);
+                        } else {
+                            suite_statements.insert(statement);
+                        }
+                        // Only a bare suite whose title renders opens its body to the sequence:
+                        // a chained member (`skip`, `each`) changes what registering inside means,
+                        // and an unrenderable title makes the caller-side prefix unprovable.
+                        if matches!(site.kind, SiteKind::Registers(Registers::Suite))
+                            && site.chain.is_empty()
+                            && normal::titles::title(parsed, site.node).is_some()
+                        {
+                            let arguments = tree.list(site.node, "arguments");
+                            let body = arguments
+                                .get(1)
+                                .and_then(|argument| *argument)
+                                .map(|argument| tree.inner(argument))
+                                .filter(|&argument| tree.is_function(argument))
+                                .and_then(|callback| tree.child(callback, "body"))
+                                .filter(|&body| tree.kind(body) == "BlockStatement")
+                                .map(|body| {
+                                    tree.list(body, "body")
+                                        .into_iter()
+                                        .flatten()
+                                        .collect::<Vec<_>>()
+                                })?;
+                            suite_bodies.push(body);
+                        }
+                        continue;
+                    }
+                }
+            }
+            if !inventory::runners::inert_declaration(parsed, statement) {
+                return None;
+            }
+        }
+        Some(())
+    };
+    walk(
+        &tree
+            .list(tree.root(), "body")
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>(),
+        true,
+        &mut top_level_statements,
+        &mut suite_statements,
+        &mut registrations,
+        &mut stated,
+        &mut suite_bodies,
+    )?;
+    while let Some(statements) = suite_bodies.pop() {
+        walk(
+            &statements,
+            false,
+            &mut top_level_statements,
+            &mut suite_statements,
+            &mut registrations,
+            &mut stated,
+            &mut suite_bodies,
+        )?;
+    }
     // A site inside a helper is its template; it registers only when an admitted call runs it.
-    // Which of its statements run is the template reader's to prove when a call reaches it.
+    // Which of its statements run is the template reader's to prove when a call reaches it. A
+    // labeled site anywhere else (a loop, a branch, a non-suite callback) is no closed position:
+    // the file keeps today's exclusions.
     let mut templates = HashSet::new();
     for site in &found.sites {
-        if site.labels.is_empty() {
+        if site.labels.is_empty() || stated.contains_key(&site.node) {
             continue;
         }
         let enclosing = tree
@@ -143,45 +254,24 @@ fn closed_batch(
         }
         templates.insert(site.node);
     }
+    // A call is admitted where its statement sits in a closed position; a call inside a suite
+    // body registers into that suite (its labels are exactly the registration body's).
     let calls: Vec<_> = found
         .sites
         .iter()
-        .filter(|site| matches!(site.kind, SiteKind::Wrapper(_)) && site.labels.is_empty())
-        .collect();
-    if parsed.parse_errors != 0
-        || calls.is_empty()
-        || found.setup_access
-        || calls.len() > 2000
-        || !found.loads.is_empty()
-        || !found.escapes.is_empty()
-        || found.sites.iter().any(|site| {
-            !matches!(
-                site.kind,
-                SiteKind::Registers(Registers::Test) | SiteKind::Wrapper(_)
-            )
-        })
-    {
-        return None;
-    }
-    for statement in tree.list(tree.root(), "body").into_iter().flatten() {
-        if tree.kind(statement) == "ImportDeclaration" {
-            continue;
-        }
-        if tree.kind(statement) == "ExpressionStatement"
-            && tree
-                .child(statement, "expression")
-                .is_some_and(|expression| {
-                    found
-                        .sites
-                        .iter()
-                        .any(|site| site.node == tree.inner(expression))
+        .filter(|site| {
+            matches!(site.kind, SiteKind::Wrapper(_))
+                && site
+                    .labels
+                    .iter()
+                    .all(|label| matches!(label, crate::inventory::Label::RegistrationBody))
+                && stated.get(&site.node).is_some_and(|statement| {
+                    top_level_statements.contains(statement) || suite_statements.contains(statement)
                 })
-        {
-            continue;
-        }
-        if !inventory::runners::inert_declaration(parsed, statement) {
-            return None;
-        }
+        })
+        .collect();
+    if calls.is_empty() || calls.len() > 2000 {
+        return None;
     }
     let owner = run.sources.relative(path, setting.root)?;
     let mut planner = Planner {
@@ -194,20 +284,25 @@ fn closed_batch(
         active: HashSet::new(),
         left: 2000,
         work: 0,
-        registrations: found
-            .sites
-            .iter()
-            .filter(|site| site.labels.is_empty())
-            .map(|site| site.node)
-            .collect(),
+        registrations: registrations.clone(),
+        invocation: 0,
     };
     // A template's title reads its helper's parameters; each call checks it with their values.
+    // An inert chain (`skip`, `todo`) is the caller's own labeled case and reads the same way.
     for site in found.sites.iter().filter(|site| {
         site.kind == SiteKind::Registers(Registers::Test) && !templates.contains(&site.node)
     }) {
+        let inert = site.chain.iter().all(|member| {
+            matches!(
+                setting.dialect.chain_member(member),
+                Some(crate::framework::Chain::Skip | crate::framework::Chain::Todo)
+            )
+        });
+        if !site.chain.is_empty() && !inert {
+            return None;
+        }
         let arguments = tree.list(site.node, "arguments");
-        if !site.chain.is_empty()
-            || arguments.len() != 2
+        if arguments.len() != 2
             || !arguments[1].is_some_and(|argument| tree.is_function(tree.inner(argument)))
         {
             return None;
@@ -224,12 +319,7 @@ fn closed_batch(
     let mut checked_bindings = HashSet::new();
     for &call in &calls {
         let callee = tree.inner(tree.child(call.node, "callee")?);
-        if tree.kind(callee) != "Identifier"
-            || !tree.outer_parent(call.node).is_some_and(|statement| {
-                tree.kind(statement) == "ExpressionStatement"
-                    && tree.parent(statement) == Some(tree.root())
-            })
-        {
+        if tree.kind(callee) != "Identifier" {
             return None;
         }
         let symbol = parsed.scopes.symbol_at(tree.span(callee).start)?;
@@ -241,6 +331,7 @@ fn closed_batch(
             return None;
         }
         checked_bindings.insert(symbol);
+        planner.invocation = tree.span(call.node).start;
         let invocation = planner.call(
             Module {
                 path,
@@ -299,14 +390,50 @@ fn closed_batch(
     }
     // A helper registers only through calls the batch runs: every use of it is such a call's
     // callee, and a `const` helper is initialized before the first top-level call runs.
-    let callees: HashSet<u32> = found
-        .sites
+    // A helper registers only through calls the batch runs: every use of it is such a call's
+    // callee — the call itself, or a nested call the planner proves inside a helper body. A
+    // reference anywhere else (a skipped suite's body, a value read) is an escape.
+    let admitted_callees: HashSet<u32> = calls
         .iter()
-        .filter(|site| matches!(site.kind, SiteKind::Wrapper(_)))
         .filter_map(|site| tree.child(site.node, "callee"))
         .map(|callee| tree.span(tree.inner(callee)).start)
         .collect();
-    let first_call = calls.iter().map(|call| tree.span(call.node).start).min()?;
+    let helper_callees: HashSet<u32> = found
+        .sites
+        .iter()
+        .filter(|site| matches!(site.kind, SiteKind::Wrapper(_)))
+        .filter(|site| {
+            helpers
+                .values()
+                .any(|helper| tree.span(helper.function).contains(tree.span(site.node)))
+        })
+        .filter_map(|site| tree.child(site.node, "callee"))
+        .map(|callee| tree.span(tree.inner(callee)).start)
+        .collect();
+    let callees: HashSet<u32> = admitted_callees.union(&helper_callees).copied().collect();
+    // Only a top-level call executes during the module body, in statement order: that is the
+    // early execution a `const` initializer and every top-level read must precede. A
+    // suite-position call runs after the whole body (measured: Vitest 5.0.5 describe callbacks
+    // run last), so a helper with no top-level calls has no early execution to precede.
+    let top_level_callees: HashSet<u32> = calls
+        .iter()
+        .filter(|site| {
+            stated
+                .get(&site.node)
+                .is_some_and(|statement| top_level_statements.contains(statement))
+        })
+        .filter_map(|site| tree.child(site.node, "callee"))
+        .map(|callee| tree.span(tree.inner(callee)).start)
+        .collect();
+    let first_call = calls
+        .iter()
+        .filter(|site| {
+            stated
+                .get(&site.node)
+                .is_some_and(|statement| top_level_statements.contains(statement))
+        })
+        .map(|call| tree.span(call.node).start)
+        .min();
     for (&symbol, helper) in &helpers {
         let binding = parsed.scopes.symbol(symbol);
         // A function that registers nothing and no call runs as a wrapper is ordinary code.
@@ -327,32 +454,39 @@ fn closed_batch(
         {
             return None;
         }
-        if helper.constant && tree.span(helper.statement).end > first_call {
-            return None;
-        }
-        // What the helper reads while it registers (a title, a nested call's argument) is read
-        // when the first top-level call runs: a top-level variable or class declared after that
-        // call is uninitialized then, or `undefined` for a `var`.
-        let span = tree.span(helper.function);
-        let late = parsed.scopes.symbols().any(|read| {
-            let declared = parsed.scopes.symbol(read);
-            declared.top_level
-                && matches!(
-                    declared.declaration,
-                    Declaration::Variable(_) | Declaration::Class(_)
-                )
-                && declared
-                    .references
-                    .iter()
-                    .any(|reference| span.contains(reference.span))
-                && parsed
-                    .scopes
-                    .declaration_node(read)
-                    .and_then(|node| top_level_statement(tree, node))
-                    .is_none_or(|statement| tree.span(statement).end > first_call)
-        });
-        if late {
-            return None;
+        if binding
+            .references
+            .iter()
+            .any(|reference| top_level_callees.contains(&reference.span.start))
+        {
+            let first_call = first_call?;
+            if helper.constant && tree.span(helper.statement).end > first_call {
+                return None;
+            }
+            // What the helper reads while it registers (a title, a nested call's argument) is
+            // read when the first top-level call runs: a top-level variable or class declared
+            // after that call is uninitialized then, or `undefined` for a `var`.
+            let span = tree.span(helper.function);
+            let late = parsed.scopes.symbols().any(|read| {
+                let declared = parsed.scopes.symbol(read);
+                declared.top_level
+                    && matches!(
+                        declared.declaration,
+                        Declaration::Variable(_) | Declaration::Class(_)
+                    )
+                    && declared
+                        .references
+                        .iter()
+                        .any(|reference| span.contains(reference.span))
+                    && parsed
+                        .scopes
+                        .declaration_node(read)
+                        .and_then(|node| top_level_statement(tree, node))
+                        .is_none_or(|statement| tree.span(statement).end > first_call)
+            });
+            if late {
+                return None;
+            }
         }
     }
     if let Some(last) = expansions.last_mut() {
@@ -444,6 +578,9 @@ struct Planner<'a> {
     work: usize,
     /// The calling file's top-level registering calls; see [`Frame::registrations`].
     registrations: HashSet<NodeId>,
+    /// The registering call whose invocation is being planned, by its start byte: the cases it
+    /// produces are distinct declarations, one per invocation.
+    invocation: u32,
 }
 
 impl Planner<'_> {
@@ -672,6 +809,7 @@ impl Planner<'_> {
                     case.origin = Some(Origin {
                         path: relative.clone(),
                         registration_files: vec![self.owner.clone()],
+                        call: self.invocation,
                     });
                     direct.entry(case.span.start_byte).or_default().push(case);
                 }

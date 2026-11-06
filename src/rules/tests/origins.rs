@@ -9,6 +9,7 @@ fn imported(source: &str, owner: &str, line: u32) -> TestCase {
     case.origin = Some(Origin {
         path: PathBuf::from(source),
         registration_files: vec![PathBuf::from(owner)],
+        call: 0,
     });
     case
 }

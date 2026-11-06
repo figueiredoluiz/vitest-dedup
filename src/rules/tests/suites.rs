@@ -97,6 +97,7 @@ fn suite_case_index_preserves_rows_and_file_identity() {
     origin.origin = Some(crate::corpus::Origin {
         path: "helper.ts".into(),
         registration_files: vec!["a.test.ts".into()],
+        call: 0,
     });
     let mut bodyless = case(4, 70, 1, 1);
     bodyless.bodyless = true;
