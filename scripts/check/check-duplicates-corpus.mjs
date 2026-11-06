@@ -220,6 +220,7 @@ const DELIBERATE_BLIND_FILES = new Set([
   // `vi.doMock`, a body cut short at the depth cap, a guard that `eval` can rebind.
   'declarations/template-literal-title-const-fold.test.ts',
   'duplicates/not-duplicate-each-row-loop-template-title.test.ts',
+  'duplicates/not-redundant-hook-describe-each-unread.test.ts',
   'edge/vi-domock-scoped.test.ts',
   'edge/vi-dounmock-scoped.test.ts',
   'mixed/mixed-loop-each-in-non-idempotent-hook-scope.test.ts',

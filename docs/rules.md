@@ -77,8 +77,19 @@ so removing one may change when queued work becomes observable. The analyzer wit
 `redundant-hook` claims when callbacks in the affected lifecycle scope contain potentially
 deferred or opaque work, including async callbacks, nested callbacks, unknown calls or
 non-assertion property access. Ordinary synchronous assertions and proven lexical writes remain
-eligible. This conservative check also applies to imported setup hooks; it does not exclude
-the tests from unrelated comparisons.
+eligible; property writes stay refused — a file-local scan cannot prove the receiver stays plain
+against exports, setup files and loaded modules.
+
+A hook inside a suite table whose rows are proven is an ordinary lifecycle hook: the table's
+callback runs once per generated suite, so its registrations form the same chain a suite body
+does, and a pair is reported once by declaration location. Only primitive-literal rows qualify —
+title formatting reads richer rows again, and an accessor among them can run code. Unread or
+empty table rows keep the tests' usual treatment instead (unresolved or unregistered).
+
+A nested `beforeAll` pairs with an identical one in an enclosing scope when the cells it writes
+cannot change between the two runs -- every module-wide write to each cell assigns the same
+primitive literal. Per-test phases pair across scopes as before; `afterAll` does not, because
+the outer hook runs last and the nested write may be the first establishment of that state.
 
 ## Local classes and constructors
 

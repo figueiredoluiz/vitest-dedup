@@ -194,7 +194,8 @@ fn an_owned_redundant_reset_pair_stays_unreported() {
     assert!(findings(source, 2).is_empty());
 }
 
-/// Each lifecycle phase works in one scope; only per-test phases cross scope boundaries.
+/// Each lifecycle phase works in one scope; per-test phases cross scope boundaries, and a
+/// `beforeAll` does too when its written cells cannot change between the scopes.
 #[test]
 fn hook_phase_and_scope_are_dimensions() {
     for phase in ["beforeEach", "afterEach", "beforeAll", "afterAll"] {
@@ -205,13 +206,38 @@ fn hook_phase_and_scope_are_dimensions() {
         );
         assert_eq!(
             findings(&nested, 1).len(),
-            usize::from(phase.ends_with("Each")),
+            usize::from(phase != "afterAll"),
             "{phase}"
         );
     }
     let a = "beforeEach(() => { value = 1 });";
     assert!(findings(&pair(a, "afterEach(() => { value = 1 });"), 1).is_empty());
     assert!(findings(&format!("{IMPORTS} let value = 0; describe('a', () => {{ {a} {TEST} }}); describe('b', () => {{ {a} {TEST} }});"), 2).is_empty());
+}
+
+/// Cross-scope `beforeAll` pairs only over constant lexical writes; other effects re-dirty
+/// between the scopes.
+#[test]
+fn hook_cross_scope_before_all_needs_invariant_state() {
+    let hook = "beforeAll(() => { value = 1 });";
+    let nested = |body: &str| {
+        format!("{IMPORTS} let value = 0; {body} describe('inner', () => {{ {body} test('works', () => {{ expect(value).toBe(1) }}); }});")
+    };
+    assert_eq!(findings(&nested(hook), 1).len(), 1);
+    // A second, differing write to the cell breaks the single-value proof.
+    let reassigned = format!(
+        "{IMPORTS} let value = 0; {hook} test('mutates', () => {{ value = 2; expect(value).toBe(2) }}); describe('inner', () => {{ {hook} {TEST} }});"
+    );
+    assert!(findings(&reassigned, 2).is_empty());
+    // Property effects do not cross scopes: their receiver's state is not proven invariant.
+    let property = "beforeAll(() => { audit.mode = 1 });";
+    let receiver = format!(
+        "{IMPORTS} const audit = {{ mode: 0 }}; {property} describe('inner', () => {{ {property} test('works', () => {{ expect(audit.mode).toBe(1) }}); }});"
+    );
+    assert!(findings(&receiver, 1).is_empty());
+    // Reset effects stay refused everywhere.
+    let reset = "beforeAll(() => { tools.unstubAllEnvs() });";
+    assert!(findings(&nested(reset), 1).is_empty());
 }
 
 /// Different and opaque work block a pair; removing the barrier keeps the positive.
@@ -235,6 +261,7 @@ fn hook_intervening_effects_and_observers_are_barriers() {
 #[test]
 fn hook_effect_proof_refuses_unknown_work() {
     for body in [
+        "audit.mode = 1",
         "value += 1",
         "value = make()",
         "value ||= make()",
@@ -246,6 +273,7 @@ fn hook_effect_proof_refuses_unknown_work() {
         "value = /x/",
         "value = '\\uD800'",
         "value = 1; observe()",
+        "[value] = [1]",
     ] {
         let hook = format!("beforeEach(() => {{ {body} }});");
         assert!(findings(&pair(&hook, &hook), 1).is_empty(), "{body}");
@@ -320,7 +348,6 @@ fn hook_chain_registration_must_be_known() {
     for callee in [
         "describe.skip",
         "describe.runIf(true)",
-        "describe.each([1])",
         "describe.concurrent",
     ] {
         let source =
@@ -328,6 +355,91 @@ fn hook_chain_registration_must_be_known() {
         assert!(findings(&source, 1).is_empty(), "{callee}");
     }
     assert!(findings(&format!("{} describe('elsewhere', () => {{ test.only('focused', () => {{ expect(2).toBe(2) }}) }});", pair(hook, hook)), 2).is_empty());
+}
+
+/// A proven suite table is an ordinary lifecycle scope; unproven rows and dead tables refuse.
+#[test]
+fn suite_table_hooks_pair_when_rows_are_proven() {
+    let hook = "beforeEach(() => { value = 1 });";
+    let table = |rows: &str| {
+        format!("{IMPORTS} let value = 0; describe.each({rows})('s', () => {{ {hook} {hook} {TEST} }});")
+    };
+    // One finding per declaration pair, whatever the row count.
+    assert_eq!(findings(&table("[1, 2]"), 2).len(), 1);
+    assert_eq!(findings(&table("[1]"), 1).len(), 1);
+    // Unread rows: the population is unknown, so no chain and no pair.
+    assert!(findings(&table("make()"), 1).is_empty());
+    // Proven-empty rows: the hooks never register and neither does the test.
+    assert!(findings(&table("[]"), 0).is_empty());
+    // Differing bodies are not a pair.
+    let mixed = format!(
+        "{IMPORTS} let value = 0; describe.each([1])('s', () => {{ {hook} beforeEach(() => {{ value = 2 }}); {TEST} }});"
+    );
+    assert!(findings(&mixed, 1).is_empty());
+    // A table inside a loop keeps its refusal, like any conditional registration.
+    let looped = format!(
+        "{IMPORTS} let value = 0; for (const row of [1, 2]) {{ describe.each([1])('s', () => {{ {hook} {hook} {TEST} }}); }}"
+    );
+    assert!(findings(&looped, 1).is_empty());
+    // A hook in the table and an identical one in a nested ordinary describe pair across scopes.
+    let nested = format!(
+        "{IMPORTS} let value = 0; describe.each([1])('s', () => {{ {hook} describe('inner', () => {{ {hook} {TEST} }}); }});"
+    );
+    assert_eq!(findings(&nested, 1).len(), 1);
+    // The registration arguments evaluate too: a call in the title can register a hook.
+    let titled = format!(
+        "{IMPORTS} let value = 0; {hook} {hook} describe.each([1])(title(), () => {{ test('observes', () => {{ expect(value).toBe(1) }}); }}); test('plain', () => {{ expect(value).toBe(1) }});"
+    );
+    assert!(findings(&titled, 2).is_empty());
+    // A rows argument that calls while evaluating can register hooks; the table refuses, and
+    // with it the file scope, so the file-scope pair beside it never becomes eligible.
+    let calling = format!(
+        "{IMPORTS} let value = 0; {hook} {hook} describe.each([registerObserver()])('s', () => {{ test('observes', () => {{ expect(value).toBe(1) }}); }}); test('plain', () => {{ expect(value).toBe(1) }});"
+    );
+    assert!(findings(&calling, 2).is_empty());
+    // A callback parameter default evaluates when each generated suite binds its row; the
+    // table refuses, and with it the file scope, so the file-scope pair beside it is not
+    // eligible either.
+    let defaulted = format!(
+        "{IMPORTS} let value = 0; {hook} {hook} describe.each([1])('row', (row, extra = install()) => {{ test('observes', () => {{ expect(value).toBe(1) }}); }}); test('plain', () => {{ expect(value).toBe(1) }});"
+    );
+    assert!(findings(&defaulted, 2).is_empty());
+    // Binding a pattern reads the row, runs defaults and computed keys: parameters must be
+    // plain identifiers, whose binding evaluates nothing.
+    for params in [
+        "({ scope })",
+        "(row, { extra } = make())",
+        "({ [install()]: unused })",
+    ] {
+        let pattern = format!(
+            "{IMPORTS} let value = 0; {hook} {hook} describe.each([1])('s', {params} => {{ test('observes', () => {{ expect(value).toBe(1) }}); }}); test('plain', () => {{ expect(value).toBe(1) }});"
+        );
+        assert!(findings(&pattern, 2).is_empty(), "{params}");
+    }
+    // A regex row is an object: title formatting can read a prototype accessor for it.
+    let regex_row = format!(
+        "{IMPORTS} let value = 0; describe.each([/x/])('$probe', () => {{ {hook} {hook} {TEST} }});"
+    );
+    assert!(findings(&regex_row, 1).is_empty());
+    // Object rows are read while Vitest formats the title, and an accessor among them can
+    // register a hook, so only primitive-literal rows close.
+    let object_rows = format!(
+        "{IMPORTS} let value = 0; describe.each([{{ role: 'admin' }}])('s', () => {{ {hook} {hook} {TEST} }});"
+    );
+    assert!(findings(&object_rows, 1).is_empty());
+    // Rows read through an alias keep the refusal: the proof reads the argument spelled at
+    // the table.
+    let aliased = format!(
+        "{IMPORTS} let value = 0; const rows = [1]; describe.each(rows)('s', () => {{ {hook} {hook} {TEST} }});"
+    );
+    assert!(findings(&aliased, 1).is_empty());
+    // A tagged-template table and a suite wrapped in a loop keep the ordinary refusal.
+    for shape in [
+        format!("{IMPORTS} let value = 0; describe.each`row ${{1}}`(() => {{ {hook} {hook} {TEST} }});"),
+        format!("{IMPORTS} let value = 0; for (const row of [1]) {{ describe('s', () => {{ {hook} {hook} {TEST} }}); }}"),
+    ] {
+        assert!(findings(&shape, 1).is_empty());
+    }
 }
 
 /// Equal-looking declarations in separate scopes still denote different lexical state cells.

@@ -124,41 +124,50 @@ impl Normalizer<'_> {
                 if tree.kind(target) != "Identifier" {
                     return None;
                 }
-                let symbol = self.scopes.symbol_at(tree.span(target).start)?;
-                let binding = self.scopes.symbol(symbol);
-                let Declaration::Variable(declaration) = binding.declaration else {
-                    return None;
-                };
-                // A lexical cell has no setter. Parameters, globals, imports, consts and properties
-                // cannot borrow this proof, nor can a callback-local temporary be useful setup.
-                if tree.span(callback).contains(binding.span)
-                    || tree.text(tree.parent(declaration)?, "kind") != Some("let")
-                    || tree.flag(tree.parent(declaration)?, "declare")
-                {
-                    return None;
-                }
                 let value = tree.inner(tree.child(expression, "right")?);
-                if !primitive(tree, value) {
-                    return None;
-                }
-                let raw = tree.text(value, "raw")?;
-                let fixed = if let Some(value) = self.hook_writes.get(&symbol) {
-                    value.as_deref() == Some(raw)
-                } else {
-                    let value = self.hook_write_value(symbol);
-                    let fixed = value.as_deref() == Some(raw);
-                    self.hook_writes.insert(symbol, value);
-                    fixed
-                };
-                if !fixed {
-                    return None;
-                }
-                effects.push(format!("write:{symbol:?}:{raw}"));
+                let effect = self.lexical_write_effect(callback, target, value)?;
+                effects.push(effect);
             } else {
                 return None;
             }
         }
         (!effects.is_empty()).then(|| serde_json::to_string(&effects).expect("strings serialize"))
+    }
+
+    /// An overwrite of one lexical cell, or no proof.
+    fn lexical_write_effect(
+        &mut self,
+        callback: NodeId,
+        target: NodeId,
+        value: NodeId,
+    ) -> Option<String> {
+        let tree = self.tree;
+        if !primitive(tree, value) {
+            return None;
+        }
+        let symbol = self.scopes.symbol_at(tree.span(target).start)?;
+        let binding = self.scopes.symbol(symbol);
+        let Declaration::Variable(declaration) = binding.declaration else {
+            return None;
+        };
+        // A lexical cell has no setter. Parameters, globals, imports, consts and properties
+        // cannot borrow this proof, nor can a callback-local temporary be useful setup.
+        if tree.span(callback).contains(binding.span)
+            || tree.text(tree.parent(declaration)?, "kind") != Some("let")
+            || tree.flag(tree.parent(declaration)?, "declare")
+        {
+            return None;
+        }
+        let raw = tree.text(value, "raw")?;
+        let fixed = if let Some(value) = self.hook_writes.get(&symbol) {
+            value.as_deref() == Some(raw)
+        } else {
+            let value = self.hook_write_value(symbol);
+            let fixed = value.as_deref() == Some(raw);
+            self.hook_writes.insert(symbol, value);
+            fixed
+        };
+        fixed.then(|| format!("write:{symbol:?}:{raw}"))
     }
 
     /// Only a directly imported framework assertion and its synchronous member chain qualify.
@@ -177,15 +186,11 @@ impl Normalizer<'_> {
                     {
                         return false;
                     }
-                    let Some(object) = tree.child(current, "object") else {
-                        return false;
-                    };
+                    let object = tree.child(current, "object").expect("member has an object");
                     current = object;
                 }
                 "CallExpression" => {
-                    let Some(callee) = tree.child(current, "callee") else {
-                        return false;
-                    };
+                    let callee = tree.child(current, "callee").expect("call has a callee");
                     current = callee;
                 }
                 "Identifier" => {
@@ -281,6 +286,10 @@ impl Normalizer<'_> {
                             .is_some_and(|value| self.hook_registration_inert(value))
                 })
             }),
+            "ArrayExpression" => tree
+                .list(node, "elements")
+                .into_iter()
+                .all(|item| item.is_some_and(|item| self.hook_registration_inert(item))),
             "EmptyStatement" => true,
             _ => false,
         }
@@ -288,6 +297,6 @@ impl Normalizer<'_> {
 }
 
 /// Primitive values only; see [`crate::lang::primitive`].
-fn primitive(tree: &crate::lang::Tree, node: NodeId) -> bool {
+pub(crate) fn primitive(tree: &crate::lang::Tree, node: NodeId) -> bool {
     crate::lang::primitive(tree, node)
 }
