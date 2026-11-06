@@ -2672,13 +2672,7 @@ mod tests {
             for common in [false, true] {
                 let directory = single_file_project("a.test.ts", source);
                 let root = directory.path();
-                assert!(std::process::Command::new("git")
-                    .args(["init", "--quiet"])
-                    .arg(root)
-                    .output()
-                    .unwrap()
-                    .status
-                    .success());
+                git(root, &["init", "--quiet"]);
                 std::fs::write(root.join("ignored.test.ts"), source).unwrap();
                 let metadata = root.join(" metadata ");
                 std::fs::rename(root.join(".git"), &metadata).unwrap();
@@ -2699,12 +2693,7 @@ mod tests {
                     metadata
                 };
                 std::fs::write(excludes.join("info/exclude"), "ignored.test.ts\n").unwrap();
-                let git = std::process::Command::new("git")
-                    .args(["check-ignore", "--no-index", "ignored.test.ts"])
-                    .current_dir(root)
-                    .output()
-                    .unwrap();
-                assert!(git.status.success(), "{:?}", git);
+                git(root, &["check-ignore", "--no-index", "ignored.test.ts"]);
                 let (_, report) = run_json_with_stderr(root, ExitCode::QualityGateFailed);
                 assert_eq!(report["testsAnalyzed"], 2, "{ending:?}, common={common}");
                 assert_eq!(report["unresolvedTests"], 0);
