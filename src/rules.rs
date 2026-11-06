@@ -47,8 +47,7 @@ impl<'a> Entry<'a> {
     /// The runtime case this entry is, as the quality gate counts it; `None` for a case outside
     /// the gate's denominator (a todo a name finding still names), so the numerator never counts
     /// what the denominator leaves out. Two invocations of one template are two runtime cases, so
-    /// the identity carries the invocation: the caller file (digested) and the call position, `0`
-    /// for a case the file spells itself.
+    /// the identity carries the invocation (`TestCase::invocation`).
     fn gate_case(self) -> Option<GateCase> {
         self.case.gate_eligible().then(|| {
             (
@@ -57,22 +56,17 @@ impl<'a> Entry<'a> {
                     span: self.case.span,
                 },
                 self.case.gate_row(),
-                self.case.origin.as_ref().map_or(0, |origin| {
-                    origin
-                        .call
-                        .wrapping_add(origin.registration_files.first().map_or(0, |path| {
-                            crate::normal::digest(&path.display().to_string()) as u32
-                        }))
-                }),
+                self.case.invocation(),
             )
         })
     }
 
     /// Source identity is independent of the caller that happens to register this execution,
     /// except that two invocations of one template are two runtime cases: the invocation
-    /// discriminates them -- by caller file and call position, since a byte offset is only
-    /// unique within its own module -- so equal-argument calls pair as the duplicates they are.
-    fn declaration(self) -> (&'a Path, u32, &'a Path, u32) {
+    /// discriminates them -- by caller file and the chain of call positions, since a byte offset
+    /// is only unique within its own module -- so equal-argument calls pair as the duplicates
+    /// they are.
+    fn declaration(self) -> (&'a Path, u32, &'a Path, &'a [u32]) {
         (
             self.case.declaration_path(self.path),
             self.case.span.start_byte,
@@ -81,7 +75,10 @@ impl<'a> Entry<'a> {
                 .as_ref()
                 .and_then(|origin| origin.registration_files.first())
                 .map_or(self.path, |path| path.as_path()),
-            self.case.origin.as_ref().map_or(0, |origin| origin.call),
+            self.case
+                .origin
+                .as_ref()
+                .map_or(&[][..], |origin| origin.call.as_slice()),
         )
     }
 }

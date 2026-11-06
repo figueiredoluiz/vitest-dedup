@@ -623,3 +623,51 @@ fn the_gate_counts_each_invocation() {
         .expect("the pair fires");
     assert_eq!(finding.cases.len(), 2, "both invocations are counted");
 }
+
+/// A nested call is its own execution: a helper that calls another twice registers two runtime
+/// cases each time it runs, so two calls of it register four, all counted and paired.
+#[test]
+fn nested_calls_are_distinct_invocations() {
+    let header = "import { describe, test, expect } from 'vitest'\n";
+    let helpers = "function run() {\n  test('shared', () => {\n    expect(1).toBe(1)\n  })\n}\nfunction outer() {\n  run()\n  run()\n}\n";
+    let cases = |calls: &str| {
+        let source = format!("{header}{helpers}describe('s', () => {{\n{calls}}})\n");
+        let corpus = corpora(&[("a.test.ts", &source)], &["a.test.ts"]).remove(0);
+        let expanded = corpus
+            .tests
+            .iter()
+            .filter(|test| test.exclusion.is_none())
+            .count();
+        let counted = owned_findings("a.test.ts", corpus)
+            .findings
+            .iter()
+            .filter(|finding| finding.rule == Rule::DuplicateTest)
+            .flat_map(|finding| finding.cases.clone())
+            .collect::<std::collections::BTreeSet<_>>()
+            .len();
+        (expanded, counted)
+    };
+    assert_eq!(
+        cases("  outer()\n"),
+        (2, 2),
+        "one outer call still pairs its two runs"
+    );
+    assert_eq!(cases("  outer()\n  outer()\n"), (4, 4));
+}
+
+/// A `using` declaration disposes its value when the suite body ends, which runs code (Vitest
+/// 5.0.5 fails collecting a non-disposable one), so a suite body holding one refuses.
+#[test]
+fn a_using_declaration_in_a_suite_body_refuses() {
+    let header = "import { describe, test, expect } from 'vitest'\n";
+    let helper = "function run() {\n  test('shared', () => {\n    expect(1).toBe(1)\n  })\n}\n";
+    let expanded = |statement: &str| {
+        by_title(&format!(
+            "{header}{helper}describe('s', () => {{\n  {statement}\n  run()\n  run()\n}})\n"
+        ))
+        .values()
+        .any(|test| test.exclusion.is_none())
+    };
+    assert!(expanded("const resource = {}"), "the control expands");
+    assert!(!expanded("using resource = {}"));
+}

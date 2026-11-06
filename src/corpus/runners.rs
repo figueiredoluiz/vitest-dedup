@@ -297,7 +297,7 @@ fn closed_batch(
         left: 2000,
         work: 0,
         registrations: registrations.clone(),
-        invocation: 0,
+        invocation: Vec::new(),
     };
     // A template's title reads its helper's parameters; each call checks it with their values.
     // An inert chain (`skip`, `todo`) is the caller's own labeled case and reads the same way.
@@ -343,7 +343,7 @@ fn closed_batch(
             return None;
         }
         checked_bindings.insert(symbol);
-        planner.invocation = tree.span(call.node).start;
+        planner.invocation = vec![tree.span(call.node).start];
         let invocation = planner.call(
             Module {
                 path,
@@ -584,9 +584,9 @@ struct Planner<'a> {
     work: usize,
     /// The calling file's top-level registering calls; see [`Frame::registrations`].
     registrations: HashSet<NodeId>,
-    /// The registering call whose invocation is being planned, by its start byte: the cases it
-    /// produces are distinct declarations, one per invocation.
-    invocation: u32,
+    /// The registering calls of the invocation being planned, by start byte, outermost first: the
+    /// cases it produces are distinct declarations, one per execution path.
+    invocation: Vec<u32>,
 }
 
 impl Planner<'_> {
@@ -815,7 +815,7 @@ impl Planner<'_> {
                     case.origin = Some(Origin {
                         path: relative.clone(),
                         registration_files: vec![self.owner.clone()],
-                        call: self.invocation,
+                        call: self.invocation.clone(),
                     });
                     direct.entry(case.span.start_byte).or_default().push(case);
                 }
@@ -871,7 +871,12 @@ impl Planner<'_> {
                         hooks.push(normalized_hooks.remove(&node)?);
                     }
                     inventory::runners::Step::Call(call) => {
-                        let nested = self.call(module, call, Some(&frame), run, depth)?;
+                        // A nested call is its own execution: two calls of one runner inside a
+                        // helper register two runtime cases each time the helper runs.
+                        self.invocation.push(tree.span(call).start);
+                        let nested = self.call(module, call, Some(&frame), run, depth);
+                        self.invocation.pop();
+                        let nested = nested?;
                         scheduling_safe &= nested.scheduling_safe;
                         tests.extend(nested.tests);
                         hooks.extend(nested.hooks);

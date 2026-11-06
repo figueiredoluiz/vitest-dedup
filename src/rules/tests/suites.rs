@@ -97,7 +97,7 @@ fn suite_case_index_preserves_rows_and_file_identity() {
     origin.origin = Some(crate::corpus::Origin {
         path: "helper.ts".into(),
         registration_files: vec!["a.test.ts".into()],
-        call: 0,
+        call: Vec::new(),
     });
     let mut bodyless = case(4, 70, 1, 1);
     bodyless.bodyless = true;
@@ -243,7 +243,7 @@ fn carried_children_keep_the_highest_severity() {
     let at = |line| {
         let mut location = suite.locations[0].clone();
         location.span.start.line = line;
-        vec![(location, None, 0)]
+        vec![(location, None, None)]
     };
     let (one, two, three) = (at(1), at(2), at(3));
     crate::rules::suites::carry(&mut suite, Severity::Warning, one);

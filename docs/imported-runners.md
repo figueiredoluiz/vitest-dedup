@@ -10,10 +10,10 @@ tests around it are left out of comparison rather than guessed at.
 - Source locations come from the runner; the registering file, governing globals and configuration
   come from the caller.
 - Each call registers its own tests, titled from its own arguments. Every test a call registers
-  is a separate runtime case for that call, keyed by its declaration, the caller file and the call
-  position, so the tests repeated calls with equal arguments register can be reported as
-  duplicates of each other (under an equivalent context, with the rule enabled); such a finding
-  names the runner's declaration for both.
+  is a separate runtime case for that call, keyed by its declaration, the caller file and the chain
+  of call positions (a nested call is its own execution). So the tests that repeated calls with
+  equal arguments register can be reported as duplicates of each other (under an equivalent
+  context, with the rule enabled); such a finding names the runner's declaration for both.
 - An expanded test is compared with every other test, including the caller's own.
 - Reads of `import.meta` retain the runner's source module identity. A matching spelling in a
   different module does not establish equal metadata, even when both assertions happen to pass.

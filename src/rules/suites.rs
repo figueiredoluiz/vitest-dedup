@@ -287,7 +287,7 @@ fn descendants(
                                     span: case.span,
                                 },
                                 case.gate_row(),
-                                0,
+                                case.invocation(),
                             )
                         })
                 })

@@ -74,6 +74,21 @@ pub enum Exclusion {
 }
 
 impl TestCase {
+    /// Which execution of its declaration this case is (see [`crate::model::Invocation`]).
+    pub fn invocation(&self) -> crate::model::Invocation {
+        let origin = self.origin.as_ref()?;
+        (!origin.call.is_empty()).then(|| {
+            (
+                origin
+                    .registration_files
+                    .first()
+                    .cloned()
+                    .unwrap_or_default(),
+                origin.call.clone(),
+            )
+        })
+    }
+
     /// Runtime case identity keeps enclosing suite multiplicity separate from a written row.
     pub fn gate_row(&self) -> Option<usize> {
         self.runtime_row.or(self.row)
@@ -188,10 +203,10 @@ pub struct Origin {
     pub path: PathBuf,
     /// Caller modules whose registrations own this declaration's executions.
     pub registration_files: Vec<PathBuf>,
-    /// The caller's registering call, by its start byte: two invocations of one template with
-    /// equal arguments are two runtime cases, so they are distinct declarations. `0` when the
-    /// case was not produced through an invocation.
-    pub call: u32,
+    /// The registering calls that ran the template, by start byte, outermost first: two
+    /// invocations of one template with equal arguments, or two nested calls inside one, are
+    /// distinct runtime cases. Empty when the case was not produced through an invocation.
+    pub call: Vec<u32>,
 }
 
 /// One test, one row of a test table, or a suite in the separate suite population.

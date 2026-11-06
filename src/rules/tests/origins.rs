@@ -9,7 +9,7 @@ fn imported(source: &str, owner: &str, line: u32) -> TestCase {
     case.origin = Some(Origin {
         path: PathBuf::from(source),
         registration_files: vec![PathBuf::from(owner)],
-        call: 0,
+        call: Vec::new(),
     });
     case
 }
@@ -156,4 +156,26 @@ fn row_pairs_of_two_tables_are_one_claim_beside_imported_cases() {
     let findings = claims(files, Rule::DuplicateTest);
     assert_eq!(findings.len(), 1, "{findings:?}");
     assert_eq!(findings[0].locations.len(), 2, "{findings:?}");
+}
+
+/// Two callers running one declaration at the same call position are two runtime cases: the
+/// identity keeps the caller path and the call chain apart, never folded into one number.
+#[test]
+fn equal_call_positions_in_two_callers_are_two_cases() {
+    let at = |owner: &str| {
+        let mut case = imported("runner.ts", owner, 1);
+        case.origin.as_mut().unwrap().call = vec![42];
+        case
+    };
+    let files = vec![
+        file("a.test.ts", vec![at("a.test.ts")]),
+        file("b.test.ts", vec![at("b.test.ts")]),
+    ];
+    let findings = claims(files, Rule::CrossFileDuplicate);
+    assert_eq!(findings.len(), 1, "{findings:?}");
+    assert_eq!(findings[0].cases.len(), 2, "{:?}", findings[0].cases);
+    assert!(findings[0]
+        .cases
+        .iter()
+        .all(|(_, _, invocation)| invocation.is_some()));
 }

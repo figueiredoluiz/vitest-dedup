@@ -58,7 +58,7 @@ pub(super) fn cover_suites(findings: &mut [Finding], files: &Files) {
                             span: case.span,
                         },
                         case.gate_row(),
-                        0,
+                        case.invocation(),
                     ));
             }
         }
