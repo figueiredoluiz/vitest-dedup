@@ -115,7 +115,7 @@ pub struct BaselineFile {
     /// Format version of this file. See [`BASELINE_SCHEMA_VERSION`].
     pub schema_version: u32,
     /// The fingerprint derivation these entries were computed with, e.g.
-    /// `vitestDedupFingerprint/v2`.
+    /// `vitestDedupFingerprint/v3`.
     ///
     /// Recorded separately from the fingerprints themselves (which already embed it) so a stale
     /// baseline is detected in one comparison, with an actionable message, instead of silently
@@ -347,7 +347,7 @@ fn build_baseline(findings: &[Finding], version: &str) -> BaselineFile {
 /// person opens in a diff viewer, and a raw newline inside a title would break one accepted
 /// finding across several lines of the file and make the diff unreadable.
 fn annotate(title: &str) -> String {
-    let sanitized = terminal_safe(title);
+    let sanitized = terminal_safe(&crate::lang::text::display(title));
     if sanitized.chars().count() <= MAX_BASELINE_TITLE_CHARS {
         return sanitized;
     }

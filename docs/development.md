@@ -160,9 +160,10 @@ with a branch, is left out under `incomplete-trace`, as it is by parameterizatio
 parameterization group already reports is not claimed twice. Tests with fewer than two events have
 nothing to compare.
 
-Baselines carry `vitestDedupFingerprint/v2`. Earlier releases wrote `v1` and paired and titled tests
-differently, so a `v1` file is refused with a prompt to regenerate it rather than half matched.
-`--baseline-from-ref` uses v2 as well. Historical source files, project helpers,
+Baselines carry `vitestDedupFingerprint/v3`. Earlier versions used different title identities:
+`v1` paired and titled tests differently, and `v2` could confuse lone JavaScript surrogates with
+literal replacement-character text. Older files are refused with a prompt to regenerate them.
+`--baseline-from-ref` uses v3 as well. Historical source files, project helpers,
 re-exports, and resolver tsconfig/package metadata come from one pinned Git commit. Missing files
 never fall back to the working tree. Historical symlinks and actual dependency/configuration read
 failures are operational errors. An absent package-based tsconfig extension instead marks the

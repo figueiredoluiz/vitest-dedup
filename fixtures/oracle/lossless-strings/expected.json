@@ -1,0 +1,10 @@
+{
+  "files": {
+    "names.test.ts": { "tasks": 20, "wrapperSites": [], "next": {} },
+    "edges.test.ts": { "tasks": 4, "wrapperSites": [], "next": {} },
+    "hooks.test.ts": { "tasks": 4, "wrapperSites": [], "next": {} },
+    "roundtrip.test.ts": { "tasks": 5, "wrapperSites": [], "next": {} },
+    "helper.test.ts": { "tasks": 6, "wrapperSites": ["wrapper@7", "wrapper@8", "wrapper@9"], "next": {} },
+    "joined.test.ts": { "tasks": 4, "wrapperSites": [], "next": {} }
+  }
+}

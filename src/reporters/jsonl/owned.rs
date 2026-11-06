@@ -1,5 +1,7 @@
 //! Versioned owned-core evidence. Legacy fingerprint fields are deliberately not synthesized.
-use super::{bounded_text, report_safe_path, HOOK_CONTENT_NOTICE, REGISTRATION_TEST_NOTICE};
+use super::{
+    bounded_text, bounded_title, report_safe_path, HOOK_CONTENT_NOTICE, REGISTRATION_TEST_NOTICE,
+};
 use crate::corpus::{
     records::{DiagnosticHook, Views},
     Exclusion, TestCase,
@@ -41,8 +43,17 @@ fn header(kind: &str, path: &Path, line: u32, column: u32) -> (Value, Vec<String
     )
 }
 
+/// The title has a lossless JSON boundary; ordinary record fields remain plain Unicode.
+#[derive(serde::Serialize)]
+struct TestRecord {
+    #[serde(flatten)]
+    fields: Value,
+    #[serde(serialize_with = "crate::lang::text::serialize")]
+    title: String,
+}
+
 /// Render one execution, keeping declaration identity distinct from caller ownership.
-fn test(path: &Path, case: &TestCase) -> Value {
+fn test(path: &Path, case: &TestCase) -> TestRecord {
     let (mut record, mut truncated) = header(
         "test",
         case.declaration_path(path),
@@ -56,7 +67,7 @@ fn test(path: &Path, case: &TestCase) -> Value {
         .or_else(|| case.full_title.clone())
         .or_else(|| case.title.clone())
         .unwrap_or_default();
-    record["title"] = json!(bounded_text(&title, "title", &mut truncated));
+    let title = bounded_title(&title, "title", &mut truncated);
     if case.declaration_path(path) != path {
         record["registrationFile"] = json!(bounded_text(
             &report_safe_path(path),
@@ -98,7 +109,10 @@ fn test(path: &Path, case: &TestCase) -> Value {
     record["views"] = views(case.views.as_deref(), true);
     record["truncatedFields"] = json!(truncated);
     record["contentNotice"] = json!(REGISTRATION_TEST_NOTICE);
-    record
+    TestRecord {
+        fields: record,
+        title,
+    }
 }
 
 /// Render a declaration even when the hook rule has no chain or effect proof for it.

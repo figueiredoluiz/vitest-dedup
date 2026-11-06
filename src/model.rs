@@ -1027,7 +1027,7 @@ pub struct Finding {
     /// file filtering from dropping a finding when a non-representative caller changed.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub registration_files: Vec<Vec<PathBuf>>,
-    /// Full titles of the participating tests, parallel to `locations`.
+    /// Full titles in [`crate::lang::text`]'s lossless encoding, parallel to `locations`.
     pub titles: Vec<String>,
     /// Whether each participating test is inert (`.skip`/`.todo`), parallel to `locations`.
     ///
@@ -1242,8 +1242,9 @@ impl Finding {
 /// -- never the rest of the spelling -- when [`Finding::fingerprint`]'s derivation changes, so a
 /// baseline computed against an older version reads as unmistakably stale rather than silently
 /// comparing hashes produced by two different schemes. `v1` was the earlier engine's: it paired and
-/// titled tests differently, so its baselines are refused rather than half matched.
-pub const FINGERPRINT_VERSION: &str = "vitestDedupFingerprint/v2";
+/// titled tests differently. `v2` used lossy string identities for lone surrogates; both older
+/// versions are refused rather than reusing ambiguous allowances.
+pub const FINGERPRINT_VERSION: &str = "vitestDedupFingerprint/v3";
 
 /// Renders `path` with forward slashes regardless of host platform.
 ///

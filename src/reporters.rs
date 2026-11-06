@@ -41,6 +41,42 @@ pub use terminal::{DetectionTiming, TerminalReportContext, TerminalReporter};
 /// place to find it.
 pub use shared::terminal_safe;
 
+/// Machine title fields retain code units, while human surfaces use an explicit escape.
+#[cfg(test)]
+#[test]
+fn nc65_reporters_keep_semantic_titles_separate_from_display() {
+    use crate::lang::text;
+    let mut result = test_support::cross_file_result("string identity");
+    result.findings[0].titles = vec![
+        text::from_utf16([0xd800]),
+        text::from_utf8("�d800").into_owned(),
+    ];
+    let render = |reporter: &dyn Reporter| {
+        let mut bytes = Vec::new();
+        reporter.write_report(&result, &mut bytes).unwrap();
+        String::from_utf8(bytes).unwrap()
+    };
+    for reporter in [
+        &json::JsonReporter::new() as &dyn Reporter,
+        &jsonl::JsonlReporter::new(),
+    ] {
+        let json = render(reporter);
+        assert!(json.contains(r#""\ud800""#), "{json}");
+        assert!(json.contains("\"�d800\""), "{json}");
+        assert!(!json.contains("�fffdd800"));
+    }
+    let html = render(&html::HtmlReporter::new());
+    assert!(html.contains(r#"\ud800"#));
+    assert!(html.contains("�d800"));
+    assert!(!html.contains("�fffdd800"));
+    let sarif = render(&sarif::SarifReporter::new());
+    assert!(sarif.contains(r#"\\ud800"#));
+    let terminal = render(&terminal::TerminalReporter::new());
+    assert!(terminal.contains(r#"\ud800"#));
+    assert!(terminal.contains("�d800"));
+    assert!(!terminal.contains("�fffdd800"));
+}
+
 use crate::model::AnalysisResult;
 use std::io::Write;
 

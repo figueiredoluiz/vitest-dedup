@@ -59,7 +59,7 @@
 //!       "titles": ["suite > a", "suite > b"],
 //!       "inert": [false, false],
 //!       "baselined": false,
-//!       "fingerprint": "vitestDedupFingerprint/v2:0123456789abcdef"
+//!       "fingerprint": "vitestDedupFingerprint/v3:0123456789abcdef"
 //!     }
 //!   ]
 //! }
@@ -121,8 +121,8 @@
 //! be true on a changed-files run that otherwise looks clean.
 
 use super::shared::{
-    report_registration_files, report_safe, JsonCovers, JsonExcludedFile, JsonLocation,
-    SummaryCounters,
+    report_registration_files, report_safe, report_safe_title, JsonCovers, JsonExcludedFile,
+    JsonLocation, SummaryCounters,
 };
 use super::Reporter;
 use crate::model::{AnalysisResult, Finding, Rule, Severity, Verdict};
@@ -214,6 +214,7 @@ struct JsonFinding {
     locations: Vec<JsonLocation>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     registration_files: Vec<Vec<String>>,
+    #[serde(serialize_with = "crate::lang::text::serialize_titles")]
     titles: Vec<String>,
     /// Per-participant inert (`.skip`/`.todo`) flags, parallel to `locations` and `titles`.
     ///
@@ -246,7 +247,7 @@ impl From<&Finding> for JsonFinding {
             titles: finding
                 .titles
                 .iter()
-                .map(|title| report_safe(title))
+                .map(|title| report_safe_title(title))
                 .collect(),
             inert: finding.inert.clone(),
             baselined: finding.baselined,

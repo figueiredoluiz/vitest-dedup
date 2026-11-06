@@ -187,8 +187,7 @@ impl Normalizer<'_> {
                 "ObjectExpression" => {
                     for property in tree.list(node, "properties").into_iter().flatten() {
                         if !own_data_property(tree, property)
-                            || row_property_key(tree, property)
-                                .is_none_or(|key| key == "__proto__" || key.contains('\u{fffd}'))
+                            || row_property_key(tree, property).is_none_or(|key| key == "__proto__")
                         {
                             return false;
                         }
@@ -749,7 +748,11 @@ impl Reader<'_, '_> {
                     Scalar::Number(0.0) => "0".into(),
                     value => value.source(),
                 };
-                Scalar::String(format!("{}{}", text(left), text(right)))
+                Scalar::String(crate::lang::text::canonical(format!(
+                    "{}{}",
+                    text(left),
+                    text(right)
+                )))
             }
             "TemplateLiteral" if tree.list(node, "expressions").is_empty() => {
                 let quasi = tree.list(node, "quasis").first().copied()??;
@@ -769,7 +772,7 @@ impl Reader<'_, '_> {
             _ => return None,
         };
         match &result {
-            Scalar::String(text) if text.contains('\u{fffd}') || text.len() > 65_536 => None,
+            Scalar::String(text) if text.len() > 65_536 => None,
             _ => Some(result),
         }
     }

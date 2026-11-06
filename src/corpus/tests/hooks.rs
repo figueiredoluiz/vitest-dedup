@@ -271,7 +271,6 @@ fn hook_effect_proof_refuses_unknown_work() {
         "return () => { value = 1 }",
         "observe()",
         "value = /x/",
-        "value = '\\uD800'",
         "value = 1; observe()",
         "[value] = [1]",
     ] {
@@ -295,6 +294,22 @@ fn hook_effect_proof_refuses_unknown_work() {
         1
     )
     .is_empty());
+}
+
+/// Primitive surrogate writes retain hook redundancy without equating replacement text.
+#[test]
+fn nc65_hook_effects_keep_exact_string_identity() {
+    let source = include_str!("../../../fixtures/oracle/lossless-strings/hooks.test.ts");
+    let found = findings(source, 2);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!(
+        found[0]
+            .locations
+            .iter()
+            .map(|l| l.span.start.line)
+            .collect::<Vec<_>>(),
+        [5, 6]
+    );
 }
 
 /// Reset calls remain opaque until utility-object stability is modeled.

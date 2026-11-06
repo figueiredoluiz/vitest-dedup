@@ -269,7 +269,7 @@ fn revision_baselines_and_changed_callers_follow_the_helper() {
         assert!(baseline["findings"][0]["fingerprint"]
             .as_str()
             .unwrap()
-            .starts_with("vitestDedupFingerprint/v2:"));
+            .starts_with("vitestDedupFingerprint/v3:"));
     }
 }
 

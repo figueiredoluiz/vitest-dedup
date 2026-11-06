@@ -20,6 +20,11 @@ vitest-dedup . --reporters jsonl | jq -c 'select(.type == "finding")'
 `terminal` and `jsonl` both own stdout and cannot be selected together. `jsonl` combines freely
 with the file reporters, which never touch stdout.
 
+JSON and JSONL title fields preserve JavaScript lone surrogate code units as `\ud800`-style
+JSON escapes. Terminal, HTML and SARIF messages display those units as visible `\ud800` text.
+Literal replacement characters remain replacement characters. Existing control-character
+sanitization still applies; display text is never used for comparison or baseline identity.
+
 | Page | Contents |
 | --- | --- |
 | [Terminal](reports/terminal.md) | Layout, footer, detection time, color. |

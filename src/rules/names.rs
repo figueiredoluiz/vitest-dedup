@@ -54,6 +54,6 @@ fn message(members: &[Entry<'_>]) -> String {
     format!(
         "{} tests in this file share the full title \"{}\"",
         members.len(),
-        title
+        crate::lang::text::display(&title)
     )
 }

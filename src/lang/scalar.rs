@@ -13,7 +13,7 @@ pub enum Scalar {
     Number(f64),
     /// A decimal bigint, with an optional minus sign.
     BigInt(String),
-    /// Owned text; callers retain the lossless-text guard.
+    /// Owned text in [`super::text`]'s lossless representation.
     String(String),
 }
 
@@ -30,7 +30,7 @@ impl Scalar {
             Self::Number(value) if *value == 0.0 && value.is_sign_negative() => "-0".into(),
             Self::Number(value) => ryu_js::Buffer::new().format(*value).to_owned(),
             Self::BigInt(value) => format!("{value}n"),
-            Self::String(value) => serde_json::to_string(value).expect("strings serialize"),
+            Self::String(value) => super::text::json(value),
         }
     }
 

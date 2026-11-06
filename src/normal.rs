@@ -404,10 +404,7 @@ impl InvocationValue {
     /// Bind a proved primitive runtime value using the literal writer's exact two policies.
     /// Objects and arrays need reference identity, which primitive substitution cannot establish.
     pub fn scalar(value: &serde_json::Value) -> Option<Self> {
-        if value.is_object()
-            || value.is_array()
-            || value.as_str().is_some_and(|text| text.contains('\u{fffd}'))
-        {
+        if value.is_object() || value.is_array() {
             return None;
         }
         Some(Self {

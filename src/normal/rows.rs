@@ -370,7 +370,7 @@ impl Normalizer<'_> {
         };
         let first = text(quasis.first().copied()??)?;
         if expressions.is_empty() {
-            return (!first.contains('\u{fffd}') && first.len() <= 65_536).then(|| {
+            return (first.len() <= 65_536).then(|| {
                 vec![TableRow {
                     index: 0,
                     value: Row::Whole(quasi, None),

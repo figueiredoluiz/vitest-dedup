@@ -2,7 +2,6 @@
 //! nothing up for the code around it.
 
 use super::{Declaration, Field, NodeId, Scopes, Tree};
-use serde_json::Value;
 use std::collections::BTreeSet;
 
 /// Nesting the evaluator follows before it gives up; deeper statements are not inert.
@@ -335,9 +334,7 @@ impl Evaluator<'_> {
     }
 }
 
-/// Primitive values only; regular expressions allocate, and replacement-encoded text is uncertain.
+/// Primitive values only; regular expressions allocate.
 pub(crate) fn primitive(tree: &Tree, node: NodeId) -> bool {
-    tree.kind(node) == "Literal"
-        && !matches!(tree.field_of(node, "regex"), Field::Object(_))
-        && !matches!(tree.field_of(node, "value"), Field::Value(Value::String(text)) if text.contains('\u{fffd}'))
+    tree.kind(node) == "Literal" && !matches!(tree.field_of(node, "regex"), Field::Object(_))
 }

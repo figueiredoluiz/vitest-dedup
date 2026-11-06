@@ -365,6 +365,30 @@ impl SourceTree for ImporterTree {
     }
 }
 
+/// Committed-file lookup decodes real replacement characters and refuses lone-surrogate aliases.
+#[test]
+fn nc65_committed_resolution_decodes_only_valid_unicode() {
+    let dir = crate::modes::tests::repository_with(&[
+        ("run.test.ts", b"import './helper';"),
+        ("�d800.ts", b"export const value = 1;"),
+    ]);
+    let root = dir.path().canonicalize().unwrap();
+    let catalog = crate::modes::RevisionFiles::load(&root, "HEAD", None).unwrap();
+    let sources = Sources::committed(Arc::new(catalog));
+    let from = root.join("run.test.ts");
+    assert_eq!(
+        sources.resolve_file(&from, &crate::lang::text::from_utf8("./�d800"), &root),
+        Some(root.join("�d800.ts"))
+    );
+    assert!(sources
+        .resolve_file(
+            &from,
+            &crate::lang::text::from_utf16("./".encode_utf16().chain([0xd800])),
+            &root
+        )
+        .is_none());
+}
+
 /// Resolve known importer identities before parsing them, while retaining supplied-source callers.
 #[test]
 fn resolver_uses_the_catalogs_importer_identity() {

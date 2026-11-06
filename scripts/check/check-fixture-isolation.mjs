@@ -126,7 +126,6 @@ export const KNOWN_GAPS = new Map([
   ['fixtures/mixed/mixed-template-title-with-one-real-duplicate-row.test.ts:L42', 'a row whose template title is not rendered has no record under the rendered title'],
   ['fixtures/duplicates/near-reordered-setup-dependent-twin.test.ts:L16', 'the twin that multiplies before resetting reads state another statement writes, so it is order-dependent and not compared'],
   ['fixtures/duplicates/not-redundant-hook-different-body.test.ts:L27', 'the hook planner proves no redundancy for these bodies, so there is no hook proof to relate'],
-  ['fixtures/duplicates/parameterization-computed-keys.test.ts:L28', 'a lone-surrogate key and U+FFFD render to the same shape'],
 ])
 
 /**

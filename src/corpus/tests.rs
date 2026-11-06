@@ -12,6 +12,7 @@ mod import_keys;
 mod local_helpers;
 mod module_meta;
 mod nc64;
+mod nc65;
 mod runners;
 
 /// The corpus of each of `tests` (paths among `files`), read in one run.
@@ -1315,7 +1316,7 @@ fn owned_duplicate_rows_require_proven_inputs_and_keep_every_group() {
             .iter()
             .filter(|case| case.row_class.is_some())
             .count(),
-        51
+        57
     );
     let expected = [
         ("scalar 1", 2),
@@ -1332,6 +1333,7 @@ fn owned_duplicate_rows_require_proven_inputs_and_keep_every_group() {
         ("literal array", 2),
         ("empty row", 2),
         ("unicode é😀", 2),
+        ("encoded title \u{fffd}d800", 2),
         ("whole const 1", 2),
     ];
     assert_owned_row_findings(corpus, &expected);

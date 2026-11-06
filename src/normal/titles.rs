@@ -356,7 +356,7 @@ fn read(
                     text.push_str(&part);
                 }
             }
-            Some(Value::String(text))
+            Some(Value::String(crate::lang::text::canonical(text)))
         }
         "ArrayExpression" => tree
             .list(node, "elements")

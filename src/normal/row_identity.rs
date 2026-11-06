@@ -79,9 +79,7 @@ fn field_identity(
     properties
         .iter()
         .map(|(key, node)| {
-            if key.contains('\u{fffd}')
-                || matches!(key.as_str(), "__proto__" | "toString" | "valueOf")
-            {
+            if matches!(key.as_str(), "__proto__" | "toString" | "valueOf") {
                 return None;
             }
             Some(Value::Array(vec![

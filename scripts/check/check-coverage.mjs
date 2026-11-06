@@ -143,6 +143,8 @@ const RUST_MODULES = {
   // Lowered 2026-11-04 to 90.70% (39/43): the template-text reader and its test went with the
   // earlier analyzer; the 4 uncovered lines are this file's test-helper `panic!` arms.
   'src/lang/js_text.rs': 90,
+  // Lossless UTF-16 boundaries: first measured at 99.20% (124/125 instrumented lines).
+  'src/lang/text.rs': 99,
   'src/lang/manifest_fs.rs': 99,
   // Installable-package classification: first measured at 100% (51/51).
   'src/lang/packages.rs': 100,

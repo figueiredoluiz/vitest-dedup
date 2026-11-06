@@ -49,6 +49,33 @@ fn pair(path: &str, title: &str, line: u32) -> Finding {
 
 // -- round trip ------------------------------------------------------------------------
 
+/// A formerly colliding title has its own allowance; old versions cannot lend it acceptance.
+#[test]
+fn nc65_baselines_distinguish_code_units_and_reject_lossy_versions() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("baseline.json");
+    let surrogate = pair("a.test.ts", &crate::lang::text::from_utf16([0xd800]), 1);
+    let literal = pair("a.test.ts", &crate::lang::text::from_utf8("�d800"), 1);
+    assert_ne!(surrogate.fingerprint(), literal.fingerprint());
+    write_baseline(&path, std::slice::from_ref(&surrogate)).unwrap();
+    let baseline = load_baseline(&path).unwrap();
+    let mut findings = vec![surrogate, literal];
+    assert_eq!(apply_baseline(&mut findings, &baseline), (1, 1));
+    assert!(findings[0].baselined);
+    assert!(!findings[1].baselined);
+    let json = std::fs::read_to_string(&path).unwrap();
+    assert!(json.contains(r#"\\ud800"#));
+    std::fs::write(
+        &path,
+        json.replace("vitestDedupFingerprint/v3", "vitestDedupFingerprint/v2"),
+    )
+    .unwrap();
+    assert!(load_baseline(&path)
+        .unwrap_err()
+        .to_string()
+        .contains("fingerprint version"));
+}
+
 /// Regression fixture for baseline/change filtering: a written baseline reads back and
 /// matches the findings it recorded.
 #[test]
@@ -185,7 +212,7 @@ fn a_stale_or_malformed_baseline_is_an_error_never_a_silent_empty_baseline() {
     let cases: [(&str, &str); 5] = [
         ("not json at all", "failed to parse baseline"),
         (
-            r#"{"schemaVersion":99,"fingerprintVersion":"vitestDedupFingerprint/v2","findings":[]}"#,
+            r#"{"schemaVersion":99,"fingerprintVersion":"vitestDedupFingerprint/v3","findings":[]}"#,
             "schema version",
         ),
         (
@@ -193,11 +220,11 @@ fn a_stale_or_malformed_baseline_is_an_error_never_a_silent_empty_baseline() {
             "fingerprint version",
         ),
         (
-            r#"{"schemaVersion":1,"fingerprintVersion":"vitestDedupFingerprint/v2","findings":[{"fingerprint":"vitestDedupFingerprint/v2:aaaa","count":0}]}"#,
+            r#"{"schemaVersion":1,"fingerprintVersion":"vitestDedupFingerprint/v3","findings":[{"fingerprint":"vitestDedupFingerprint/v3:aaaa","count":0}]}"#,
             "0 occurrences",
         ),
         (
-            r#"{"schemaVersion":1,"fingerprintVersion":"vitestDedupFingerprint/v2","findings":[{"fingerprint":"vitestDedupFingerprint/v2:aaaa","count":1},{"fingerprint":"vitestDedupFingerprint/v2:aaaa","count":1}]}"#,
+            r#"{"schemaVersion":1,"fingerprintVersion":"vitestDedupFingerprint/v3","findings":[{"fingerprint":"vitestDedupFingerprint/v3:aaaa","count":1},{"fingerprint":"vitestDedupFingerprint/v3:aaaa","count":1}]}"#,
             "same fingerprint twice",
         ),
     ];
@@ -236,7 +263,7 @@ fn an_oversized_or_overlong_baseline_is_rejected_by_the_bound_it_actually_crosse
     );
 
     let mut overlong = String::from(
-        r#"{"schemaVersion":1,"fingerprintVersion":"vitestDedupFingerprint/v2","findings":["#,
+        r#"{"schemaVersion":1,"fingerprintVersion":"vitestDedupFingerprint/v3","findings":["#,
     );
     for index in 0..=MAX_BASELINE_ENTRIES {
         if index > 0 {
@@ -267,7 +294,7 @@ fn a_baseline_entry_whose_fingerprint_is_not_a_versioned_value_is_rejected() {
     let path = directory.path().join("baseline.json");
     std::fs::write(
         &path,
-        r#"{"schemaVersion":1,"fingerprintVersion":"vitestDedupFingerprint/v2","findings":[{"fingerprint":"cukeDedupFingerprint/v2:aaaa","count":1}]}"#,
+        r#"{"schemaVersion":1,"fingerprintVersion":"vitestDedupFingerprint/v3","findings":[{"fingerprint":"cukeDedupFingerprint/v2:aaaa","count":1}]}"#,
     )
     .unwrap();
     let error = format!("{:#}", load_baseline(&path).unwrap_err());
@@ -288,7 +315,7 @@ fn a_baseline_is_empty_only_when_it_accepts_no_instance_at_all() {
 
     std::fs::write(
         &path,
-        r#"{"schemaVersion":1,"fingerprintVersion":"vitestDedupFingerprint/v2","findings":[]}"#,
+        r#"{"schemaVersion":1,"fingerprintVersion":"vitestDedupFingerprint/v3","findings":[]}"#,
     )
     .unwrap();
     let empty = load_baseline(&path).unwrap();

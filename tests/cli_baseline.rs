@@ -134,7 +134,7 @@ fn duplicates(stdout: &str) -> (usize, usize) {
     (records.len(), baselined.count())
 }
 
-/// Recorded findings stop counting, a new one still does, and each carries the `v2` identity.
+/// Recorded findings stop counting, a new one still does, and each carries the `v3` identity.
 #[test]
 fn a_baseline_is_recorded_and_applied() {
     let directory = tempfile::tempdir().unwrap();
@@ -150,11 +150,11 @@ fn a_baseline_is_recorded_and_applied() {
     assert_eq!(exit, 0, "{stderr}");
     let written: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
-    assert_eq!(written["fingerprintVersion"], "vitestDedupFingerprint/v2");
+    assert_eq!(written["fingerprintVersion"], "vitestDedupFingerprint/v3");
     let (exit, stdout, stderr) = analyze(directory.path(), &args);
     assert_eq!(exit, 0, "{stderr}");
     assert_eq!(duplicates(&stdout), (1, 1));
-    assert!(stdout.contains("vitestDedupFingerprint/v2:"), "{stdout}");
+    assert!(stdout.contains("vitestDedupFingerprint/v3:"), "{stdout}");
     std::fs::write(&test_file, source(&["one", "two", "three"])).unwrap();
     let (exit, stdout, _) = analyze(directory.path(), &args);
     assert_eq!(exit, 1);
@@ -198,14 +198,14 @@ fn an_earlier_release_baseline_is_refused_with_the_way_out() {
     let (exit, _, stderr) = analyze(directory.path(), &args);
     assert_eq!(exit, 2, "{stderr}");
     assert!(stderr.contains("vitestDedupFingerprint/v1"), "{stderr}");
-    assert!(stderr.contains("vitestDedupFingerprint/v2"), "{stderr}");
+    assert!(stderr.contains("vitestDedupFingerprint/v3"), "{stderr}");
     assert!(stderr.contains("--update-baseline"), "{stderr}");
     let update = [&args[..], &["--update-baseline"]].concat();
     assert_eq!(analyze(directory.path(), &update).0, 0);
     assert_eq!(analyze(directory.path(), &args).0, 0);
 }
 
-/// A file whose header claims the `v2` identity must hold only its entries, and malformed
+/// A file whose header claims the `v3` identity must hold only its entries, and malformed
 /// input stays a refusal, never a pass.
 #[test]
 fn a_malformed_baseline_is_refused() {
@@ -214,20 +214,20 @@ fn a_malformed_baseline_is_refused() {
     let path = directory.path().join("baseline.json");
     let file = |fingerprint: &str, count: u32| {
         format!(
-            r#"{{"schemaVersion":1,"fingerprintVersion":"vitestDedupFingerprint/v2","findings":[{{"fingerprint":"{fingerprint}","count":{count},"rule":"r","tests":[]}}]}}"#
+            r#"{{"schemaVersion":1,"fingerprintVersion":"vitestDedupFingerprint/v3","findings":[{{"fingerprint":"{fingerprint}","count":{count},"rule":"r","tests":[]}}]}}"#
         )
     };
     for (body, reason) in [
         (
             file("vitestDedupFingerprint/v1:00", 1),
-            "not a `vitestDedupFingerprint/v2`",
+            "not a `vitestDedupFingerprint/v3`",
         ),
         (
-            file("vitestDedupFingerprint/v2x:00", 1),
-            "not a `vitestDedupFingerprint/v2`",
+            file("vitestDedupFingerprint/v3x:00", 1),
+            "not a `vitestDedupFingerprint/v3`",
         ),
         (
-            file("vitestDedupFingerprint/v2:00", 0),
+            file("vitestDedupFingerprint/v3:00", 0),
             "accepts 0 occurrences",
         ),
         ("{".to_owned(), "failed to parse"),

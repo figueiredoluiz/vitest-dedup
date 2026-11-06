@@ -89,6 +89,37 @@ pub(super) fn report_safe(value: &str) -> String {
     sanitize(value, true)
 }
 
+/// Sanitize semantic UTF-16 titles, including forbidden pairs exposed by earlier removals.
+pub(super) fn report_safe_title(value: &str) -> String {
+    if !value.contains('\u{fffd}') {
+        return report_safe(value);
+    }
+    let mut units = Vec::<u16>::new();
+    for unit in crate::lang::text::units(value) {
+        if char::from_u32(u32::from(unit)).is_some_and(|character| {
+            !matches!(character, '\n' | '\r' | '\t') && is_dropped(character)
+        }) {
+            continue;
+        }
+        if (0xdc00..=0xdfff).contains(&unit) {
+            if let Some(high) = units
+                .last()
+                .copied()
+                .filter(|high| (0xd800..=0xdbff).contains(high))
+            {
+                let scalar =
+                    0x10000 + ((u32::from(high) - 0xd800) << 10) + u32::from(unit) - 0xdc00;
+                if is_dropped(char::from_u32(scalar).unwrap()) {
+                    units.pop();
+                    continue;
+                }
+            }
+        }
+        units.push(unit);
+    }
+    crate::lang::text::from_utf16(units)
+}
+
 /// Renders a path with forward slashes regardless of the host platform's separator.
 ///
 /// A `Location::path` is a relative, analyzer-owned path recorded by the frontend, not a

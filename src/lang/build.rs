@@ -186,11 +186,15 @@ fn export_name(name: &ModuleExportName) -> String {
     }
 }
 
-/// `json` with every lone surrogate escape (`\ud800` not part of a pair) spelled as
-/// [`super::js_text`] spells one: U+FFFD followed by the code unit in four lowercase hex digits. A JSON parser rejects a lone surrogate escape; oxc writes one for a string
-/// value that holds one.
+/// Encode JSON string contents before serde reads them: it rejects lone surrogates. Escape the
+/// introducer even in strings without surrogates, so literal replacement text cannot collide.
 pub(super) fn spell_lone_surrogates(json: &str) -> Cow<'_, str> {
-    if !json.contains("\\ud") && !json.contains("\\uD") {
+    if !json.contains("\\ud")
+        && !json.contains("\\uD")
+        && !json.contains("\\uf")
+        && !json.contains("\\uF")
+        && !json.contains('\u{fffd}')
+    {
         return Cow::Borrowed(json);
     }
     let unit = |at: usize| -> Option<u16> {
@@ -203,17 +207,17 @@ pub(super) fn spell_lone_surrogates(json: &str) -> Cow<'_, str> {
     while index < json.len() {
         let rest = &json[index..];
         let Some(slash) = rest.find('\\') else {
-            out.push_str(rest);
+            out.push_str(&super::text::from_utf8(rest));
             break;
         };
-        out.push_str(&rest[..slash]);
+        out.push_str(&super::text::from_utf8(&rest[..slash]));
         index += slash;
         match unit(index) {
             Some(0xD800..=0xDBFF) if matches!(unit(index + 6), Some(0xDC00..=0xDFFF)) => {
                 out.push_str(&json[index..index + 12]);
                 index += 12;
             }
-            Some(lone @ 0xD800..=0xDFFF) => {
+            Some(lone @ (0xD800..=0xDFFF | 0xFFFD)) => {
                 out.push_str(&format!("\u{FFFD}{lone:04x}"));
                 index += 6;
             }

@@ -55,7 +55,7 @@ fn memory_boundary_harness_reads_the_engine_findings() {
     assert_eq!(report["filesAnalyzed"], 2);
     let findings = report["findings"].as_array().unwrap();
     assert!(!findings.is_empty());
-    let prefix = "vitestDedupFingerprint/v2:";
+    let prefix = "vitestDedupFingerprint/v3:";
     assert!(findings
         .iter()
         .all(|f| f["fingerprint"].as_str().unwrap().starts_with(prefix)));
