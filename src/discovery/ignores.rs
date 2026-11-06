@@ -202,7 +202,12 @@ impl Ignores {
         } else {
             match self.contents(&dotgit) {
                 Ok(Some(text)) => {
-                    let Some(path) = text.trim().strip_prefix("gitdir: ") else {
+                    let Some(path) = text
+                        .lines()
+                        .next()
+                        .unwrap_or_default()
+                        .strip_prefix("gitdir: ")
+                    else {
                         self.error(&dotgit, "invalid gitdir pointer");
                         return None;
                     };
@@ -217,7 +222,7 @@ impl Ignores {
         };
         let common = gitdir.join("commondir");
         match self.contents(&common) {
-            Ok(Some(text)) => Some(gitdir.join(text.trim())),
+            Ok(Some(text)) => Some(gitdir.join(text.lines().next().unwrap_or_default())),
             Ok(None) => Some(gitdir),
             Err(error) => {
                 self.error(&common, error);
@@ -342,7 +347,7 @@ mod tests {
             let root = dir.path();
             let path = root.join(name);
             for text in [
-                "x".repeat(FILE_BYTES + 1),
+                "0".repeat(FILE_BYTES + 1),
                 "#".repeat(LINE_BYTES + 1),
                 "\n".repeat(FILE_LINES + 1),
                 "ignored\n".repeat(FILE_PATTERNS + 1),
@@ -444,7 +449,7 @@ mod tests {
         fs::create_dir(root.join("node_modules")).unwrap();
         fs::write(
             root.join("node_modules/.ignore"),
-            "x".repeat(FILE_BYTES + 1),
+            "0".repeat(FILE_BYTES + 1),
         )
         .unwrap();
         let result = discover(root);
@@ -524,7 +529,7 @@ mod tests {
             ignores.contents_with_links(&link, true).unwrap().as_deref(),
             Some("a.test.ts\n")
         );
-        fs::write(&target, "x".repeat(FILE_BYTES + 1)).unwrap();
+        fs::write(&target, "0".repeat(FILE_BYTES + 1)).unwrap();
         assert!(ignores.contents_with_links(&link, true).is_err());
         fs::remove_file(&target).unwrap();
         symlink("/dev/zero", &target).unwrap();
@@ -570,5 +575,42 @@ mod tests {
         let result = discover(root);
         assert!(result.files.is_empty());
         assert!(!result.incomplete, "{:?}", result.errors);
+    }
+
+    /// Metadata paths retain significant spaces with absent, Unix or Windows line endings.
+    #[test]
+    #[cfg(unix)]
+    fn bounded_ignore_metadata_paths_preserve_whitespace() {
+        for ending in ["", "\n", "\r\n"] {
+            for common in [false, true] {
+                let dir = fixture();
+                let root = dir.path();
+                fs::remove_dir(root.join(".git")).unwrap();
+                let metadata = root.join(" metadata ");
+                fs::create_dir(&metadata).unwrap();
+                fs::write(
+                    root.join(".git"),
+                    format!("gitdir: {}{ending}", metadata.display()),
+                )
+                .unwrap();
+                let excludes = if common {
+                    let shared = root.join(" shared ");
+                    fs::create_dir(&shared).unwrap();
+                    fs::write(metadata.join("commondir"), format!("../ shared {ending}")).unwrap();
+                    shared
+                } else {
+                    metadata
+                };
+                fs::create_dir(excludes.join("info")).unwrap();
+                fs::write(excludes.join("info/exclude"), "a.test.ts\n").unwrap();
+                let result = discover(root);
+                assert!(result.files.is_empty(), "{ending:?}, common={common}");
+                assert!(!result.incomplete, "{:?}", result.errors);
+                fs::write(excludes.join("info/exclude"), "a.test.ts\n!a.test.ts\n").unwrap();
+                let result = discover(root);
+                assert_eq!(result.files.len(), 1);
+                assert!(!result.incomplete, "{:?}", result.errors);
+            }
+        }
     }
 }

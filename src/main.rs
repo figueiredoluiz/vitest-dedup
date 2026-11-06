@@ -2663,6 +2663,59 @@ mod tests {
         assert_eq!(report["findings"][0]["rule"], "duplicate-test");
     }
 
+    /// Significant spaces in both metadata pointers preserve Git exclusions and owned positives.
+    #[test]
+    #[cfg(unix)]
+    fn bounded_metadata_paths_preserve_the_cli_and_git_result() {
+        let source = include_str!("../fixtures/recall/ignore-input-bounded/a.test.ts");
+        for ending in ["", "\n", "\r\n"] {
+            for common in [false, true] {
+                let directory = single_file_project("a.test.ts", source);
+                let root = directory.path();
+                assert!(std::process::Command::new("git")
+                    .args(["init", "--quiet"])
+                    .arg(root)
+                    .output()
+                    .unwrap()
+                    .status
+                    .success());
+                std::fs::write(root.join("ignored.test.ts"), source).unwrap();
+                let metadata = root.join(" metadata ");
+                std::fs::rename(root.join(".git"), &metadata).unwrap();
+                std::fs::write(
+                    root.join(".git"),
+                    format!("gitdir: {}{ending}", metadata.display()),
+                )
+                .unwrap();
+                let excludes = if common {
+                    let shared = root.join(" shared ");
+                    std::fs::rename(&metadata, &shared).unwrap();
+                    std::fs::create_dir(&metadata).unwrap();
+                    std::fs::copy(shared.join("HEAD"), metadata.join("HEAD")).unwrap();
+                    std::fs::write(metadata.join("commondir"), format!("../ shared {ending}"))
+                        .unwrap();
+                    shared
+                } else {
+                    metadata
+                };
+                std::fs::write(excludes.join("info/exclude"), "ignored.test.ts\n").unwrap();
+                let git = std::process::Command::new("git")
+                    .args(["check-ignore", "--no-index", "ignored.test.ts"])
+                    .current_dir(root)
+                    .output()
+                    .unwrap();
+                assert!(git.status.success(), "{:?}", git);
+                let (_, report) = run_json_with_stderr(root, ExitCode::QualityGateFailed);
+                assert_eq!(report["testsAnalyzed"], 2, "{ending:?}, common={common}");
+                assert_eq!(report["unresolvedTests"], 0);
+                assert_eq!(report["incomplete"], false);
+                let findings = report["findings"].as_array().unwrap();
+                assert_eq!(findings.len(), 1);
+                assert_eq!(findings[0]["rule"], "duplicate-test");
+            }
+        }
+    }
+
     /// Read and parse the JSON file for an output prefix, panicking with path context on
     /// failure.
     fn read_json_report(prefix: &std::path::Path) -> serde_json::Value {
