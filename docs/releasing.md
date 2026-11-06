@@ -34,8 +34,9 @@ in [the recall corpus README](../fixtures/recall/README.md#comparing-two-binarie
 
 - A rehearsal prints the section that the notes would carry in the job summary and in the
   `corpus-comparison` artifact, which also holds the full per-case detail.
-- A publish adds that section to the top of the generated release notes, between markers, after the
-  release is created. A retry replaces the section rather than adding another.
+- A publish adds that section, headed "Detection changes since" the previous tag, after the generated
+  list of changes, between markers, once the release is created. A retry replaces the section rather
+  than adding another.
 - A comparison that cannot be made (the previous archive missing, altered or unattested, or the
   evaluation failing) fails the job and so stops the release. It is never written as a clean result.
   The first release of a repository has no earlier release and says so in its notes.

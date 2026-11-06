@@ -128,7 +128,8 @@ export function literal(name) {
  * @returns {string} Markdown between the start and end markers.
  */
 export function renderSection({ comparison, version, previousTag, cases, key = COMPARISON_TARGET }) {
-  const lines = [START_MARKER, '## Recall corpus comparison', '']
+  const heading = previousTag === null ? '## Detection changes' : `## Detection changes since ${previousTag}`
+  const lines = [START_MARKER, heading, '']
   if (comparison === null) {
     lines.push(`There is no earlier release of vitest-dedup to compare v${version} with.`)
   } else {
@@ -169,23 +170,24 @@ export function renderSection({ comparison, version, previousTag, cases, key = C
 }
 
 /**
- * Puts `section` at the top of `body`, replacing any earlier copy between the markers.
+ * Puts `section` after the generated notes in `body`, replacing any earlier copy between the
+ * markers, so the list of changes comes first.
  *
  * @param {string} body The release notes as they are.
  * @param {string} section A section from {@link renderSection}.
- * @returns {string} The notes with exactly one section.
+ * @returns {string} The notes with exactly one section, at the end.
  */
 export function upsertSection(body, section) {
-  const pattern = new RegExp(`${START_MARKER}[\\s\\S]*?${END_MARKER}\\n*`, 'g')
-  let rest = (body ?? '').replace(pattern, '').trim()
-  const head = `${section.trim()}\n\n`
+  const pattern = new RegExp(`\\n*${START_MARKER}[\\s\\S]*?${END_MARKER}\\n*`, 'g')
+  let rest = (body ?? '').replace(pattern, '\n\n').trim()
+  const tail = `${section.trim()}\n`
   // GitHub refuses notes over its size limit, and a refusal after publication would leave none of
   // the section; the generated notes give way instead.
-  if (head.length + rest.length + 1 > MAX_NOTES_LENGTH) {
+  if (rest.length + 2 + tail.length > MAX_NOTES_LENGTH) {
     const whole = rest.endsWith(TRUNCATION_NOTICE) ? rest.slice(0, -TRUNCATION_NOTICE.length) : rest
-    rest = `${whole.slice(0, Math.max(0, MAX_NOTES_LENGTH - head.length - TRUNCATION_NOTICE.length - 1))}${TRUNCATION_NOTICE}`
+    rest = `${whole.slice(0, Math.max(0, MAX_NOTES_LENGTH - tail.length - 2 - TRUNCATION_NOTICE.length))}${TRUNCATION_NOTICE}`
   }
-  return `${head}${rest}`.trimEnd() + '\n'
+  return rest === '' ? tail : `${rest}\n\n${tail}`
 }
 
 /**
