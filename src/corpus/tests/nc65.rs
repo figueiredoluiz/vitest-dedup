@@ -109,15 +109,20 @@ fn nc65_helper_arguments_preserve_string_identity() {
         .iter()
         .filter(|f| f.rule == Rule::DuplicateTest)
         .collect();
-    // Each invocation is its own declaration, so the two equal-argument calls pair with each
-    // other declaration by declaration; a repeated source declaration pair (lines 4 and 5) is
-    // still one claim across invocation groups, holding the replacement pair's cases too.
+    // Each invocation is its own runtime case: the two equal-argument calls pair declaration by
+    // declaration, and the replacement call's own pair (lines 4 and 5) is a separate claim.
     let lines: Vec<Vec<u32>> = exact
         .iter()
         .map(|f| f.locations.iter().map(|l| l.span.start.line).collect())
         .collect();
-    assert_eq!(lines, [[4, 4], [4, 5], [5, 5]], "{exact:?}");
-    assert_eq!(exact[1].cases.len(), 4, "{:?}", exact[1].cases);
+    assert_eq!(lines, [[4, 4], [4, 5], [4, 5], [5, 5]], "{exact:?}");
+    assert!(exact.iter().all(|f| f.cases.len() == 2), "{exact:?}");
+    assert!(
+        exact
+            .iter()
+            .any(|f| f.titles == ["replacement call", "replacement call copy"]),
+        "{exact:?}"
+    );
 }
 
 /// Re-parsed scalar substitutions equal literal source without turning the encoding into data.

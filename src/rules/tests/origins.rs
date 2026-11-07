@@ -179,3 +179,45 @@ fn equal_call_positions_in_two_callers_are_two_cases() {
         .iter()
         .all(|(_, _, invocation)| invocation.is_some()));
 }
+
+/// Two pairs of one declaration from different calls are two claims: the second pair is named by
+/// its own finding, so a baseline that accepted the first does not accept it.
+#[test]
+fn pairs_from_different_calls_are_different_claims() {
+    let at = |position: u32| {
+        let mut case = imported("a.test.ts", "a.test.ts", 1);
+        case.origin.as_mut().unwrap().call = vec![position];
+        case
+    };
+    let mut cases = vec![at(10), at(20), at(30), at(40)];
+    cases[2].key = 2;
+    cases[3].key = 2;
+    let files = vec![file("a.test.ts", cases)];
+    assert_eq!(files[0].1.len(), 4);
+    let findings = claims(files, Rule::DuplicateTest);
+    assert_eq!(findings.len(), 2, "{findings:?}");
+    assert!(
+        findings.iter().all(|finding| finding.cases.len() == 2),
+        "{findings:?}"
+    );
+}
+
+/// One runner called identically in three files: the pairs stay a spanning set over the three
+/// invocations, each naming its own two callers.
+#[test]
+fn three_callers_of_one_runner_are_a_spanning_set() {
+    let at = |owner: &str| {
+        let mut case = imported("runner.ts", owner, 1);
+        case.origin.as_mut().unwrap().call = vec![42];
+        case
+    };
+    let files = vec![
+        file("a.test.ts", vec![at("a.test.ts")]),
+        file("b.test.ts", vec![at("b.test.ts")]),
+        file("c.test.ts", vec![at("c.test.ts")]),
+    ];
+    let findings = claims(files, Rule::CrossFileDuplicate);
+    assert_eq!(findings.len(), 2, "{findings:?}");
+    let cases: BTreeSet<_> = findings.iter().flat_map(|finding| &finding.cases).collect();
+    assert_eq!(cases.len(), 3, "{cases:?}");
+}
