@@ -401,8 +401,15 @@ fn per_file(group: Reduced, entries: &[Entry<'_>]) -> Reduced {
 }
 
 /// One physical declaration claim, with row identity only for the row rule and caller scope
-/// for file-local rules. Cross-file claims aggregate their matching callers instead.
-type DeclarationClaim<'a> = (&'a Path, u32, Option<usize>, &'a Path);
+/// for file-local rules, and the invocation (caller file and call chain) that ran it: two pairs
+/// of one declaration from different calls are different runtime cases, so different claims.
+type DeclarationClaim<'a> = (
+    &'a Path,
+    u32,
+    Option<usize>,
+    &'a Path,
+    (&'a Path, &'a [u32]),
+);
 
 /// The declarations `members` stand for: two copied tables pair row by row, and every row pair is
 /// the same claim about the same calls, so one finding speaks for them all. Row findings instead
@@ -421,6 +428,10 @@ fn declarations<'a>(rule: Rule, members: &[Entry<'a>]) -> Vec<DeclarationClaim<'
                     member.case.declaration_path(member.path)
                 } else {
                     member.path
+                },
+                {
+                    let (_, _, caller, call) = member.declaration();
+                    (caller, call)
                 },
             )
         })
