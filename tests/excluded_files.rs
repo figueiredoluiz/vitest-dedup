@@ -1339,37 +1339,83 @@ fn a_hostile_file_name_is_sanitized_in_every_report() {
     assert!(!run.stderr.contains('\u{202e}'));
 }
 
-/// The analyzer over the owned fixtures: floors on the work it did, and a ceiling on what it
-/// leaves unresolved, so neither an empty read nor a mass exclusion passes.
+/// How one owned fixture is excluded: what `tests/fixtures/owned-exclusions.json` pins for it.
+#[derive(serde::Deserialize, serde::Serialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct Pinned {
+    reason: String,
+    other_reasons: Vec<String>,
+    tests_excluded: u64,
+}
+
+/// The analyzer over the owned fixtures: floors on the work it did, and every file it excludes,
+/// with its reasons and test count, pinned in `tests/fixtures/owned-exclusions.json`, so neither an
+/// empty read nor an unexpected exclusion passes.
 #[test]
 fn the_analyzer_reads_the_owned_fixtures() {
     // The corpus includes lone-surrogate titles. Deserialize only the population this check
     // verifies: serde_json::Value cannot represent every JavaScript string in the findings.
     #[derive(serde::Deserialize)]
     #[serde(rename_all = "camelCase")]
+    struct Excluded {
+        path: String,
+        #[serde(flatten)]
+        pinned: Pinned,
+    }
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
     struct Population {
         files_analyzed: u64,
         tests_analyzed: u64,
         unresolved_tests: u64,
-        excluded_files: Vec<Value>,
+        excluded_files: Vec<Excluded>,
     }
-    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures");
-    let run: Population = serde_json::from_str(&json_report(&fixtures, &[])).unwrap();
+    #[derive(serde::Deserialize)]
+    struct Pins {
+        files: std::collections::BTreeMap<String, Pinned>,
+    }
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let run: Population = serde_json::from_str(&json_report(&root.join("fixtures"), &[])).unwrap();
     assert!(run.files_analyzed >= 580, "{}", run.files_analyzed);
     assert!(run.tests_analyzed >= 1250, "{}", run.tests_analyzed);
-    let unresolved = run.unresolved_tests;
+    assert!(run.unresolved_tests > 0);
+    let mut actual = std::collections::BTreeMap::new();
+    for Excluded { path, mut pinned } in run.excluded_files {
+        assert!(
+            !["extraction-failed", "source-limit"].contains(&pinned.reason.as_str()),
+            "{path}: {}",
+            pinned.reason
+        );
+        pinned.other_reasons.sort();
+        assert!(actual.insert(path.replace('\\', "/"), pinned).is_none());
+    }
+    // Every unresolved test belongs to an excluded file.
+    let excluded: u64 = actual.values().map(|pinned| pinned.tests_excluded).sum();
+    assert_eq!(excluded, run.unresolved_tests);
+    let expected: Pins = serde_json::from_str(
+        &std::fs::read_to_string(root.join("tests/fixtures/owned-exclusions.json")).unwrap(),
+    )
+    .unwrap();
+    let entry = |pinned: &Pinned| serde_json::to_string(pinned).unwrap();
+    let mut differences = Vec::new();
+    let paths: std::collections::BTreeSet<_> = actual.keys().chain(expected.files.keys()).collect();
+    for path in paths {
+        match (actual.get(path), expected.files.get(path)) {
+            (Some(now), None) => differences.push(format!("added {path:?}: {}", entry(now))),
+            (None, Some(was)) => differences.push(format!("removed {path:?}: {}", entry(was))),
+            (Some(now), Some(was)) if now != was => differences.push(format!(
+                "changed {path:?}: {} (pinned {})",
+                entry(now),
+                entry(was)
+            )),
+            _ => {}
+        }
+    }
     assert!(
-        unresolved > 0 && unresolved * 5 <= run.tests_analyzed,
-        "{unresolved}"
+        differences.is_empty(),
+        "owned-fixture exclusions differ from tests/fixtures/owned-exclusions.json:\n{}",
+        differences.join("\n")
     );
-    let failed: Vec<_> = run
-        .excluded_files
-        .iter()
-        .filter(|entry| {
-            ["extraction-failed", "source-limit"].contains(&entry["reason"].as_str().unwrap())
-        })
-        .collect();
-    assert!(failed.is_empty(), "{failed:#?}");
 }
 
 /// A todo a name finding names is marked inert, and stays out of the quality gate's numerator as it

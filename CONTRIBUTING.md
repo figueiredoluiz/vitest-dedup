@@ -86,6 +86,11 @@ Four rules that are easy to get wrong:
    nothing about a serializer that drops type information; `true` and `'true'` are the case that
    catches it.
 
+Every file in `fixtures/` the analyzer excludes, with its reasons and how many tests, is pinned in
+`tests/fixtures/owned-exclusions.json`. A fixture or change that adds, removes or moves an
+exclusion fails `the_analyzer_reads_the_owned_fixtures` until the entry is edited; the failure
+prints the entries to paste.
+
 Before adding an encoding or a normalization, ask what it now makes indistinguishable. That
 question is what most fixtures here exist to answer.
 

@@ -1,0 +1,1448 @@
+{
+  "files": {
+    "behavior-runtime/trace-expressions.test.tsx": {
+      "reason": "incomplete-trace",
+      "otherReasons": [],
+      "testsExcluded": 0
+    },
+    "behavior-runtime/trace-soundness.test.ts": {
+      "reason": "incomplete-trace",
+      "otherReasons": [],
+      "testsExcluded": 0
+    },
+    "declarations/bench-legacy-toplevel.bench.ts": {
+      "reason": "unsupported-benchmark",
+      "otherReasons": [],
+      "testsExcluded": 1
+    },
+    "declarations/template-literal-title-const-fold.test.ts": {
+      "reason": "unresolved-context",
+      "otherReasons": [],
+      "testsExcluded": 1
+    },
+    "duplicates/behavior-depth-truncation.test.ts": {
+      "reason": "unresolved-context",
+      "otherReasons": [
+        "incomplete-trace"
+      ],
+      "testsExcluded": 2
+    },
+    "duplicates/external-instance-alias-control.test.ts": {
+      "reason": "incomplete-trace",
+      "otherReasons": [],
+      "testsExcluded": 0
+    },
+    "duplicates/external-instance-conditional.test.ts": {
+      "reason": "incomplete-trace",
+      "otherReasons": [],
+      "testsExcluded": 0
+    },
+    "duplicates/external-instance-imported.test.ts": {
+      "reason": "incomplete-trace",
+      "otherReasons": [],
+      "testsExcluded": 0
+    },
+    "duplicates/external-instance-owned-control.test.ts": {
+      "reason": "incomplete-trace",
+      "otherReasons": [],
+      "testsExcluded": 0
+    },
+    "duplicates/external-instance-reflection.test.ts": {
+      "reason": "incomplete-trace",
+      "otherReasons": [],
+      "testsExcluded": 0
+    },
+    "duplicates/for-await-protocol.test.ts": {
+      "reason": "incomplete-trace",
+      "otherReasons": [],
+      "testsExcluded": 0
+    },
+    "duplicates/near-conditional-observation.test.ts": {
+      "reason": "incomplete-trace",
+      "otherReasons": [],
+      "testsExcluded": 0
+    },
+    "duplicates/near-reordered-setup-dependent-twin.test.ts": {
+      "reason": "order-dependent-state",
+      "otherReasons": [],
+      "testsExcluded": 1
+    },
+    "duplicates/not-duplicate-each-row-loop-template-title.test.ts": {
+      "reason": "unresolved-context",
+      "otherReasons": [],
+      "testsExcluded": 3
+    },
+    "duplicates/not-duplicate-each-row-loop-unroll.test.ts": {
+      "reason": "incomplete-trace",
+      "otherReasons": [],
+      "testsExcluded": 0
+    },
+    "duplicates/not-duplicates-structural-differs.test.ts": {
+      "reason": "incomplete-trace",
+      "otherReasons": [],
+      "testsExcluded": 0
+    },
+    "duplicates/not-helper-call-in-skip-suite.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "unresolved-context"
+      ],
+      "testsExcluded": 3
+    },
+    "duplicates/not-helper-call-in-table-suite.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "unresolved-context"
+      ],
+      "testsExcluded": 3
+    },
+    "duplicates/not-helper-call-with-hooks.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "unresolved-context"
+      ],
+      "testsExcluded": 3
+    },
+    "duplicates/not-redundant-hook-accumulator.test.ts": {
+      "reason": "order-dependent-state",
+      "otherReasons": [],
+      "testsExcluded": 2
+    },
+    "duplicates/not-redundant-hook-describe-each-unread.test.ts": {
+      "reason": "unresolved-context",
+      "otherReasons": [],
+      "testsExcluded": 1
+    },
+    "duplicates/parameterization-invocation-observers.test.ts": {
+      "reason": "incomplete-trace",
+      "otherReasons": [],
+      "testsExcluded": 0
+    },
+    "duplicates/parameterization-modules.test.ts": {
+      "reason": "incomplete-trace",
+      "otherReasons": [],
+      "testsExcluded": 0
+    },
+    "duplicates/table-invocation-observers.test.ts": {
+      "reason": "incomplete-trace",
+      "otherReasons": [],
+      "testsExcluded": 0
+    },
+    "edge/vi-domock-scoped.test.ts": {
+      "reason": "unresolved-context",
+      "otherReasons": [],
+      "testsExcluded": 2
+    },
+    "edge/vi-dounmock-scoped.test.ts": {
+      "reason": "unresolved-context",
+      "otherReasons": [],
+      "testsExcluded": 1
+    },
+    "edge/vi-unmock-file-wide.test.ts": {
+      "reason": "incomplete-trace",
+      "otherReasons": [],
+      "testsExcluded": 0
+    },
+    "mixed/mixed-loop-each-in-non-idempotent-hook-scope.test.ts": {
+      "reason": "unresolved-context",
+      "otherReasons": [],
+      "testsExcluded": 2
+    },
+    "mixed/mixed-template-title-with-one-real-duplicate-row.test.ts": {
+      "reason": "unresolved-context",
+      "otherReasons": [],
+      "testsExcluded": 2
+    },
+    "observed/observed-loop-unrolled-declarations.test.ts": {
+      "reason": "incomplete-trace",
+      "otherReasons": [],
+      "testsExcluded": 0
+    },
+    "observed/observed-module-scope-helper-declares-tests.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 4
+    },
+    "oracle/api-export-identity/conflicting.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 2
+    },
+    "oracle/api-export-identity/loaded.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [],
+      "testsExcluded": 1
+    },
+    "oracle/api-reexports/star-package.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [],
+      "testsExcluded": 2
+    },
+    "oracle/api-reexports/star-second.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [],
+      "testsExcluded": 2
+    },
+    "oracle/api-reexports/star-spelled.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 2
+    },
+    "oracle/benchmarks/speed.bench.ts": {
+      "reason": "unsupported-benchmark",
+      "otherReasons": [],
+      "testsExcluded": 1
+    },
+    "oracle/binding-stability/alias-of-reassigned.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 3
+    },
+    "oracle/binding-stability/array-redeclaration.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 3
+    },
+    "oracle/binding-stability/catch-redeclaration.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 4
+    },
+    "oracle/binding-stability/compound-assignment.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 3
+    },
+    "oracle/binding-stability/destructured-redeclaration.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 3
+    },
+    "oracle/binding-stability/destructuring-assignment.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 3
+    },
+    "oracle/binding-stability/direct-eval.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 4
+    },
+    "oracle/binding-stability/exported-hook-alias.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 3
+    },
+    "oracle/binding-stability/for-of-assignment.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 3
+    },
+    "oracle/binding-stability/live-export.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 3
+    },
+    "oracle/binding-stability/namespace-export-const.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 2
+    },
+    "oracle/binding-stability/namespace-export-declared.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [],
+      "testsExcluded": 3
+    },
+    "oracle/binding-stability/namespace-export-runtime.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 2
+    },
+    "oracle/binding-stability/namespace-export-shadow.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 2
+    },
+    "oracle/binding-stability/namespace-export-stars.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 2
+    },
+    "oracle/binding-stability/namespace-export-type.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [],
+      "testsExcluded": 3
+    },
+    "oracle/binding-stability/nested-redeclaration.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 3
+    },
+    "oracle/binding-stability/parameter-property.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [],
+      "testsExcluded": 3
+    },
+    "oracle/binding-stability/parameter-redeclaration.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 6
+    },
+    "oracle/binding-stability/reassigned-alias.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 5
+    },
+    "oracle/binding-stability/reassigned-export-barrel.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 3
+    },
+    "oracle/binding-stability/reassigned-export.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 3
+    },
+    "oracle/binding-stability/reassigned-helper.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 3
+    },
+    "oracle/binding-stability/reassigned-hook.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 3
+    },
+    "oracle/binding-stability/reassigned-local.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 5
+    },
+    "oracle/binding-stability/reassigned-namespace.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 3
+    },
+    "oracle/binding-stability/rewritten-namespace-call.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 8
+    },
+    "oracle/binding-stability/rewritten-namespace-export.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 3
+    },
+    "oracle/binding-stability/var-redeclaration.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 3
+    },
+    "oracle/collection-scope-calls/constructor.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [],
+      "testsExcluded": 1
+    },
+    "oracle/collection-scope-calls/control-call.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 3
+    },
+    "oracle/collection-scope-calls/control-named.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 3
+    },
+    "oracle/collection-scope-calls/default-object.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [],
+      "testsExcluded": 1
+    },
+    "oracle/collection-scope-calls/describe-title.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 3
+    },
+    "oracle/collection-scope-calls/hook-timeout.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [],
+      "testsExcluded": 1
+    },
+    "oracle/collection-scope-calls/namespace-member.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [],
+      "testsExcluded": 1
+    },
+    "oracle/collection-scope-calls/object-member.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [],
+      "testsExcluded": 1
+    },
+    "oracle/collection-scope-calls/optional-call.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 3
+    },
+    "oracle/collection-scope-calls/sequence-callee.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [],
+      "testsExcluded": 2
+    },
+    "oracle/collection-scope-calls/static-method.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [],
+      "testsExcluded": 1
+    },
+    "oracle/collection-scope-calls/wrapper-as-value.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [],
+      "testsExcluded": 2
+    },
+    "oracle/hook-proof-boundaries/reset-alias.test.ts": {
+      "reason": "order-dependent-state",
+      "otherReasons": [],
+      "testsExcluded": 1
+    },
+    "oracle/hook-proof-boundaries/reset-dynamic-import.test.ts": {
+      "reason": "order-dependent-state",
+      "otherReasons": [],
+      "testsExcluded": 1
+    },
+    "oracle/hook-proof-boundaries/reset-helper-load.test.ts": {
+      "reason": "order-dependent-state",
+      "otherReasons": [],
+      "testsExcluded": 1
+    },
+    "oracle/hook-proof-boundaries/reset-import-actual.test.ts": {
+      "reason": "order-dependent-state",
+      "otherReasons": [],
+      "testsExcluded": 1
+    },
+    "oracle/hook-proof-boundaries/reset-meta-computed.test.ts": {
+      "reason": "order-dependent-state",
+      "otherReasons": [],
+      "testsExcluded": 1
+    },
+    "oracle/hook-proof-boundaries/reset-mock-method.test.ts": {
+      "reason": "order-dependent-state",
+      "otherReasons": [],
+      "testsExcluded": 1
+    },
+    "oracle/hook-proof-boundaries/reset-result.test.ts": {
+      "reason": "order-dependent-state",
+      "otherReasons": [],
+      "testsExcluded": 1
+    },
+    "oracle/hook-proof-boundaries/reset-value-of.test.ts": {
+      "reason": "order-dependent-state",
+      "otherReasons": [],
+      "testsExcluded": 1
+    },
+    "oracle/hooks-only-control/control.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 2
+    },
+    "oracle/hooks-only-cycle-head-direct/case.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 2
+    },
+    "oracle/hooks-only-cycle-head-local/case.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 2
+    },
+    "oracle/hooks-only-cycle-head-third/case.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 2
+    },
+    "oracle/hooks-only-cycle-member-ab/case.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 2
+    },
+    "oracle/hooks-only-cycle-member-ba/case.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 2
+    },
+    "oracle/hooks-only-depth/case.test.ts": {
+      "reason": "helper-export-unreadable",
+      "otherReasons": [
+        "registered-elsewhere"
+      ],
+      "testsExcluded": 2
+    },
+    "oracle/hooks-only-evaluation/async-arrow.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 4
+    },
+    "oracle/hooks-only-evaluation/async-return.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 3
+    },
+    "oracle/hooks-only-evaluation/call-site.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 5
+    },
+    "oracle/hooks-only-evaluation/conditional.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 3
+    },
+    "oracle/hooks-only-evaluation/global.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 3
+    },
+    "oracle/hooks-only-evaluation/method.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 3
+    },
+    "oracle/hooks-only-evaluation/namespace.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 3
+    },
+    "oracle/hooks-only-evaluation/parameter.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 5
+    },
+    "oracle/hooks-only-evaluation/timeout.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 4
+    },
+    "oracle/hooks-only-reach/escape-callee.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 2
+    },
+    "oracle/hooks-only-reach/member.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 3
+    },
+    "oracle/hooks-only-reach/result-call.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 2
+    },
+    "oracle/hooks-only-test-file-cycle/case.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 3
+    },
+    "oracle/name-collisions/formats.test.ts": {
+      "reason": "unresolved-context",
+      "otherReasons": [],
+      "testsExcluded": 2
+    },
+    "oracle/named-callback/declared.test.ts": {
+      "reason": "named-callback",
+      "otherReasons": [],
+      "testsExcluded": 1
+    },
+    "oracle/named-callback/reassigned.test.ts": {
+      "reason": "named-callback",
+      "otherReasons": [],
+      "testsExcluded": 1
+    },
+    "oracle/named-callback/shared.test.ts": {
+      "reason": "named-callback",
+      "otherReasons": [],
+      "testsExcluded": 2
+    },
+    "oracle/order-dependence/try-assignment.test.ts": {
+      "reason": "order-dependent-state",
+      "otherReasons": [],
+      "testsExcluded": 2
+    },
+    "oracle/row-value-tables/bindings.test.ts": {
+      "reason": "unresolved-context",
+      "otherReasons": [],
+      "testsExcluded": 3
+    },
+    "oracle/row-value-tables/concise-effects.test.ts": {
+      "reason": "order-dependent-state",
+      "otherReasons": [],
+      "testsExcluded": 1
+    },
+    "oracle/row-value-tables/tagged-arguments.test.ts": {
+      "reason": "unresolved-context",
+      "otherReasons": [],
+      "testsExcluded": 4
+    },
+    "oracle/row-value-tables/tagged-captures.test.ts": {
+      "reason": "unresolved-context",
+      "otherReasons": [],
+      "testsExcluded": 2
+    },
+    "oracle/row-value-tables/tagged-effects.test.ts": {
+      "reason": "unresolved-context",
+      "otherReasons": [],
+      "testsExcluded": 2
+    },
+    "oracle/row-value-tables/tagged-lexical-observers.test.ts": {
+      "reason": "unresolved-context",
+      "otherReasons": [],
+      "testsExcluded": 4
+    },
+    "oracle/truncated-body/truncated.test.ts": {
+      "reason": "unresolved-context",
+      "otherReasons": [],
+      "testsExcluded": 2
+    },
+    "recall/callback-parameter-registers/run.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [],
+      "testsExcluded": 1
+    },
+    "recall/concise-suite-guarded-hook-uncertainty/run.test.ts": {
+      "reason": "registered-inside-function",
+      "otherReasons": [
+        "registered-elsewhere"
+      ],
+      "testsExcluded": 4
+    },
+    "recall/concise-suite-hook-retention/run.test.ts": {
+      "reason": "registered-inside-function",
+      "otherReasons": [
+        "registered-elsewhere"
+      ],
+      "testsExcluded": 4
+    },
+    "recall/cross-file-duplicate-dynamic-import-different-module/a/panel.test.ts": {
+      "reason": "incomplete-trace",
+      "otherReasons": [],
+      "testsExcluded": 0
+    },
+    "recall/cross-file-duplicate-dynamic-import-different-module/b/panel.test.ts": {
+      "reason": "incomplete-trace",
+      "otherReasons": [],
+      "testsExcluded": 0
+    },
+    "recall/cross-file-duplicate-dynamic-import-template-different-module/a/panel.test.ts": {
+      "reason": "incomplete-trace",
+      "otherReasons": [],
+      "testsExcluded": 0
+    },
+    "recall/cross-file-duplicate-dynamic-import-template-different-module/b/panel.test.ts": {
+      "reason": "incomplete-trace",
+      "otherReasons": [],
+      "testsExcluded": 0
+    },
+    "recall/cross-file-duplicate-test-member-evaluated-prefix/stub-1.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 2
+    },
+    "recall/cross-file-duplicate-test-member-evaluated-prefix/stub-2.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 2
+    },
+    "recall/duplicate-test-bench-vitest-range/parse.bench.ts": {
+      "reason": "unsupported-benchmark",
+      "otherReasons": [],
+      "testsExcluded": 2
+    },
+    "recall/duplicate-test-bench-vitest4-concurrent/sort.bench.ts": {
+      "reason": "unsupported-benchmark",
+      "otherReasons": [],
+      "testsExcluded": 3
+    },
+    "recall/duplicate-test-bench-vitest4-hook-reset/count.bench.ts": {
+      "reason": "order-dependent-state",
+      "otherReasons": [],
+      "testsExcluded": 2
+    },
+    "recall/duplicate-test-bench-vitest4-setup-reference/size.bench.ts": {
+      "reason": "unsupported-benchmark",
+      "otherReasons": [],
+      "testsExcluded": 2
+    },
+    "recall/duplicate-test-bench-vitest4-setup/count.bench.ts": {
+      "reason": "unsupported-benchmark",
+      "otherReasons": [],
+      "testsExcluded": 2
+    },
+    "recall/duplicate-test-bench-vitest4-table/rows.bench.ts": {
+      "reason": "unsupported-benchmark",
+      "otherReasons": [],
+      "testsExcluded": 3
+    },
+    "recall/duplicate-test-bench-vitest5/parse.bench.ts": {
+      "reason": "unsupported-benchmark",
+      "otherReasons": [],
+      "testsExcluded": 2
+    },
+    "recall/duplicate-test-bench/perf.test.ts": {
+      "reason": "unsupported-benchmark",
+      "otherReasons": [],
+      "testsExcluded": 2
+    },
+    "recall/duplicate-test-class-chain/run.test.ts": {
+      "reason": "incomplete-trace",
+      "otherReasons": [],
+      "testsExcluded": 0
+    },
+    "recall/duplicate-test-dynamic-title/session.test.ts": {
+      "reason": "unresolved-context",
+      "otherReasons": [],
+      "testsExcluded": 2
+    },
+    "recall/duplicate-test-name-dynamic-title/tenants.test.ts": {
+      "reason": "unresolved-context",
+      "otherReasons": [],
+      "testsExcluded": 2
+    },
+    "recall/duplicate-test-name-suite-callback-test-parameter/cases.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [],
+      "testsExcluded": 2
+    },
+    "recall/duplicate-test-name-todo-uncertain-registration/ledger.test.ts": {
+      "reason": "unreadable-callback",
+      "otherReasons": [],
+      "testsExcluded": 2
+    },
+    "recall/duplicate-test-past-the-depth-bound/run.test.ts": {
+      "reason": "unresolved-context",
+      "otherReasons": [],
+      "testsExcluded": 2
+    },
+    "recall/duplicate-test-runner-beside-call-title-negative/caller.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 3
+    },
+    "recall/duplicate-test-runner-beside-costly-titles-negative/caller.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 4
+    },
+    "recall/duplicate-test-runner-beside-long-title/caller.test.ts": {
+      "reason": "unresolved-context",
+      "otherReasons": [],
+      "testsExcluded": 2
+    },
+    "recall/duplicate-test-runner-costly-arguments-negative/caller.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 3
+    },
+    "recall/duplicate-test-unprovable-class/run.test.ts": {
+      "reason": "incomplete-trace",
+      "otherReasons": [],
+      "testsExcluded": 0
+    },
+    "recall/fixture-builder-unreadable/dynamic.test.ts": {
+      "reason": "fixture-unreadable",
+      "otherReasons": [],
+      "testsExcluded": 2
+    },
+    "recall/foreach-known-array/run.test.ts": {
+      "reason": "unresolved-context",
+      "otherReasons": [],
+      "testsExcluded": 1
+    },
+    "recall/framework-nuxt-mock-redeclared-binding/run.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [],
+      "testsExcluded": 1
+    },
+    "recall/framework-package-manifest-oversized/metadata.test.ts": {
+      "reason": "package-manifest-unreadable",
+      "otherReasons": [],
+      "testsExcluded": 2
+    },
+    "recall/framework-runner-default-imported-negative/slugs.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 2
+    },
+    "recall/framework-runner-default-let-negative/slugs.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 2
+    },
+    "recall/framework-runner-default-reassigned-negative/slugs.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 2
+    },
+    "recall/framework-runner-fake-timers-negative/observe.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 2
+    },
+    "recall/framework-runner-fake-timers-negative/slugs.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 2
+    },
+    "recall/framework-runner-getter-value-negative/slugs.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 3
+    },
+    "recall/framework-runner-import-time-mock-negative/slugs.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 2
+    },
+    "recall/framework-runner-module-values/slugs.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 2
+    },
+    "recall/framework-runner-namespace-hook-negative/observe.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 3
+    },
+    "recall/framework-runner-namespace-hook-negative/slugs.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 3
+    },
+    "recall/framework-runner-plain-import-control/slugs.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 2
+    },
+    "recall/function-title-unresolved/run.test.ts": {
+      "reason": "unresolved-context",
+      "otherReasons": [],
+      "testsExcluded": 3
+    },
+    "recall/helper-factory-alias-call/run.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 3
+    },
+    "recall/helper-factory-chain-state/run.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 3
+    },
+    "recall/helper-factory-coerced-argument/run.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 3
+    },
+    "recall/helper-factory-override-fixture/run.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 3
+    },
+    "recall/helper-factory-table-on-table/run.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 3
+    },
+    "recall/helper-factory-uninitialized-root/run.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 3
+    },
+    "recall/helper-hook-collection-call/page.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 3
+    },
+    "recall/helper-hook-local-at-collection/page.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 4
+    },
+    "recall/helper-ignored-assignment-hook/run.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 2
+    },
+    "recall/helper-ignored-conditional-hook/run.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 2
+    },
+    "recall/helper-ignored-logical-hook/run.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 2
+    },
+    "recall/helper-ignored-sequence-hook/run.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 2
+    },
+    "recall/helper-in-source-before-binding/run.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 4
+    },
+    "recall/helper-in-source-bindings/run.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 3
+    },
+    "recall/helper-initializer-factories/run.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 3
+    },
+    "recall/helper-initializer-factory-argument-hook/run.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 2
+    },
+    "recall/import-depth-cut/deep.test.ts": {
+      "reason": "helper-export-unreadable",
+      "otherReasons": [],
+      "testsExcluded": 2
+    },
+    "recall/local-helper-async-await/run.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 2
+    },
+    "recall/local-helper-computed-arguments/run.test.ts": {
+      "reason": "unresolved-context",
+      "otherReasons": [
+        "registered-elsewhere"
+      ],
+      "testsExcluded": 3
+    },
+    "recall/local-helper-const-async-await/run.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 3
+    },
+    "recall/local-helper-const-default-hook/run.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 2
+    },
+    "recall/local-helper-const-describe-scope/run.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "helper-effects-unproved",
+        "unresolved-context"
+      ],
+      "testsExcluded": 3
+    },
+    "recall/local-helper-const-generator/run.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 3
+    },
+    "recall/local-helper-const-return-hook/run.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 2
+    },
+    "recall/local-helper-const-switch-case/run.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 3
+    },
+    "recall/local-helper-const-switch-cross-case/run.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 4
+    },
+    "recall/local-helper-const-tdz/run.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 4
+    },
+    "recall/local-helper-default-hook/run.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 2
+    },
+    "recall/local-helper-forwarded-parameter/run.test.ts": {
+      "reason": "registered-inside-function",
+      "otherReasons": [
+        "registered-elsewhere"
+      ],
+      "testsExcluded": 3
+    },
+    "recall/local-helper-generator/run.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 3
+    },
+    "recall/local-helper-late-constant/run.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 3
+    },
+    "recall/local-helper-member-write/run.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 4
+    },
+    "recall/local-helper-nested-default-getter/run.test.ts": {
+      "reason": "registered-inside-function",
+      "otherReasons": [
+        "registered-elsewhere"
+      ],
+      "testsExcluded": 2
+    },
+    "recall/local-helper-nested-late-constant/top-level.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 4
+    },
+    "recall/local-helper-noniterable-destructure/run.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 3
+    },
+    "recall/local-helper-null-destructure/run.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 3
+    },
+    "recall/local-helper-overloaded-reassigned/run.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 5
+    },
+    "recall/local-helper-parameter-callee/run.test.ts": {
+      "reason": "registered-inside-function",
+      "otherReasons": [],
+      "testsExcluded": 1
+    },
+    "recall/local-helper-parameter-default-call/run.test.ts": {
+      "reason": "registered-inside-function",
+      "otherReasons": [
+        "registered-elsewhere"
+      ],
+      "testsExcluded": 2
+    },
+    "recall/local-helper-reassigned/run.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 5
+    },
+    "recall/local-helper-return-describe/run.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 3
+    },
+    "recall/local-helper-return-hook/run.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 2
+    },
+    "recall/local-helper-shadowed-undefined/run.test.ts": {
+      "reason": "registered-inside-function",
+      "otherReasons": [
+        "registered-elsewhere"
+      ],
+      "testsExcluded": 2
+    },
+    "recall/local-helper-suite-arguments/options.test.ts": {
+      "reason": "registered-inside-function",
+      "otherReasons": [
+        "registered-elsewhere"
+      ],
+      "testsExcluded": 3
+    },
+    "recall/local-helper-suite-arguments/parameters.test.ts": {
+      "reason": "registered-inside-function",
+      "otherReasons": [
+        "registered-elsewhere"
+      ],
+      "testsExcluded": 3
+    },
+    "recall/local-helper-suite-using/using.test.ts": {
+      "reason": "registered-inside-function",
+      "otherReasons": [
+        "registered-elsewhere"
+      ],
+      "testsExcluded": 3
+    },
+    "recall/local-helper-unopened-sibling-suite/side.test.ts": {
+      "reason": "registered-inside-function",
+      "otherReasons": [
+        "registered-elsewhere"
+      ],
+      "testsExcluded": 3
+    },
+    "recall/local-helper-unused-default/run.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 3
+    },
+    "recall/mixed-loop-each-under-projects-entry/pkg/loops.spec.ts": {
+      "reason": "unresolved-context",
+      "otherReasons": [],
+      "testsExcluded": 2
+    },
+    "recall/mock-spy-options-unreadable/unknown.test.ts": {
+      "reason": "mock-factory-unreadable",
+      "otherReasons": [],
+      "testsExcluded": 2
+    },
+    "recall/runner-arguments-receiver/caller.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [],
+      "testsExcluded": 1
+    },
+    "recall/runner-eval-binding-guard/eval-only.test.ts": {
+      "reason": "unresolved-context",
+      "otherReasons": [],
+      "testsExcluded": 0
+    },
+    "recall/runner-eval-binding-guard/rows-unsafe.test.ts": {
+      "reason": "unresolved-context",
+      "otherReasons": [],
+      "testsExcluded": 4
+    },
+    "recall/runner-eval-binding-guard/unsafe.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [],
+      "testsExcluded": 1
+    },
+    "recall/runner-hook-inside-suite/install.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [],
+      "testsExcluded": 2
+    },
+    "recall/runner-in-source-binding/run.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [],
+      "testsExcluded": 1
+    },
+    "recall/runner-in-source-hoisted-read/run.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [],
+      "testsExcluded": 1
+    },
+    "recall/runner-unproved-scope-retention/unsafe.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 3
+    },
+    "recall/suite-registration-state/a.test.ts": {
+      "reason": "order-dependent-state",
+      "otherReasons": [],
+      "testsExcluded": 2
+    },
+    "recall/suite-user-wrapper-withheld/a.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 3
+    },
+    "recall/vitest-api-hoisted-guard-mock-refused/case.test.ts": {
+      "reason": "unresolved-context",
+      "otherReasons": [],
+      "testsExcluded": 2
+    },
+    "recall/vitest-api-hoisted-in-mock-refused/case.test.ts": {
+      "reason": "unresolved-context",
+      "otherReasons": [],
+      "testsExcluded": 2
+    },
+    "recall/vitest-api-in-place-dynamic/namespace.test.ts": {
+      "reason": "incomplete-trace",
+      "otherReasons": [],
+      "testsExcluded": 0
+    },
+    "recall/vitest-api-in-place-dynamic/plain.test.ts": {
+      "reason": "incomplete-trace",
+      "otherReasons": [],
+      "testsExcluded": 0
+    },
+    "recall/vitest-api-in-place-dynamic/renamed.test.ts": {
+      "reason": "incomplete-trace",
+      "otherReasons": [],
+      "testsExcluded": 0
+    },
+    "recall/vitest-api-namespace-dynamic/alias.test.ts": {
+      "reason": "incomplete-trace",
+      "otherReasons": [],
+      "testsExcluded": 0
+    },
+    "recall/vitest-api-namespace-dynamic/plain.test.ts": {
+      "reason": "incomplete-trace",
+      "otherReasons": [],
+      "testsExcluded": 0
+    },
+    "recall/vitest-api-namespace-dynamic/vi.test.ts": {
+      "reason": "incomplete-trace",
+      "otherReasons": [],
+      "testsExcluded": 0
+    },
+    "recall/vitest-api-nested-mock-refused/one.test.ts": {
+      "reason": "unresolved-context",
+      "otherReasons": [],
+      "testsExcluded": 1
+    },
+    "recall/vitest-api-nested-mock-refused/two.test.ts": {
+      "reason": "unresolved-context",
+      "otherReasons": [],
+      "testsExcluded": 1
+    },
+    "recall/vitest-api-renamed-in-test/renamed.test.ts": {
+      "reason": "unresolved-context",
+      "otherReasons": [],
+      "testsExcluded": 1
+    },
+    "recall/vitest-api-renamed-in-test/vi.test.ts": {
+      "reason": "incomplete-trace",
+      "otherReasons": [],
+      "testsExcluded": 0
+    },
+    "recall/vitest-api-renamed-mock-import-target/case.test.ts": {
+      "reason": "unresolved-context",
+      "otherReasons": [],
+      "testsExcluded": 2
+    },
+    "recall/vitest-api-vi-positive/alias.test.ts": {
+      "reason": "incomplete-trace",
+      "otherReasons": [],
+      "testsExcluded": 0
+    },
+    "recall/vitest-api-vi-positive/plain.test.ts": {
+      "reason": "incomplete-trace",
+      "otherReasons": [],
+      "testsExcluded": 0
+    },
+    "recall/vitest-api-vi-positive/vi.test.ts": {
+      "reason": "incomplete-trace",
+      "otherReasons": [],
+      "testsExcluded": 0
+    },
+    "recall/wrapper-reach-chain/chain.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 25
+    }
+  }
+}
