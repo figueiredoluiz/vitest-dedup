@@ -1,5 +1,20 @@
 {
   "files": {
+    "after-each-write-control.test.ts": {
+      "tasks": 2,
+      "wrapperSites": [],
+      "next": {}
+    },
+    "after-each-write.test.ts": {
+      "tasks": 2,
+      "wrapperSites": [],
+      "next": {
+        "reasons": [
+          "order-dependent-state"
+        ],
+        "testsExcluded": 2
+      }
+    },
     "helper-write-control.test.ts": {
       "tasks": 3,
       "wrapperSites": [],
@@ -34,6 +49,21 @@
       "nextToday": {},
       "waitsOn": "mutation through methods and properties"
     },
+    "sibling-suite-write-control.test.ts": {
+      "tasks": 4,
+      "wrapperSites": [],
+      "next": {}
+    },
+    "sibling-suite-write.test.ts": {
+      "tasks": 4,
+      "wrapperSites": [],
+      "next": {
+        "reasons": [
+          "order-dependent-state"
+        ],
+        "testsExcluded": 2
+      }
+    },
     "try-assignment-control.test.ts": {
       "tasks": 3,
       "wrapperSites": [],
@@ -51,5 +81,6 @@
       },
       "waitsOn": "an assignment in `try` read as a reset"
     }
-  }
+  },
+  "blindUnderCurrent": ["after-each-write.test.ts"]
 }

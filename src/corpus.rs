@@ -36,7 +36,8 @@ pub enum Exclusion {
     UnreadableCallback,
     /// A tagged row's cells or callback bindings have no complete primitive proof.
     UnprovedTableRow,
-    /// It reads state another test writes, or a hook accumulates.
+    /// It reads state another test writes, a hook accumulates, or a hook sets outside its own
+    /// lifecycle.
     OrderDependentState,
     /// Its body is deeper than the normal form reads, so it can match nothing.
     TruncatedBody,
@@ -121,8 +122,8 @@ impl Exclusion {
             )),
             Self::OrderDependentState => Some((
                 ExclusionReason::OrderDependentState,
-                "a test reads state another test writes, or a hook accumulates, so it depends on \
-                 which tests ran first",
+                "a test reads state another test writes, a hook accumulates, or a hook outside \
+                 its own before-hooks sets, so it depends on which tests ran first",
             )),
             Self::TruncatedBody => Some((
                 ExclusionReason::UnresolvedContext,
@@ -279,6 +280,13 @@ impl TestCase {
         self.origin
             .as_ref()
             .map_or(registered_in, |origin| origin.path.as_path())
+    }
+
+    /// Whether it runs the hooks around it as evidence for a hook chain: a test that runs, kept
+    /// out of comparison at most because what it reads depends on which tests ran first. That
+    /// changes what the test observes, not whether two identical hook writes repeat each other.
+    pub fn witnesses_hooks(&self) -> bool {
+        !self.inert && matches!(self.exclusion, None | Some(Exclusion::OrderDependentState))
     }
 }
 
@@ -1424,12 +1432,7 @@ fn read_parsed(
     let imported_tests: Vec<_> = expanded
         .calls
         .iter()
-        .filter(|expansion| {
-            expansion
-                .tests
-                .iter()
-                .any(|test| !test.inert && test.exclusion.is_none())
-        })
+        .filter(|expansion| expansion.tests.iter().any(TestCase::witnesses_hooks))
         .map(|expansion| expansion.call)
         .collect();
     let admitted_calls: Vec<_> = expanded

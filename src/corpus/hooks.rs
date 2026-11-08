@@ -232,7 +232,7 @@ pub(super) fn collect(
     }
     let eligible: BTreeSet<_> = tests
         .iter()
-        .filter(|test| !test.inert && test.exclusion.is_none())
+        .filter(|test| test.witnesses_hooks())
         .map(|test| test.span.start_byte)
         .collect();
     let mut chains = BTreeSet::new();

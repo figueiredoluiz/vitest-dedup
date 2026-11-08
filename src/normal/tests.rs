@@ -795,6 +795,200 @@ fn an_accumulating_hook_makes_its_readers_order_dependent() {
     }
 }
 
+/// A plain hook write reaches a test it does not run right before: another suite's hook, an
+/// after-each hook that leaves a new value, a cleanup the hook returns. A write every test starts
+/// from the same result of does not.
+#[test]
+fn a_hook_write_outside_the_tests_own_lifecycle_makes_it_order_dependent() {
+    let case = |setup: &str, own: &str| {
+        order_dependent(&format!(
+            "{ORDER_HEADER}import {{ afterEach, afterAll }} from 'vitest'\n\
+             let v = 0\nlet other = 0\n\
+             {setup}\n\
+             describe('scope', () => {{\n{own}\n\
+             test('reads', () => {{ expect(v).toBe(0) }}) }})"
+        ))["reads"]
+    };
+    let sibling = "describe('writer', () => { beforeEach(() => { v = 1 }); test('w', () => {}) })";
+    for (setup, own, expected) in [
+        // Another suite's hook writes the binding; its own binding, or an unrelated one, does not.
+        (sibling, "", true),
+        (
+            "describe('writer', () => { let v = 5; beforeEach(() => { v = 1 }) })",
+            "",
+            false,
+        ),
+        (
+            "describe('writer', () => { beforeEach(() => { other = 1 }) })",
+            "",
+            false,
+        ),
+        // A hook registered by a helper lands wherever the helper is called.
+        (
+            "function install() { beforeEach(() => { v = 1 }) }\ninstall()",
+            "",
+            true,
+        ),
+        // A hook around the reader rewrites it after the writer: before-each always, before-all
+        // only when the writer is outside its suite.
+        (sibling, "beforeAll(() => { v = 0 })", false),
+        (sibling, "beforeEach(() => { ({ v } = { v: 0 }) })", false),
+        (
+            "",
+            "beforeAll(() => { v = 0 })\n\
+             describe('writer', () => { beforeEach(() => { v = 1 }) })",
+            true,
+        ),
+        // In the reader's own suite: once per scope, before or after its tests, is the same for
+        // each; after each test it must restore the declared value.
+        ("", "beforeAll(() => { v = 1 })", false),
+        ("", "afterAll(() => { v = 1 })", false),
+        ("", "afterEach(() => { v = 1 })", true),
+        ("", "afterEach(() => { v = 0 })", false),
+        ("", "beforeEach(() => { return () => { v = 1 } })", true),
+        // Before each test: a direct write, alone, destructured, in a sequence or a chain.
+        ("", "beforeEach(() => { ({ v } = { v: 1 }) })", false),
+        ("", "beforeEach(() => { ({ v } = { v: v + 1 }) })", true),
+        ("", "beforeEach(() => { ((v = 1), (other = 2)) })", false),
+        ("", "beforeEach(() => { other = v = 1 })", false),
+        ("", "function set() { v = 1 }\nbeforeEach(set)", false),
+        // A write inside a function the hook creates runs when that function is called: not seen.
+        ("", "beforeEach(() => { other = () => { v = 1 } })", false),
+        // An after-each restore holds only if the first test also starts from the declared value:
+        // a once-per-scope hook or module code that sets another value first breaks it, unless a
+        // before-each hook rewrites it.
+        (
+            "",
+            "beforeAll(() => { v = 1 })\nafterEach(() => { v = 0 })",
+            true,
+        ),
+        ("v = 1", "afterEach(() => { v = 0 })", true),
+        ("", "v = 1\nafterEach(() => { v = 0 })", true),
+        // A helper's write runs when something calls it, like a write through a method.
+        (
+            "function set() { v = 1 }",
+            "afterEach(() => { v = 0 })",
+            false,
+        ),
+        (
+            "",
+            "beforeAll(() => { v = 0 })\nafterEach(() => { v = 0 })",
+            false,
+        ),
+        (
+            "",
+            "beforeAll(() => { v = 1 })\nbeforeEach(() => { v = 0 })\nafterEach(() => { v = 0 })",
+            false,
+        ),
+    ] {
+        assert_eq!(case(setup, own), expected, "{setup} | {own}");
+    }
+}
+
+/// An after-each hook that sets a binding declared without a value back to `undefined` restores
+/// it; a shadowed `undefined` is not the value.
+#[test]
+fn an_after_each_hook_restoring_undefined_is_not_order_dependent() {
+    let case = |restore: &str| {
+        order_dependent(&format!(
+            "{ORDER_HEADER}import {{ afterEach }} from 'vitest'\n\
+             describe('scope', () => {{\n\
+             let v\n\
+             afterEach(() => {{ {restore} }})\n\
+             test('reads', () => {{ expect(v).toBeUndefined() }}) }})"
+        ))["reads"]
+    };
+    assert!(!case("v = undefined"));
+    assert!(case("v = 1"));
+    assert!(case("const undefined = 1; v = undefined"));
+}
+
+/// An after-each hook restores a primitive initializer spelled alike: the global `undefined`, or a
+/// sign, negation or `void` of a primitive literal.
+#[test]
+fn an_after_each_hook_restoring_a_primitive_initializer_is_not_order_dependent() {
+    let case = |init: &str, restore: &str| {
+        order_dependent(&format!(
+            "{ORDER_HEADER}import {{ afterEach }} from 'vitest'\n\
+             describe('scope', () => {{\n\
+             let v = {init}\n\
+             afterEach(() => {{ {restore} }})\n\
+             test('reads', () => {{ expect(v).toBe({init}) }}) }})"
+        ))["reads"]
+    };
+    for same in ["undefined", "-1", "+1", "!0", "void 0"] {
+        assert!(!case(same, &format!("v = {same}")), "{same}");
+    }
+    assert!(case("-1", "v = 1"));
+    assert!(case("-1", "v = +1"));
+    assert!(case("-1", "v = -2"));
+    assert!(case("-/a/", "v = -/a/"));
+    assert!(case("-x", "v = -x"));
+    assert!(case("undefined", "v = null"));
+    assert!(case("undefined", "const undefined = 1; v = undefined"));
+}
+
+/// A hook write restores the declared value only when it spells the same inert literal; a cleanup
+/// a hook returns runs after its tests, and a write the analysis cannot read as `v = value` varies.
+#[test]
+fn hook_writes_restore_only_the_declared_inert_value() {
+    let case = |hook: &str| {
+        order_dependent(&format!(
+            "{ORDER_HEADER}import {{ afterEach, afterAll }} from 'vitest'\n\
+             describe('scope', () => {{\n\
+             let v = [1, {{ a: 'x' }}]\n\
+             {hook}\n\
+             test('reads', () => {{ expect(v).toEqual([1, {{ a: 'x' }}]) }}) }})"
+        ))["reads"]
+    };
+    assert!(!case("afterEach(() => { v = [1, { a: 'x' }] })"));
+    for differs in [
+        "v = [1, { a: 'y' }]",
+        "v = [1]",
+        "v = { a: 'x' }",
+        "v = [1, { [a]: 'x' }]",
+        "v = [1, { a: f() }]",
+        "[v] = [[1, { a: 'x' }]]",
+    ] {
+        assert!(
+            case(&format!("afterEach(() => {{ {differs} }})")),
+            "{differs}"
+        );
+    }
+    // A before-all cleanup runs once after the scope's tests; a before-each one after each test.
+    assert!(!case("beforeAll(() => () => { v = 2 })"));
+    assert!(case("beforeEach(() => () => { v = 2 })"));
+    // Vitest ignores what an after or around hook returns: that function never runs.
+    assert!(!case("afterEach(() => () => { v = 2 })"));
+    assert!(!case("afterAll(() => () => { v = 2 })"));
+    assert!(!case(
+        "aroundEach(async (run) => { await run(); return () => { v = 2 } })"
+    ));
+    // A cleanup is read on its own: one restoring the declared value leaves every test alike.
+    assert!(!case("beforeEach(() => () => { v = [1, { a: 'x' }] })"));
+    // A before-each hook around the test rewrites what an after-each one left; a before-all
+    // one runs once, so it does not.
+    let shielded = |shield: &str, writer: &str| case(&format!("{shield}\n{writer}"));
+    assert!(!shielded(
+        "beforeEach(() => { [v] = [[1]] })",
+        "afterEach(() => { v = 2 })"
+    ));
+    assert!(!shielded(
+        "beforeEach(() => { v = [1] })",
+        "beforeEach(() => () => { v = 2 })"
+    ));
+    assert!(shielded(
+        "beforeAll(() => { v = [1] })",
+        "afterEach(() => { v = 2 })"
+    ));
+    assert!(shielded(
+        "beforeEach(() => { v = v.concat(1) })",
+        "afterEach(() => { v = 2 })"
+    ));
+    // A default in the pattern runs only when the value is missing.
+    assert!(case("beforeEach(() => { [v = 1] = [] })"));
+}
+
 /// A binding every test starts from the same value of is not order-dependent: one the test assigns
 /// first, or one a before-each hook around it surely assigns.
 #[test]
