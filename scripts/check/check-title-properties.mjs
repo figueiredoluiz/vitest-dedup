@@ -50,10 +50,11 @@ function options(args) {
   const parsed = { seed: SEED, cases: CASES, binary: undefined }
   for (let i = 0; i < args.length; i++) {
     const value = args[i + 1]
+    if (!['--seed', '--cases', '--binary'].includes(args[i])) throw new Error(`unknown argument ${args[i]}`)
+    if (value === undefined) throw new Error(`${args[i]} needs a value`)
     if (args[i] === '--seed') parsed.seed = Number(value)
     else if (args[i] === '--cases') parsed.cases = Number(value)
-    else if (args[i] === '--binary') parsed.binary = value
-    else throw new Error(`unknown argument ${args[i]}`)
+    else parsed.binary = value
     i++
   }
   if (!Number.isInteger(parsed.seed) || !Number.isInteger(parsed.cases) || parsed.cases < 1) {
