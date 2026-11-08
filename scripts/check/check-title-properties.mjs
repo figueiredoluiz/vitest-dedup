@@ -160,11 +160,15 @@ const standard = pass(`seed ${seed}, default display cut`, all, binary, null)
 const long = pass(`seed ${seed}, taskTitleValueFormatTruncate ${LONG_CUT}`, all.filter(holdsLongValue), binary, LONG_CUT)
 const failures = []
 const floor = (measured, minimum, what) => {
-  if (cases >= CASES && measured < minimum) failures.push(`${measured} ${what}, below the ${minimum} floor`)
+  if (measured < minimum) failures.push(`${measured} ${what}, below the ${minimum} floor`)
 }
-floor(standard.compared, MIN_COMPARED, 'cases compared')
-floor(standard.proved, MIN_PROVED, 'proved titles (refusing everything is not agreement)')
-floor(long.compared, MIN_LONG_COMPARED, 'long-value cases compared')
+// The measured floors hold for the default population only; another seed or size draws a different
+// one, and still must not pass having measured nothing.
+const defaultRun = seed === SEED && cases === CASES
+const longCases = all.filter(holdsLongValue).length
+floor(standard.compared, defaultRun ? MIN_COMPARED : 1, 'cases compared')
+floor(standard.proved, defaultRun ? MIN_PROVED : 1, 'proved titles (refusing everything is not agreement)')
+floor(long.compared, defaultRun ? MIN_LONG_COMPARED : Math.min(1, longCases), 'long-value cases compared')
 const disagreements = standard.disagreements + long.disagreements
 if (disagreements > 0) failures.push(`${disagreements} distinct disagreement(s) after shrinking`)
 for (const failure of failures) console.error(`FAIL: ${failure}`)
