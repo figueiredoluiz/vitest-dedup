@@ -125,6 +125,10 @@ export function verdict(collected, records) {
   return { status: mismatches.length > 0 ? 'title' : 'agree', proved, rows: collected.tests.length, mismatches }
 }
 
+/** Replacement values, plainest first: a value shrinks only to one before it. */
+const PLAINER = ['0', "'x'"]
+const rank = (value) => (PLAINER.includes(value) ? PLAINER.indexOf(value) : PLAINER.length)
+
 /**
  * The cases one step smaller than `testCase`: one pattern piece, row or cell dropped, or one value
  * replaced by a plainer one. Every candidate keeps at least one piece, row and object key.
@@ -141,9 +145,8 @@ export function shrinkCandidates(testCase) {
     const replaceRow = (cells) => ({ ...testCase, rows: rows.with(r, { ...row, cells }) })
     row.cells.forEach(([key, value], c) => {
       if (row.kind !== 'scalar' && (row.kind === 'array' || row.cells.length > 1)) out.push(replaceRow(row.cells.toSpliced(c, 1)))
-      for (const plainer of ['0', "'x'"]) {
-        if (value !== plainer) out.push(replaceRow(row.cells.with(c, [key, plainer])))
-      }
+      // Strictly plainer only, so shrinking cannot swap two plain values back and forth.
+      for (const plainer of PLAINER.slice(0, rank(value))) out.push(replaceRow(row.cells.with(c, [key, plainer])))
     })
   })
   return out

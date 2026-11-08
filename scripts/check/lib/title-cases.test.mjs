@@ -43,8 +43,21 @@ test('shrinking steps are each one change smaller and never empty the case', () 
     assert.ok(c.pattern.length >= 1 && c.rows.length >= 1)
     for (const row of c.rows) if (row.kind !== 'array') assert.ok(row.cells.length >= 1)
   }
-  const minimal = { api: 'each', pattern: ['a'], rows: [{ kind: 'scalar', cells: [[null, '0']] }] }
-  assert.deepEqual(shrinkCandidates(minimal).map((c) => c.rows[0].cells[0][1]), ["'x'"])
+  const scalar = (value) => ({ api: 'each', pattern: ['a'], rows: [{ kind: 'scalar', cells: [[null, value]] }] })
+  assert.deepEqual(shrinkCandidates(scalar('0')), [])
+  assert.deepEqual(shrinkCandidates(scalar("'x'")).map((c) => c.rows[0].cells[0][1]), ['0'])
+  assert.deepEqual(shrinkCandidates(scalar('42')).map((c) => c.rows[0].cells[0][1]), ['0', "'x'"])
+})
+
+test('always taking the first step still ends, and simplifies every cell', () => {
+  // A disagreement that needs both cells: every candidate keeping them "still fails".
+  let current = { api: 'each', pattern: ['%s'], rows: [{ kind: 'array', cells: [[null, '42'], [null, '42']] }] }
+  for (let step = 0; step < 50; step++) {
+    const next = shrinkCandidates(current).find((c) => c.rows[0].cells.length === 2 && c.pattern.length === 1)
+    if (next === undefined) break
+    current = next
+  }
+  assert.deepEqual(current.rows[0].cells.map(([, value]) => value), ['0', '0'])
 })
 
 test('a refused title is allowed, a proved one must match, rows are compared in row order', () => {

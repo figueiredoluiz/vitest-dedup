@@ -70,6 +70,9 @@ function options(args) {
  * @returns {object[]} Each case's verdict, in order.
  */
 function judge(cases, binary, truncate) {
+  // The analyzer refuses an empty directory, and both callers can pass no cases: a pass with no
+  // long values, or a shrink round whose cases are already minimal.
+  if (cases.length === 0) return []
   const work = realpathSync(mkdtempSync(join(tmpdir(), 'vitest-dedup-titles-')))
   try {
     symlinkSync(join(ROOT, 'node_modules'), join(work, 'node_modules'), process.platform === 'win32' ? 'junction' : 'dir')
