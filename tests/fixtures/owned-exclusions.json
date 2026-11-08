@@ -504,6 +504,11 @@
       "otherReasons": [],
       "testsExcluded": 1
     },
+    "oracle/hook-scheduling/cases.test.ts": {
+      "reason": "order-dependent-state",
+      "otherReasons": [],
+      "testsExcluded": 1
+    },
     "oracle/hooks-only-control/control.test.ts": {
       "reason": "registered-elsewhere",
       "otherReasons": [
@@ -661,6 +666,16 @@
     },
     "oracle/named-callback/shared.test.ts": {
       "reason": "named-callback",
+      "otherReasons": [],
+      "testsExcluded": 2
+    },
+    "oracle/order-dependence/after-each-write.test.ts": {
+      "reason": "order-dependent-state",
+      "otherReasons": [],
+      "testsExcluded": 2
+    },
+    "oracle/order-dependence/sibling-suite-write.test.ts": {
+      "reason": "order-dependent-state",
       "otherReasons": [],
       "testsExcluded": 2
     },
@@ -1072,6 +1087,21 @@
       ],
       "testsExcluded": 2
     },
+    "recall/hook-after-each-write/run.test.ts": {
+      "reason": "order-dependent-state",
+      "otherReasons": [],
+      "testsExcluded": 2
+    },
+    "recall/hook-before-all-nested-writer/run.test.ts": {
+      "reason": "order-dependent-state",
+      "otherReasons": [],
+      "testsExcluded": 2
+    },
+    "recall/hook-sibling-suite-write/run.test.ts": {
+      "reason": "order-dependent-state",
+      "otherReasons": [],
+      "testsExcluded": 2
+    },
     "recall/import-depth-cut/deep.test.ts": {
       "reason": "helper-export-unreadable",
       "otherReasons": [],
@@ -1158,9 +1188,10 @@
     "recall/local-helper-forwarded-parameter/run.test.ts": {
       "reason": "registered-inside-function",
       "otherReasons": [
+        "order-dependent-state",
         "registered-elsewhere"
       ],
-      "testsExcluded": 3
+      "testsExcluded": 4
     },
     "recall/local-helper-generator/run.test.ts": {
       "reason": "registered-elsewhere",
@@ -1186,9 +1217,10 @@
     "recall/local-helper-nested-default-getter/run.test.ts": {
       "reason": "registered-inside-function",
       "otherReasons": [
+        "order-dependent-state",
         "registered-elsewhere"
       ],
-      "testsExcluded": 2
+      "testsExcluded": 3
     },
     "recall/local-helper-nested-late-constant/top-level.test.ts": {
       "reason": "registered-elsewhere",
@@ -1226,9 +1258,10 @@
     "recall/local-helper-parameter-default-call/run.test.ts": {
       "reason": "registered-inside-function",
       "otherReasons": [
+        "order-dependent-state",
         "registered-elsewhere"
       ],
-      "testsExcluded": 2
+      "testsExcluded": 3
     },
     "recall/local-helper-reassigned/run.test.ts": {
       "reason": "registered-elsewhere",

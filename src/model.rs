@@ -2306,7 +2306,8 @@ pub enum ExclusionReason {
     UnresolvedContext,
     /// A test is registered inside a function whose caller decides what it registers.
     RegisteredInsideFunction,
-    /// A test reads state another test writes, or a hook accumulates.
+    /// A test reads state another test writes, a hook accumulates, or a hook outside its own
+    /// before-hooks sets.
     OrderDependentState,
     /// A test's callback is passed by name, and the analyzer does not read callbacks it is not
     /// given inline.

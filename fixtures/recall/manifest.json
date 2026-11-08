@@ -6933,7 +6933,10 @@
           ]
         }
       ],
-      "expectedUnresolvedNext": 2
+      "expectedUnresolvedNext": 3,
+      "blindUnderCurrent": [
+        "run.test.ts"
+      ]
     },
     {
       "name": "local-helper-nested-default-getter",
@@ -6956,7 +6959,10 @@
           ]
         }
       ],
-      "expectedUnresolvedNext": 2
+      "expectedUnresolvedNext": 3,
+      "blindUnderCurrent": [
+        "run.test.ts"
+      ]
     },
     {
       "name": "local-helper-forwarded-parameter",
@@ -6979,7 +6985,10 @@
           ]
         }
       ],
-      "expectedUnresolvedNext": 3
+      "expectedUnresolvedNext": 4,
+      "blindUnderCurrent": [
+        "run.test.ts"
+      ]
     },
     {
       "name": "local-helper-const-arrow",
@@ -11674,6 +11683,221 @@
       ],
       "blindUnderCurrent": [
         "run.test.ts"
+      ]
+    },
+    {
+      "name": "hook-sibling-suite-write",
+      "path": "hook-sibling-suite-write",
+      "rule": "duplicate-test",
+      "role": "variant",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-08",
+      "expectedTests": 3,
+      "expectedIncomplete": true,
+      "expectedUnresolved": 2,
+      "expectedFindings": [],
+      "expectedAbsent": [
+        {
+          "rule": "duplicate-test",
+          "titles": [
+            "after",
+            "before"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "hook-sibling-suite-shadowed",
+      "path": "hook-sibling-suite-shadowed",
+      "rule": "duplicate-test",
+      "role": "positive",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-08",
+      "expectedTests": 3,
+      "expectedIncomplete": false,
+      "expectedUnresolved": 0,
+      "expectedFindings": [
+        {
+          "rule": "duplicate-test",
+          "severity": "error",
+          "titles": [
+            "after",
+            "before"
+          ]
+        }
+      ],
+      "expectedAbsent": []
+    },
+    {
+      "name": "hook-after-each-write",
+      "path": "hook-after-each-write",
+      "rule": "duplicate-test",
+      "role": "variant",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-08",
+      "expectedTests": 2,
+      "expectedIncomplete": true,
+      "expectedUnresolved": 2,
+      "expectedFindings": [],
+      "expectedAbsent": [
+        {
+          "rule": "duplicate-test",
+          "titles": [
+            "readers > a",
+            "readers > b"
+          ]
+        }
+      ],
+      "blindUnderCurrent": [
+        "run.test.ts"
+      ]
+    },
+    {
+      "name": "hook-after-each-restore",
+      "path": "hook-after-each-restore",
+      "rule": "duplicate-test",
+      "role": "positive",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-08",
+      "expectedTests": 2,
+      "expectedIncomplete": false,
+      "expectedUnresolved": 0,
+      "expectedFindings": [
+        {
+          "rule": "duplicate-test",
+          "severity": "error",
+          "titles": [
+            "readers > a",
+            "readers > b"
+          ]
+        }
+      ],
+      "expectedAbsent": []
+    },
+    {
+      "name": "hook-after-each-restore-sentinel",
+      "path": "hook-after-each-restore-sentinel",
+      "rule": "duplicate-test",
+      "role": "positive",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-08",
+      "expectedTests": 4,
+      "expectedIncomplete": false,
+      "expectedUnresolved": 0,
+      "expectedFindings": [
+        {
+          "rule": "duplicate-test",
+          "severity": "error",
+          "titles": [
+            "sentinel > a",
+            "sentinel > b"
+          ]
+        },
+        {
+          "rule": "duplicate-test",
+          "severity": "error",
+          "titles": [
+            "unset > a",
+            "unset > b"
+          ]
+        }
+      ],
+      "expectedAbsent": []
+    },
+    {
+      "name": "hook-cleanup-restore",
+      "path": "hook-cleanup-restore",
+      "rule": "duplicate-test",
+      "role": "positive",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-08",
+      "expectedTests": 2,
+      "expectedIncomplete": false,
+      "expectedUnresolved": 0,
+      "expectedFindings": [
+        {
+          "rule": "duplicate-test",
+          "severity": "error",
+          "titles": [
+            "readers > a",
+            "readers > b"
+          ]
+        }
+      ],
+      "expectedAbsent": []
+    },
+    {
+      "name": "hook-after-each-shielded",
+      "path": "hook-after-each-shielded",
+      "rule": "duplicate-test",
+      "role": "positive",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-08",
+      "expectedTests": 2,
+      "expectedIncomplete": false,
+      "expectedUnresolved": 0,
+      "expectedFindings": [
+        {
+          "rule": "duplicate-test",
+          "severity": "error",
+          "titles": [
+            "readers > a",
+            "readers > b"
+          ]
+        }
+      ],
+      "expectedAbsent": []
+    },
+    {
+      "name": "hook-before-all-shield",
+      "path": "hook-before-all-shield",
+      "rule": "duplicate-test",
+      "role": "positive",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-08",
+      "expectedTests": 2,
+      "expectedIncomplete": false,
+      "expectedUnresolved": 0,
+      "expectedFindings": [
+        {
+          "rule": "duplicate-test",
+          "severity": "error",
+          "titles": [
+            "first > reads",
+            "second > reads"
+          ]
+        }
+      ],
+      "expectedAbsent": []
+    },
+    {
+      "name": "hook-before-all-nested-writer",
+      "path": "hook-before-all-nested-writer",
+      "rule": "duplicate-test",
+      "role": "variant",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-08",
+      "expectedTests": 3,
+      "expectedIncomplete": true,
+      "expectedUnresolved": 2,
+      "expectedFindings": [],
+      "expectedAbsent": [
+        {
+          "rule": "duplicate-test",
+          "titles": [
+            "outer > a",
+            "outer > b"
+          ]
+        }
       ]
     }
   ],

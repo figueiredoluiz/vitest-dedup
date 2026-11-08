@@ -79,6 +79,23 @@ pub struct HookBody {
     /// Whether it is registered whenever its file or suite runs: a statement directly in the
     /// program or the suite's body, not under a condition or inside another function.
     pub unconditional: bool,
+    /// Where its registration runs, for an inline callback and one passed by name alike.
+    pub registered: Registration,
+}
+
+/// Where a hook's registration runs, which decides the tests it runs around.
+#[derive(Clone, Copy, Debug)]
+pub struct Registration {
+    /// The nearest function around the registering call (a suite's callback, or a helper that
+    /// registers for whoever calls it), `None` at module level. A test registered inside it gets
+    /// the hook wherever that function's registrations land.
+    pub function: Option<Span>,
+    /// Whether that function is a suite's callback (or there is none), so where the hook lands
+    /// among the file's suites is known.
+    pub in_suite: bool,
+    /// Whether it registers whenever that function runs: a statement directly in its body, not
+    /// under a condition.
+    pub unconditional: bool,
 }
 
 /// What registration-time structure the normal form of a module depends on.
@@ -138,6 +155,38 @@ impl Structure {
                     .filter_map(|argument| local_function(tree, &parsed.scopes, argument))
                     .collect::<Vec<_>>()
             };
+            // The nearest function around the registration: a suite's callback, or another
+            // function, which registers it only for whoever calls it.
+            let registration = || {
+                let around = tree
+                    .ancestors(site.node)
+                    .find(|&ancestor| tree.is_function(ancestor));
+                let suite = around.filter(|&function| {
+                    tree.outer_parent(function)
+                        .is_some_and(|call| suite_calls.contains(&call))
+                });
+                // Registered whenever the file or its suite runs: a statement directly in the
+                // program or in the suite's own body, not under a condition or loop.
+                let body = match around {
+                    Some(function) => tree.child(function, "body"),
+                    None => Some(tree.root()),
+                };
+                let direct = tree
+                    .outer_parent(site.node)
+                    .filter(|statement| tree.kind(*statement) == "ExpressionStatement")
+                    .and_then(|statement| tree.parent(statement))
+                    == body;
+                let in_suite = around.is_none() || suite.is_some();
+                (
+                    suite.map(|suite| tree.span(suite)),
+                    in_suite && direct,
+                    Registration {
+                        function: around.map(|function| tree.span(function)),
+                        in_suite,
+                        unconditional: direct,
+                    },
+                )
+            };
             let Some(callback) = inline else {
                 // A named suite body runs while the file registers, so it stays registration time.
                 if site.kind == SiteKind::Registers(Registers::Suite) {
@@ -153,6 +202,7 @@ impl Structure {
                                 timing,
                                 scope: None,
                                 unconditional: false,
+                                registered: registration().2,
                             })
                         }
                         _ => structure.tests.push(tree.span(function)),
@@ -166,33 +216,14 @@ impl Structure {
                 }
                 SiteKind::Registers(Registers::Hook(timing)) => {
                     structure.run_time.push(tree.span(callback));
-                    // The nearest function around the hook: a suite's callback, or another
-                    // function, which registers it only for whoever calls it.
-                    let around = tree
-                        .ancestors(site.node)
-                        .find(|&ancestor| tree.is_function(ancestor));
-                    let suite = around.filter(|&function| {
-                        tree.outer_parent(function)
-                            .is_some_and(|call| suite_calls.contains(&call))
-                    });
-                    // Registered whenever the file or its suite runs: a statement directly in
-                    // the program or in the suite's own body, not under a condition or loop.
-                    let body = match around {
-                        Some(function) => tree.child(function, "body"),
-                        None => Some(tree.root()),
-                    };
-                    let unconditional = (around.is_none() || suite.is_some())
-                        && tree
-                            .outer_parent(site.node)
-                            .filter(|statement| tree.kind(*statement) == "ExpressionStatement")
-                            .and_then(|statement| tree.parent(statement))
-                            == body;
+                    let (scope, unconditional, registered) = registration();
                     structure.hooks.push(HookBody {
                         callback,
                         span: tree.span(callback),
                         timing,
-                        scope: suite.map(|suite| tree.span(suite)),
+                        scope,
                         unconditional,
+                        registered,
                     });
                 }
                 SiteKind::Registers(_) => {
@@ -743,12 +774,15 @@ impl<'s> Normalizer<'s> {
     }
 
     /// Whether a body whose text is `body` reads state another test writes, a hook writes in a
-    /// way that depends on what it held before, or a suite body writes at registration: equal
-    /// text then observes different values depending on which tests ran first or in which copy.
-    /// A binding every body starts from the same value of is not such state: one the body assigns
-    /// before reading it, or, when `hooks_run`, one a before-each hook around it assigns. Writes
-    /// through a method call or a property (`list.push`) are not seen. A benchmark passes
-    /// `hooks_run: false`: Vitest 4 runs no hook around one, so a hook's reset protects nothing.
+    /// way that depends on what it held before, a hook writes outside the test's own lifecycle
+    /// (another suite's hook, an after-each hook, a write not run on every pass), or a suite body
+    /// writes at registration: equal text then observes different values depending on which
+    /// tests ran first or in which copy. A binding every body starts from the same value of is
+    /// not such state: one the body assigns before reading it, or, when `hooks_run`, one a
+    /// before-each hook around it assigns. Writes through a method call, a property
+    /// (`list.push`) or a function a hook creates are not seen. A benchmark passes
+    /// `hooks_run: false`: Vitest 4 runs no hook around one, so a hook's reset protects nothing
+    /// and only an accumulating hook write counts.
     pub fn order_dependent(&self, body: NodeId, hooks_run: bool) -> bool {
         let tree = self.tree;
         let own = tree.span(body);
@@ -769,6 +803,8 @@ impl<'s> Normalizer<'s> {
             {
                 return false;
             }
+            // The hooks that rewrite this binding before the test, computed once per binding.
+            let shields = std::cell::OnceCell::new();
             symbol.references.iter().any(|reference| {
                 if !reference.write || own.contains(reference.span) {
                     return false;
@@ -827,13 +863,323 @@ impl<'s> Normalizer<'s> {
                         return true;
                     }
                 }
-                self.structure
+                // Every hook whose callback holds the write: a function passed by name may be
+                // registered more than once.
+                let mut holding = self
+                    .structure
                     .hooks
                     .iter()
-                    .any(|hook| hook.span.contains(reference.span))
-                    && reference.node.is_some_and(|node| self.accumulates(node))
+                    .filter(|hook| hook.span.contains(reference.span))
+                    .peekable();
+                if holding.peek().is_none() {
+                    return false;
+                }
+                reference.node.is_some_and(|node| {
+                    self.accumulates(node)
+                        || (hooks_run
+                            && holding.any(|hook| {
+                                self.hook_write_varies(hook, node, own, || {
+                                    shields.get_or_init(|| self.shields(id, own)).as_slice()
+                                })
+                            }))
+                })
             })
         })
+    }
+
+    /// Whether `hook`'s write at identifier `node` can leave the test whose body spans `test`
+    /// reading a value that depends on which tests ran before it. `shields` lists the hooks
+    /// around the test that rewrite the binding directly first (see [`Self::shields`]).
+    fn hook_write_varies<'c>(
+        &self,
+        hook: &HookBody,
+        node: NodeId,
+        test: Span,
+        shields: impl FnOnce() -> &'c [(HookTiming, Option<Span>)],
+    ) -> bool {
+        // Where the write runs: in the hook's own run, in a cleanup the hook returns (Vitest runs
+        // it after each test), or in another function the hook creates. A write through such a
+        // function happens when something calls it, like a write through a method: not seen.
+        let tree = self.tree;
+        let mut timing = hook.timing;
+        let mut runs_in = hook.callback;
+        if let Some(function) = tree
+            .ancestors(node)
+            .take_while(|&ancestor| ancestor != hook.callback)
+            .find(|&ancestor| tree.is_function(ancestor))
+        {
+            let returned = tree.child(hook.callback, "body").map(|b| tree.inner(b))
+                == Some(function)
+                || tree.parent(function).is_some_and(|parent| {
+                    tree.kind(parent) == "ReturnStatement"
+                        && tree.ancestors(parent).find(|&a| tree.is_function(a))
+                            == Some(hook.callback)
+                });
+            if !returned {
+                return false;
+            }
+            timing = match hook.timing {
+                HookTiming::BeforeAll => HookTiming::AfterAll,
+                _ => HookTiming::AfterEach,
+            };
+            runs_in = function;
+        }
+        let writer = hook.registered;
+        // A hook of another suite runs around other tests, before or after this one in some
+        // order the analysis does not model (shuffle, concurrency): the value varies unless a
+        // hook around this test rewrites it after the writer.
+        if !writer
+            .function
+            .is_none_or(|function| function.contains(test))
+        {
+            return !shields().iter().any(|&(timing, scope)| match timing {
+                HookTiming::BeforeEach => true,
+                // Where a helper's hooks land is unknown, so only a suite's writer is ordered.
+                _ => {
+                    writer.in_suite
+                        && scope.is_some_and(|scope| {
+                            writer
+                                .function
+                                .is_some_and(|writer| !scope.contains(writer))
+                        })
+                }
+            });
+        }
+        let direct = self.direct_write(node, runs_in);
+        // Once per scope, before or after every test in it: each test reads the same value.
+        match timing {
+            HookTiming::BeforeAll | HookTiming::AfterAll | HookTiming::AroundAll => false,
+            HookTiming::BeforeEach | HookTiming::AroundEach => !direct,
+            // After each test it restores the declared value, or a before-each hook around the
+            // test rewrites it before the next one: every test starts from the same value.
+            HookTiming::AfterEach => {
+                !(direct && self.restores_initializer(node))
+                    && !shields()
+                        .iter()
+                        .any(|&(timing, _)| timing == HookTiming::BeforeEach)
+            }
+            _ => true,
+        }
+    }
+
+    /// Whether the write at identifier `node` runs whenever `function` does and sets a value that
+    /// does not read the binding: a statement of its body (alone, in a sequence, or in a chain
+    /// `a = node = value`), unless a `return` or `throw` before it leaves.
+    fn direct_write(&self, node: NodeId, function: NodeId) -> bool {
+        let tree = self.tree;
+        if tree
+            .ancestors(node)
+            .take_while(|&ancestor| ancestor != function)
+            .any(|ancestor| tree.is_function(ancestor))
+        {
+            return false;
+        }
+        let Some(left) = self.plain_or_destructured(node) else {
+            return false;
+        };
+        if self.accumulates(node) || self.value_reads(node, left) {
+            return false;
+        }
+        // Climb to the expression the statement holds; `runs_directly` takes a child of it.
+        let mut child = left;
+        let Some(mut top) = tree.outer_parent(left) else {
+            return false;
+        };
+        while let Some(parent) = tree.outer_parent(top) {
+            let chained = tree.kind(parent) == "AssignmentExpression"
+                && tree.text(parent, "operator") == Some("=")
+                && tree.child(parent, "right").map(|right| tree.inner(right)) == Some(top);
+            if tree.kind(parent) != "SequenceExpression" && !chained {
+                break;
+            }
+            child = top;
+            top = parent;
+        }
+        self.runs_directly(child, function)
+    }
+
+    /// The before-each and before-all hooks registered around `test` that write `symbol`
+    /// directly, with their scopes. A before-each one runs after any writer outside the test's
+    /// scope; a before-all one runs after a writer whose suite its scope does not hold.
+    fn shields(&self, symbol: SymbolId, test: Span) -> Vec<(HookTiming, Option<Span>)> {
+        let mut found = Vec::new();
+        for reference in &self.scopes.symbol(symbol).references {
+            let Some(write) = reference.node.filter(|_| reference.write) else {
+                continue;
+            };
+            for hook in &self.structure.hooks {
+                let Registration {
+                    function: scope,
+                    in_suite,
+                    unconditional,
+                } = hook.registered;
+                if in_suite
+                    && unconditional
+                    && matches!(hook.timing, HookTiming::BeforeEach | HookTiming::BeforeAll)
+                    && hook.span.contains(reference.span)
+                    && scope.is_none_or(|scope| scope.contains(test))
+                    && (hook.timing == HookTiming::BeforeEach || scope.is_some())
+                    && self.direct_write(write, hook.callback)
+                {
+                    found.push((hook.timing, scope));
+                }
+            }
+        }
+        found
+    }
+
+    /// The assignment's direct left side when the write at identifier `node` is `node = value` or
+    /// a destructuring `({ node } = value)` / `[node] = value`, with no default that runs.
+    fn plain_or_destructured(&self, node: NodeId) -> Option<NodeId> {
+        let tree = self.tree;
+        let mut at = node;
+        loop {
+            let parent = tree.outer_parent(at)?;
+            match tree.kind(parent) {
+                "AssignmentExpression" => {
+                    return (tree.child(parent, "left").map(|left| tree.inner(left)) == Some(at)
+                        && tree.text(parent, "operator") == Some("="))
+                    .then_some(at);
+                }
+                "ObjectPattern" | "ArrayPattern" | "RestElement" => at = parent,
+                "Property" if tree.child(parent, "value").map(|v| tree.inner(v)) == Some(at) => {
+                    at = parent
+                }
+                _ => return None,
+            }
+        }
+    }
+
+    /// Whether the value assigned to `left` reads the binding written at `node` while it is
+    /// evaluated (a read inside a function the value holds runs later).
+    fn value_reads(&self, node: NodeId, left: NodeId) -> bool {
+        let tree = self.tree;
+        let Some(right) = tree
+            .outer_parent(left)
+            .and_then(|assignment| tree.child(assignment, "right"))
+        else {
+            return true;
+        };
+        let Some(symbol) = self.scopes.symbol_at(tree.span(node).start) else {
+            return true;
+        };
+        self.scopes
+            .symbol(symbol)
+            .references
+            .iter()
+            .any(|reference| {
+                tree.span(right).contains(reference.span)
+                    && reference.node.is_some_and(|read| {
+                        !tree
+                            .ancestors(read)
+                            .take_while(|&ancestor| ancestor != right)
+                            .any(|ancestor| tree.is_function(ancestor))
+                            && !tree.is_function(right)
+                    })
+            })
+    }
+
+    /// Whether the assignment at `target` writes the same inert value its binding is declared
+    /// with: literals, and array or object literals of them.
+    fn restores_initializer(&self, target: NodeId) -> bool {
+        let tree = self.tree;
+        let Some(symbol) = self.scopes.symbol_at(tree.span(target).start) else {
+            return false;
+        };
+        let declared = self.scopes.symbol(symbol).span;
+        // The declarator is a statement of a block around the write; its identifier's span may
+        // also hold a type annotation, so it is matched by where the name starts.
+        let init = tree
+            .ancestors(target)
+            .flat_map(|block| tree.list(block, "body").into_iter().flatten())
+            .filter(|&statement| tree.kind(statement) == "VariableDeclaration")
+            .flat_map(|statement| tree.list(statement, "declarations").into_iter().flatten())
+            .find(|&declarator| {
+                tree.child(declarator, "id").is_some_and(|id| {
+                    tree.kind(id) == "Identifier" && tree.span(id).start == declared.start
+                })
+            });
+        let declarator_found = init.is_some();
+        let init = init.and_then(|declarator| tree.child(declarator, "init"));
+        let value = tree
+            .outer_parent(target)
+            .and_then(|assignment| tree.child(assignment, "right"));
+        match (init, value) {
+            (Some(init), Some(value)) => self.same_inert(tree.inner(init), tree.inner(value)),
+            (None, Some(value)) => declarator_found && self.global_undefined(tree.inner(value)),
+            _ => false,
+        }
+    }
+
+    /// Whether `node` is the global `undefined`, not a binding that shadows it.
+    fn global_undefined(&self, node: NodeId) -> bool {
+        let tree = self.tree;
+        tree.kind(node) == "Identifier"
+            && tree.text(node, "name") == Some("undefined")
+            && matches!(
+                self.scopes.name_at(tree.span(node).start),
+                Some(Name::Reference(None))
+            )
+    }
+
+    /// Whether `a` and `b` are the same inert value, spelled alike.
+    fn same_inert(&self, a: NodeId, b: NodeId) -> bool {
+        let tree = self.tree;
+        let (a, b) = (tree.inner(a), tree.inner(b));
+        if tree.kind(a) != tree.kind(b) {
+            return false;
+        }
+        let pairs = |key: &str| {
+            let (left, right) = (tree.list(a, key), tree.list(b, key));
+            left.len() == right.len()
+                && left.iter().zip(&right).all(|pair| match pair {
+                    (Some(x), Some(y)) => self.same_inert(*x, *y),
+                    _ => false,
+                })
+        };
+        match tree.kind(a) {
+            "Identifier" => self.global_undefined(a) && self.global_undefined(b),
+            // A sign, negation or `void` of a primitive literal calls nothing; a regular
+            // expression is an object, whose conversion can.
+            "UnaryExpression" => {
+                let operator = tree.text(a, "operator");
+                matches!(operator, Some("-" | "+" | "!" | "void"))
+                    && operator == tree.text(b, "operator")
+                    && tree
+                        .child(a, "argument")
+                        .zip(tree.child(b, "argument"))
+                        .is_some_and(|(x, y)| {
+                            let (x, y) = (tree.inner(x), tree.inner(y));
+                            tree.kind(x) == "Literal"
+                                && !tree.text(x, "raw").is_some_and(|raw| raw.starts_with('/'))
+                                && self.same_inert(x, y)
+                        })
+            }
+            "Literal" => {
+                tree.text(a, "raw").is_some() && tree.text(a, "raw") == tree.text(b, "raw")
+            }
+            "ArrayExpression" => pairs("elements"),
+            "ObjectExpression" => pairs("properties"),
+            "Property" => {
+                !tree.flag(a, "computed")
+                    && !tree.flag(b, "computed")
+                    && tree.text(a, "kind") == Some("init")
+                    && tree.text(b, "kind") == Some("init")
+                    && tree
+                        .child(a, "key")
+                        .zip(tree.child(b, "key"))
+                        .is_some_and(|(x, y)| {
+                            let name =
+                                |n: NodeId| tree.text(n, "name").or_else(|| tree.text(n, "raw"));
+                            name(x).is_some() && name(x) == name(y)
+                        })
+                    && tree
+                        .child(a, "value")
+                        .zip(tree.child(b, "value"))
+                        .is_some_and(|(x, y)| self.same_inert(x, y))
+            }
+            _ => false,
+        }
     }
 
     /// Whether `symbol`'s first reference in the function `body` is a plain assignment, directly in
