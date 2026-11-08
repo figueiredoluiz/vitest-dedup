@@ -1,86 +1,16 @@
 #!/usr/bin/env node
-// Retained memory must be LINEAR in test count. Measured at 1k, 10k and 100k tests.
-//
+// Bound retained-memory growth across the synthetic corpus scales in SCALES.
 // Usage: `node scripts/check/check-memory-scaling.mjs [binary] [--keep]`
 //
-// ## Why this exists separately from `check-memory.mjs`
+// Each scale must meet the corpus digest, exact test count and file floor before its memory
+// figures enter the comparison. IR bytes per test exclude the Vec spine so capacity-doubling
+// steps do not masquerade as a scaling trend; MAX_GROWTH_PER_DECADE bounds adjacent ratios.
+// MAX_BYTES_PER_TEST_ANY_SCALE independently bounds total retained bytes, spine included.
+// The fitted exponent and million-test projection are diagnostics, not extra assertions.
+// Passing these limits does not establish the separate million-test memory target.
 //
-// Every memory measurement this project has is a single point: 3,642 bytes per test over 24,147
-// tests. One point fixes a constant and says nothing about an exponent, so anything super-linear
-// is invisible today -- and super-linear is the failure that kills the customer this tool is for.
-// A legacy monorepo is where the test count is large; a per-test cost that grows with the test
-// count turns a 3.6 KB/test tool into an unusable one somewhere between the corpus it was measured
-// on and the corpus it was built for, with no warning in between.
-//
-// `check-memory.mjs` bounds the constant. This bounds the exponent. Neither implies the other: a
-// tool can be perfectly linear at 40 KB/test, and a tool can be 200 bytes/test at 1k and
-// quadratic above it.
-//
-// ## The assertion, and why it is this one
-//
-// **IR bytes per test must not grow by more than `MAX_GROWTH_PER_DECADE` from one scale to the
-// next**, where "IR bytes" is `retainedBytes` minus `fields.spine`. Linear retention means that
-// quantity is constant in N, so a growth RATIO between consecutive decades is the direct
-// statement of the property.
-//
-// Two decisions inside that sentence, and both came out of measuring rather than reasoning.
-//
-// **Why the spine is excluded, and why that is not a loophole.** `fields.spine` is
-// `Vec::capacity() * size_of::<TestCase>()` for the one vector holding the IR. Capacity is the
-// allocator's doubling overshoot, so the spine is a STEP function of N, not a curve: measured
-// across seven scales it took exactly three values -- 533, 426 and 684 bytes per retained
-// declaration -- depending only on where N fell between two doublings. Including it would inject
-// a 1.6x sawtooth into a ratio whose whole job is to detect a trend, forcing the bound out to
-// ~1.25 and blinding it to everything milder than that. It is not a loophole because a `Vec`
-// spine cannot be super-linear by construction (capacity is bounded by a constant multiple of
-// length), and because its height is governed anyway: `MAX_BYTES_PER_TEST_ANY_SCALE` below
-// bounds the TOTAL, spine included, at every scale.
-//
-// With the spine out, the measured IR figure is 2722 / 2819 / 2819 bytes per test at 1k / 10k /
-// 100k -- flat to 3.5% across two decades. That is what makes a 1.10 bound possible, and a 1.10
-// bound is what makes this test sensitive.
-//
-// **Why a ratio and not a fitted slope.** Three alternatives were weighed:
-//
-//   - **A fitted log-log slope.** With three points it has one degree of freedom and is dominated
-//     by the endpoints, and its tolerance has to absorb the fixed process cost that legitimately
-//     makes the 1k point the odd one out. The ratio absorbs that for free, because the bound is
-//     one-sided: amortizing fixed cost makes the ratio smaller than 1 and the gate does not care.
-//     The fitted exponent is still computed and PRINTED, as the headline number a human wants; it
-//     is not compared, because a second assertion carrying the same information as the first is a
-//     test that cannot independently fail.
-//   - **Absolute retained bytes against a per-scale table.** Three ratchets wearing a scaling
-//     test's clothes: red on any constant-factor change rather than on a shape change.
-//   - **Comparing only the endpoints, 1k against 100k.** It averages a break away. A structure
-//     flat to 10k and quadratic after it -- a pairwise index built past a threshold, a hash map
-//     degrading -- is the realistic shape, and only a per-decade bound names the decade.
-//
-// **What would trip it.** Quadratic retention gives a per-decade ratio of 10, a hundred times the
-// permitted excess. `N * sqrt(N)` gives 3.16. `N log N`, the mildest super-linearity anyone ships
-// by accident, gives `log(10k)/log(1k)` = 1.33 and fails with room to spare. Against the 3.5%
-// spread actually observed, the bound has 3x headroom in the other direction.
-//
-// The second assertion is independent of the first: `bytesPerTest` -- the real governed number,
-// spine included -- must clear `MAX_BYTES_PER_TEST_ANY_SCALE` at every scale. The ratio bounds
-// the shape of the curve and says nothing about its height; the ceiling bounds the height and
-// says nothing about the shape. Either can fail while the other passes. That ceiling is
-// deliberately looser than `check-memory.mjs`'s ratchet, and for a stated reason rather than for
-// comfort: at a FIXED N the spine is a constant and the ratchet can be near-zero-slack, while
-// across scales it carries the doubling sawtooth described above.
-//
-// ## Runtime, and where this runs
-//
-// About 40 seconds of analysis on an M-series laptop -- 0.3s, 3.7s and 35s at the three scales --
-// plus 3s to generate 72 MB of corpus. That is cheap enough to run per pull request, and it does,
-// beside `check-memory.mjs`, on a release build that shares `Swatinem/rust-cache` with the corpus
-// and recall jobs. The 100k scale peaks around 436 MB of RSS, well inside a GitHub runner.
-//
-// ## Floors on work performed, at every scale
-//
-// A scaling test is unusually good at silent success: a run that extracted nothing at 100k has
-// wonderful memory AND a wonderful ratio. Each scale therefore asserts the corpus digest, the
-// exact test count, and the file floor before its number is allowed into the fit -- see
-// `lib/memory-corpus.mjs` and `lib/memory-record.mjs`.
+// CI runs this beside check-memory.mjs on a release build. The current run prints duration,
+// corpus size and memory observations; historical values are not promises for a new revision.
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -101,15 +31,14 @@ const SCALES = [1_000, 10_000, 100_000]
 // THE ASSERTIONS. See the header for why these two and not a fitted slope.
 // ---------------------------------------------------------------------------------------------
 /**
- * How much IR bytes per test may grow across one decade of N. Observed 2026-09-19: 1.035 from 1k
- * to 10k and 1.000 from 10k to 100k, so 1.10 is 3x the observed spread and still far below the
- * 1.33 an `N log N` structure produces or the 10 a quadratic one does.
+ * How much IR bytes per test may grow across one decade of N. This bounds the measured growth
+ * ratios independently of the absolute per-test ceiling below.
  */
 const MAX_GROWTH_PER_DECADE = 1.1
 
 /**
- * Ceiling on TOTAL bytes per test -- spine included -- at every scale. Measured maximum across
- * the three scales was 2313 (at 100k, where the `Vec` capacity overshoot is worst).
+ * Ceiling on TOTAL bytes per test -- spine included -- at every scale. It is an enforced limit,
+ * not a claim that the separate million-test memory target is met.
  *
  * Looser than `check-memory.mjs`'s ratchet on purpose: that gate measures one fixed N, where the
  * spine is a constant, so it can be near-zero-slack. This one spans three, and the spine's
@@ -245,7 +174,7 @@ function main() {
           `  ceiling            ${MAX_BYTES_PER_TEST_ANY_SCALE} bytes/test at every scale, spine ` +
           'included\n' +
           `  at 1M tests        ${(points[points.length - 1].bytesPerTest * 1e6 / 1024 ** 3).toFixed(2)} GB ` +
-          'projected from the largest scale, against a 2 GB budget',
+          "projected from the largest scale; the separate 2 GB target is not this gate's ceiling",
       )
     }
   } finally {
@@ -257,7 +186,7 @@ function main() {
     for (const failure of failures) console.error(`  ${failure}`)
     process.exit(1)
   }
-  console.log('\nok: retention is linear in test count across three decades, and bounded at each.')
+  console.log('\nok: retention meets the per-decade growth bound and per-scale retained-byte ceiling.')
 }
 
 if (resolve(process.argv[1] ?? '') === resolve(fileURLToPath(import.meta.url))) {

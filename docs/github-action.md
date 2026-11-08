@@ -36,6 +36,10 @@ The inputs are `path`, `config`, `threshold`, `reporters`, `output`, `rule`, `gl
 - Each of the others maps to the flag of the same name.
 - `globals` accepts `true`, `false`, or empty (including omission). Only `true` forces globals;
   the other accepted values preserve config detection. Other values fail before installation or analysis.
+- `fail-on-incomplete` accepts `false` or empty to leave strict failure disabled, `true` for
+  `--fail-on-incomplete`, or `any`, `reads`, and `limits` for the corresponding `=mode` flag.
+  Other values fail before installation or analysis. See [incomplete runs](incomplete-runs.md)
+  for what each mode rejects.
 - `rule` accepts several overrides separated by newlines or commas.
 - The JSON reporter is always enabled so the outputs below can be read.
 - `output` defaults to `reports/vitest-dedup`. The Action resolves the filename stem against its
@@ -68,5 +72,10 @@ The inputs are `path`, `config`, `threshold`, `reporters`, `output`, `rule`, `gl
 | `json-report` | Path to the JSON report |
 | `html-report` | Path to the HTML report, when the html reporter was selected |
 | `attestation` | `verified`, or `unavailable` when only the checksum could be checked |
+
+Before analysis, the Action removes stale JSON and HTML reports at the selected output stem.
+A missing JSON report makes the step fail: `exit-code` is `2` if the analyzer exited successfully,
+and otherwise preserves the analyzer's nonzero exit code. An unreadable or malformed JSON report
+sets `exit-code` to `2`. An earlier report cannot supply the current run's outputs.
 
 Back to the [documentation index](README.md).

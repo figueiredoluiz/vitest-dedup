@@ -138,8 +138,9 @@ the `glob` package is read when its pattern is a string literal and its only opt
 `.`, `..` or empty segment, a trailing `/`, `**` inside a segment or two `**` segments in a row, a
 backslash, `?`, `!`, `(`, `)`, `:`, `[...]`, or a brace that is not a comma list leaves the list
 unresolved (an optional `?(...)` group is expanded first). On macOS and Windows an ignore pattern
-matches regardless of case, as glob's does
-there. A project config file that only forwards another one (`export { default } from './shared'`,
+matches regardless of case, as glob's does there. A pattern can therefore select different
+projects on a developer's macOS or Windows machine and on Linux CI; use consistent path casing
+for portable project lists. A project config file that only forwards another one (`export { default } from './shared'`,
 or an import exported again as the default), with no other runtime imports, is read as that config,
 from the project's own directory. Imported config literals may carry a simple TypeScript-only
 `as`/`satisfies`/non-null suffix. A supported `mergeConfig` call may pass through one local `const`

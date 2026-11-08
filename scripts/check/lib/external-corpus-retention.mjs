@@ -127,7 +127,7 @@ export function validateAnalysisRecords(records) {
   }
 }
 
-/** Findings for one opt-in rule, after proving the supplemental run completed and measured work. */
+/** Findings for one opt-in rule from a valid, complete summary; zero-work summaries are accepted. */
 export function supplementalFindingsForRule(records, rule) {
   const { summary, findings } = validateAnalysisRecords(records)
   if (summary.incomplete) {

@@ -9,9 +9,8 @@
 // first run, and a gate that is red on arrival gets ignored -- which is worse than no gate,
 // because it also teaches everyone that this number does not matter.
 //
-// `rust` has since reached the bar (2.48% -> 0.65%, by de-duplicating `analysis.rs`,
-// `framework/vitest/config.rs` and `framework/vitest/projects.rs`) and its threshold is pinned there. The other three
-// scopes now meet it too; see `TARGET_PERCENTAGE` and the per-scope history below.
+// The enforced ceilings live in `THRESHOLDS`, separately from `TARGET_PERCENTAGE`. Consult those
+// values rather than historical measurements when deciding what the gate permits today.
 //
 // So this is a ratchet: the threshold is the measured value, the gate fails when the number gets
 // worse, and tightening it is a deliberate one-line edit to `THRESHOLDS`. The target is recorded
@@ -51,9 +50,8 @@
 //      tested in `lib/rust-test-modules.test.mjs`.
 //   2. Removing a block makes the code above and below it adjacent in the token stream, which can
 //      in principle manufacture a clone that does not exist in the real file. The gate counts
-//      those joins and prints the count; today it is 1 (`analysis.rs`, whose `mod tests;` is a
-//      two-line declaration in the middle of the file), so the exposure is one join across 24
-//      files rather than something to hand-wave about.
+//      those joins and prints the count for the staged source; it is not a fixed property of
+//      the repository.
 //   3. `#[cfg(test)]` on non-`mod` items is not stripped and counts as production. See the
 //      module header of `lib/rust-test-modules.mjs` for why.
 //
@@ -130,7 +128,7 @@ const MAX_SIZE = '50mb'
 // To tighten: lower one number. That is the whole workflow. Do not raise one without saying why
 // in the commit message -- a raised ceiling is the ratchet running backwards.
 // ---------------------------------------------------------------------------------------------
-// The owner's bar, now reached by all four scopes; their measured ceilings still prevent drift.
+// The target is separate from the per-scope enforced ceilings below.
 const TARGET_PERCENTAGE = 1.0
 
 const THRESHOLDS = {

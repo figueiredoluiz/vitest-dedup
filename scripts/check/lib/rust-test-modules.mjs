@@ -1,6 +1,6 @@
 // Splits a Rust source file into its production half and its `#[cfg(test)] mod` half.
 //
-// This exists for one consumer -- `check-duplication.mjs` -- and for one reason: jscpd has no
+// Used by duplication and Rust coverage measurement: jscpd has no
 // notion of `#[cfg(test)]`, so a duplication figure measured over `src/` as written is dominated
 // by test setup. Roughly half of this project's duplicated Rust lines live inside inline test
 // modules, where repetition is the house style (explicit fixtures over shared helpers,
@@ -13,11 +13,9 @@
 // A real Rust parser would be the right tool for a bigger question; it is not needed for this one,
 // and `splitRustTestModules` asserts a partition invariant that would catch it going wrong.
 //
-// What it does NOT strip, deliberately: `#[cfg(test)]` on non-`mod` items. The fingerprint module has
-// three -- a const, a `thread_local!`, and an `#[inline(never)]` fn -- which together are the
-// recursion-depth instrumentation. They are a dozen lines, they are not test *setup*, and
-// recognizing arbitrary attributed items is the point where a scanner stops being honest. They
-// stay in the production half and are counted there.
+// What it does NOT strip, deliberately: `#[cfg(test)]` on non-`mod` items, including test-only
+// constants, functions and instrumentation. Recognizing arbitrary attributed items is outside
+// this scanner's contract. They stay in the production half, regardless of their current count.
 
 /**
  * Returns `source` with every comment body and string/char literal body replaced by spaces,

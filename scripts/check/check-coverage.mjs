@@ -78,7 +78,7 @@ import { coverageOnHost } from './lib/coverage-platform.mjs'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
 
-// `devEngines.runtime` in `package.json` mirrors Vitest 5.0.3's own `engines` range (Node 22.12+,
+// `devEngines.runtime` in `package.json` mirrors the pinned Vitest dependency's `engines` range (Node 22.12+,
 // 24 or 26+): Vitest is the differential-title harness's runtime oracle, and a developer Node it
 // does not support must fail `npm ci` by name rather than run the harness on it. `engines.node`
 // stays at 20 for the published launcher, which needs none of this and never installs
@@ -120,8 +120,8 @@ const TOLERANCE_PP = 0.2
 // To tighten: raise one number.
 // ---------------------------------------------------------------------------------------------
 const RUST_TOTALS = { lines: 96, regions: 96, functions: 95 }
-const RUST_MIN_TESTS = 600 // 676 today (565 lib + 51 bin + 45 matrix + 15 contract).
-const RUST_MIN_INSTRUMENTED_LINES = 12_000 // 15,261 today.
+const RUST_MIN_TESTS = 600 // Work-performed floor, not the current suite size.
+const RUST_MIN_INSTRUMENTED_LINES = 12_000 // Minimum instrumented source population.
 
 const RUST_MODULES = {
   'src/analysis.rs': 84,
@@ -449,7 +449,7 @@ const JS_NOT_MEASURED = {
   'scripts/check/run-external-corpus.mjs': 'needs ~1GB of clones and a local, untracked manifest of the third-party repositories to clone',
   'scripts/check/verify-titles.mjs': 'gate entry point; needs a release binary AND the pinned Vitest devDependency (it spawns both to diff rendered titles against the runtime), and its interesting logic is the spawn sequence rather than in-process state',
   'scripts/check/run-npm-tests.mjs': 'test-runner wrapper; running it under coverage would recurse',
-  'scripts/release/check-npm-trusted-publishing.mjs': 'queries the npm registry over the network',
+  'scripts/release/check-npm-trusted-publishing.mjs': 'local npm-version preflight, outside the enumerated coverage suites',
   'scripts/release/check-release-version.mjs': 'gate entry point, run as a process by CI',
 }
 
@@ -539,7 +539,7 @@ function checkRust(failures) {
   const logPath = join(work, 'rust-cov.log')
   try {
     // Output is redirected, not streamed: an instrumented `cargo test` over the oxc dependency
-    // tree prints thousands of lines (`AGENTS.md`, bounded command output).
+    // tree prints thousands of lines ; keep command output bounded.
     let log
     try {
       log = execFileSync(

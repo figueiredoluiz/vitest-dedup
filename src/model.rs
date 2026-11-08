@@ -1,8 +1,12 @@
 //! The parser-independent intermediate representation and finding model.
 //!
-//! Everything above `crate::frontend` consumes these types. No `oxc_*` type may appear here: the
+//! Shared report and compatibility types. No `oxc_*` type may appear here: the
 //! whole point of the boundary is that the analysis layer is testable from hand-built values and
 //! survives a frontend replacement.
+//!
+//! `TestCase`, `Context` and related legacy extraction types remain compatibility surface.
+//! Their historical key descriptions refer to the earlier engine. The active engine builds
+//! owned cases in [`crate::corpus`]; findings and report summaries here serve both consumers.
 
 use crate::memory::HeapBytes;
 use serde::{Deserialize, Serialize};
@@ -11,11 +15,8 @@ use std::sync::Arc;
 
 /// Serializes an `Arc<str>` field exactly as the `String` it replaced.
 ///
-/// `serde`'s own `Arc` support is behind its `rc` feature, and enabling a feature to move three
-/// fields is a heavier change than eleven lines. What matters is that the encoding is unchanged:
-/// these fields are read back out inside `analysis`'s `ContextKey`, whose canonical JSON is
-/// published as [`TestFingerprint::context_key`], so a different encoding here would silently
-/// move a value consumers have already recorded.
+/// Keeps the compatibility types' serialized string representation independent of Serde's
+/// optional `rc` feature. Shared ownership changes allocation, not the encoded value.
 mod arc_str {
     use serde::{Deserialize, Deserializer, Serializer};
     use std::sync::Arc;
@@ -1142,8 +1143,8 @@ impl Finding {
     }
 
     /// A stable identity for this finding. Used as-is by the `sarif` reporter's
-    /// `partialFingerprints` (`src/reporters/sarif.rs`); baseline and suppression support are
-    /// still on the roadmap and will use it too.
+    /// `partialFingerprints` (`src/reporters/sarif.rs`) and by baselines to match accepted
+    /// findings across runs. Inline suppression is matched separately by rule and source line.
     ///
     /// Mirrors CukeDedup's `finding_fingerprint` (`cuke-dedup/src/modes.rs`), labeled the same
     /// way (`{FINGERPRINT_VERSION}:<hash>`, the CukeDedup equivalent of
@@ -2105,7 +2106,7 @@ impl IncompleteCauses {
     ///
     /// Every field is enumerated (the ignored ones underscore-bound), never `..`: a new cause
     /// must fail THIS destructure too, not only [`IncompleteCauses::any`]'s, so adding a field
-    /// forces a class decision everywhere at compile time (Copilot review, PR #30 round 2).
+    /// forces a class decision everywhere at compile time.
     /// Deliberately NOT counted: the budget causes and the truncation cap (this tool's limits,
     /// [`IncompleteCauses::hit_limits`]) and `withheld_unchanged` (a run-mode policy,
     /// countable only by the flag's default `any`).

@@ -27,14 +27,16 @@
 //! # Source snippets come from the run's own retained sources
 //!
 //! [`crate::model::Finding`] carries locations (`path:line:column`) and full test titles, not
-//! source snippets — the frontend never retains body text once it is fingerprinted, and a
+//! source snippets. A
 //! reporter that *re-read* the file from disk at generation time would risk showing text that
 //! no longer matches what the analyzer actually compared (the earlier recorded decision, and
-//! why this report once showed no code view at all). The decision the P1 backlog row re-takes:
+//! why source retention is part of the analysis run):
 //! when this reporter is requested, `main` retains the exact `String` it handed the frontend
 //! for every analyzed file (keyed by the same relativized path `Finding::locations` carry), so
-//! a snippet sliced from it is by construction the text that was parsed and fingerprinted — no
-//! staleness window, no bounds guess. Retention is conditional on this reporter being selected
+//! a snippet is sliced from the text that was parsed, without re-reading a changed file.
+//! Display sanitization still removes controls and invisible formatting characters before HTML
+//! escaping, so rendered snippets are not a byte-for-byte source export.
+//! Retention is conditional on this reporter being selected
 //! and dies with the run, so the default pipeline's memory profile is untouched; the trade is
 //! that a report run holds the corpus's source text in memory until it writes the page.
 //! A location whose file is not in the map, or whose byte span falls outside it (impossible in
@@ -442,7 +444,8 @@ fn json_for_html(value: &str) -> String {
 /// Builds the JSON island embedded in the page, mirroring the stable JSON report schema
 /// (`super::json`) closely enough that a reader who knows one recognizes the other, without
 /// literally reusing its private types — the HTML reporter's JSON is a page-local convenience
-/// for the client-side filter script and future tooling, not the versioned interchange format.
+/// for external tooling. The page's filter script uses card attributes instead; this island is
+/// not the versioned interchange format.
 fn report_data(result: &AnalysisResult) -> serde_json::Value {
     serde_json::json!({
         "testsAnalyzed": result.tests_analyzed,
@@ -729,7 +732,7 @@ mod tests {
         assert!(!output.contains('\u{202e}'));
         assert!(!output.contains('\u{202c}'));
 
-        // The instance Copilot's review flagged: the same path embedded in the JSON island must
+        // The same path embedded in the JSON island must
         // not carry the raw character even though JSON-escaping alone would leave it intact and
         // technically valid JSON.
         let path = island_first_path(&output);

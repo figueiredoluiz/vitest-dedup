@@ -52,7 +52,7 @@ if (!existsSync(vitestEntry) || !existsSync(vitestPackage)) {
 
 // The oracle must be the pinned Vitest. The JSON report carries no version, so the installed
 // package is read directly; a stale node_modules with another Vitest would otherwise become the
-// runtime silently, and every §4 claim says "measured on 5.0.3".
+// runtime silently; historical measurements retain the version used when they were recorded.
 const pinned = JSON.parse(readFileSync('package.json', 'utf8')).devDependencies?.vitest
 const installed = JSON.parse(readFileSync(vitestPackage, 'utf8')).version
 if (typeof pinned !== 'string' || !/^\d+\.\d+\.\d+$/.test(pinned)) {

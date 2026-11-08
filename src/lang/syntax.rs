@@ -5,9 +5,10 @@ use super::{NodeId, Scopes, SymbolId, Tree};
 /// Whether a subtree reads its surrounding invocation's receiver or implicit arguments.
 /// Arrow functions and computed class keys inherit them; ordinary functions, field initializers
 /// and static blocks bind their own.
-/// Meta properties are not receiver reads: Vitest only calls test callbacks, so `new.target`
-/// is deterministically absent and `import.meta` is fixed per module — neither can make two
-/// invocations of the same callback differ.
+/// Meta properties are not receiver reads: test callbacks and admitted runner helpers are
+/// invoked as plain calls, so `new.target` is absent in those frames. Constructed runners are
+/// refused by inventory. `import.meta` is fixed per module; cross-module expansion checks its
+/// provenance separately before admitting a helper.
 pub fn uses_receiver(tree: &Tree, scopes: &Scopes, root: NodeId) -> bool {
     let binds = |ancestor, read| {
         matches!(

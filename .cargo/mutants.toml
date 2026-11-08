@@ -115,21 +115,15 @@
 #
 # ## Scope is not expressed here
 #
-# There is no `examine_globs` in this file. A full run is 7,068 mutants (2026-10-24); the measured scope
-# is 13 files. Putting that scope in the config would make `cargo mutants` silently mean
-# "the scoped run" for every future invocation, including someone's exploratory run over a file
-# they just changed. The scope lives in the workflow's `--file` flags, where it is visible next to
-# the threshold it produced.
+# There is no examine_globs here, so an exploratory cargo-mutants invocation is not silently
+# restricted to the ratchet's measured slice. scripts/check/check-mutation-score.mjs owns the
+# named scopes and their floors, and builds the --file arguments for npm and workflow runs.
 #
-# ## Deviation from cuke-dedup
+# ## Build profile
 #
-# cuke-dedup sets `profile = "mutants"` here and defines `[profile.mutants] inherits = "test",
-# debug = "none"` in `Cargo.toml`. `Cargo.toml` is outside this change's ownership, and naming a
-# profile that does not exist makes every cargo invocation fail, so the profile line is omitted and
-# the same effect -- no debuginfo, which is most of that 6.3 GB and most of the link time -- is
-# obtained from `CARGO_PROFILE_DEV_DEBUG=none CARGO_PROFILE_TEST_DEBUG=none` in the `mutants` npm
-# script and in the workflow. A real `[profile.mutants]` in `Cargo.toml` is the better home, and
-# setting one there is still outstanding work rather than a rejected idea.
+# No custom Cargo profile is selected here. The npm scripts and workflow disable dev/test
+# debuginfo through CARGO_PROFILE_DEV_DEBUG and CARGO_PROFILE_TEST_DEBUG to reduce build cost.
+# A profile setting would need a matching profile in Cargo.toml.
 #
 # `all_features = true` is also omitted: this crate declares no `[features]`, so it would be a
 # no-op that reads like a decision.

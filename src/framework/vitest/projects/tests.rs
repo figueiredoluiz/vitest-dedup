@@ -2349,7 +2349,7 @@ fn an_unsupported_extglob_form_in_a_projects_include_marks_it_unknown_with_a_dia
     ));
 }
 
-// --- Copilot review #7, item 1: an unresolved entry can still out-rank a known match. -------
+// --- an unresolved entry can still out-rank a known match. -------
 
 /// Verify unresolved entry declared after a matching project forces unknown.
 #[test]
@@ -2415,7 +2415,7 @@ fn unresolved_entry_declared_before_a_matching_project_still_governs() {
     }
 }
 
-// --- Copilot review #7, item 2: escapes must be decoded correctly or refused, never mangled. -
+// --- escapes must be decoded correctly or refused, never mangled. -
 
 /// Verify read string literal decodes unicode and hex escapes like javascript.
 #[test]
@@ -2485,7 +2485,7 @@ fn an_undecodable_escape_in_a_projects_include_is_unknown_not_mangled() {
     );
 }
 
-// --- Copilot review #7, item 3: a projects entry matching nothing must set the flag. --------
+// --- a projects entry matching nothing must set the flag. --------
 
 /// Verify a literal projects entry matching no config file sets has unresolved entries.
 #[test]
@@ -3608,10 +3608,9 @@ fn a_leading_dot_slash_in_an_include_glob_matches_the_same_files_as_without() {
     );
 }
 
-/// R15: the boundary probe just past S1's edge. Stripping a LEADING `./` from a pattern must
-/// not become normalizing `./` anywhere: `pkg/./x`, `.//pkg`, and `../pkg` must each keep
-/// their distinct (here: empty) results rather than silently folding to `pkg`. Passes today
-/// because nothing normalizes at all; guards an over-broad fix.
+/// Pins the current conservative handling of `.//` and `../` project-glob prefixes while
+/// accepting a leading `./`. Mid-path `./` segments are deliberately outside this test.
+/// This is a reader-boundary control, not a claim of runtime glob parity for refused forms.
 #[test]
 fn a_dot_slash_in_a_non_initial_segment_is_not_stripped() {
     let dir = tempfile::tempdir().unwrap();
