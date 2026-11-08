@@ -542,7 +542,8 @@ fn modifiers(main: &str) -> Vec<(String, bool, Vec<String>, bool)> {
                     .flatten()
                     .collect();
                 let body = *arguments.last().unwrap();
-                let (options, expected) = normalizer.options(&arguments, body);
+                let (options, expected) =
+                    normalizer.options(&arguments, body, &mut super::RepeatCount::ProjectDefault);
                 (
                     modifiers.chain,
                     modifiers.fails,
@@ -1141,7 +1142,9 @@ fn an_unread_fails_option_leaves_the_outcome_unknown() {
                     .iter()
                     .find(|&&argument| tree.is_function(argument))
                     .unwrap();
-                normalizer.options(&arguments, body).1
+                normalizer
+                    .options(&arguments, body, &mut super::RepeatCount::ProjectDefault)
+                    .1
             })
             .collect();
         use super::Expected::{Failure, Pass, Unknown};
@@ -1167,7 +1170,7 @@ fn options_are_what_changes_what_a_test_checks() {
                 .iter()
                 .find(|&&argument| tree.is_function(argument))
                 .unwrap();
-            normalizer.options(&arguments, body)
+            normalizer.options(&arguments, body, &mut super::RepeatCount::ProjectDefault)
         };
         assert_eq!(options(0), (vec![], super::Expected::Pass));
         let (_, expected) = options(1);

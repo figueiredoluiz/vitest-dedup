@@ -269,7 +269,8 @@ fn the_vitest_dialect_declares_the_documented_api() {
             "scoped",
         ]
     );
-    assert_eq!(DIALECT.scheduling_options, ["timeout", "retry", "repeats"]);
+    assert_eq!(DIALECT.scheduling_options, ["timeout", "retry"]);
+    assert_eq!(DIALECT.repeat_option, "repeats");
     assert_eq!(DIALECT.name_observing_matchers, ["Snapshot"]);
     assert_eq!(DIALECT.api_modules, ["vitest"]);
     assert_eq!(DIALECT.in_source_member, Some("vitest"));

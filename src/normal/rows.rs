@@ -3,7 +3,7 @@
 
 use super::{form, Normalizer};
 use crate::framework::{Chain, TableRows};
-use crate::lang::{property_name, NodeId, SymbolId};
+use crate::lang::{property_name, NodeId, Scalar, SymbolId};
 use serde_json::Value;
 use std::collections::HashMap;
 
@@ -38,6 +38,34 @@ pub enum Expected {
     /// The options cannot be read for it: a spread, a computed key, a `fails` that is not a
     /// boolean literal, or options passed as a value. Vitest may run it as an expected failure.
     Unknown,
+}
+
+/// How a registration determines its number of additional body invocations.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RepeatCount {
+    /// No explicit count survives; the runner supplies its configured default.
+    ProjectDefault,
+    /// A nonnegative count that JavaScript represents exactly.
+    Fixed(u64),
+    /// Project code may set the count to a value the analyzer cannot prove.
+    Unknown,
+}
+
+impl RepeatCount {
+    /// Interpret the last property written before the runner merges the options. Runner
+    /// versions differ on whether an undefined value overrides an inherited suite count.
+    fn from_scalar(value: Option<Scalar>, inherited: Self) -> Self {
+        match value {
+            Some(Scalar::Null) => Self::ProjectDefault,
+            Some(Scalar::Undefined) if inherited == Self::ProjectDefault => Self::ProjectDefault,
+            Some(Scalar::Number(n))
+                if (0.0..=9_007_199_254_740_991.0).contains(&n) && n.fract() == 0.0 =>
+            {
+                Self::Fixed(n as u64)
+            }
+            _ => Self::Unknown,
+        }
+    }
 }
 
 /// What a registration's callee chain says beyond scheduling.
@@ -225,19 +253,30 @@ impl Normalizer<'_> {
     }
 
     /// The options a registration passes besides its title and callback that change what it
-    /// checks, and whether one of them inverts the outcome.
-    pub fn options(&mut self, arguments: &[NodeId], body: NodeId) -> (Vec<String>, Expected) {
+    /// checks, and whether one of them inverts the outcome. Apply any repeat override to the
+    /// enclosing count in property order, including writes an opaque key or spread may make.
+    pub fn options(
+        &mut self,
+        arguments: &[NodeId],
+        body: NodeId,
+        repeat_count: &mut RepeatCount,
+    ) -> (Vec<String>, Expected) {
         let tree = self.tree;
         let dialect = self.setting.dialect;
         let mut options = Vec::new();
         let mut fails = false;
-        // What could set `fails` without spelling it: a value, a spread, a computed key.
+        // Uncertainty about the outcome or whether the larger test runs with these options.
         let mut unread = false;
         for &argument in arguments
             .iter()
             .skip(1)
             .filter(|&&argument| argument != body)
         {
+            let inner = tree.inner(argument);
+            // Reading the repeat count through a wrapper does not prove the other options
+            // allow this test to run and pass. Preserve that boundary for subsumption.
+            unread |= inner != argument;
+            let argument = inner;
             match tree.kind(argument) {
                 // A timeout changes nothing a passing test checks.
                 "Literal"
@@ -246,10 +285,23 @@ impl Normalizer<'_> {
                         crate::lang::Field::Value(Value::Number(_))
                     ) => {}
                 "ObjectExpression" => {
+                    let inherited = *repeat_count;
                     for property in tree.list(argument, "properties").into_iter().flatten() {
                         let name = (tree.kind(property) == "Property")
                             .then(|| property_name(tree, property))
                             .flatten();
+                        if name == Some(dialect.repeat_option) {
+                            let value = tree
+                                .child(property, "value")
+                                .and_then(|v| self.row_scalar(v));
+                            *repeat_count = RepeatCount::from_scalar(value, inherited);
+                            continue;
+                        }
+                        if name.is_none()
+                            || (name == Some("__proto__") && !tree.flag(property, "computed"))
+                        {
+                            *repeat_count = RepeatCount::Unknown;
+                        }
                         let meaning = name.and_then(|name| dialect.chain_member(name));
                         let written = self.literal_bool(property);
                         unread |= name.is_none()
@@ -265,6 +317,14 @@ impl Normalizer<'_> {
                 }
                 _ => {
                     unread = true;
+                    // A computed timeout such as 120_000 * 3 cannot supply option properties.
+                    let primitive = matches!(
+                        tree.kind(argument),
+                        "BinaryExpression" | "UnaryExpression" | "TemplateLiteral"
+                    ) || self.row_scalar(argument).is_some();
+                    if !primitive {
+                        *repeat_count = RepeatCount::Unknown;
+                    }
                     options.push(self.of(argument));
                 }
             }
@@ -299,8 +359,9 @@ impl Normalizer<'_> {
         arguments
             .iter()
             .skip(1)
-            .filter(|&&argument| tree.kind(argument) == "ObjectExpression")
-            .flat_map(|&argument| tree.list(argument, "properties").into_iter().flatten())
+            .map(|&argument| tree.inner(argument))
+            .filter(|&argument| tree.kind(argument) == "ObjectExpression")
+            .flat_map(|argument| tree.list(argument, "properties").into_iter().flatten())
             .any(|property| {
                 let name = (tree.kind(property) == "Property")
                     .then(|| property_name(tree, property))

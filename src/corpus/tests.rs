@@ -1556,6 +1556,56 @@ fn subsumption_claim_count(source: &str, count: usize) -> usize {
         .count()
 }
 
+/// A larger trace can subsume a smaller one only on the same invocation schedule.
+#[test]
+fn subsumption_requires_equal_repeat_counts() {
+    let source = "import {test, expect} from 'vitest';
+        test('short', {repeats: 1}, () => {expect(value).toBe(1)});
+        test('long', {repeats: 2}, () => {expect(value).toBe(1);expect(other).toBe(2)});";
+    assert_eq!(subsumption_claim_count(source, 2), 0);
+    assert_eq!(
+        subsumption_claim_count(&source.replace("repeats: 1", "repeats: 2"), 2),
+        1
+    );
+}
+
+/// A wrapped skip marks its test inert and a wrapped suite withholds subsumption for its child.
+#[test]
+fn wrapped_options_mark_inert_cases() {
+    let tests = by_title(include_str!(
+        "../../fixtures/recall/subsumed-test-wrapped-options/run.test.ts"
+    ));
+    assert_eq!(tests.len(), 8);
+    assert!(tests.values().all(|case| case.exclusion.is_none()));
+    assert!(tests["skipped larger"].inert);
+    assert!(tests["pending larger"].subsumption_key.is_none());
+    assert!(!tests["running larger"].inert);
+}
+
+/// An undefined override under an explicit suite count depends on runner merge semantics.
+#[test]
+fn repeat_overrides_need_proven_counts() {
+    let tests = by_title(
+        "import {test, describe, expect} from 'vitest';
+        const count = 2 as const;
+        describe('outer', {repeats: count}, () => {
+            test('inherited', () => expect(1).toBe(1));
+            test('fixed', {repeats: 2}, () => expect(1).toBe(1));
+            test('undefined', {repeats: undefined}, () => expect(1).toBe(1));
+            test('invalid', {repeats: -1}, () => expect(1).toBe(1));
+            test('timed', () => expect(1).toBe(1), 120_000 * 3);
+        });",
+    );
+    assert_eq!(tests.len(), 5);
+    for title in ["inherited", "fixed", "timed"] {
+        assert_eq!(tests[title].exclusion, None);
+    }
+    assert_eq!(tests["inherited"].key, tests["fixed"].key);
+    for title in ["undefined", "invalid"] {
+        assert_eq!(tests[title].exclusion, Some(Exclusion::UnprovedRepeatCount));
+    }
+}
+
 /// Fixture-provider identity must participate even when the callback only reads a fixture name.
 #[test]
 fn subsumption_fixture_provider_identity() {

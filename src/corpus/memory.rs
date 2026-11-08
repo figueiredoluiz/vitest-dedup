@@ -10,6 +10,7 @@ impl HeapBytes for Exclusion {
             Self::RegisteredInsideFunction
             | Self::UnprovedTableRow
             | Self::UnprovedSuiteRow
+            | Self::UnprovedRepeatCount
             | Self::EmptyBody
             | Self::NoCallback
             | Self::UnreadableCallback

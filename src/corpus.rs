@@ -72,6 +72,8 @@ pub enum Exclusion {
     UnresolvedTitle,
     /// An enclosing suite's row inputs or bounded population could not be proved.
     UnprovedSuiteRow,
+    /// A registration option may set the number of body invocations to an unknown value.
+    UnprovedRepeatCount,
 }
 
 impl TestCase {
@@ -112,6 +114,8 @@ impl Exclusion {
     /// `None` for a test with nothing to compare.
     pub fn reason(self) -> Option<(ExclusionReason, &'static str)> {
         match self {
+            Self::UnprovedRepeatCount => Some((ExclusionReason::UnresolvedContext,
+                "the effective number of test body invocations could not be proved")),
             Self::UnprovedTableRow=>Some((ExclusionReason::UnresolvedContext,
                 "the tagged table row's inputs or callback bindings could not be proved")),
             Self::UnprovedSuiteRow=>Some((ExclusionReason::UnresolvedContext,
@@ -1069,6 +1073,7 @@ fn read_parsed(
                 ));
             }
             let mut suite_expects_failure = false;
+            let mut repeat_count = normal::RepeatCount::ProjectDefault;
             // A suite's options that may make it an expected failure without spelling it.
             let mut suite_outcome_unknown = false;
             for scope in &suites {
@@ -1089,7 +1094,7 @@ fn read_parsed(
                         .find(|&argument| tree.inner(argument) == *scope)
                         .unwrap_or(*scope);
                     let (suite_options, suite_expected) =
-                        normalizer.options(&suite_arguments, suite_body);
+                        normalizer.options(&suite_arguments, suite_body, &mut repeat_count);
                     let fails = suite.fails || suite_expected == normal::Expected::Failure;
                     suite_expects_failure |= fails;
                     suite_outcome_unknown |= suite_expected == normal::Expected::Unknown;
@@ -1107,7 +1112,17 @@ fn read_parsed(
                     context.push_str(statements);
                 }
             }
-            let (options, expected) = normalizer.options(&arguments, body);
+            let (options, expected) = normalizer.options(&arguments, body, &mut repeat_count);
+            match repeat_count {
+                normal::RepeatCount::ProjectDefault => {}
+                normal::RepeatCount::Fixed(count) => {
+                    context.push_str(&format!("|repeat-count:{count}"))
+                }
+                normal::RepeatCount::Unknown => {
+                    tests.extend(excluded(Exclusion::UnprovedRepeatCount));
+                    continue;
+                }
+            }
             let fails = if modifiers.fails || expected == normal::Expected::Failure {
                 ".!fails"
             } else {

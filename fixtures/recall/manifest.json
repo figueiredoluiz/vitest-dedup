@@ -6,6 +6,30 @@
   "recallDestination": 1,
   "cases": [
     {
+      "name": "duplicate-test-repeat-schedule",
+      "path": "duplicate-test-repeat-schedule",
+      "rule": "duplicate-test",
+      "role": "positive",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-08",
+      "expectedTests": 10,
+      "expectedIncomplete": true,
+      "expectedUnresolved": 2,
+      "expectedFindings": [
+        { "rule": "duplicate-test", "severity": "error", "titles": ["once", "repeated suite > nested suite > restores the project default"] },
+        { "rule": "duplicate-test", "severity": "error", "titles": ["explicit one pass", "repeated suite > overrides to one pass"] },
+        { "rule": "duplicate-test", "severity": "error", "titles": ["three passes", "repeated suite > inherits three passes"] },
+        { "rule": "duplicate-test", "severity": "error", "titles": ["later count wins", "later computed count wins"] }
+      ],
+      "expectedAbsent": [
+        { "rule": "duplicate-test", "titles": ["once", "three passes"] },
+        { "rule": "duplicate-test", "titles": ["once", "repeated suite > overrides to one pass"] },
+        { "rule": "duplicate-test", "titles": ["repeated suite > inherits three passes", "repeated suite > overrides to one pass"] },
+        { "rule": "duplicate-test", "titles": ["later spread decides the count", "later count wins"] }
+      ]
+    },
+    {
       "name": "import-depth-cut",
       "path": "import-depth-cut",
       "rule": "duplicate-test",
@@ -5066,6 +5090,27 @@
         }
       ],
       "expectedAbsent": []
+    },
+    {
+      "name": "subsumed-test-wrapped-options",
+      "path": "subsumed-test-wrapped-options",
+      "arguments": ["--rule", "subsumed-test=warning"],
+      "rule": "subsumed-test",
+      "role": "negative",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-08",
+      "expectedTests": 8,
+      "expectedIncomplete": false,
+      "expectedUnresolved": 0,
+      "expectedFindings": [
+        { "rule": "subsumed-test", "severity": "warning", "titles": ["reads name", "running larger"] }
+      ],
+      "expectedAbsent": [
+        { "rule": "subsumed-test", "titles": ["reads total", "skipped larger"] },
+        { "rule": "subsumed-test", "titles": ["reads sku", "pending suite > pending larger"] },
+        { "rule": "subsumed-test", "titles": ["reads zone", "dynamic larger"] }
+      ]
     },
     {
       "name": "subsumed-test-unread-expected-failure",
