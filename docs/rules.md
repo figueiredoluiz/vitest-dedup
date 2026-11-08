@@ -30,6 +30,11 @@ Each finding carries a verdict naming its remedy, because the remedies differ.
 `cross-file-duplicate` reports at Warning rather than Error because duplication across unit and
 integration layers is sometimes deliberate.
 
+Body comparisons track `repeats` on suite and test registrations. An explicit `repeats: 0`
+runs the body once even when its suite or project repeats tests. The project default stays
+symbolic, so an omitted count can compare with another use of the default. An option that
+might supply an unknown count leaves the test in the inventory and its body unresolved.
+
 Behavior comparisons retain destructuring evaluation,
 including unused properties and iterator steps. A single-property binding can still match
 a direct member read when its sole use safely accounts for the whole pattern. Destructuring

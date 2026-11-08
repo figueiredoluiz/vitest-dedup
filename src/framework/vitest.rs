@@ -162,7 +162,8 @@ pub static DIALECT: Dialect = Dialect {
         "aroundEach",
         "aroundAll",
     ],
-    scheduling_options: &["timeout", "retry", "repeats"],
+    scheduling_options: &["timeout", "retry"],
+    repeat_option: "repeats",
     name_observing_matchers: &["Snapshot"],
     source_keyed_matchers: &["InlineSnapshot"],
 };

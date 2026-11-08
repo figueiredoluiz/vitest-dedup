@@ -842,6 +842,11 @@
       "otherReasons": [],
       "testsExcluded": 2
     },
+    "recall/duplicate-test-repeat-schedule/options.test.ts": {
+      "reason": "unresolved-context",
+      "otherReasons": [],
+      "testsExcluded": 2
+    },
     "recall/duplicate-test-runner-beside-call-title-negative/caller.test.ts": {
       "reason": "registered-elsewhere",
       "otherReasons": [

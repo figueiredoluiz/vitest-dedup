@@ -3,7 +3,8 @@
 // A passing larger test proves a smaller one's events only when both expect to pass. Each larger
 // test below is an expected failure Vitest runs inverted, through options the analyzer cannot
 // read as written: a `fails` flag held in a variable, a spread of an options object, and a suite
-// options variable. None of them is reported.
+// options variable. Explicit counts keep those bodies comparable so the
+// expected-failure guard alone decides subsumption. None of them is reported.
 //
 // The `{ retry: 2 }` pair is the control: retries change nothing a passing test checks, so it
 // stays one `subsumed-test` finding.
@@ -25,21 +26,21 @@ test('reads the total, then a wrong tax', { fails: failing }, () => {
   expect(order.tax).toBe(5)
 })
 
-test('reads the sku', () => {
+test('reads the sku', { repeats: 0 }, () => {
   expect(order.sku).toBe('a1')
 })
 
-test('reads the sku, then a wrong size', { ...inverted }, () => {
+test('reads the sku, then a wrong size', { ...inverted, repeats: 0 }, () => {
   expect(order.sku).toBe('a1')
   expect(order.size).toBe(3)
 })
 
 describe('inverted suite', inverted, () => {
-  test('misreads the zone', () => {
+  test('misreads the zone', { repeats: 0 }, () => {
     expect(order.zone).toBe(1)
   })
 
-  test('misreads the zone, then the code', () => {
+  test('misreads the zone, then the code', { repeats: 0 }, () => {
     expect(order.zone).toBe(1)
     expect(order.code).toBe(7)
   })
