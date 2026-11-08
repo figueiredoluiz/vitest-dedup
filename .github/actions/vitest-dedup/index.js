@@ -27,6 +27,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { pipeline } from "node:stream/promises";
+import { setTimeout as delay } from "node:timers/promises";
 import { spawnSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
 import { TARGETS, targetFor } from "../../../npm/lib/targets.mjs";
@@ -523,19 +524,58 @@ export function errorAnnotation(message, log = console.log) {
   log(`::error::${encodeAnnotationData(message)}`);
 }
 
-/**
- * Fetch a release asset into destination, rejecting unsuccessful or bodyless responses and
- * propagating stream failures.
- */
-async function download(url, destination) {
-  const response = await fetch(url, {
-    redirect: "follow",
-    headers: { "user-agent": "vitest-dedup-action" },
-  });
-  if (!response.ok || !response.body) {
-    throw new Error(`failed to download ${url}: HTTP ${response.status}`);
+/** Stop waiting for headers after 30 seconds; a responsive server may stream a large archive for longer. */
+async function fetchReleaseHeaders(url, headers) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 30_000);
+  try {
+    return await fetch(url, { headers, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
   }
-  await pipeline(response.body, createWriteStream(destination));
+}
+
+/** Retry transient failures on idempotent public API requests, including requests following redirects. */
+async function fetchReleaseApi(url, headers) {
+  const attempts = 3;
+  for (let attempt = 1; ; attempt++) {
+    try {
+      const response = await fetchReleaseHeaders(url, headers);
+      if (response.status < 500 || attempt === attempts) return response;
+      await response.body?.cancel();
+    } catch (cause) {
+      if (attempt === attempts) throw new Error(`failed to fetch ${url}: ${cause.message}`, { cause });
+    }
+    await delay(500 * attempt);
+  }
+}
+
+/**
+ * Download files from one public release. If GitHub's download route is unavailable,
+ * resolve exact filenames on the same tag and fetch their bytes through the release assets API.
+ */
+function releaseDownloader(version) {
+  const api = `https://api.github.com/repos/${REPO}/releases`;
+  const headers = { "user-agent": "vitest-dedup-action" };
+  let assets;
+  return async (name, destination) => {
+    let url = `https://github.com/${REPO}/releases/download/v${version}/${name}`;
+    let response = await fetchReleaseHeaders(url, headers).catch(() => null);
+    if (!response || response.status >= 500) {
+      await response?.body?.cancel();
+      if (!assets) {
+        const release = await fetchReleaseApi(`${api}/tags/v${version}`, headers);
+        if (!release.ok) throw new Error(`failed to look up release v${version}: HTTP ${release.status}`);
+        assets = (await release.json()).assets;
+      }
+      const id = assets.find(asset => asset.name === name)?.id;
+      if (!Number.isSafeInteger(id) || id <= 0) throw new Error(`missing release asset ${name} on v${version}`);
+      url = `${api}/assets/${id}`;
+      response = await fetchReleaseApi(url, { ...headers, accept: "application/octet-stream" });
+    }
+    if (!response.ok || !response.body) throw new Error(`failed to download ${url}: HTTP ${response.status}`);
+    await pipeline(response.body, createWriteStream(destination));
+  };
 }
 
 /**
@@ -579,10 +619,10 @@ async function installRelease(rawVersion, target, env, workspace) {
   const assetStem = `vitest-dedup-${version}-${target.key}`;
   const archive = join(installDirectory, `${assetStem}.tar.gz`);
   const checksum = `${archive}.sha256`;
-  const base = `https://github.com/${REPO}/releases/download/v${version}`;
+  const download = releaseDownloader(version);
 
-  await download(`${base}/${assetStem}.tar.gz`, archive);
-  await download(`${base}/${assetStem}.tar.gz.sha256`, checksum);
+  await download(`${assetStem}.tar.gz`, archive);
+  await download(`${assetStem}.tar.gz.sha256`, checksum);
 
   // Non-negotiable: verify before the archive is extracted or executed. The digest proves
   // integrity; the attestation below proves origin. Neither alone is sufficient, and both run
