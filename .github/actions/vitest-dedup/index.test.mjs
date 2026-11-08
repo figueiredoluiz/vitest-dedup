@@ -1358,8 +1358,34 @@ describe("installed tools", () => {
   });
 });
 
+describe("release download errors", () => {
+  const name = `vitest-dedup-0.8.0-${releaseTarget().key}.tar.gz`;
+  for (const [label, responses, error] of [
+    ["missing direct asset", [404], /HTTP 404/],
+    ["rate-limited lookup", [504, 403], /look up release v0.8.0: HTTP 403/],
+    ["missing filename", [502, { assets: [{ name: `${name}.sha256`, id: 7 }] }], /missing release asset/],
+    ["unavailable asset API", [503, { assets: [{ name, id: 7 }] }, 502], /assets\/7: HTTP 502/],
+  ]) {
+    test(label, async (t) => {
+      const f = toolFixture(t);
+      const output = join(f.root, "outputs");
+      const queue = [...responses];
+      t.mock.method(globalThis, "fetch", async () => {
+        assert.ok(queue.length, "unexpected extra download attempt");
+        const next = queue.shift();
+        return typeof next === "number" ? new Response(null, { status: next }) : Response.json(next);
+      });
+      await assert.rejects(runAction({
+        env: { INPUT_VERSION: "0.8.0", RUNNER_TEMP: f.root, GITHUB_OUTPUT: output }, cwd: f.workspace,
+      }), error);
+      assert.deepEqual(queue, []);
+      assert.equal(parseGithubOutput(readFileSync(output, "utf8"))["exit-code"], "2");
+    });
+  }
+});
+
 describe("release installation", { skip: process.platform === "win32" }, () => {
-  for (const mode of ["verified", "symlinked", "preauthenticated", "without-gh", "without-tar", "workspace-only", "verification-failed", "checksum-mismatch"]) {
+  for (const mode of ["verified", "asset-api", "symlinked", "preauthenticated", "without-gh", "without-tar", "workspace-only", "verification-failed", "checksum-mismatch"]) {
     test(`retains the ${mode} outcome`, async (t) => {
       const f = toolFixture(t);
       const trace = join(f.root, "calls.jsonl");
@@ -1382,8 +1408,27 @@ describe("release installation", { skip: process.platform === "win32" }, () => {
       if (mode !== "without-gh") install("gh", `#!${process.execPath}\nconst {appendFileSync} = require('node:fs');\n${log}\nprocess.exit(${ghExit});`);
       const analyzer = `#!${process.execPath}\nconst {writeFileSync} = require('node:fs');\nwriteFileSync(${JSON.stringify(report)}, JSON.stringify({schemaVersion:'0.1',testsAnalyzed:1,filesAnalyzed:1,incomplete:false,findings:[]}));`;
       if (mode !== "without-tar") install("tar", `#!${process.execPath}\nconst {appendFileSync,mkdirSync,writeFileSync} = require('node:fs');\nconst {join} = require('node:path');\n${log}\nconst dir=join(process.argv[process.argv.indexOf('-C')+1],${JSON.stringify(stem)}); mkdirSync(dir,{recursive:true}); writeFileSync(join(dir,${JSON.stringify(releaseTarget().binaryName)}),${JSON.stringify(analyzer)},{mode:0o755});`);
-      t.mock.method(globalThis, "fetch", async (url) => new Response(url.endsWith(".sha256")
-        ? `${mode === "checksum-mismatch" ? "0".repeat(64) : digest}  ${stem}.tar.gz\n` : archive));
+      const api = "https://api.github.com/repos/figueiredoluiz/vitest-dedup/releases";
+      const archiveName = `${stem}.tar.gz`;
+      const checksumName = `${archiveName}.sha256`;
+      const checksum = `${mode === "checksum-mismatch" ? "0".repeat(64) : digest}  ${archiveName}\n`;
+      const metadata = t.mock.fn(() => Response.json({ assets: [
+        { name: checksumName, id: 42 }, { name: archiveName, id: 41 },
+      ] }));
+      t.mock.method(globalThis, "fetch", async (url, init) => {
+        const headers = new Headers(init?.headers);
+        assert.equal(headers.has("authorization"), false);
+        if (mode !== "asset-api" && mode !== "checksum-mismatch") {
+          assert.ok(url.startsWith("https://github.com/"));
+          return new Response(url.endsWith(".sha256") ? checksum : archive);
+        }
+        if (url.startsWith("https://github.com/")) return new Response(null, { status: 504 });
+        if (url === `${api}/tags/v0.8.0`) return metadata();
+        assert.equal(headers.get("accept"), "application/octet-stream");
+        if (url === `${api}/assets/41`) return new Response(archive);
+        assert.equal(url, `${api}/assets/42`);
+        return new Response(checksum);
+      });
       const env = { PATH: path, RUNNER_TEMP: f.cwd, GITHUB_OUTPUT: output, INPUT_VERSION: "0.8.0", INPUT_OUTPUT: join(f.workspace, "report"), INPUT_TOKEN: mode === "preauthenticated" ? "" : "explicit", GH_TOKEN: "existing", DBUS_SESSION_BUS_ADDRESS: "unix:path=/owned-bus", ACTIONS_RUNTIME_TOKEN: "runtime", DEPLOY_KEY: "job" };
       const run = runAction({ env, cwd: f.workspace });
       if (["without-tar", "workspace-only", "verification-failed", "checksum-mismatch"].includes(mode)) {
@@ -1397,7 +1442,8 @@ describe("release installation", { skip: process.platform === "win32" }, () => {
         assert.equal(outputs["tests-analyzed"], "1");
       }
       const calls = existsSync(trace) ? readFileSync(trace, "utf8").trim().split("\n").map(JSON.parse) : [];
-      const expected = { verified: 3, symlinked: 3, preauthenticated: 3, "without-gh": 1, "without-tar": 2, "workspace-only": 0, "verification-failed": 2, "checksum-mismatch": 0 };
+      assert.equal(metadata.mock.callCount(), ["asset-api", "checksum-mismatch"].includes(mode) ? 1 : 0);
+      const expected = { verified: 3, "asset-api": 3, symlinked: 3, preauthenticated: 3, "without-gh": 1, "without-tar": 2, "workspace-only": 0, "verification-failed": 2, "checksum-mismatch": 0 };
       assert.equal(calls.length, expected[mode]);
       for (const call of calls) {
         assert.equal(dirname(call.tool), path);
