@@ -1,4 +1,5 @@
-//! Shared test fixtures: an owned project written to disk and read through the layers.
+//! Shared test fixtures: an owned project written to disk and read through the layers, and the
+//! one runner every property test goes through.
 //!
 //! Both harness families that read a fixture project — the normal forms' and the behavior
 //! trace's — start from the same shape: files on disk, one parse, one inventory, one normalizer.
@@ -49,4 +50,46 @@ pub(crate) fn project<T>(
     };
     let mut normalizer = Normalizer::new(&path, &parsed, setting, &structure);
     with(dir.path(), &parsed, &found, &mut normalizer)
+}
+
+/// The seed a property runs under unless `PROPTEST_RNG_SEED` names another, so CI and a local run
+/// draw the same cases.
+const PROPERTY_SEED: u64 = 0x5eed_7e57;
+
+/// Checks `check` on `cases` values drawn from `strategy`, shrinking any failure to a minimal
+/// input, and fails unless every one of the `cases` ran and passed.
+///
+/// Failures are not persisted: a counterexample becomes an owned test or corpus case instead.
+pub(crate) fn property<S>(
+    cases: u32,
+    strategy: S,
+    check: impl Fn(S::Value) -> Result<(), proptest::test_runner::TestCaseError>,
+) where
+    S: proptest::strategy::Strategy,
+    S::Value: std::fmt::Debug,
+{
+    use proptest::test_runner::{Config, RngSeed, TestRunner};
+    use std::cell::Cell;
+    let mut config = Config {
+        cases,
+        failure_persistence: None,
+        ..Config::default()
+    };
+    if matches!(config.rng_seed, RngSeed::Random) {
+        config.rng_seed = RngSeed::Fixed(PROPERTY_SEED);
+    }
+    let passed = Cell::new(0_u32);
+    let result = TestRunner::new(config).run(&strategy, |value| {
+        check(value)?;
+        passed.set(passed.get() + 1);
+        Ok(())
+    });
+    if let Err(error) = result {
+        panic!("{error}");
+    }
+    assert!(
+        passed.get() >= cases,
+        "{} of {cases} cases ran",
+        passed.get()
+    );
 }
