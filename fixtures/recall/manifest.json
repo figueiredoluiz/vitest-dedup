@@ -11779,6 +11779,54 @@
       "expectedAbsent": []
     },
     {
+      "name": "hook-after-each-returned",
+      "path": "hook-after-each-returned",
+      "rule": "duplicate-test",
+      "role": "positive",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-08",
+      "expectedTests": 2,
+      "expectedIncomplete": false,
+      "expectedUnresolved": 0,
+      "expectedFindings": [
+        {
+          "rule": "duplicate-test",
+          "severity": "error",
+          "titles": [
+            "readers > a",
+            "readers > b"
+          ]
+        }
+      ],
+      "expectedAbsent": []
+    },
+    {
+      "name": "hook-before-all-then-restore",
+      "path": "hook-before-all-then-restore",
+      "rule": "duplicate-test",
+      "role": "variant",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-08",
+      "expectedTests": 2,
+      "expectedIncomplete": true,
+      "expectedUnresolved": 2,
+      "expectedFindings": [],
+      "expectedAbsent": [
+        {
+          "rule": "duplicate-test",
+          "titles": [
+            "readers > a",
+            "readers > b"
+          ]
+        }
+      ],
+      "blindUnderCurrent": [
+        "run.test.ts"
+      ]
+    },
+    {
       "name": "hook-after-each-restore-sentinel",
       "path": "hook-after-each-restore-sentinel",
       "rule": "duplicate-test",

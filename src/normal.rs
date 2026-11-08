@@ -897,9 +897,10 @@ impl<'s> Normalizer<'s> {
         test: Span,
         shields: impl FnOnce() -> &'c [(HookTiming, Option<Span>)],
     ) -> bool {
-        // Where the write runs: in the hook's own run, in a cleanup the hook returns (Vitest runs
-        // it after each test), or in another function the hook creates. A write through such a
-        // function happens when something calls it, like a write through a method: not seen.
+        // Where the write runs: in the hook's own run, in a cleanup a before hook returns (Vitest
+        // runs it after the test or the scope, and ignores what other hooks return), or in
+        // another function the hook creates. A write through such a function happens when
+        // something calls it, like a write through a method: not seen.
         let tree = self.tree;
         let mut timing = hook.timing;
         let mut runs_in = hook.callback;
@@ -920,7 +921,8 @@ impl<'s> Normalizer<'s> {
             }
             timing = match hook.timing {
                 HookTiming::BeforeAll => HookTiming::AfterAll,
-                _ => HookTiming::AfterEach,
+                HookTiming::BeforeEach => HookTiming::AfterEach,
+                _ => return false,
             };
             runs_in = function;
         }
@@ -953,7 +955,7 @@ impl<'s> Normalizer<'s> {
             // After each test it restores the declared value, or a before-each hook around the
             // test rewrites it before the next one: every test starts from the same value.
             HookTiming::AfterEach => {
-                !(direct && self.restores_initializer(node))
+                !(direct && self.restores_initializer(node) && self.starts_from_initializer(node))
                     && !shields()
                         .iter()
                         .any(|&(timing, _)| timing == HookTiming::BeforeEach)
@@ -1109,6 +1111,44 @@ impl<'s> Normalizer<'s> {
             (None, Some(value)) => declarator_found && self.global_undefined(tree.inner(value)),
             _ => false,
         }
+    }
+
+    /// Whether the first test reads the declared value of the binding written at `node`: every
+    /// other write that runs before it (module code, a before-all or around-all hook)
+    /// sets that value back. A before-each rewrite around the test is a shield, checked by the
+    /// caller.
+    fn starts_from_initializer(&self, node: NodeId) -> bool {
+        let tree = self.tree;
+        let Some(symbol) = self.scopes.symbol_at(tree.span(node).start) else {
+            return false;
+        };
+        self.scopes
+            .symbol(symbol)
+            .references
+            .iter()
+            .all(|reference| {
+                if !reference.write {
+                    return true;
+                }
+                let Some(write) = reference.node else {
+                    return false;
+                };
+                // Whether it runs before the first test without being called: module code or a
+                // once-per-scope hook (a suite body's write is order-dependent already). A write
+                // in another function runs when that is called, like a write through a method:
+                // not seen.
+                let before_first = match tree.ancestors(write).find(|&a| tree.is_function(a)) {
+                    None => true,
+                    Some(function) => self.structure.hooks.iter().any(|hook| {
+                        hook.callback == function
+                            && matches!(hook.timing, HookTiming::BeforeAll | HookTiming::AroundAll)
+                    }),
+                };
+                write == node
+                    || !before_first
+                    || (self.plain_or_destructured(write).is_some()
+                        && self.restores_initializer(write))
+            })
     }
 
     /// Whether `node` is the global `undefined`, not a binding that shadows it.

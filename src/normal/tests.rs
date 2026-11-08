@@ -854,6 +854,32 @@ fn a_hook_write_outside_the_tests_own_lifecycle_makes_it_order_dependent() {
         ("", "function set() { v = 1 }\nbeforeEach(set)", false),
         // A write inside a function the hook creates runs when that function is called: not seen.
         ("", "beforeEach(() => { other = () => { v = 1 } })", false),
+        // An after-each restore holds only if the first test also starts from the declared value:
+        // a once-per-scope hook or module code that sets another value first breaks it, unless a
+        // before-each hook rewrites it.
+        (
+            "",
+            "beforeAll(() => { v = 1 })\nafterEach(() => { v = 0 })",
+            true,
+        ),
+        ("v = 1", "afterEach(() => { v = 0 })", true),
+        ("", "v = 1\nafterEach(() => { v = 0 })", true),
+        // A helper's write runs when something calls it, like a write through a method.
+        (
+            "function set() { v = 1 }",
+            "afterEach(() => { v = 0 })",
+            false,
+        ),
+        (
+            "",
+            "beforeAll(() => { v = 0 })\nafterEach(() => { v = 0 })",
+            false,
+        ),
+        (
+            "",
+            "beforeAll(() => { v = 1 })\nbeforeEach(() => { v = 0 })\nafterEach(() => { v = 0 })",
+            false,
+        ),
     ] {
         assert_eq!(case(setup, own), expected, "{setup} | {own}");
     }
@@ -908,7 +934,7 @@ fn an_after_each_hook_restoring_a_primitive_initializer_is_not_order_dependent()
 fn hook_writes_restore_only_the_declared_inert_value() {
     let case = |hook: &str| {
         order_dependent(&format!(
-            "{ORDER_HEADER}import {{ afterEach }} from 'vitest'\n\
+            "{ORDER_HEADER}import {{ afterEach, afterAll }} from 'vitest'\n\
              describe('scope', () => {{\n\
              let v = [1, {{ a: 'x' }}]\n\
              {hook}\n\
@@ -932,6 +958,12 @@ fn hook_writes_restore_only_the_declared_inert_value() {
     // A before-all cleanup runs once after the scope's tests; a before-each one after each test.
     assert!(!case("beforeAll(() => () => { v = 2 })"));
     assert!(case("beforeEach(() => () => { v = 2 })"));
+    // Vitest ignores what an after or around hook returns: that function never runs.
+    assert!(!case("afterEach(() => () => { v = 2 })"));
+    assert!(!case("afterAll(() => () => { v = 2 })"));
+    assert!(!case(
+        "aroundEach(async (run) => { await run(); return () => { v = 2 } })"
+    ));
     // A cleanup is read on its own: one restoring the declared value leaves every test alike.
     assert!(!case("beforeEach(() => () => { v = [1, { a: 'x' }] })"));
     // A before-each hook around the test rewrites what an after-each one left; a before-all
