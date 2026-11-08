@@ -140,7 +140,7 @@ export const CORPUS_SCALES = {
  * every platform -- which is the whole point. Do not replace it with anything that touches
  * `Math.random`, the clock, or a float accumulator.
  */
-function mulberry32(seed) {
+export function mulberry32(seed) {
   let state = seed >>> 0
   return () => {
     state = (state + 0x6d2b79f5) >>> 0

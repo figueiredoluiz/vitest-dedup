@@ -77,6 +77,17 @@ fails the gate the moment the target is met, so the expectation changes with the
 usable `expected.json`, a file it does not declare, and a declared file Vitest cannot compare all
 fail, and at least one case file must be compared.
 
+### Generated title check
+
+`npm run check:title-properties` draws `.each` and `.for` cases from a fixed seed (`--seed` picks
+another, `--cases` sets how many) and collects each with the pinned Vitest and the analyzer. A title
+the analyzer proves must be the one Vitest collects; refusing one is allowed. A different title, a
+different row count, or a proved title for a case Vitest cannot collect fails. Cases holding values
+near the 40-unit display cut run again under a longer `taskTitleValueFormatTruncate`. Each
+disagreement is shrunk to a minimal test file and printed; add it to
+`scripts/vitest-harness/title-values.test.ts` once fixed. The run also fails when fewer cases were
+compared, or fewer titles proved, than its floors.
+
 ### Hooks-only differential check
 
 `npm run check:hooks-differential` tests the `hook-wrapper` claim (a helper call that
