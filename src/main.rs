@@ -83,7 +83,7 @@ fn display_relative(path: &std::path::Path, root: &std::path::Path) -> String {
 
 /// Makes a test path root-relative when possible. Existing paths get a canonical comparison
 /// if lexical stripping fails, including equivalent Windows verbatim-prefix spellings.
-/// Outside-root or missing paths pass through unchanged rather than inventing an identity.
+/// Paths pass through unchanged only when lexical stripping and canonical comparison both fail.
 fn relativize_test_path(path: &std::path::Path, root: &std::path::Path) -> std::path::PathBuf {
     if let Ok(relative) = path.strip_prefix(root) {
         return relative.to_path_buf();

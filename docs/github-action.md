@@ -74,7 +74,8 @@ The inputs are `path`, `config`, `threshold`, `reporters`, `output`, `rule`, `gl
 | `attestation` | `verified`, or `unavailable` when only the checksum could be checked |
 
 Before analysis, the Action removes stale JSON and HTML reports at the selected output stem.
-A missing, unreadable or malformed JSON report makes the step fail with `exit-code` set to `2`;
-an earlier report cannot supply the current run's outputs.
+A missing JSON report makes the step fail: `exit-code` is `2` if the analyzer exited successfully,
+and otherwise preserves the analyzer's nonzero exit code. An unreadable or malformed JSON report
+sets `exit-code` to `2`. An earlier report cannot supply the current run's outputs.
 
 Back to the [documentation index](README.md).
