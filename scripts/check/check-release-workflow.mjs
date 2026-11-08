@@ -16,12 +16,9 @@
 //      conventional pre-`-e` position in release.yml, because that is the documented form and costs
 //      nothing -- not because the trailing form was broken.
 //
-//   2. `npm/lib/targets.mjs` and `npm/prebuilt-targets.json` agree on every target's key set and
-//      field values. `targets.mjs` currently just parses the JSON directly, so today this is
-//      tautological -- but release.yml's comment claims this agreement as an invariant ("the build,
-//      the npm packages, and the Action can never disagree"), and nothing enforced it. This check
-//      makes it a real, continuously-verified guarantee instead of an accident of implementation
-//      that a future edit to either file could quietly break.
+//   2. The shared platform manifest satisfies its consumers' invariants: unique target keys,
+//      Rust targets and package names, supported platform values and required coverage. It does
+//      not compare two views of the same manifest as if they were independent sources.
 //
 //   3. Every job in release.yml that runs `node` as a shell command also pins a Node version via
 //      `actions/setup-node`. `publish` was found (by inspection, not by this check) to run `node -e`

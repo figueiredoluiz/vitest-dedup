@@ -32,7 +32,8 @@
 //!     "baselined": 0,
 //!     "newFindings": 0,
 //!     "changedScope": false,
-//!     "withheldUnchanged": 0
+//!     "withheldUnchanged": 0,
+//!     "suppressionsApplied": 0
 //!   },
 //!   "qualityGate": { "errorCases": 2, "eligibleCases": 10, "percentage": 20.0 },
 //!   "excludedFiles": [

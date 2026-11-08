@@ -1,6 +1,9 @@
 # Findings, verdicts and fingerprints
 
-Machine formats carry both `verdict` and `fingerprint`.
+JSON and JSONL findings carry both `verdict` and `fingerprint`. SARIF exposes the verdict in
+result properties and the fingerprint in `partialFingerprints`. The HTML page's embedded JSON
+is a convenience for external tooling, with a different field set; use the versioned JSON or
+JSONL report for interchange.
 
 ## `verdict`
 

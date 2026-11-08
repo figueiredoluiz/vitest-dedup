@@ -2,7 +2,7 @@
 //!
 //! Without knowing whether `globals: true` is in effect, a
 //! project that relies on it has its `test`/`describe`/`it` calls silently invisible to
-//! `crate::frontend` (they are ordinary, unbound free identifiers), so the analyzer extracts
+//! inventory (they are ordinary, unbound free identifiers), so the analyzer extracts
 //! **zero tests**. The zero-work guard rejects that run as an operational error, but it still
 //! produces no useful analysis. This module answers the `globals` question from the project's own
 //! configuration instead of requiring `--globals` on every invocation.
@@ -1118,33 +1118,10 @@ pub(crate) fn is_js_whitespace(c: char) -> bool {
     matches!(c, ' ' | '\t' | '\n' | '\r' | '\u{feff}')
 }
 
-/// Finds every position within `range` where `key` appears as a *direct* (depth-zero)
-/// bare-identifier object-literal property key -- not nested inside any `{`, `[`, or `(` opened
-/// within `range` -- returning the index of the first non-whitespace character of each match's
-/// value.
-///
-/// `range` must be the interior of the object literal being searched (its own wrapping `{`/`}`
-/// excluded), so depth `0` means "a property of this object." This is what anchors a lookup to
-/// "belongs to this object" rather than "this text appears somewhere underneath it": a `globals:
-/// true` written inside a nested `environmentOptions: { ... }`, inside a plugin's own options
-/// object, or inside an array element, sits at depth 1 or deeper relative to `range` and is never
-/// matched here -- only a `key:` that is a direct child of `range`'s enclosing object is.
-///
-/// Operates purely on `masked` text. A `key` occurrence inside a comment or string is invisible
-/// (already replaced with spaces by [`mask_non_code`]), and cannot desynchronize the depth counter
-/// either, since [`mask_non_code`] blanks every bracket character that appears inside a string or
-/// comment too -- every `{`/`[`/`(` left in `masked` is real code.
-/// The key-matching and depth-tracking scan shared by [`find_direct_key_value_starts`] and
-/// [`find_direct_key_value_starts_precise`].
-///
-/// Everything in the two public wrappers except one step is the same scan, and the doc comments on
-/// both already said so. The one step that differs is `value_start`, which is handed the position
-/// just past the matched `key:`'s colon and `range.end` as a limit, and returns where the value
-/// actually begins. `find_direct_key_value_starts` skips masked whitespace there;
-/// `find_direct_key_value_starts_precise` calls [`skip_trivia`] over `original`. Keeping the scan
-/// itself in one place is what guarantees the two wrappers cannot disagree about *which* keys they
-/// match -- only about where a matched key's value starts, which is the whole and only intended
-/// difference between them.
+/// Scan direct bare-identifier property keys in a masked object interior, tracking nested
+/// delimiters so nested properties are excluded. Comments and strings must already be masked.
+/// The two wrappers share key matching and differ only in the callback that finds a value's
+/// start: masked whitespace versus original-source trivia.
 fn find_direct_key_value_starts_with(
     masked: &[char],
     range: Range<usize>,
@@ -1444,7 +1421,7 @@ mod tests {
     /// Three review rounds each found a different lexical class that a whitespace normalizer here
     /// got wrong -- spaces inside string literals, spaces inside REGEX literals, and token
     /// boundaries it never normalized at all. A correct normalizer needs a JavaScript lexer, which
-    /// `AGENTS.md` keeps out of this module. See [`config_test_scope`].
+    /// belongs in the parser layer, not this module. See [`config_test_scope`].
     ///
     /// Both directions are asserted because they fail differently. Over-separation (the formatting
     /// case) suppresses a finding; under-separation merges differently-configured directories into
@@ -2048,7 +2025,7 @@ mod tests {
     /// config.
     #[test]
     fn globals_inside_a_plugin_option_is_not_mistaken_for_the_real_config() {
-        // Copilot PR #1 finding C1, failure case 1: a `test: { globals: true }` shape appearing
+        // A `test: { globals: true }` shape appearing
         // inside a plugin's own options must not be promoted to the repo-wide answer. The real
         // config sets nothing, so Vitest's own default (`globals: false`) applies.
         let directory = tempfile::tempdir().unwrap();
@@ -2068,7 +2045,7 @@ mod tests {
     /// test globals.
     #[test]
     fn globals_under_a_sibling_key_does_not_override_the_direct_test_globals() {
-        // Copilot PR #1 finding C1, failure case 2: `environmentOptions.globals` is a different
+        // `environmentOptions.globals` is a different
         // property from `test.globals` and must not be read as if it were the same one -- doing
         // so previously reported the exact opposite of what the project configured.
         let directory = tempfile::tempdir().unwrap();

@@ -142,7 +142,7 @@ jobs:
   # ad-hoc probe that produced §4's measurements died with its review session, and the T6 mirror
   # it went on to verify is exactly the kind of change that drifts silently -- title text is a
   # comparison key for `duplicate-test-name` and `duplicate-each-row`, not decoration. Vitest is
-  # a pinned devDependency (5.0.3, the version §4 measured); a future upgrade re-runs this diff
+  # a pinned devDependency (see package.json); a future upgrade re-runs this diff
   # as its first gate. Runs per pull request; npm ci is required here and nowhere else in this
   # workflow because this is the only job that needs the JavaScript dependency tree.
   titles:
@@ -263,27 +263,12 @@ jobs:
   # The memory target and current ratchets. The destination is 1,000,000 tests inside 2 GB,
   # i.e. 2 KB retained per test; the scripts below own the higher limits CI currently enforces.
   #
-  # Nothing measured this before. Peak memory on a real 24,147-test codebase was cut from 947 MB
-  # to 149 MB -- 39 KB per test down to 6.2 KB -- with no gate behind it, so the first `String`
-  # added to `src/model.rs` would have given the improvement back silently. Both halves run over a
-  # synthetic corpus generated from a fixed seed (`scripts/check/lib/memory-corpus.mjs`): no
-  # network, byte-identical on every machine, and large enough to separate a per-test constant
-  # from fixed process cost, which `fixtures/` at ~300 tests cannot do.
-  #
-  # `check-memory.mjs` is the ratchet, at one fixed scale. `check-memory-scaling.mjs` asserts the
-  # shape: every measurement this project has is a single point at 24k tests, so anything
-  # super-linear is invisible today -- and super-linear is what makes the tool unusable on exactly
-  # the legacy monorepo it was built for. The scripts carry the floors, the target and the
-  # reasoning; this comment deliberately does not repeat the numbers, because a second copy of a
-  # measurement is a second thing to forget to update.
-  #
-  # BOTH run per pull request, not on a schedule. Cost is about 50 seconds of analysis (0.4s at
-  # 1k, 3.4s at 10k, 36s at 100k) plus 3s of generation, on top of a `cargo build --release` that
-  # reuses the `release` cache that the `corpus`, `recall`, `titles`, `self-check` and
-  # install-simulation jobs share (`shared-key`; the default key is per job) -- so unlike
-  # `rust-coverage` below, there is no second cold build to avoid. And attribution is the whole
-  # point: a memory regression has to name the merge that caused it, which a weekly schedule
-  # cannot do. The 100k scale peaks around 435 MB of RSS, comfortably inside a runner.
+  # Both gates use the deterministic synthetic corpus from scripts/check/lib/memory-corpus.mjs.
+  # check-memory.mjs bounds retained bytes at one fixed scale; check-memory-scaling.mjs compares
+  # several scales to expose growth hidden by a single-point measurement. The scripts own the
+  # work floors, targets and enforced limits. Current run output owns measured time and memory.
+  # Both gates run per pull request on a release build using the configured Rust cache.
+
   memory:
     name: Memory budget and scaling gates
     runs-on: ubuntu-22.04
@@ -348,7 +333,7 @@ jobs:
         with:
           node-version: 24
       # The script redirects the instrumented build's output and prints a per-module table, per
-      # `AGENTS.md`'s bounded-output rule. It also asserts the run executed at least 500 tests --
+      # the bounded-output convention. It also asserts the run clears `RUST_MIN_TESTS` --
       # a coverage percentage over a suite that did not run is the silent-success failure this
       # repository keeps rediscovering: every gate must assert a floor on work performed, because
       # one that can only report "nothing failed" also passes when nothing was measured.

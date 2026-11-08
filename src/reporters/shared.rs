@@ -1,4 +1,5 @@
-//! Helpers shared by the terminal and JSON reporters.
+//! Sanitization, paths and report records shared by the terminal, JSON, JSONL, HTML and SARIF
+//! reporters.
 //!
 //! A test title or finding message is copied verbatim from source the analyzer never executes,
 //! so it is attacker-controlled the same way a filename or HTTP header is: it can contain
@@ -75,7 +76,7 @@ fn is_dropped(character: char) -> bool {
 /// Sanitizes text for the terminal reporter, where even a bare newline would forge a report
 /// line and a bare ESC byte could trigger a terminal escape sequence.
 ///
-/// `pub(crate)` rather than `pub(super)`: this is the same hazard for any raw diagnostic text a
+/// Re-exported publicly by [`crate::reporters`]: this is the same hazard for raw diagnostic text a
 /// caller outside this module prints straight to stdout/stderr (a repository-controlled filename,
 /// an error's context, an echoed `--output` path) — the reporters do not have a monopoly on
 /// needing it, so callers elsewhere in the crate reuse this instead of re-implementing sanitation.

@@ -1,6 +1,6 @@
 # Releasing
 
-Tag-driven, from `main`.
+Manually dispatched against an immutable release tag from `main`.
 
 ## Steps
 
@@ -18,11 +18,20 @@ release. `publish: true` creates the GitHub Release with checksums, Sigstore sig
 build provenance, then publishes to each enabled registry.
 
 - The `github-release`, `crates-io` and `npm` GitHub environments should allow only `v*` tags and
-  have no required reviewers, as in CukeDedup.
+  have no required reviewers.
 - Repository write access and the workflow's exact-tag, merged-`main` ancestry, and version checks
   control dispatch; there is no owner-only or manual reviewer gate.
 - Set `PUBLISH_NPM=true` and, after crates.io setup, `PUBLISH_CRATES=true` as repository variables
   to enable those jobs.
+
+### Checksums and provenance
+
+Each native archive is published with its own `.sha256` checksum and Sigstore signature bundle.
+The build-provenance attestation covers the archives; the individual checksum files are signed
+by the separate Sigstore signing step.
+`SHA256SUMS` concatenates those checksum files for convenience; it is not itself a signed or
+attested artifact. Authenticate an archive using its individual checksum and the archive's
+signature or provenance, rather than treating the aggregate index as proof of origin.
 
 ### The recall corpus comparison
 

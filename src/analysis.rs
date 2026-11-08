@@ -240,12 +240,9 @@ pub fn gate_percentage(result: &AnalysisResult) -> Option<f64> {
 /// It is still a *quality-gate* failure ([`ExitCode::QualityGateFailed`]) -- the analyzer ran fine
 /// and found more new duplication than policy allows.
 ///
-/// Never returns [`ExitCode::OperationalError`]: that variant is reserved for the `Err` path a
-/// caller takes before an `AnalysisResult` even exists (bad configuration, an unreadable path, a
-/// parse failure). Conflating "the analyzer broke" with "the analyzer found duplicated tests" is
-/// exactly the confusion this product's exit-code contract exists to avoid, so this function's
-/// return type structurally cannot express that outcome by mistake -- callers combine it with
-/// their own fallible setup instead.
+/// Returns only [`ExitCode::Success`] or [`ExitCode::QualityGateFailed`]. The shared return enum
+/// also contains [`ExitCode::OperationalError`], but this function does not choose it; the caller
+/// handles setup failures and strict incomplete-analysis policy separately.
 pub fn exit_code(result: &AnalysisResult, config: &Config) -> ExitCode {
     // Reads the recorded outcome rather than the retained findings: truncation is a presentation
     // limit, and a quality gate that changed its answer because a report was shortened would be

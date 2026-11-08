@@ -1183,9 +1183,8 @@ fn git_paths(root: &Path, arguments: &[&str], what: &str) -> Result<BTreeSet<Pat
         git_at(root)
     };
     let output = command
-        // Without this, git escapes non-ASCII names into C-style quoted strings, and the decoded
-        // path would never equal the real one -- silently dropping every non-ASCII file from the
-        // changed set.
+        // NUL-delimited callers request raw names with `-z`; quotePath does not affect those
+        // names. Keep the explicit setting for any non-NUL output from this helper.
         .args(["-c", "core.quotePath=false"])
         .args(arguments)
         .output()
@@ -1205,8 +1204,7 @@ fn git_paths(root: &Path, arguments: &[&str], what: &str) -> Result<BTreeSet<Pat
 }
 
 #[cfg(unix)]
-/// Decodes a `git ls-files -z` path: raw bytes on unix (git quotes nothing there), the
-/// quoted-and-lossy fallback elsewhere, matching each platform's `ls-files` behavior.
+/// Preserves a NUL-delimited Git path's raw bytes on Unix; `-z` disables quoting.
 fn path_from_git_bytes(bytes: &[u8]) -> Result<PathBuf> {
     use std::ffi::OsStr;
     use std::os::unix::ffi::OsStrExt;
@@ -1214,8 +1212,8 @@ fn path_from_git_bytes(bytes: &[u8]) -> Result<PathBuf> {
     Ok(PathBuf::from(OsStr::from_bytes(bytes)))
 }
 
-/// The non-unix twin of the unix decoder above: git quotes bytes it cannot encode, so the
-/// quoted form is decoded (lossily, and only ever for a diagnostic path).
+/// Converts an unquoted NUL-delimited Git path on non-Unix hosts. Non-UTF-8 names fail the
+/// operation explicitly rather than entering the changed-file set through lossy decoding.
 #[cfg(not(unix))]
 fn path_from_git_bytes(bytes: &[u8]) -> Result<PathBuf> {
     Ok(PathBuf::from(

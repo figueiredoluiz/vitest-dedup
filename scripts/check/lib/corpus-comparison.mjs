@@ -1,8 +1,9 @@
 // The two-binary comparison over the corpus evaluation: which expectations a candidate binary keeps,
 // gains or loses relative to a baseline binary run on the same labelled corpus.
 //
-// Pure except `readLabelChanges` and `buildRunRecord`, which ask git and the filesystem. The
-// comparison never turns an unusable baseline run into a quiet one: a case the baseline could not
+// Classification and rendering operate on supplied records; provenance and tree helpers read
+// files and spawn git, tar or analyzer processes. The comparison never turns an unusable baseline
+// run into a quiet one: a case the baseline could not
 // be evaluated on (a crash, an old report schema, zero extracted tests) is `unavailable` with the
 // reason, and it never counts as zero findings.
 import { createHash } from 'node:crypto'
@@ -355,8 +356,8 @@ function readIfFile(path) {
  * whatever way it is spelled. A case is taken to be self-contained: a file it imports from outside
  * its own directory is not followed, so a change confined to such a file is not seen.
  *
- * @param {{root: string, top: string}} tree A corpus root and the top of the tree it sits in.
- * @param {string} currentTop The top of the current checkout, to place an absolute `--config` in `tree`.
+ * @param {{root: string, top: string}} given A corpus root and the top of the tree it sits in.
+ * @param {string} currentTop The top of the current checkout, to place an absolute `--config` in the supplied tree.
  * @param {object} testCase A raw manifest case.
  * @returns {string} Hex digest.
  */

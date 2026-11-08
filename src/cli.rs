@@ -204,7 +204,7 @@ struct RawOptions {
     ///
     /// The value requires `=`: an optional value with a space would greedily consume the next
     /// token, so the documented bare form before a path (`--fail-on-incomplete .`) parsed the
-    /// PATH as the class and errored (Copilot review, PR #30, High).
+    /// PATH as the class and errored.
     #[arg(
         long,
         global = true,
@@ -290,7 +290,8 @@ struct RawOptions {
     #[arg(long, global = true)]
     globals: bool,
 
-    /// Stop reading files once the analyzer holds more than MIB mebibytes (default 2048).
+    /// Stop reading files when retained engine state exceeds MIB mebibytes (default 2048),
+    /// or when current process RSS exceeds the separate 1.5-times-budget backstop where supported.
     ///
     /// Checked between files, with a current process RSS backstop at 1.5 times MIB. The run
     /// analyzes whole files only; the rest are reported and the run is marked incomplete.
@@ -830,8 +831,8 @@ mod tests {
         // An unknown class is a usage error, not silently "any".
         assert!(ParsedArgs::parse_from(["vitest-dedup", "--fail-on-incomplete=oops"]).is_err());
         // The bare flag before a POSITIONAL is the documented invocation and must stay usable:
-        // an optional value taken with a space would swallow the path as the class (Copilot
-        // review, PR #30). The value is `=`-only.
+        // an optional value taken with a space would swallow the path as the class.
+        // The value is `=`-only.
         let bare_before_path =
             ParsedArgs::parse_from(["vitest-dedup", "--fail-on-incomplete", "."]).unwrap();
         assert_eq!(

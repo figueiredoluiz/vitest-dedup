@@ -1,8 +1,8 @@
 //! The `vitest-dedup` command-line entry point.
 //!
-//! This binary is deliberately thin: it sequences discovery, extraction, analysis, and reporting,
-//! and it owns the exit-code contract. Every decision it makes is delegated to a library module so
-//! the same pipeline is reachable by embedders.
+//! Orchestrates discovery, extraction, analysis and reporting, including CLI-specific path
+//! handling, diagnostics, source retention and output writing. Library modules expose the
+//! individual stages; this binary composes them and preserves their exit-code contract.
 
 use anyhow::{Context, Result};
 use std::collections::{BTreeMap, BTreeSet};
@@ -58,39 +58,8 @@ fn process_code(code: ExitCode) -> ProcessExitCode {
     ProcessExitCode::from(u8::try_from(code.code()).unwrap_or(2))
 }
 
-/// Converts a discovered test's absolute [`Location::path`](vitest_dedup::model::Location::path)
-/// into one relative to the analysis `root`, for portable, diffable reports.
-///
-/// Falls back to the absolute `path` unchanged when it does not fall under `root`. A direct
-/// `strip_prefix` can refuse equivalent Windows spellings when one side has the verbatim `\\?\`
-/// prefix, so existing paths get one canonical comparison before that fallback. A genuinely
-/// outside-root or missing path is still forwarded unchanged: silently dropping or inventing a
-/// relative path would be a coverage gap disguised as success.
-///
-/// `discovery::discover` walks with `follow_links(false)` (see `discovery.rs`), so a file reached
-/// through a symlink that resolves outside `root` is not walked at all today -- this function's
-/// fallback branch is therefore defense in depth against a discovery change or a frontend path
-/// that arrives from somewhere else, not a route this binary currently exercises end to end.
-/// Verified empirically before writing this comment: pointing the binary at a directory containing
-/// a symlink (to a file, and separately to a directory) that resolves outside the root extracts
-/// zero tests, confirming discovery never yields the escaping path in the first place. Pinned
-/// directly against this function instead, via a `#[cfg(unix)]` symlink fixture, so the decision is
-/// tested regardless of whether discovery's traversal policy ever changes.
-/// A repository path as every stderr diagnostic must print it: relativized against the analysis
-/// root, then sanitized.
-///
-/// The two halves belong together and had been applied separately at nine call sites, which is
-/// how the S12 sweep found sites that had one and not the other -- `discovery.rs`'s
-/// governance-reason line and the `includeSource` globals diagnostic both printed an absolute
-/// path while their immediate siblings did not. Spelling the pair out per site also put
-/// `main.rs` over the production-Rust duplication ceiling (0.63%), which is the same defect
-/// measured a second way: a five-line idiom repeated is a five-line idiom that can be got wrong
-/// in one copy.
-///
-/// A new diagnostic that forgets this function is still possible, but it is now one obvious call
-/// rather than a block to reassemble from memory, and
-/// `tests::no_stderr_line_contains_the_analysis_root_prefix` sweeps every line the fixture can
-/// reach.
+/// Relativizes a diagnostic path, normalizes separators and sanitizes repository-controlled text.
+/// All stderr path diagnostics use this helper so display rules remain consistent.
 fn diagnostic_path(path: &std::path::Path, root: &std::path::Path) -> Sanitized {
     Sanitized::new(&display_relative(path, root))
 }
@@ -112,9 +81,9 @@ fn display_relative(path: &std::path::Path, root: &std::path::Path) -> String {
         .replace('\\', "/")
 }
 
-/// Paths beneath `root` become root-relative (the portable form every report and fingerprint
-/// carries); paths outside it pass through unchanged, because no better answer exists and
-/// inventing one would be wrong in a different way.
+/// Makes a test path root-relative when possible. Existing paths get a canonical comparison
+/// if lexical stripping fails, including equivalent Windows verbatim-prefix spellings.
+/// Outside-root or missing paths pass through unchanged rather than inventing an identity.
 fn relativize_test_path(path: &std::path::Path, root: &std::path::Path) -> std::path::PathBuf {
     if let Ok(relative) = path.strip_prefix(root) {
         return relative.to_path_buf();
@@ -1655,7 +1624,7 @@ mod tests {
         assert_fail_on_incomplete_is_operational_error(directory.path());
     }
 
-    // -- Copilot review #8, item 1: the ordinary (non-`includeSource`) path must fail closed on -
+    // -- The ordinary (non-`includeSource`) path must fail closed on -
     // -- an unreadable governing project's `globals`, the same way the `includeSource` path      -
     // -- above already does. -----------------------------------------------------------------
 
@@ -1746,7 +1715,7 @@ mod tests {
         );
     }
 
-    // -- Copilot review #8, item 2 (revised): the "extracted no tests" guard's *advice* must -----
+    // -- The "extracted no tests" guard's *advice* must -----
     // -- name a statically empty `.each`/`.for` table when that is the actual cause, instead of --
     // -- always blaming `test.globals` -- but the guard itself must keep firing (`incomplete`     -
     // -- stays `true`), since Vitest itself refuses such a file ("No test suite found in file").  -
@@ -2015,14 +1984,6 @@ mod tests {
         assert_eq!(findings[0]["rule"], "cross-file-duplicate");
     }
 
-    /// The ordinary case: a path under `root` is rewritten relative to it.
-    /// The invariant `Sanitized` exists to enforce, checked end to end rather than at the type.
-    ///
-    /// A filename carrying a bidi override and an ANSI escape reaches stderr through the
-    /// diagnostics vector (this file is unreadable as UTF-8, so it becomes a skip diagnostic).
-    /// Asserting on the process's real stderr -- not on `Sanitized::new` in isolation -- is what
-    /// makes this a regression test for the *print* path a reviewer flagged, rather than a
-    /// restatement of `terminal_safe`'s own unit tests.
     /// `--help` and `--version` are successful output, not failures.
     ///
     /// clap models both as `Err`, so they used to reach `main`'s error handler: printed to stderr
@@ -2158,22 +2119,7 @@ mod tests {
         );
     }
 
-    /// C11: the shapes that CANNOT be stripped to the analysis root, one test per shape. All of
-    /// them answer the same way -- `strip_prefix` refuses and the absolute form survives -- but
-    /// each shape reaches that refusal through a different platform mechanism, and only Windows
-    /// can build the volume-bound ones as real `Path` values:
-    ///
-    /// - a **symlink escaping the root** (the Unix test above; the frontend reads through the
-    ///   link, so the path the frontend carries is the target's);
-    /// - a **differing drive letter** -- `D:\data\...` under a `C:\repo` root shares no volume
-    ///   prefix, so no relative form exists;
-    /// - a **verbatim/ordinary prefix mismatch** -- when both spellings exist and resolve to the
-    ///   same file, canonical comparison identifies the path as inside the root; and a UNC share
-    ///   root (`\\server\share\repo`) strips only for paths on the same share.
-    ///
-    /// The platform-neutral test at the end pins the CONTRACT itself on every OS: whatever
-    /// `strip_prefix` refuses is forwarded absolute, never dropped, never rewritten to something
-    /// that looks relative but is not.
+    /// A path on another Windows drive keeps its absolute identity.
     #[cfg(windows)]
     #[test]
     fn relativize_test_path_keeps_the_absolute_path_for_a_path_on_another_drive() {
@@ -2305,13 +2251,6 @@ mod tests {
         .unwrap()
     }
 
-    /// `--fail-on-incomplete` on an incomplete run must return the documented operational
-    /// error code (2), never the quality-gate code (1) -- an analyzer that could not fully read
-    /// the corpus is a different failure than one that read it and found duplicates, and
-    /// `cli.rs`'s `ExitCode` contract exists precisely so CI can tell them apart.
-    /// C10: `=reads` counts only read-side causes. A limits-only degraded run (pair budget
-    /// exhausted) must NOT trip it -- that run's response is raising the budget, and failing a
-    /// reads gate on it would send someone chasing the wrong fix.
     use vitest_dedup::cli::FailOnIncomplete;
 
     /// Regression fixture for CLI reporting: fail on incomplete reads ignores limit causes.
@@ -2873,10 +2812,6 @@ mod tests {
         assert_eq!(report["modes"]["baselineApplied"], true);
     }
 
-    /// P3: `// vitest-dedup-disable-next-line` beside one participant removes the finding, the
-    /// summary says so, and the precedence holds end to end -- the suppressed pair is never
-    /// recorded by `--update-baseline`, so the baseline records nothing and a later run of the
-    /// same tree gates clean for the right reason (nothing to accept, not debt accepted).
     /// P4 flagship: `--baseline-from-ref HEAD` treats the base revision's findings as accepted,
     /// so a PR touching nothing about the duplicates gates clean -- while the finding itself
     /// stays in every report, marked like any baselined debt. The containment is asserted
@@ -3735,15 +3670,6 @@ mod tests {
     // cases would leave the gate exactly where it is today.
     // =========================================================================================
 
-    /// Every line of a `jsonl` run, parsed. Exit code is deliberately not asserted: these corpora
-    /// are meant to contain findings, and a run that reports one exits 1 by design.
-    /// Writes one fixture file into a fresh tempdir and returns the tempdir's root -- the
-    /// four-line setup every stream/memory test in this half of the module opens with.
-    /// Writes a `types.test.ts` fixture and runs every rule over it: the harness the four
-    /// type-level tests reduce to. The imports and `type Expected` alias are the shared
-    /// preamble (differing only in which `./helpers` names each test needs); `declarations` is
-    /// the per-test `test(...)` blocks, indentation included so the written bytes match the
-    /// fixtures these replaced.
     /// The plain string-mapping declaration the identical-duplicate and whitespace fixtures
     /// both open with -- the control both compare their variation against.
     const STRING_MAPPING_TEST: &str = r#"
@@ -4749,7 +4675,7 @@ mod tests {
     /// the fix, the `nothing_read` guard was only reached when files were discovered but yielded
     /// nothing (`tests.is_empty() && !discovered.files.is_empty()`); zero discovered files
     /// cleared every flag and a JSON consumer read a clean, complete pass over nothing -- the
-    /// threshold trap of CLAUDE.local.md §2 in the product.
+    /// regression where no work is performed but the gate passes.
     #[test]
     fn a_run_that_discovered_no_files_is_incomplete_with_a_named_cause() {
         let dir = tempfile::tempdir().unwrap();
@@ -4864,7 +4790,7 @@ mod tests {
 
     /// R26 (S12): stderr diagnostic paths are relativized against the analysis root, like every
     /// `locations[].path` in every report already is. Before the fix, one site was relativized
-    /// and its sibling was not -- the shape CLAUDE.local.md §3 keeps catching.
+    /// and its sibling was not: both input routes must preserve the same contract.
     #[test]
     fn stderr_diagnostic_paths_are_relativized_against_the_analysis_root() {
         let dir = tempfile::tempdir().unwrap();

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Mutation-score ratchet over the two modules where a wrong answer costs the most.
+// Mutation-score ratchet over the selected, explicitly bounded Rust scope.
 //
 // Usage:
 //   node scripts/check/check-mutation-score.mjs [outcomes.json] [minimumScore]
@@ -8,7 +8,7 @@
 //
 // ## What this measures that nothing else here does
 //
-// This repository has 468 unit tests and, before this gate, no evidence that any of them would
+// At the original measurement, the repository had 468 unit tests and no evidence that they would
 // fail if the code were wrong. That is not a hypothetical worry: this repository has shipped five
 // separate checks that passed while doing no work, and several fixes whose only test was the bug
 // they fixed. Coverage cannot see either -- a line is "covered" by a test that executes it and
@@ -30,13 +30,13 @@
 //
 // ## Scope is part of the number, so the gate owns it
 //
-// A full run is 7,068 mutants (`cargo mutants --list`, 2026-10-24), and cargo-mutants must rebuild
-// and re-run the suite for each one, so each scope below is a measured slice with its own floors.
+// cargo-mutants rebuilds and re-runs the suite for each mutant, so each scope below is a
+// measured slice with its own floors. Historical whole-tree counts do not describe current scope.
 // The earlier analyzer's fingerprint and analysis scope was deleted with it; a rules-layer scope
 // waits on a measured run.
 // Everything outside `SCOPE` is therefore unmeasured, and stays unmeasured until the scope grows.
 //
-// `SCOPE` below is the single source of truth for that scope. `--run` (which is what
+// `SCOPE` selects the default; named scopes have their own lists and floors. `--run` (what
 // `npm run mutants` and the workflow invoke) builds the cargo-mutants command line from it, and
 // `--print-scope` emits the same `--file` arguments for anyone driving cargo-mutants by hand or
 // sharding the scope. Nothing repeats the file list.
@@ -61,7 +61,7 @@
 //     repository's rule is that a gate floors the *work it performed*, and `> 0` passes a run
 //     that matched one file and tested three mutants at 100%. The floor is the measured count minus headroom
 //     for mutants that legitimately stop being generated as code is deleted;
-//   - `timeout == 0`. A timeout is an unknown, not a catch, and `fingerprint.rs`'s recursion depth
+//   - `timeout == 0`. A timeout is an unknown, not a catch, and recursive analysis's depth
 //     guards make a genuine hang plausible. Note the trap this guard sprang on its own first run:
 //     cargo-mutants counts a **build** timeout in the same bucket, and at the default
 //     `build_timeout_multiplier = 3.0` two mutants timed out mid-build purely because another

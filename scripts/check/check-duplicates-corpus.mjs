@@ -1,98 +1,15 @@
 #!/usr/bin/env node
-// Corpus gate for fixtures/duplicates/ and fixtures/observed/ — plus, since V1, a whole-tree
-// blindness ratchet over ALL of fixtures/ (see `DELIBERATE_BLIND_FILES`): the per-fixture
-// expectations below cover three directories, while the blind set is pinned across the entire
-// tree, because blindness can be manufactured anywhere a fixture's extraction can degrade.
+// Pairwise corpus gate for the owned directories in TARGETS and the whole-tree blind-file pin.
 //
-// `fixtures/observed/` was added when the six pinned reference repositories moved to scheduled
-// monitoring: each of its fixtures distils one shape actually found on that corpus into something
-// this repository owns, reads in one screen, and can check offline. See `TARGETS` below. Both
-// fixture directories are on the blocking merge path; the external reference repositories they
-// were distilled from are not -- those are scheduled monitoring. Everything else in this file
-// applies to both directories identically.
+// Fixture directives name the expected rule, severity and participants, or explain whether a
+// silent pair is distinct or not compared. lib/next-duplicates.mjs judges the emitted pairs.
+// The known-difference list permits only recorded deltas; a stale allowance fails too.
+// Per-fixture extraction and solo-run eligibility are not enforced by this transition gate.
 //
-// Historically this gate inferred a fixture's expected verdict from its filename
-// (`duplicates-*` "must fire", everything else "must stay silent") and only checked whether *any*
-// finding mentioned the file. An external review found that structurally incapable of protecting
-// the near-duplication corpus it was about to be handed:
-//
-//   - Every planned `near-*`/`parameterization-*` fixture would be read as expecting silence,
-//     because the prefix check only recognized `duplicates-` and `duplicate-test-name`.
-//   - "Some finding mentions this file" is satisfied by the wrong rule firing between the wrong
-//     tests -- a `duplicate-test-name` warning would satisfy a near-duplication positive while the
-//     rule under test found nothing at all.
-//   - There was no way to tell "compared and found different" (`distinct`) from "never compared"
-//     (`not-compared`); a fixture could pass because its tests were silently skipped.
-//
-// This version replaces the filename heuristic with a machine-readable expectation block in each
-// fixture's header comment (see `CONTRIBUTING.md`'s fixture conventions for the verdict
-// vocabulary). The block states, per fixture: how many tests must be extracted, and for every pair
-// (or cluster edge) under test, which rule must fire, at what severity, naming which participants
-// by file-relative line and title -- or, for a pair expected to produce no finding, whether that
-// silence is `distinct` (compared, found different) or `not-compared` (never eligible).
-//
-// A fixture with no block, or a block that fails to parse, is a gate FAILURE, never a silent
-// default -- see `parseFixture` below. This is deliberate: it is what lets another agent drop a
-// new fixture into this directory without this gate quietly waving it through.
-//
-// Each directory is judged pairwise by `lib/next-duplicates.mjs`: every required pair linked by its
-// rule, every declared silence kept, and no other link. A delta is a failure unless
-// `next-duplicates-known.json` lists it with a reason; a listed delta that no longer occurs fails
-// too. Per-fixture extraction counts and solo-run eligibility are not judged yet: the headers
-// still state the earlier analyzer's facts, and their deltas are the known list's.
-//
-// ---------------------------------------------------------------------------------------------
-// Expectation block format
-// ---------------------------------------------------------------------------------------------
-//
-// Parsed by `lib/fixture-directives.mjs`, which owns the format and documents it in full. The short
-// version: plain `//` comment lines carrying `@vitest-dedup:extracted`, `@vitest-dedup:expect`,
-// `@vitest-dedup:isolates`, and `@vitest-dedup:participant`, stating per fixture how many tests must
-// be extracted and, for every pair under test, which rule must fire at what severity between which
-// participants -- or, for a pair expected to produce no finding, whether that silence is `distinct`
-// (compared, found different) or `not-compared` (never eligible), and which single variable the pair
-// isolates.
-//
-// That parser is shared with `check-fixture-isolation.mjs`, which this gate also runs (see the end
-// of `main`). The two checks are complementary and neither is sufficient alone: this one asserts the
-// analyzer stayed silent between the declared participants, and that one asserts the participants
-// were close enough for the silence to mean something. A negative fixture whose participants differ
-// in more than the one variable it claims to isolate passes this gate while proving nothing -- the
-// silent-success shape the work-performed floor exists to reject.
-//
-// ---------------------------------------------------------------------------------------------
-// distinct vs not-compared: what this gate can and cannot verify
-// ---------------------------------------------------------------------------------------------
-//
-// No reporter exposes per-test comparison eligibility -- neither the JSON nor the JSONL report
-// enumerates tests that did not appear in a finding, so there is no direct way to ask "was this
-// specific pair ever eligible for comparison". What IS exposed is `AnalysisResult::incomplete`
-// (`summary.incomplete` in both reports), and `analysis::analyze` sets it whenever ANY test in the
-// run has an unresolved `Context` (dropped mock, unreadable `test.extend` factory, unresolvable
-// `.each` table, dynamic title, opaque body -- see `model.rs`'s `Context::unresolved` and
-// `analysis.rs`'s `has_unresolved_context`), independent of whether any rule fires.
-//
-// Run alone (this gate already isolates every fixture into its own directory to attribute
-// extraction counts -- see `checkExtraction`), that per-file `incomplete` flag becomes a usable,
-// if coarse, proxy:
-//
-//   - `not-compared` asserts the solo run's `incomplete` is `true`: something in the file was
-//     genuinely unresolved, so absence of a finding proves nothing.
-//   - `distinct` asserts the solo run's `incomplete` is `false`: nothing was silently excluded on
-//     those grounds, so the tests were actually compared and found different.
-//
-// This only catches the `Context::unresolved` family of exclusions. A body excluded from
-// `duplicate-test`/`parameterization-candidate` for being a recognized trivial stub
-// (`Fingerprints::trivial`) does NOT set `incomplete`, so `summary.incomplete` alone cannot
-// distinguish "trivial body, never compared" from "compared, found different". It no longer has
-// to: `Fingerprints::trivial` is already on the `--emit-test-fingerprints` stream (`"test"` and
-// `"hook"` records alike), so this gate runs that stream once per directory and uses it as a
-// SECOND eligibility signal -- a `not-compared` verdict may also rest on a participant whose
-// record is trivial (excluded from comparison for that reason, run complete or not), and a
-// `distinct` verdict is rejected when a participant's record says trivial, because "compared and
-// found different" is then false: the pair was never compared at all. A participant with no
-// resolvable record (a suite, resolved through its children) asserts nothing here, the same way
-// it asserts nothing in the isolation gate.
+// Independently, checkBlindFiles derives the whole-tree blind set from test records and checks
+// both the named pin and summary consistency. Isolation runs even if pairwise assertions fail;
+// it uses the analyzer to check that distinct controls retain the intended comparison dimension.
+// Pending near fixtures are counted separately, not treated as passing finding expectations.
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { report as reportIsolation, run as runIsolation } from './check-fixture-isolation.mjs'
@@ -195,7 +112,7 @@ function checkTarget(target, known, { failures, held, consumed }) {
 // true` for its deliberate cause can go blind on top without flipping anything the expectations
 // read.
 //
-// The ratchet compares the SET, not the count (Copilot review, PR #32): a count can pass a swap
+// The ratchet compares the SET, not the count: a count can pass a swap
 // -- one deliberate fixture un-blinding while another goes blind accidentally keeps 13 at 13.
 // The set is derived from the analyzer's own per-test fingerprint stream (`--emit-test-
 // fingerprints`, which filters to executable declarations exactly as `analyze` does), so the
@@ -409,7 +326,7 @@ main()
 // unimplemented rule, or -- since near-arrow-vs-function-this-twin.test.ts moved there -- a known
 // analyzer defect being recorded honestly instead of being pinned as correct behavior. They are
 // deliberately outside this gate's finding assertions (asserting them would fail against today's
-// binary) but they are NOT outside the isolation gate, which needs no binary and checks them along
+// binary) but they are NOT outside the isolation gate, which checks them along
 // with fixtures/duplicates/. A directory nothing reports on is how work gets forgotten, so count
 // them and say so, every run.
 const pendingDir = 'fixtures/near'

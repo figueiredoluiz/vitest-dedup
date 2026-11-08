@@ -14,7 +14,7 @@
 //!   `vec![]` on a reformat would make the failure mode this file exists to close reappear as
 //!   quietly as the drift itself.
 //! - If documentation and behaviour actually disagree, the relevant test fails. That is the
-//!   intended outcome, not a bug in this file -- see the report below for what currently fails.
+//!   intended outcome, not a reason to weaken the assertion.
 
 use assert_cmd::Command;
 use std::collections::BTreeSet;
@@ -170,8 +170,6 @@ test('adds one and one again', () => {
     .unwrap();
 }
 
-/// Two tests sharing a full title with different bodies: a textbook `duplicate-test-name`
-/// (Warning by default) with bodies too different to also trip `duplicate-test`.
 /// Two tests with identical structure differing only in literal values -- a `test.each` table
 /// waiting to happen, and the `parameterization-candidate` trigger.
 ///

@@ -513,8 +513,7 @@ impl ProjectSet {
     /// This is the exact machinery [`ProjectSet::governing_project`] uses for its own known-match
     /// ambiguity check, factored out so [`crate::discovery`]'s `includeSource` in-source-testing
     /// fast path can ask the identical question about the project that admits a candidate file,
-    /// rather than maintaining a second, parallel version of it. Copilot review #9 found exactly
-    /// that drift: the ordinary `include`/`exclude` path was fixed to fail closed on an unresolved
+    /// rather than maintaining a second, parallel version of it. The drift this prevents: the ordinary `include`/`exclude` path was fixed to fail closed on an unresolved
     /// later entry, while the `includeSource` path kept resolving the admitting project directly
     /// (`in_source_candidates.iter().rfind(...)`) and never consulted this question at all.
     ///
@@ -1522,27 +1521,6 @@ fn split_top_level(original: &[char], masked: &[char], range: Range<usize>) -> V
         .collect()
 }
 
-/// Reads a plain single- or double-quoted string literal occupying `range` (after skipping leading
-/// trivia), returning `None` for anything else -- a variable, a template literal, string
-/// concatenation, trailing content (other than trivia) after the closing quote, or an escape
-/// sequence this function does not decode (see below).
-///
-/// Decodes the standard JavaScript escapes this scan actually expects to see in a glob/name string:
-/// `\n`, `\t`, `\r`, `\0`, `\\`, `\'`, `\"`, `\xNN`, `\uXXXX`, and `\u{...}`. Any other escape --
-/// `\v`, `\b`, an octal escape, a malformed/unterminated `\u`/`\x`, or a `\u{...}` codepoint that is
-/// not a valid `char` (e.g. a lone surrogate half or a value past `U+10FFFF`) -- makes the whole
-/// literal unreadable (`None`), which every caller already treats as "not a plain string literal"
-/// and reports as unresolved. This is deliberate: an earlier version of this function reduced any
-/// unrecognized `\x` to the bare `x` (so `"tests/tests/**/*.ts"` silently became
-/// `tests/u0074ests/**/*.ts`, a *different, valid-looking* glob), which is exactly the
-/// wrong-but-plausible failure this module's fail-closed rule exists to prevent -- refusing to
-/// decode is safer than guessing.
-///
-/// Reads from `original`, not `masked`: [`crate::vitest_config::mask_non_code`] blanks a string's
-/// *contents* (quotes included) to keep keyword scans from matching text inside it, which is
-/// exactly the information this function needs back. Trivia is skipped with [`skip_trivia`] rather
-/// than a masked-whitespace scan for the same reason `find_direct_key_value_starts_precise` exists:
-/// a masked scan cannot tell "still leading trivia" from "already inside this very string."
 /// The identifier of a `...name` spread element, or `None` for anything else.
 fn read_spread_identifier(original: &[char], range: Range<usize>) -> Option<String> {
     let mut i = skip_trivia(original, range.start, range.end);
@@ -1565,8 +1543,27 @@ fn read_spread_identifier(original: &[char], range: Range<usize>) -> Option<Stri
     (skip_trivia(original, i, range.end) >= range.end).then_some(name)
 }
 
-/// Decode a complete supported single- or double-quoted string in the range; return None for
-/// unsupported or incomplete forms.
+/// Reads a plain single- or double-quoted string literal occupying `range` (after skipping leading
+/// trivia), returning `None` for anything else -- a variable, a template literal, string
+/// concatenation, trailing content (other than trivia) after the closing quote, or an escape
+/// sequence this function does not decode (see below).
+///
+/// Decodes the standard JavaScript escapes this scan actually expects to see in a glob/name string:
+/// `\n`, `\t`, `\r`, `\0`, `\\`, `\'`, `\"`, `\xNN`, `\uXXXX`, and `\u{...}`. Any other escape --
+/// `\v`, `\b`, an octal escape, a malformed/unterminated `\u`/`\x`, or a `\u{...}` codepoint that is
+/// not a valid `char` (e.g. a lone surrogate half or a value past `U+10FFFF`) -- makes the whole
+/// literal unreadable (`None`), which every caller already treats as "not a plain string literal"
+/// and reports as unresolved. This is deliberate: an earlier version of this function reduced any
+/// unrecognized `\x` to the bare `x` (so `"tests/tests/**/*.ts"` silently became
+/// `tests/u0074ests/**/*.ts`, a *different, valid-looking* glob), which is exactly the
+/// wrong-but-plausible failure this module's fail-closed rule exists to prevent -- refusing to
+/// decode is safer than guessing.
+///
+/// Reads from `original`, not `masked`: [`crate::vitest_config::mask_non_code`] blanks a string's
+/// *contents* (quotes included) to keep keyword scans from matching text inside it, which is
+/// exactly the information this function needs back. Trivia is skipped with [`skip_trivia`] rather
+/// than a masked-whitespace scan for the same reason `find_direct_key_value_starts_precise` exists:
+/// a masked scan cannot tell "still leading trivia" from "already inside this very string."
 fn read_string_literal(original: &[char], range: Range<usize>) -> Option<String> {
     let mut i = skip_trivia(original, range.start, range.end);
     if i >= range.end {
