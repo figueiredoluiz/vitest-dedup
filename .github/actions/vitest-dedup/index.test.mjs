@@ -1359,12 +1359,30 @@ describe("installed tools", () => {
 });
 
 describe("release download errors", () => {
+  test("a stalled direct request switches to the API at the header deadline", async (t) => {
+    const f = toolFixture(t);
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+    let direct;
+    const requests = t.mock.method(globalThis, "fetch", async (url, { signal }) => {
+      if (url.startsWith("https://api.github.com/")) return new Response(null, { status: 404 });
+      direct = signal;
+      return new Promise((_, reject) => signal.addEventListener("abort", () => reject(signal.reason), { once: true }));
+    });
+    const outcome = assert.rejects(runAction({
+      env: { INPUT_VERSION: "0.8.0", RUNNER_TEMP: f.root, GITHUB_OUTPUT: join(f.root, "outputs") }, cwd: f.workspace,
+    }), /look up release v0.8.0: HTTP 404/);
+    t.mock.timers.tick(30_000);
+    await outcome;
+    assert.equal(direct?.aborted, true);
+    assert.equal(requests.mock.callCount(), 2);
+  });
+
   const name = `vitest-dedup-0.8.0-${releaseTarget().key}.tar.gz`;
   for (const [label, responses, error] of [
     ["missing direct asset", [404], /HTTP 404/],
     ["rate-limited lookup", [504, 403], /look up release v0.8.0: HTTP 403/],
     ["missing filename", [502, { assets: [{ name: `${name}.sha256`, id: 7 }] }], /missing release asset/],
-    ["unavailable asset API", [503, { assets: [{ name, id: 7 }] }, 502], /assets\/7: HTTP 502/],
+    ["unavailable asset API", [503, { assets: [{ name, id: 7 }] }, 502, 502, 502], /assets\/7: HTTP 502/],
   ]) {
     test(label, async (t) => {
       const f = toolFixture(t);
@@ -1422,8 +1440,14 @@ describe("release installation", { skip: process.platform === "win32" }, () => {
           assert.ok(url.startsWith("https://github.com/"));
           return new Response(url.endsWith(".sha256") ? checksum : archive);
         }
-        if (url.startsWith("https://github.com/")) return new Response(null, { status: 504 });
-        if (url === `${api}/tags/v0.8.0`) return metadata();
+        if (url.startsWith("https://github.com/")) {
+          if (mode === "asset-api") throw new TypeError("fetch failed");
+          return new Response(null, { status: 504 });
+        }
+        if (url === `${api}/tags/v0.8.0`) {
+          const result = metadata();
+          return mode === "asset-api" && metadata.mock.callCount() === 1 ? new Response(null, { status: 504 }) : result;
+        }
         assert.equal(headers.get("accept"), "application/octet-stream");
         if (url === `${api}/assets/41`) return new Response(archive);
         assert.equal(url, `${api}/assets/42`);
@@ -1442,7 +1466,7 @@ describe("release installation", { skip: process.platform === "win32" }, () => {
         assert.equal(outputs["tests-analyzed"], "1");
       }
       const calls = existsSync(trace) ? readFileSync(trace, "utf8").trim().split("\n").map(JSON.parse) : [];
-      assert.equal(metadata.mock.callCount(), ["asset-api", "checksum-mismatch"].includes(mode) ? 1 : 0);
+      assert.equal(metadata.mock.callCount(), mode === "asset-api" ? 2 : mode === "checksum-mismatch" ? 1 : 0);
       const expected = { verified: 3, "asset-api": 3, symlinked: 3, preauthenticated: 3, "without-gh": 1, "without-tar": 2, "workspace-only": 0, "verification-failed": 2, "checksum-mismatch": 0 };
       assert.equal(calls.length, expected[mode]);
       for (const call of calls) {

@@ -27,6 +27,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { pipeline } from "node:stream/promises";
+import { setTimeout as delay } from "node:timers/promises";
 import { spawnSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
 import { TARGETS, targetFor } from "../../../npm/lib/targets.mjs";
@@ -523,8 +524,34 @@ export function errorAnnotation(message, log = console.log) {
   log(`::error::${encodeAnnotationData(message)}`);
 }
 
+/** Stop waiting for headers after 30 seconds; a responsive server may stream a large archive for longer. */
+async function fetchReleaseHeaders(url, headers) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 30_000);
+  try {
+    return await fetch(url, { headers, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** Retry transient failures on idempotent public API requests, including requests following redirects. */
+async function fetchReleaseApi(url, headers) {
+  const attempts = 3;
+  for (let attempt = 1; ; attempt++) {
+    try {
+      const response = await fetchReleaseHeaders(url, headers);
+      if (response.status < 500 || attempt === attempts) return response;
+      await response.body?.cancel();
+    } catch (cause) {
+      if (attempt === attempts) throw new Error(`failed to fetch ${url}: ${cause.message}`, { cause });
+    }
+    await delay(500 * attempt);
+  }
+}
+
 /**
- * Download files from one public release. If GitHub's download route returns a server error,
+ * Download files from one public release. If GitHub's download route is unavailable,
  * resolve exact filenames on the same tag and fetch their bytes through the release assets API.
  */
 function releaseDownloader(version) {
@@ -533,18 +560,18 @@ function releaseDownloader(version) {
   let assets;
   return async (name, destination) => {
     let url = `https://github.com/${REPO}/releases/download/v${version}/${name}`;
-    let response = await fetch(url, { headers });
-    if (response.status >= 500 && response.status < 600) {
-      await response.body?.cancel();
+    let response = await fetchReleaseHeaders(url, headers).catch(() => null);
+    if (!response || response.status >= 500) {
+      await response?.body?.cancel();
       if (!assets) {
-        const release = await fetch(`${api}/tags/v${version}`, { headers });
+        const release = await fetchReleaseApi(`${api}/tags/v${version}`, headers);
         if (!release.ok) throw new Error(`failed to look up release v${version}: HTTP ${release.status}`);
         assets = (await release.json()).assets;
       }
       const id = assets.find(asset => asset.name === name)?.id;
       if (!Number.isSafeInteger(id) || id <= 0) throw new Error(`missing release asset ${name} on v${version}`);
       url = `${api}/assets/${id}`;
-      response = await fetch(url, { headers: { ...headers, accept: "application/octet-stream" } });
+      response = await fetchReleaseApi(url, { ...headers, accept: "application/octet-stream" });
     }
     if (!response.ok || !response.body) throw new Error(`failed to download ${url}: HTTP ${response.status}`);
     await pipeline(response.body, createWriteStream(destination));
