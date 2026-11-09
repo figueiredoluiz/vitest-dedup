@@ -81,4 +81,38 @@ mod tests {
         );
         assert_ne!(string("'\\uD800'").0, string("'\\uD801'").0);
     }
+
+    /// A string literal spelling each unit as a `\uXXXX` escape, or as itself when `raw` is set and
+    /// the unit is a scalar a single-quoted literal can hold unescaped.
+    fn spell(units: &[(u16, bool)]) -> String {
+        let mut source = String::from("'");
+        for &(unit, raw) in units {
+            match char::from_u32(u32::from(unit)) {
+                Some(character)
+                    if raw
+                        && !matches!(
+                            character,
+                            '\'' | '\\' | '\n' | '\r' | '\u{2028}' | '\u{2029}'
+                        ) =>
+                {
+                    source.push(character);
+                }
+                _ => source.push_str(&format!("\\u{unit:04X}")),
+            }
+        }
+        source.push('\'');
+        source
+    }
+
+    /// Whatever code units a literal spells, through oxc, reads as their lossless encoding.
+    #[test]
+    fn literal_text_is_the_encoding_of_its_code_units() {
+        use crate::lang::text::{from_utf16, tests::code_unit};
+        let units = proptest::collection::vec((code_unit(), proptest::bool::ANY), 0..24);
+        crate::testing::property(1024, units, |units| {
+            let expected = from_utf16(units.iter().map(|&(unit, _)| unit));
+            proptest::prop_assert_eq!(string(&spell(&units)).0, expected);
+            Ok(())
+        });
+    }
 }
