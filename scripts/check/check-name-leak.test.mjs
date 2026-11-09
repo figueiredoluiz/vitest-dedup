@@ -185,7 +185,7 @@ test("inspect skips a binary file and a file it cannot read, and counts only wha
   const files = ["text.md", "binary.png", "gone.rs"];
   const read = (path) => {
     if (path.endsWith("gone.rs")) throw new Error("ENOENT");
-    if (path.endsWith("binary.png")) return " someproject";
+    if (path.endsWith("binary.png")) return "\0\u0001someproject";
     return "someproject's shape";
   };
   const { problems, scanned } = inspect(files, [{ text: "someproject", mode: "attributive" }], {

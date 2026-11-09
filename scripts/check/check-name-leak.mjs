@@ -317,7 +317,7 @@ export function inspect(files, terms, { read = readFileSync, root = ROOT } = {})
       // working tree. Neither can carry prose, so neither is this gate's business.
       continue;
     }
-    if (text.includes(" ")) continue;
+    if (text.includes("\0")) continue;
     scanned += 1;
     problems.push(...scan(path, text, terms));
   }
