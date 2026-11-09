@@ -145,14 +145,17 @@ function pass(label, cases, binary, truncate) {
   const failing = cases.flatMap((testCase, i) =>
     DISAGREEMENTS.has(results[i].status) ? [{ testCase, result: results[i], original: { testCase, result: results[i] } }] : [])
   const shrunk = failing.length > 0 ? shrink(failing, binary, truncate) : []
-  const distinct = new Map(shrunk.map((entry) => [spellCase(entry.testCase), entry]))
   // Shrinking keeps only the status, so the minimal case can show a different mismatch than the
-  // one first found; the original is printed with it.
-  for (const [source, { result, original }] of distinct) {
-    console.error(
-      `\n${result.status.toUpperCase()} disagreement (${label}):\n${source}${JSON.stringify(result.mismatches)}\n` +
-        `shrunk from:\n${spellCase(original.testCase)}${JSON.stringify(original.result.mismatches)}`,
-    )
+  // one first found; every original that shrank to it is printed with it.
+  const distinct = new Map()
+  for (const { testCase, result, original } of shrunk) {
+    const source = spellCase(testCase)
+    if (!distinct.has(source)) distinct.set(source, { result, originals: [] })
+    distinct.get(source).originals.push(original)
+  }
+  for (const [source, { result, originals }] of distinct) {
+    const from = originals.map((o) => `shrunk from:\n${spellCase(o.testCase)}${JSON.stringify(o.result.mismatches)}`)
+    console.error(`\n${result.status.toUpperCase()} disagreement (${label}):\n${source}${JSON.stringify(result.mismatches)}\n${from.join('\n')}`)
   }
   return { compared, proved, disagreements: distinct.size }
 }
