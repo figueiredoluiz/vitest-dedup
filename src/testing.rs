@@ -56,6 +56,15 @@ pub(crate) fn project<T>(
 /// draw the same cases.
 const PROPERTY_SEED: u64 = 0x5eed_7e57;
 
+/// The seed a run uses: the one `PROPTEST_RNG_SEED` set, or [`PROPERTY_SEED`] when none was.
+fn seed(configured: proptest::test_runner::RngSeed) -> proptest::test_runner::RngSeed {
+    use proptest::test_runner::RngSeed;
+    match configured {
+        RngSeed::Random => RngSeed::Fixed(PROPERTY_SEED),
+        named => named,
+    }
+}
+
 /// Checks `check` on `cases` values drawn from `strategy`, shrinking any failure to a minimal
 /// input, and fails unless every one of the `cases` ran and passed.
 ///
@@ -68,28 +77,85 @@ pub(crate) fn property<S>(
     S: proptest::strategy::Strategy,
     S::Value: std::fmt::Debug,
 {
-    use proptest::test_runner::{Config, RngSeed, TestRunner};
+    use proptest::test_runner::{Config, TestRunner};
     use std::cell::Cell;
-    let mut config = Config {
+    assert!(cases > 0, "a property that runs no case measures nothing");
+    let defaults = Config::default();
+    let config = Config {
         cases,
         failure_persistence: None,
-        ..Config::default()
+        rng_seed: seed(defaults.rng_seed),
+        ..defaults
     };
-    if matches!(config.rng_seed, RngSeed::Random) {
-        config.rng_seed = RngSeed::Fixed(PROPERTY_SEED);
-    }
     let passed = Cell::new(0_u32);
     let result = TestRunner::new(config).run(&strategy, |value| {
         check(value)?;
         passed.set(passed.get() + 1);
         Ok(())
     });
+    finish(
+        result.map_err(|error| error.to_string()),
+        passed.get(),
+        cases,
+    );
+}
+
+/// Fails a property run that found a counterexample, or that ran fewer than `cases` cases. Kept
+/// out of the generic runner so both outcomes are measured as one function.
+fn finish(result: Result<(), String>, ran: u32, cases: u32) {
     if let Err(error) = result {
         panic!("{error}");
     }
-    assert!(
-        passed.get() >= cases,
-        "{} of {cases} cases ran",
-        passed.get()
-    );
+    // Not reachable through `TestRunner`, which errors before passing fewer cases than asked; it
+    // guards the configuration above.
+    assert!(ran >= cases, "{ran} of {cases} cases ran");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{property, seed, PROPERTY_SEED};
+    use proptest::test_runner::RngSeed;
+    use std::panic::{catch_unwind, AssertUnwindSafe};
+
+    /// With no seed configured a run uses the fixed one; a seed `PROPTEST_RNG_SEED` named wins.
+    #[test]
+    fn a_named_seed_overrides_the_fixed_one() {
+        assert_eq!(seed(RngSeed::Random), RngSeed::Fixed(PROPERTY_SEED));
+        assert_eq!(seed(RngSeed::Fixed(7)), RngSeed::Fixed(7));
+    }
+
+    /// The message `run` panics with; a run that returns fails the calling test.
+    fn panic_message(run: impl FnOnce()) -> String {
+        let payload = catch_unwind(AssertUnwindSafe(run)).expect_err("the property passed");
+        let text = payload.downcast_ref::<String>().map(String::as_str);
+        text.or_else(|| payload.downcast_ref::<&str>().copied())
+            .unwrap_or_default()
+            .to_owned()
+    }
+
+    /// A failing property panics with its input shrunk to the smallest that still fails.
+    #[test]
+    fn a_failing_property_reports_its_shrunk_input() {
+        let message = panic_message(|| {
+            property(256, 0_u32..1_000, |value| {
+                proptest::prop_assert!(value < 10);
+                Ok(())
+            })
+        });
+        assert!(message.contains("minimal failing input: 10"), "{message}");
+    }
+
+    /// A check every value passes.
+    fn holds(_: u32) -> Result<(), proptest::test_runner::TestCaseError> {
+        Ok(())
+    }
+
+    /// Asking for no cases is refused, since it would pass having measured nothing; the same
+    /// property asked for one case passes.
+    #[test]
+    fn a_property_with_no_cases_is_refused() {
+        let message = panic_message(|| property(0, 0_u32..1, holds));
+        assert!(message.contains("runs no case"), "{message}");
+        property(1, 0_u32..1, holds);
+    }
 }
