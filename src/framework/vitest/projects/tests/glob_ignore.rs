@@ -50,7 +50,7 @@ fn project_dirs(set: &ProjectSet, root: &Path) -> Vec<String> {
     dirs
 }
 
-/// tldraw's spelling: one `const` hop, a brace pattern and a string `ignore`.
+/// A real monorepo spelling: one `const` hop, a brace pattern and a string `ignore`.
 #[test]
 fn glob_sync_with_a_literal_ignore_resolves() {
     let directory = tempfile::tempdir().unwrap();
@@ -61,7 +61,7 @@ fn glob_sync_with_a_literal_ignore_resolves() {
     );
     write(
         directory.path(),
-        "packages/tldraw/vitest.config.ts",
+        "packages/ui/vitest.config.ts",
         "export default defineConfig({ test: { globals: true } });",
     );
     let set = resolve_projects(directory.path());

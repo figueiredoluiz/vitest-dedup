@@ -76,6 +76,23 @@ test("an in-scope tool segment yields NO bare term: only the slug and owner are 
   ]);
 });
 
+test("the test framework's slug sweeps its slug and owner, never the bare framework name", () => {
+  // Every file here names the framework the tool analyzes; only the repository spellings leak.
+  const terms = termsFromSlug("vitest-dev/vitest");
+  assert.deepEqual(terms, [
+    { text: "vitest-dev/vitest", mode: "substring" },
+    { text: "vitest-dev", mode: "substring" },
+  ]);
+  assert.deepEqual(scan("a.md", "import { test } from 'vitest'\nVitest's runner", terms), []);
+  assert.deepEqual(
+    scan("a.md", "see github.com/vitest-dev/vitest", terms).map((problem) => problem.detail),
+    [
+      "names a benchmark repository (vitest-dev/vitest)",
+      "names a benchmark repository (vitest-dev)",
+    ],
+  );
+});
+
 test("a STANDALONE in-scope slug is never omitted from the sweep", () => {
   // Copilot review, PR #29, High: skipping the segment unconditionally made
   // `termsFromSlug("vite")` return NO terms -- a source listing the bare slug would have been

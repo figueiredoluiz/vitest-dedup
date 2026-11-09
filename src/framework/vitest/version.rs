@@ -119,7 +119,7 @@ fn major(range: &str) -> Option<u64> {
     let range = range.strip_prefix(['^', '~', '=']).unwrap_or(range);
     let range = range.strip_prefix('v').unwrap_or(range);
     // A prerelease or build suffix follows the version core, and must be identifiers only: a space,
-    // `||` or a comparator after it is another range. Before it, the core's parts reject them.
+    // `||` or a comparator after it is another range. Before it, the parts of the core reject them.
     let (core, suffix) = range.split_at(range.find(['-', '+']).unwrap_or(range.len()));
     if !suffix.is_empty()
         && (suffix.len() == 1
