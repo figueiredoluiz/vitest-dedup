@@ -1466,3 +1466,26 @@ fn export_identity_cache_retains_owned_bytes() {
     );
     assert!(cache.heap_bytes() > reserved);
 }
+
+/// Every test in a looped suite shares one proof: the loop and the suite callback are each
+/// scanned once for early exits, however many tests the suite holds.
+#[test]
+fn a_looped_suite_is_scanned_once_for_all_its_tests() {
+    let tests: String = (0..50)
+        .map(|i| format!("    test('t{i}', () => {{}})\n"))
+        .collect();
+    let main = format!(
+        "import {{ describe, test }} from 'vitest'\nfor (const n of [1, 2]) {{\n  describe('s', () => {{\n{tests}  }})\n}}\n"
+    );
+    with_normalizer(&main, &[], false, |normalizer, _, inventory| {
+        super::population::JUMP_SCANS.with(|scans| scans.set(0));
+        let populations: Vec<_> = inventory
+            .sites
+            .iter()
+            .filter(|site| site.kind == SiteKind::Registers(crate::framework::Registers::Test))
+            .map(|site| normalizer.population(site.node))
+            .collect();
+        assert_eq!(populations, vec![super::Population::Known(2); 50]);
+        assert_eq!(super::population::JUMP_SCANS.with(|scans| scans.get()), 2);
+    });
+}

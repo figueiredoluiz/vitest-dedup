@@ -40,6 +40,7 @@ fn case(line: u32, site: u32, key: u64, module_key: u64) -> TestCase {
         inert: false,
         bodyless: false,
         benchmark: false,
+        iterations: 1,
         exclusion: None,
     }
 }
@@ -726,3 +727,37 @@ mod near;
 mod parameters;
 
 mod subsumed;
+
+/// Suite-row coverage expands a looped case's iterations only for a row a finding names, so a run
+/// with no row finding allocates nothing per iteration.
+#[test]
+fn suite_row_coverage_expands_only_claimed_rows() {
+    let mut looped = case(3, 20, 1, 1);
+    looped.suite_rows = vec![(10, 0)];
+    looped.iterations = 1000;
+    let files = vec![file("a.test.ts", vec![looped])];
+    crate::rules::rows::COVER_EXPANSIONS.with(|count| count.set(0));
+    let result = crate::rules::run_with_suites(&files, &[], &config_with(&[]), &[]);
+    assert!(result.findings.is_empty());
+    assert_eq!(
+        crate::rules::rows::COVER_EXPANSIONS.with(|count| count.get()),
+        0
+    );
+}
+
+/// A looped case in a finding is one gate identity weighted by its iterations, not one entry per
+/// iteration, so a large loop costs no more to charge than a single test.
+#[test]
+fn a_looped_case_is_one_weighted_gate_identity() {
+    let mut looped = case(3, 20, 7, 7);
+    looped.iterations = 1000;
+    let files = vec![file("a.test.ts", vec![looped, case(9, 80, 7, 7)])];
+    let result = crate::rules::run_with_suites(&files, &[], &config_with(&[]), &[]);
+    assert_eq!(result.findings.len(), 1, "{:?}", result.findings);
+    let weights: Vec<u32> = result.findings[0]
+        .cases
+        .iter()
+        .map(|(.., weight)| *weight)
+        .collect();
+    assert_eq!(weights, [1000, 1]);
+}

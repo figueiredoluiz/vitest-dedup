@@ -78,6 +78,7 @@ fn test(path: &Path, case: &TestCase) -> TestRecord {
     let compared = case.exclusion.is_none();
     record["row"] = json!(case.row);
     record["runtimeRow"] = json!(case.runtime_row);
+    record["iterations"] = json!(case.iterations);
     record["comparable"] = json!(compared);
     record["exclusion"] = json!(case.exclusion.map(|exclusion| match exclusion {
         Exclusion::EmptyBody => "empty-body",

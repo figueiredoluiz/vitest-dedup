@@ -120,13 +120,6 @@
       "reason": "A hook inside a callback the helper creates and never calls is recorded; Vitest never registers it."
     },
     {
-      "dir": "fixtures/recall/callback-registers-foreach",
-      "path": "run.test.ts",
-      "kind": "missing-test",
-      "item": "hidden",
-      "reason": "A registration in a `forEach` callback is one record; Vitest registers one test per element."
-    },
-    {
       "dir": "fixtures/recall/suite-local-table-withheld",
       "path": "a.test.ts",
       "kind": "missing-test",

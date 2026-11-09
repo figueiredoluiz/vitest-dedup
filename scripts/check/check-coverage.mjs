@@ -243,6 +243,8 @@ const RUST_MODULES = {
   'src/normal/identity.rs': 90,
   'src/normal/rows.rs': 90,
   'src/normal/row_identity.rs': 95,
+  // Loop and iteration-callback populations: first measured 241/249 lines (96.79%).
+  'src/normal/population.rs': 95,
   // Primitive and readonly literal-input proofs: first measured 604/667 lines (90.55%).
   'src/normal/row_values.rs': 90.5,
   'src/normal/titles.rs': 93,

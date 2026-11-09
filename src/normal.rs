@@ -11,6 +11,7 @@ mod form;
 mod hooks;
 pub(crate) use form::{MAX_CLASS_RENDER_BYTES, UNSCOPED_PRIVATE};
 mod identity;
+mod population;
 pub(crate) mod row_identity;
 mod row_values;
 mod rows;
@@ -18,6 +19,7 @@ mod suites;
 pub(crate) mod titles;
 
 pub(crate) use hooks::primitive;
+pub use population::Population;
 pub use rows::{Expected, Modifiers, RepeatCount, Row, TableRow};
 
 use crate::framework::{Dialect, HookTiming};
@@ -478,6 +480,10 @@ pub struct Normalizer<'s> {
     nesting: usize,
     /// Whether a form written since [`Normalizer::take_truncated`] reached the depth bound.
     truncated: bool,
+    /// Each loop or iteration callback's proved count, computed once (see [`Population`]).
+    loop_counts: HashMap<NodeId, Option<u64>>,
+    /// Whether each enclosing function can return or throw before a site inside it.
+    early_exits: HashMap<NodeId, bool>,
 }
 
 impl<'s> Normalizer<'s> {
@@ -502,6 +508,8 @@ impl<'s> Normalizer<'s> {
             hook_writes: HashMap::new(),
             hook_eval: None,
             hook_scheduling: None,
+            loop_counts: HashMap::new(),
+            early_exits: HashMap::new(),
             discovering: None,
             resolving: false,
             shallow_imports: false,

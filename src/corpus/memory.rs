@@ -11,6 +11,7 @@ impl HeapBytes for Exclusion {
             | Self::UnprovedTableRow
             | Self::UnprovedSuiteRow
             | Self::UnprovedRepeatCount
+            | Self::UnprovedLoopPopulation
             | Self::EmptyBody
             | Self::NoCallback
             | Self::UnreadableCallback
@@ -59,6 +60,7 @@ impl HeapBytes for TestCase {
             inert,
             bodyless,
             benchmark,
+            iterations,
             exclusion,
         } = self;
         [
@@ -87,6 +89,7 @@ impl HeapBytes for TestCase {
             inert.heap_bytes(),
             bodyless.heap_bytes(),
             benchmark.heap_bytes(),
+            iterations.heap_bytes(),
             exclusion.heap_bytes(),
         ]
         .into_iter()

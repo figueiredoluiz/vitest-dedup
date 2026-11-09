@@ -147,8 +147,8 @@ pub(crate) mod test_support {
                 location("src/a.test.ts", 21, 5),
             ],
             cases: vec![
-                (location("src/a.test.ts", 11, 5), None, None),
-                (location("src/a.test.ts", 21, 5), None, None),
+                (location("src/a.test.ts", 11, 5), None, None, 1),
+                (location("src/a.test.ts", 21, 5), None, None, 1),
             ],
         });
         rendered_result(vec![suite])

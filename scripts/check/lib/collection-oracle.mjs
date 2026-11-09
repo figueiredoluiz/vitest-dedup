@@ -293,8 +293,11 @@ export function analyzerView(records, absoluteDir) {
     // A test an imported runner declares belongs to the test file that registered it.
     if (record.type === 'test') {
       const file = local(record.registrationFile ?? record.path)
-      if (record.comparisonKeys?.name === null) push(unproven, file, record.title)
-      else push(tests, file, record.title)
+      // A record stands for one collected test per proved iteration of its enclosing loops.
+      for (let i = 0; i < (record.iterations ?? 1); i += 1) {
+        if (record.comparisonKeys?.name === null) push(unproven, file, record.title)
+        else push(tests, file, record.title)
+      }
     } else if (record.type === 'hook') push(hooks, path, hookSite({ ...record, path }))
     else if (record.type === 'excluded-file') excluded.add(path)
   }

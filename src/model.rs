@@ -1066,9 +1066,9 @@ pub struct Finding {
 /// its template. Two calls of one template are two runtime cases over one written declaration.
 pub type Invocation = Option<(PathBuf, Vec<u32>)>;
 
-/// One runtime case as the quality gate counts it: where it is declared, its row, and which
-/// execution it is.
-pub type GateCase = (Location, Option<usize>, Invocation);
+/// A runtime case identity as the quality gate counts it: where it is declared, its row, which
+/// execution it is, and how many runtime cases it stands for (its loops' proved iterations).
+pub type GateCase = (Location, Option<usize>, Invocation, u32);
 
 /// What reporting a copied block once removed: the highest severity among the child findings it
 /// replaced, and their locations at that severity. Copying a whole block must not pass a gate

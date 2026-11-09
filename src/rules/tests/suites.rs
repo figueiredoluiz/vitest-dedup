@@ -243,7 +243,7 @@ fn carried_children_keep_the_highest_severity() {
     let at = |line| {
         let mut location = suite.locations[0].clone();
         location.span.start.line = line;
-        vec![(location, None, None)]
+        vec![(location, None, None, 1)]
     };
     let (one, two, three) = (at(1), at(2), at(3));
     crate::rules::suites::carry(&mut suite, Severity::Warning, one);

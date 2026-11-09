@@ -46,18 +46,14 @@ struct Entry<'a> {
 impl<'a> Entry<'a> {
     /// The runtime case this entry is, as the quality gate counts it; `None` for a case outside
     /// the gate's denominator (a todo a name finding still names), so the numerator never counts
-    /// what the denominator leaves out. Two invocations of one template are two runtime cases, so
-    /// the identity carries the invocation (`TestCase::invocation`).
+    /// what the denominator leaves out. Two invocations of one template are two runtime cases;
+    /// a loop's iterations are its weight ([`TestCase::gate_case`]).
     fn gate_case(self) -> Option<GateCase> {
         self.case.gate_eligible().then(|| {
-            (
-                Location {
-                    path: self.case.declaration_path(self.path).to_path_buf(),
-                    span: self.case.span,
-                },
-                self.case.gate_row(),
-                self.case.invocation(),
-            )
+            self.case.gate_case(Location {
+                path: self.case.declaration_path(self.path).to_path_buf(),
+                span: self.case.span,
+            })
         })
     }
 

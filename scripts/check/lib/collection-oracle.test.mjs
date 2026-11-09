@@ -129,6 +129,16 @@ test('an unproven title record is read from the comparison key', () => {
   assert.deepEqual(view.unproven.get('a.test.ts'), ['row %s'])
 })
 
+test('a record stands for one collected test per proved loop iteration', () => {
+  const view = analyzerView([
+    { type: 'test', path: 'a.test.ts', title: 'loop', iterations: 2, comparisonKeys: { name: 'aa' } },
+    { type: 'test', path: 'a.test.ts', title: 'row %s', iterations: 3, comparisonKeys: { name: null } },
+    { type: 'test', path: 'a.test.ts', title: 'once', comparisonKeys: { name: 'bb' } },
+  ])
+  assert.deepEqual(view.tests.get('a.test.ts'), ['loop', 'loop', 'once'])
+  assert.deepEqual(view.unproven.get('a.test.ts'), ['row %s', 'row %s', 'row %s'])
+})
+
 test('a test an imported runner declares is keyed by the file that registered it', () => {
   const view = analyzerView([
     { type: 'test', path: 'runner.ts', registrationFile: 'slugs.test.ts', title: 'page lowercases' },

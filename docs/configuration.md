@@ -52,9 +52,14 @@ finding.
 
 - A case is a declaration, or one row of a test table: two rows of one table are two cases, and a
   case named by several findings counts once. A suite finding counts the tests inside its
-  copies. A `redundant-hook` finding is not a test case: it adds nothing to the count, though at
-  error it still fails a run at the default threshold. A todo a `duplicate-test-name` finding names
-  is not counted either.
+  copies, once, whichever of the suite and its tests is at error. A `redundant-hook` finding is
+  not a test case: it adds nothing to the count, though at error it still fails a run at the
+  default threshold. A todo a `duplicate-test-name` finding names is not counted either.
+- A test registered inside a loop is one case per iteration when the loop iterates an array
+  literal or a `let` counter with integer literal bounds, directly or through `.forEach` or
+  `.map` on an array literal. A loop over an empty literal registers nothing: no case, suite or
+  benchmark. A loop whose iterations the run cannot count, such as one over a named array or one
+  that can `break`, leaves its test uncompared, counts it once, and marks the run incomplete.
 - Every analyzed test is eligible except benchmarks, placeholders for the tests a wrapper call or
   module load registers, and `test.todo` with no callback. A `.todo` or `.skip` with a callback
   stays, and so does a test the run could not compare.
