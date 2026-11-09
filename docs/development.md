@@ -84,9 +84,10 @@ another, `--cases` sets how many) and collects each with the pinned Vitest and t
 the analyzer proves must be the one Vitest collects; refusing one is allowed. A different title, a
 different row count, or a proved title for a case Vitest cannot collect fails. Cases holding values
 near the 40-unit display cut run again under a longer `taskTitleValueFormatTruncate`. Each
-disagreement is shrunk to a minimal test file and printed; add it to
+disagreement is shrunk to a minimal test file and printed with the case it started from; add it to
 `scripts/vitest-harness/title-values.test.ts` once fixed. The run also fails when fewer cases were
-compared, or fewer titles proved, than its floors.
+compared, or fewer titles proved, than its floors. The measured floors apply to the default seed and
+case count only; any other run must compare at least one case and prove at least one title.
 
 ### Hooks-only differential check
 
