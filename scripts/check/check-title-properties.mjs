@@ -99,10 +99,10 @@ function judge(cases, binary, truncate) {
 /**
  * Shrinks each failing case to one no single step smaller still fails the same way, one Vitest
  * run per round across all of them.
- * @param {Array<{testCase: object, result: object}>} failing The failing cases and verdicts.
+ * @param {Array<{testCase: object, result: object, original: object}>} failing The failing cases and verdicts.
  * @param {string} binary The analyzer.
  * @param {number | null} truncate The display cut they failed under.
- * @returns {Array<{testCase: object, result: object}>} The shrunk cases.
+ * @returns {Array<{testCase: object, result: object, original: object}>} The shrunk cases, each with the case it started from.
  */
 function shrink(failing, binary, truncate) {
   let current = failing
@@ -117,7 +117,7 @@ function shrink(failing, binary, truncate) {
       const smaller = own.findIndex((result) => result.status === entry.result.status)
       if (smaller === -1) return entry
       progressed = true
-      return { testCase: candidates[i][smaller], result: own[smaller] }
+      return { ...entry, testCase: candidates[i][smaller], result: own[smaller] }
     })
     if (!progressed) break
   }
@@ -142,11 +142,17 @@ function pass(label, cases, binary, truncate) {
     `${label}: ${cases.length} cases, ${compared} compared (${rows} rows, ${proved} proved titles); ` +
       Object.entries(tally).map(([status, list]) => `${status} ${list.length}`).join(', '),
   )
-  const failing = cases.flatMap((testCase, i) => (DISAGREEMENTS.has(results[i].status) ? [{ testCase, result: results[i] }] : []))
+  const failing = cases.flatMap((testCase, i) =>
+    DISAGREEMENTS.has(results[i].status) ? [{ testCase, result: results[i], original: { testCase, result: results[i] } }] : [])
   const shrunk = failing.length > 0 ? shrink(failing, binary, truncate) : []
   const distinct = new Map(shrunk.map((entry) => [spellCase(entry.testCase), entry]))
-  for (const [source, { result }] of distinct) {
-    console.error(`\n${result.status.toUpperCase()} disagreement (${label}):\n${source}${JSON.stringify(result.mismatches)}`)
+  // Shrinking keeps only the status, so the minimal case can show a different mismatch than the
+  // one first found; the original is printed with it.
+  for (const [source, { result, original }] of distinct) {
+    console.error(
+      `\n${result.status.toUpperCase()} disagreement (${label}):\n${source}${JSON.stringify(result.mismatches)}\n` +
+        `shrunk from:\n${spellCase(original.testCase)}${JSON.stringify(original.result.mismatches)}`,
+    )
   }
   return { compared, proved, disagreements: distinct.size }
 }
