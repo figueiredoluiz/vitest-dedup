@@ -74,6 +74,8 @@ pub enum Exclusion {
     UnprovedSuiteRow,
     /// A registration option may set the number of body invocations to an unknown value.
     UnprovedRepeatCount,
+    /// An enclosing loop or iteration callback registers it a number of times not proved.
+    UnprovedLoopPopulation,
 }
 
 impl TestCase {
@@ -96,6 +98,19 @@ impl TestCase {
     pub fn gate_row(&self) -> Option<usize> {
         self.runtime_row.or(self.row)
     }
+
+    /// The quality gate's identity for this record, declared at `location`, weighted by the
+    /// proved iterations of its enclosing loops: every iteration is in or out of a finding together,
+    /// so one entry stands for them all without allocating one per iteration.
+    pub fn gate_case(&self, location: crate::model::Location) -> crate::model::GateCase {
+        (
+            location,
+            self.gate_row(),
+            self.invocation(),
+            self.iterations,
+        )
+    }
+
     /// Whether the quality gate's denominator counts this case: every runtime test, compared or
     /// not, except a benchmark, a placeholder for what a wrapper call or module load registers,
     /// and a todo with no callback.
@@ -116,6 +131,8 @@ impl Exclusion {
         match self {
             Self::UnprovedRepeatCount => Some((ExclusionReason::UnresolvedContext,
                 "the effective number of test body invocations could not be proved")),
+            Self::UnprovedLoopPopulation => Some((ExclusionReason::UnresolvedContext,
+                "how many times an enclosing loop registers this test could not be proved")),
             Self::UnprovedTableRow=>Some((ExclusionReason::UnresolvedContext,
                 "the tagged table row's inputs or callback bindings could not be proved")),
             Self::UnprovedSuiteRow=>Some((ExclusionReason::UnresolvedContext,
@@ -274,6 +291,9 @@ pub struct TestCase {
     pub bodyless: bool,
     /// Whether it is a benchmark: compared only with benchmarks, and outside the quality gate.
     pub benchmark: bool,
+    /// How many runtime cases this record stands for: the proved iterations of its enclosing
+    /// loops (see [`normal::Population`]), else one.
+    pub iterations: u32,
     /// Why it is not compared, if it is not.
     pub exclusion: Option<Exclusion>,
 }
@@ -477,6 +497,7 @@ fn unkeyed_case(span: Span, title: Option<String>, exclusion: Option<Exclusion>)
         inert: false,
         bodyless: false,
         benchmark: false,
+        iterations: 1,
         exclusion,
     }
 }
@@ -747,10 +768,13 @@ fn read_parsed(
         })
         .map(|(&scope, _)| scope)
         .collect();
+    // Inside a suite proved empty, or a loop proved never to iterate, nothing is registered: no
+    // test, suite, benchmark or wrapper call.
     let unregistered = |normalizer: &mut Normalizer<'_>, node: NodeId| {
         normalizer
             .suites_around(node)
             .is_some_and(|scopes| scopes.iter().any(|scope| dead.contains(scope)))
+            || normalizer.population(node) == normal::Population::Known(0)
     };
 
     // Comparison names take only a rendering the values establish; display may also cut long
@@ -840,7 +864,11 @@ fn read_parsed(
             if unregistered(normalizer, site.node) {
                 continue;
             }
+            let population = normalizer.population(site.node);
             let mut record = unkeyed(site, None);
+            if let normal::Population::Known(iterations) = population {
+                record.iterations = iterations;
+            }
             record.benchmark = benchmark;
             record.suite_rows = suite_frame.rows.clone();
             // Display identity survives every refusal; it is not a name-comparison proof.
@@ -976,6 +1004,10 @@ fn read_parsed(
                 }
             };
             let unread_callee = modifiers.is_none();
+            if population == normal::Population::Unknown {
+                tests.extend(excluded(Exclusion::UnprovedLoopPopulation));
+                continue;
+            }
             if suite_frame.table && (!suite_frame.proven || record.runtime_row.is_none()) {
                 tests.extend(excluded(Exclusion::UnprovedSuiteRow));
                 continue;
@@ -1871,7 +1903,8 @@ impl Engine {
             .tests
             .iter()
             .filter(|case| case.gate_eligible())
-            .count();
+            .map(|case| case.iterations as usize)
+            .sum::<usize>();
         let mut corpus = corpus;
         let cases = (relative.to_path_buf(), std::mem::take(&mut corpus.tests));
         self.retained.cases = self.retained.cases.saturating_add(cases.heap_bytes());

@@ -165,10 +165,6 @@
       "reason": "A shadowed `vitest` is read as the API, so its call stays in the context and equal tests key apart."
     },
     {
-      "id": "recall-absent|callback-registers-foreach|duplicate-test|run.test.ts:12,run.test.ts:17",
-      "reason": "The default engine abstains on this file; the next engine compares identical text in an identical context, as decided."
-    },
-    {
       "id": "recall-miss|foreach-known-array|duplicate-test|loop a,outside",
       "reason": "The next engine renders no dynamic title and locates a participant at its call, so the finding differs in shape, not in claim."
     },

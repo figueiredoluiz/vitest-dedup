@@ -6,6 +6,12 @@ use crate::model::{Finding, GateCase, Rule, Severity};
 use crate::pairs::PairBudget;
 use std::collections::BTreeMap;
 
+#[cfg(test)]
+thread_local! {
+    /// Gate cases materialized while charging suite-row claims on this test thread.
+    pub(super) static COVER_EXPANSIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// Requires both proven inputs and equivalent callback/context keys, under one rendered name.
 pub(super) fn run(
     files: &Files,
@@ -44,22 +50,32 @@ pub(super) fn run(
 
 /// A suite-row claim charges its actual child cases, never its non-executable suite declaration.
 pub(super) fn cover_suites(findings: &mut [Finding], files: &Files) {
+    // Only the suite rows a row finding names are indexed: the rest have nothing to charge.
+    let claimed: std::collections::BTreeSet<(std::path::PathBuf, u32, usize)> = findings
+        .iter()
+        .filter(|f| f.rule == Rule::DuplicateEachRow)
+        .flat_map(|f| f.cases.iter())
+        .filter_map(|(location, row, ..)| {
+            row.map(|row| (location.path.clone(), location.span.start_byte, row))
+        })
+        .collect();
     let mut children = BTreeMap::new();
     for (path, cases) in files {
         for case in cases.iter().filter(|c| c.gate_eligible()) {
             let owner = case.declaration_path(path);
             for &(start, row) in &case.suite_rows {
+                if !claimed.contains(&(owner.to_path_buf(), start, row)) {
+                    continue;
+                }
+                #[cfg(test)]
+                COVER_EXPANSIONS.with(|count| count.set(count.get() + 1));
                 children
                     .entry((owner, start, row))
                     .or_insert_with(Vec::new)
-                    .push((
-                        crate::model::Location {
-                            path: owner.to_path_buf(),
-                            span: case.span,
-                        },
-                        case.gate_row(),
-                        case.invocation(),
-                    ));
+                    .push(case.gate_case(crate::model::Location {
+                        path: owner.to_path_buf(),
+                        span: case.span,
+                    }));
             }
         }
     }

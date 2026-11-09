@@ -59,6 +59,9 @@ declaration, combining enclosing suite rows with its own test row. It is `null` 
 tables; `row` continues to identify the written test-table row. Runtime ordinals are local to
 one declaration and run, and are the row coordinates used by the quality gate.
 
+`iterations` is how many runtime cases the record stands for: the proved iteration count of the
+loops and `.forEach`/`.map` callbacks around it, else 1. The quality gate counts each.
+
 Keys without proof are `null`. Excluded tests still receive a record, preserving known suite
 prefixes and supported test-row title rendering, but carry no body-comparison proof. Rule eligibility also depends on the recorded trace facts, registration/declaration identity,
 and rule-specific requirements. Equal keys alone do not promise a finding: grouping, lifecycle

@@ -281,14 +281,10 @@ fn descendants(
                                 && case.span.end_byte <= copy.span.end_byte
                         })
                         .map(move |case| {
-                            (
-                                Location {
-                                    path: path.clone(),
-                                    span: case.span,
-                                },
-                                case.gate_row(),
-                                case.invocation(),
-                            )
+                            case.gate_case(Location {
+                                path: path.clone(),
+                                span: case.span,
+                            })
                         })
                 })
         })

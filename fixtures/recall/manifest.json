@@ -9493,9 +9493,74 @@
             "visible"
           ]
         }
+      ]
+    },
+    {
+      "name": "loop-population-empty",
+      "path": "loop-population-empty",
+      "rule": "duplicate-test",
+      "role": "negative",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-09",
+      "expectedTests": 1,
+      "expectedIncomplete": false,
+      "expectedUnresolved": 0,
+      "expectedFindings": [],
+      "expectedAbsent": [
+        {
+          "rule": "duplicate-test",
+          "titles": [
+            "never",
+            "twin"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "loop-population-literal",
+      "path": "loop-population-literal",
+      "rule": "duplicate-test",
+      "role": "positive",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-09",
+      "expectedTests": 2,
+      "expectedIncomplete": false,
+      "expectedUnresolved": 0,
+      "expectedFindings": [
+        {
+          "rule": "duplicate-test",
+          "severity": "error",
+          "titles": [
+            "loop",
+            "twin"
+          ]
+        }
       ],
-      "expectedIncompleteNext": false,
-      "expectedUnresolvedNext": 0
+      "expectedAbsent": []
+    },
+    {
+      "name": "loop-population-unproved",
+      "path": "loop-population-unproved",
+      "rule": "duplicate-test",
+      "role": "variant",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-09",
+      "expectedTests": 2,
+      "expectedIncomplete": true,
+      "expectedUnresolved": 1,
+      "expectedFindings": [],
+      "expectedAbsent": [
+        {
+          "rule": "duplicate-test",
+          "titles": [
+            "loop",
+            "twin"
+          ]
+        }
+      ]
     },
     {
       "name": "callback-parameter-registers",

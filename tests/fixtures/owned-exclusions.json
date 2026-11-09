@@ -724,6 +724,11 @@
       "otherReasons": [],
       "testsExcluded": 1
     },
+    "recall/callback-registers-foreach/run.test.ts": {
+      "reason": "unresolved-context",
+      "otherReasons": [],
+      "testsExcluded": 1
+    },
     "recall/concise-suite-guarded-hook-uncertainty/run.test.ts": {
       "reason": "registered-inside-function",
       "otherReasons": [
@@ -1335,6 +1340,11 @@
         "helper-effects-unproved"
       ],
       "testsExcluded": 3
+    },
+    "recall/loop-population-unproved/run.test.ts": {
+      "reason": "unresolved-context",
+      "otherReasons": [],
+      "testsExcluded": 1
     },
     "recall/mixed-loop-each-under-projects-entry/pkg/loops.spec.ts": {
       "reason": "unresolved-context",

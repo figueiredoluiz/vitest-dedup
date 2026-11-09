@@ -152,13 +152,15 @@ pub fn finish_findings(
     // Captured here, beside `had_error_finding`, for the same reason: this is the threshold's
     // numerator, and truncation below would shrink it.
     // A case is its declaration and row, so two rows of one table count twice and one case named
-    // by two findings counts once.
+    // by two findings counts once. A loop's case counts once per iteration (its weight).
     let error_cases = findings
         .iter()
         .filter(|finding| !finding.baselined)
         .flat_map(|finding| finding.gate_cases(Severity::Error))
         .collect::<BTreeSet<_>>()
-        .len();
+        .iter()
+        .map(|(.., iterations)| *iterations as usize)
+        .sum();
     if findings.len() > MAX_FINDINGS {
         // Recorded as a count rather than a flag: "the display cap dropped 4 findings" and "the
         // display cap dropped 40,000" are the same bool and very different reports.

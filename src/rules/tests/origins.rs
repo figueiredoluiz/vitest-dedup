@@ -177,7 +177,7 @@ fn equal_call_positions_in_two_callers_are_two_cases() {
     assert!(findings[0]
         .cases
         .iter()
-        .all(|(_, _, invocation)| invocation.is_some()));
+        .all(|(_, _, invocation, _)| invocation.is_some()));
 }
 
 /// Two pairs of one declaration from different calls are two claims: the second pair is named by

@@ -34,6 +34,8 @@ const COLLISIONS: &[(&str, &str)] = &[
     ("src/behavior/dataflow.rs", "test"),
     // The same field, in a suite statement's completions.
     ("src/lang/completion.rs", "test"),
+    // The same field, a counted loop's condition.
+    ("src/normal/population.rs", "test"),
 ];
 
 /// The string literals in `source`, with `//` comments removed first so prose may name the API.

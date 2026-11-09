@@ -538,3 +538,381 @@ fn a_suppressed_test_behind_a_representative_is_not_charged() {
         assert_eq!(gate(&run).1, 3);
     }
 }
+
+/// A loop registers one runtime case per proved iteration: the gate counts each, a loop that never
+/// iterates registers nothing, and a loop the run cannot count is one uncompared placeholder that
+/// leaves the run incomplete. `BODY` stands for the twin's body, so a counted loop pairs with it.
+#[test]
+fn loops_count_one_case_per_proved_iteration() {
+    const B: &str = "() => { expect(1).toBe(1) }";
+    // (registration, error cases, eligible cases, incomplete); each file also holds the twin.
+    let cases: &[(&str, u64, u64, bool)] = &[
+        (
+            "for (const n of [1, 2]) { test('loop', BODY) }",
+            3,
+            3,
+            false,
+        ),
+        ("for (const n of []) { test('loop', BODY) }", 0, 1, false),
+        ("[].forEach(() => { test('loop', BODY) })", 0, 1, false),
+        (
+            "for (let i = 0; i < 0; i++) { test('loop', BODY) }",
+            0,
+            1,
+            false,
+        ),
+        (
+            "for (const n of []) { describe('s', () => { test('loop', BODY) }) }",
+            0,
+            1,
+            false,
+        ),
+        (
+            "for (const n of [1, , 2]) { test('loop', BODY) }",
+            4,
+            4,
+            false,
+        ),
+        (
+            "[1, , 2].forEach(() => { test('loop', BODY) })",
+            3,
+            3,
+            false,
+        ),
+        ("[1, , 2].map(() => test('loop', BODY))", 3, 3, false),
+        (
+            "for (const a of [1, 2]) { for (const b of [1, 2, 3]) { test('loop', BODY) } }",
+            7,
+            7,
+            false,
+        ),
+        (
+            "for (const n of [1, 2] as const) { test('loop', BODY) }",
+            3,
+            3,
+            false,
+        ),
+        (
+            "for (let i = 1; i <= 3; ++i) { test('loop', BODY) }",
+            4,
+            4,
+            false,
+        ),
+        (
+            "for (let i = -2; i < 1; i++) { test('loop', BODY) }",
+            4,
+            4,
+            false,
+        ),
+        (
+            "const rows = [1, 2]\nfor (const n of rows) { test('loop', BODY) }",
+            0,
+            2,
+            true,
+        ),
+        (
+            "for (const k in { a: 1 }) { test('loop', BODY) }",
+            0,
+            2,
+            true,
+        ),
+        (
+            "for (const [k] of Object.entries({ a: 1 })) { test('loop', BODY) }",
+            0,
+            2,
+            true,
+        ),
+        (
+            "let i = 0\nwhile (i < 2) { test('loop', BODY); i++ }",
+            0,
+            2,
+            true,
+        ),
+        (
+            "for await (const n of [1, 2]) { test('loop', BODY) }",
+            0,
+            2,
+            true,
+        ),
+        (
+            "for (const n of [1, 2]) { test('loop', BODY); break }",
+            0,
+            2,
+            true,
+        ),
+        (
+            "for (const n of [1, 2]) { if (n > 1) continue; test('loop', BODY) }",
+            0,
+            2,
+            true,
+        ),
+        (
+            "for (const n of [1, 2]) { if (n > 1) test('loop', BODY) }",
+            0,
+            2,
+            true,
+        ),
+        (
+            "for (let i = 0; i < 2; i++) { test('loop', BODY); i += 0 }",
+            0,
+            2,
+            true,
+        ),
+        (
+            "for (let i = 0; i < 2; i++) { test('loop', () => { i = 5; expect(1).toBe(1) }) }",
+            0,
+            2,
+            true,
+        ),
+        (
+            "for (let i = 0, j = 0; i < 2; i++) { test('loop', BODY) }",
+            0,
+            2,
+            true,
+        ),
+        (
+            "for (const n of [...[1]]) { test('loop', BODY) }",
+            0,
+            2,
+            true,
+        ),
+        ("[1, 2]?.forEach(() => { test('loop', BODY) })", 0, 2, true),
+        (
+            "[1, 2].forEach(() => { test('loop', BODY); return })",
+            0,
+            2,
+            true,
+        ),
+        (
+            "for (let i = 0; i < 20000; i++) { test('loop', BODY) }",
+            0,
+            2,
+            true,
+        ),
+        (
+            "[1, 2, 3].forEach((_, i, rows) => { rows.length = 1; test('loop', BODY) })",
+            0,
+            2,
+            true,
+        ),
+        (
+            "[1, 2, 3].forEach(function () { arguments[2].length = 1; test('loop', BODY) })",
+            0,
+            2,
+            true,
+        ),
+        (
+            "[1, 2, 3].forEach((...args) => { args[2].length = 1; test('loop', BODY) })",
+            0,
+            2,
+            true,
+        ),
+        (
+            "for (const n of [1, 2, 3]) { describe('s', () => { if (n > 1) return; test('loop', BODY) }) }",
+            0,
+            2,
+            true,
+        ),
+        (
+            "for (var i = 0; i < 3; i++) { test('loop', BODY); var i = 3 }",
+            0,
+            2,
+            true,
+        ),
+        (
+            "[1, undefined].forEach((v = test('loop', BODY)) => {})",
+            0,
+            2,
+            true,
+        ),
+        (
+            "for (const n of [1, 2]) { describe('s', (v = test('loop', BODY)) => {}) }",
+            0,
+            2,
+            true,
+        ),
+        (
+            "for (let i = 0; i < 0; test('loop', BODY)) {}",
+            0,
+            2,
+            true,
+        ),
+        (
+            "for (let i = 0; i < 2 && test('loop', BODY) === undefined; i++) {}",
+            0,
+            2,
+            true,
+        ),
+        (
+            "for (const n of [1, 2]) { for (test('loop', BODY); false; ) {} }",
+            3,
+            3,
+            false,
+        ),
+        (
+            "for (const n of [1, 2]) { const f = () => { test('loop', BODY) }; f() }",
+            0,
+            2,
+            true,
+        ),
+        (
+            "for (const n of [1, 2]) { (() => { test('loop', BODY) }) }",
+            0,
+            2,
+            true,
+        ),
+        (
+            "const helper = (f) => f()\nfor (const n of [1, 2]) { helper(() => { test('loop', BODY) }) }",
+            0,
+            2,
+            true,
+        ),
+        (
+            "for (const n of [1, 2, 3]) if (n === 1) test('loop', BODY)",
+            0,
+            2,
+            true,
+        ),
+        (
+            "[1, 2, 3].forEach((n) => n === 1 && test('loop', BODY))",
+            0,
+            2,
+            true,
+        ),
+        (
+            "for (const n of [1, 2]) test('loop', BODY)",
+            3,
+            3,
+            false,
+        ),
+        ("for (const x of [test('loop', BODY), 0]) {}", 2, 2, false),
+        (
+            "for (const n of [1, 2]) { test('loop', () => { if (n) return; expect(1).toBe(1) }) }",
+            0,
+            3,
+            false,
+        ),
+    ];
+    for &(registration, errors, eligible, incomplete) in cases {
+        let source = format!(
+            "import {{ describe, test, expect }} from 'vitest'\n{}\ntest('twin', {B})\n",
+            registration.replace("BODY", B)
+        );
+        let run = run(&[("a.test.ts", &source)], &["--threshold", "100"]);
+        let (error_cases, eligible_cases, _) = gate(&run);
+        assert_eq!(
+            (
+                error_cases,
+                eligible_cases,
+                run.json["incomplete"].as_bool()
+            ),
+            (errors, eligible, Some(incomplete)),
+            "{registration}"
+        );
+    }
+}
+
+/// A loop proved never to iterate registers no benchmark, wrapper call or suite either: no
+/// exclusion stands for what it would have registered, and a suite in it is no container.
+#[test]
+fn a_loop_that_never_runs_registers_no_benchmark_wrapper_or_suite() {
+    let helper = "import { test, expect } from 'vitest'\nexport function run() { test('a', () => { expect(1).toBe(1) }) }\n";
+    let twin = "test('t', () => { expect(1).toBe(1) })\n";
+    let cases: &[(&str, &[&str], bool)] = &[
+        (
+            "import { bench, test, expect } from 'vitest'\nfor (const x of []) { bench('b', () => {}) }\n",
+            &[],
+            false,
+        ),
+        // The runner's refused scope is its own reason; the call adds no `registered-elsewhere`.
+        (
+            "import { test, expect } from 'vitest'\nimport { run } from './helper'\nfor (const x of []) { run() }\n",
+            &["helper-effects-unproved"],
+            true,
+        ),
+    ];
+    for &(head, reasons, incomplete) in cases {
+        let source = format!("{head}{twin}");
+        let run = run(&[("a.test.ts", &source), ("helper.ts", helper)], &[]);
+        let listed: Vec<&str> = run.jsonl_summary["exclusions"]["reasons"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|reason| reason["reason"].as_str().unwrap())
+            .collect();
+        assert_eq!(listed, reasons, "{source}");
+        assert_eq!(run.jsonl_summary["incomplete"], incomplete, "{source}");
+    }
+    let directory = tempfile::tempdir().unwrap();
+    write(
+        directory.path(),
+        &[(
+            "a.test.ts",
+            "import { describe } from 'vitest'\nfor (const x of []) { describe('s', () => {}) }\n",
+        )],
+    );
+    let output = assert_cmd::Command::cargo_bin("vitest-dedup")
+        .unwrap()
+        .arg(directory.path())
+        .arg("--no-metrics")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert_eq!(output.status.code(), Some(2), "{stderr}");
+    assert!(stderr.contains("extracted no tests"), "{stderr}");
+    assert!(!stderr.contains("suite containers"), "{stderr}");
+}
+
+/// Iterations multiply whatever else a registration repeats: a table inside a counted loop, a
+/// counted loop inside a suite table, a suite inside a counted loop, and skipped iterations.
+#[test]
+fn loop_iterations_multiply_tables_suites_and_skips() {
+    let cases: &[(&str, u64)] = &[
+        (
+            "for (const n of [1, 2]) { test.each([[1], [2], [3]])('row %s', (v) => { expect(v).toBeGreaterThan(0) }) }",
+            6,
+        ),
+        (
+            "describe.each([[1], [2]])('s %s', () => { for (const n of [1, 2, 3]) { test('loop', () => { expect(1).toBe(1) }) } })",
+            6,
+        ),
+        (
+            "for (const n of [1, 2]) { describe('s', () => { test('a', () => { expect(1).toBe(1) }); test('b', () => { expect(2).toBe(3) }) }) }",
+            4,
+        ),
+        ("for (const n of [1, 2]) { test.skip('loop', () => { expect(1).toBe(1) }) }", 2),
+    ];
+    for &(source, eligible) in cases {
+        let source = format!("import {{ describe, test, expect }} from 'vitest'\n{source}\n");
+        let run = run(&[("a.test.ts", &source)], &["--threshold", "100"]);
+        assert_eq!(gate(&run).1, eligible, "{source}");
+        assert_eq!(run.json["incomplete"], false, "{source}");
+    }
+}
+
+/// A suite copy counts the tests inside it once whichever is at error: the suite above its
+/// children here, the children above the suite in `a_suite_copy_counts_its_children_not_its_blocks`.
+#[test]
+fn a_suite_above_its_children_counts_the_tests_it_covers() {
+    let run = run(
+        &[(
+            "a.test.ts",
+            "import { describe, test, expect } from 'vitest'
+describe('copy', () => { test('a', () => { expect(1).toBe(1) }); test('b', () => { expect(2).toBe(2) }) })
+describe('copy', () => { test('a', () => { expect(1).toBe(1) }); test('b', () => { expect(2).toBe(2) }) })
+",
+        )],
+        &[
+            "--rule",
+            "duplicate-suite=error",
+            "--rule",
+            "duplicate-test=warning",
+            "--threshold",
+            "100",
+        ],
+    );
+    let suite = &run.json["findings"][0];
+    assert_eq!(suite["rule"], "duplicate-suite");
+    assert_eq!(suite["severity"], "error");
+    assert_eq!(gate(&run), (4, 4, Some(100.0)));
+}
