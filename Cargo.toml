@@ -51,6 +51,8 @@ windows-sys = { version = "0.61.2", features = ["Win32_System_ProcessStatus", "W
 [dev-dependencies]
 assert_cmd = "2.0"
 predicates = "3.1"
+# Without `fork` and `timeout`: properties run in-process, and failures are not persisted to files.
+proptest = { version = "1.12", default-features = false, features = ["std"] }
 
 # Catch accidental debug output, unfinished code, and undocumented unsafe operations.
 # CI and developer checks deny warnings; deliberately invalid JS corpus files are unaffected.
