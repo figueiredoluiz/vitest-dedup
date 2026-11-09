@@ -95,7 +95,7 @@ export const NEXT_CORE = {
   minimumScored: 320,
 }
 
-// The default scope: the next core's normal forms, the one scope the weekly workflow runs.
+// The default scope: the normal forms of the next core, the one scope the weekly workflow runs.
 export const SCOPE = NEXT_CORE.scope
 export const MINIMUM_SCORE = NEXT_CORE.minimumScore
 export const MINIMUM_SCORED = NEXT_CORE.minimumScored

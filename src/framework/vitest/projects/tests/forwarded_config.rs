@@ -31,7 +31,7 @@ const SHARED: (&str, &str) = (
     "import { defineConfig } from 'vitest/config'\nexport default defineConfig({ test: { globals: true, include: ['src/**/*.test.ts'] } })",
 );
 
-/// trpc's and tldraw's spellings, and a named forward: each project is the forwarded config,
+/// A bare default re-export, with and without the extension, and a named forward: each project is the forwarded config,
 /// rooted at its own directory.
 #[test]
 fn a_forwarded_config_is_the_project_config() {

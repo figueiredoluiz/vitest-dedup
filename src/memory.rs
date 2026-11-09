@@ -941,7 +941,7 @@ impl MemoryRoof {
         self.exceeded_with_heap(spine.saturating_add(retained), resident)
     }
 
-    /// Checks a core's complete retained heap together with separately charged report sources.
+    /// Checks the complete retained heap of a core together with separately charged report sources.
     /// A disabled roof never samples residency; missing RSS preserves the accounting ceiling.
     #[must_use]
     pub fn exceeded_with_heap(

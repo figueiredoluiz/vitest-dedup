@@ -116,7 +116,8 @@ export function trackedFiles(root = ROOT, { run = execFileSync } = {}) {
  * For paired slugs, segments that name a tool this analyzer is ABOUT are not swept in bare form, not
  * even the possessive: `vitejs/vite` is the repository of the build tool whose config files this
  * project must document, and `docs/vitest-surface.md` legitimately says `Vite's config loader`
- * and `vite.config.*` throughout. A standalone in-scope slug is retained in attributive mode so
+ * and `vite.config.*` throughout. `vitest-dev/vitest` is the framework this project analyzes, so
+ * `vitest` is in nearly every tracked file. A standalone in-scope slug is retained in attributive mode so
  * it cannot disappear from the sweep; no bare term is emitted only for paired slugs.
  *
  * The residual hole is real and recorded: `measured on vite`, `vite's real shape` -- a genuine
@@ -125,7 +126,7 @@ export function trackedFiles(root = ROOT, { run = execFileSync } = {}) {
  * names out of the tree in the first place. Accepting this hole is a measurement, not an
  * oversight: the alternative was a gate this repository would switch off.
  */
-export const IN_SCOPE_SEGMENTS = new Set(["vite"]);
+export const IN_SCOPE_SEGMENTS = new Set(["vite", "vitest"]);
 
 /**
  * Segments too generic to grep for as bare substrings. Every one is an ordinary software word that
@@ -316,7 +317,7 @@ export function inspect(files, terms, { read = readFileSync, root = ROOT } = {})
       // working tree. Neither can carry prose, so neither is this gate's business.
       continue;
     }
-    if (text.includes(" ")) continue;
+    if (text.includes("\0")) continue;
     scanned += 1;
     problems.push(...scan(path, text, terms));
   }

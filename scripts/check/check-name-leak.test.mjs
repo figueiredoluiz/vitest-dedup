@@ -76,6 +76,23 @@ test("an in-scope tool segment yields NO bare term: only the slug and owner are 
   ]);
 });
 
+test("the test framework's slug sweeps its slug and owner, never the bare framework name", () => {
+  // Every file here names the framework the tool analyzes; only the repository spellings leak.
+  const terms = termsFromSlug("vitest-dev/vitest");
+  assert.deepEqual(terms, [
+    { text: "vitest-dev/vitest", mode: "substring" },
+    { text: "vitest-dev", mode: "substring" },
+  ]);
+  assert.deepEqual(scan("a.md", "import { test } from 'vitest'\nVitest's runner", terms), []);
+  assert.deepEqual(
+    scan("a.md", "see github.com/vitest-dev/vitest", terms).map((problem) => problem.detail),
+    [
+      "names a benchmark repository (vitest-dev/vitest)",
+      "names a benchmark repository (vitest-dev)",
+    ],
+  );
+});
+
 test("a STANDALONE in-scope slug is never omitted from the sweep", () => {
   // Copilot review, PR #29, High: skipping the segment unconditionally made
   // `termsFromSlug("vite")` return NO terms -- a source listing the bare slug would have been
@@ -168,7 +185,7 @@ test("inspect skips a binary file and a file it cannot read, and counts only wha
   const files = ["text.md", "binary.png", "gone.rs"];
   const read = (path) => {
     if (path.endsWith("gone.rs")) throw new Error("ENOENT");
-    if (path.endsWith("binary.png")) return " someproject";
+    if (path.endsWith("binary.png")) return "\0\u0001someproject";
     return "someproject's shape";
   };
   const { problems, scanned } = inspect(files, [{ text: "someproject", mode: "attributive" }], {
