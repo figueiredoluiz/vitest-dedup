@@ -137,3 +137,35 @@ fn erased_deep_import_keeps_duplicate_control() {
     assert!(corpus.tests.iter().all(|test| test.exclusion.is_none()));
     assert_duplicate("deep.test.ts", corpus, ["visible first", "visible second"]);
 }
+
+/// A wide but shallow helper graph becomes comparable only after its completed proofs are reused.
+#[test]
+fn bounded_import_retry_recovers_same_file_findings() {
+    let mut root = String::new();
+    let mut sources = Vec::new();
+    for module in 0..65 {
+        let path = format!("m{module}.ts");
+        root.push_str(&format!("import './m{module}';\n"));
+        sources.push((path, format!("export const value{module} = {module};")));
+    }
+    root.push_str(
+        "import { expect, test } from 'vitest';\n\
+         test('recovered first', () => { expect(1).toBe(1) });\n\
+         test('recovered second', () => { expect(1).toBe(1) });\n",
+    );
+    sources.push(("wide.test.ts".to_owned(), root));
+    let files: Vec<_> = sources
+        .iter()
+        .map(|(path, source)| (path.as_str(), source.as_str()))
+        .collect();
+    let corpus = corpora(&files, &["wide.test.ts"]).remove(0);
+    assert_eq!(corpus.tests.len(), 2);
+    assert!(corpus.context_refusals.is_empty());
+    assert!(corpus.import_limit.is_none());
+    assert!(corpus.tests.iter().all(|test| test.exclusion.is_none()));
+    assert_duplicate(
+        "wide.test.ts",
+        corpus,
+        ["recovered first", "recovered second"],
+    );
+}

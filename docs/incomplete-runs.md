@@ -138,14 +138,17 @@ available. First-party imported helpers use the same preflight limits. Use
 failure. Admitted extraction runs on an explicitly sized worker stack; a larger stack alone would
 not protect against unbounded input.
 
-Import analysis allows at most 32 uncached import levels, 64 uncached module-analysis attempts,
-and 8 MiB of imported source per root inventory. Completed cached proofs can be reused without
-spending that work again. Reaching a limit stops further import analysis for that inventory,
-excludes the affected file's tests from comparison, and marks the run incomplete, including
-when the file has no visible local tests. Independent files remain analyzable. These limits
-produce `helper-export-unreadable` diagnostics that name the exhausted bound, first refused
-root-relative module, depth, analysis count and admitted source bytes. They are covered by
-`--fail-on-incomplete=reads`.
+Import analysis allows at most 32 uncached import levels, 64 uncached module-analysis attempts per
+pass, three passes (192 attempts total), and 8 MiB of imported source per root inventory. A pass is
+retried only when it stopped at the attempt limit, added a fully proved module to the cache, and
+encountered no unreadable import, path-confinement refusal or refused package manifest. Completed
+cached proofs can be reused without spending that work again; incomplete ancestor proofs are never
+reused. The source-byte budget is shared by every pass rather than reset by a retry. Reaching a
+final limit stops further import analysis for that inventory, excludes the affected file's tests
+from comparison, and marks the run incomplete, including when the file has no visible local tests.
+Independent files remain analyzable. These limits produce `helper-export-unreadable` diagnostics
+that name the exhausted bound, final refused root-relative module, depth, aggregate analysis count
+and aggregate admitted source bytes. They are covered by `--fail-on-incomplete=reads`.
 
 ## Memory budget
 
