@@ -293,8 +293,10 @@ const UNREADABLE_FIXTURE: &str = "\0fixture";
 /// How many imports deep a module's exports are followed. Reaching it refuses the whole root, so
 /// it sits above real import chains; the analysis and byte caps below bound the work.
 const MAX_DEPTH: usize = 32;
-/// Uncached module analysis attempts allowed by one root inventory reading.
+/// Uncached module analysis attempts allowed by one pass over a root inventory.
 const MAX_IMPORT_ANALYSES: usize = 64;
+/// Passes allowed when a refused pass leaves new complete module proofs in the cache.
+const MAX_IMPORT_ANALYSIS_PASSES: usize = 3;
 /// Source bytes admitted to uncached import analysis by one root inventory reading.
 const MAX_IMPORT_SOURCE_BYTES: usize = 8 * 1024 * 1024;
 
@@ -303,7 +305,7 @@ const MAX_IMPORT_SOURCE_BYTES: usize = 8 * 1024 * 1024;
 pub(crate) enum ImportLimitKind {
     /// The import chain passed [`MAX_DEPTH`].
     Depth,
-    /// The root needed more than [`MAX_IMPORT_ANALYSES`] uncached module analyses.
+    /// The root exhausted its bounded passes of [`MAX_IMPORT_ANALYSES`] uncached analyses.
     Analyses,
     /// Imported sources would pass [`MAX_IMPORT_SOURCE_BYTES`].
     SourceBytes,
@@ -341,11 +343,29 @@ impl ImportLimit {
 }
 
 /// Work already spent by one root reading; a refusal stops its remaining import analyses.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct ImportWork {
+    /// Analyses completed by earlier passes over this root.
+    prior_analyses: usize,
+    /// Analyses attempted by the current pass.
     analyses: usize,
+    /// Aggregate imported source bytes admitted by every pass over this root.
     bytes: usize,
     refusal: Option<ImportLimit>,
+    /// Whether completed cache entries are the only lasting effects of this pass.
+    retry_safe: bool,
+}
+
+impl Default for ImportWork {
+    fn default() -> Self {
+        Self {
+            prior_analyses: 0,
+            analyses: 0,
+            bytes: 0,
+            refusal: None,
+            retry_safe: true,
+        }
+    }
 }
 
 /// Export names whose value registers when called, per project module and globals setting (a
@@ -354,8 +374,10 @@ struct ImportWork {
 pub struct Modules {
     sources: crate::lang::Sources,
     cache: crate::memory::RetainedMap<(PathBuf, bool), HashMap<String, Export>>,
+    /// Advances only when a new complete module proof enters `cache`.
+    cache_generation: usize,
     active: HashSet<PathBuf>,
-    /// Reset for each root; incomplete ancestor proofs never enter the shared cache.
+    /// Reset for each pass over a root; incomplete ancestor proofs never enter the shared cache.
     work: ImportWork,
 }
 
@@ -391,7 +413,7 @@ impl Modules {
                     .or_else(|| path.file_name().map(PathBuf::from))
                     .unwrap_or_else(|| PathBuf::from("<module>")),
                 depth,
-                analyses: self.work.analyses,
+                analyses: self.work.prior_analyses.saturating_add(self.work.analyses),
                 bytes: self.work.bytes,
             });
         }
@@ -448,18 +470,24 @@ impl Modules {
         self.active.remove(path);
         // Each importer records the refusal itself, so the module is read again, not cached.
         if unparsed {
+            self.work.retry_safe = false;
             UNREAD_IMPORTS.with(|count| count.set(count.get() + 1));
             return exports;
         }
         // A module whose analysis saw a confinement refusal, a refused package manifest or a module
         // it could not parse is not cached, as with a cut: the next file re-reads it and records
         // its own refusal instead of inheriting silence.
-        if self.work.refusal.is_none()
-            && crate::lang::confinement_refusals() == confined_before
+        let reusable = crate::lang::confinement_refusals() == confined_before
             && crate::lang::manifest_refusals() == refused_before
-            && UNREAD_IMPORTS.with(std::cell::Cell::get) == unread_before
+            && UNREAD_IMPORTS.with(std::cell::Cell::get) == unread_before;
+        if !reusable {
+            self.work.retry_safe = false;
+        }
+        if self.work.refusal.is_none()
+            && reusable
+            && self.cache.insert(key, exports.clone()).is_none()
         {
-            self.cache.insert(key, exports.clone());
+            self.cache_generation = self.cache_generation.saturating_add(1);
         }
         exports
     }
@@ -483,8 +511,32 @@ pub fn inventory(
     setting: Setting,
     modules: &mut Modules,
 ) -> Inventory {
-    modules.work = ImportWork::default();
-    module::analyse(path, source, parsed, setting, modules, 0).0
+    let mut prior_analyses = 0usize;
+    let mut bytes = 0usize;
+    for pass in 1..=MAX_IMPORT_ANALYSIS_PASSES {
+        let cache_generation = modules.cache_generation;
+        modules.work = ImportWork {
+            prior_analyses,
+            bytes,
+            ..ImportWork::default()
+        };
+        let found = module::analyse(path, source, parsed, setting, modules, 0).0;
+        let analysis_refusal = matches!(
+            modules.work.refusal.as_ref().map(|limit| limit.kind),
+            Some(ImportLimitKind::Analyses)
+        );
+        let cache_progress = modules.cache_generation > cache_generation;
+        if !analysis_refusal
+            || !cache_progress
+            || !modules.work.retry_safe
+            || pass == MAX_IMPORT_ANALYSIS_PASSES
+        {
+            return found;
+        }
+        prior_analyses = prior_analyses.saturating_add(modules.work.analyses);
+        bytes = modules.work.bytes;
+    }
+    unreachable!("the bounded import retry loop always returns")
 }
 
 #[cfg(test)]
@@ -508,6 +560,7 @@ impl crate::memory::HeapBytes for Modules {
             // The owning Run charges this shared catalog once, alongside the module cache.
             sources: _,
             cache,
+            cache_generation: _,
             active,
             work: _,
         } = self;

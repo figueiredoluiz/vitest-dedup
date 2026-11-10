@@ -1,6 +1,7 @@
 use super::*;
 use crate::inventory::{
-    ImportLimit, ImportLimitKind, MAX_DEPTH, MAX_IMPORT_ANALYSES, MAX_IMPORT_SOURCE_BYTES,
+    ImportLimit, ImportLimitKind, MAX_DEPTH, MAX_IMPORT_ANALYSES, MAX_IMPORT_ANALYSIS_PASSES,
+    MAX_IMPORT_SOURCE_BYTES,
 };
 use std::path::PathBuf;
 
@@ -142,47 +143,125 @@ fn import_limits_cover_reexports_but_not_erased_imports() {
     assert_eq!(modules.work.analyses, 0);
 }
 
-/// Count limits charge uncached attempts, reset per root, and preserve completed cache entries.
+/// A flat import root for measuring exact analysis-pass boundaries.
+fn fanout(dir: &Path, modules: usize, content: &str) -> String {
+    let mut source = String::new();
+    for n in 0..modules {
+        fs::write(dir.join(format!("m{n}.ts")), content).unwrap();
+        source.push_str(&format!("import './m{n}';\n"));
+    }
+    source.push_str("import { test } from 'vitest'; test('visible', () => {});");
+    source
+}
+
+/// Count limits admit three progressing passes, reset per root, and preserve completed proofs.
 #[test]
 fn import_analysis_count_boundary_keeps_cached_proofs() {
     let dir = tempfile::tempdir().unwrap();
-    let mut source = String::new();
-    for n in 0..=MAX_IMPORT_ANALYSES {
-        fs::write(
-            dir.path().join(format!("m{n}.ts")),
-            "export const value = 1;",
-        )
-        .unwrap();
-        if n < MAX_IMPORT_ANALYSES {
-            source.push_str(&format!("import './m{n}';\n"));
-        }
-    }
-    source.push_str("import { test } from 'vitest'; test('visible', () => {});");
+    let module = "export const value = 1;";
+    let source = fanout(
+        dir.path(),
+        MAX_IMPORT_ANALYSES * MAX_IMPORT_ANALYSIS_PASSES + 1,
+        module,
+    );
     let mut modules = Modules::default();
-    let found = read(dir.path(), &source, &mut modules);
+    let exact_pass = source
+        .lines()
+        .take(MAX_IMPORT_ANALYSES)
+        .chain(std::iter::once(
+            "import { test } from 'vitest'; test('visible', () => {});",
+        ))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let found = read(dir.path(), &exact_pass, &mut modules);
     assert_eq!(found.sites.len(), 1);
     assert!(found.import_limit.is_none());
     assert_eq!(modules.work.analyses, MAX_IMPORT_ANALYSES);
-    source.push_str(&format!("import './m{MAX_IMPORT_ANALYSES}';\n"));
-    let found = read(dir.path(), &source, &mut modules);
+
+    let second_pass = source
+        .lines()
+        .take(MAX_IMPORT_ANALYSES + 1)
+        .chain(std::iter::once(
+            "import { test } from 'vitest'; test('visible', () => {});",
+        ))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let found = read(dir.path(), &second_pass, &mut modules);
     assert_eq!(found.sites.len(), 1);
     assert!(found.import_limit.is_none());
     assert_eq!(modules.work.analyses, 1);
+
     let mut cold = Modules::default();
-    let found = read(dir.path(), &source, &mut cold);
+    let found = read(dir.path(), &second_pass, &mut cold);
     assert_eq!(found.sites.len(), 1);
+    assert!(found.import_limit.is_none());
+    assert_eq!(cold.work.prior_analyses, MAX_IMPORT_ANALYSES);
+    assert_eq!(cold.work.analyses, 1);
+    assert!(cold.active.is_empty());
+
+    let exact_total = source
+        .lines()
+        .take(MAX_IMPORT_ANALYSES * MAX_IMPORT_ANALYSIS_PASSES)
+        .chain(std::iter::once(
+            "import { test } from 'vitest'; test('visible', () => {});",
+        ))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let mut exact = Modules::default();
+    let found = read(dir.path(), &exact_total, &mut exact);
+    assert!(found.import_limit.is_none());
+    assert_eq!(
+        exact.work.prior_analyses + exact.work.analyses,
+        MAX_IMPORT_ANALYSES * MAX_IMPORT_ANALYSIS_PASSES
+    );
+
+    let mut limited = Modules::default();
+    let found = read(dir.path(), &source, &mut limited);
+    assert_eq!(found.sites.len(), 1);
+    assert_limit(
+        &found,
+        ImportLimitKind::Analyses,
+        &format!("m{}.ts", MAX_IMPORT_ANALYSES * MAX_IMPORT_ANALYSIS_PASSES),
+        1,
+        MAX_IMPORT_ANALYSES * MAX_IMPORT_ANALYSIS_PASSES,
+        MAX_IMPORT_ANALYSES * MAX_IMPORT_ANALYSIS_PASSES * module.len(),
+    );
+    assert_eq!(
+        limited.work.prior_analyses,
+        MAX_IMPORT_ANALYSES * (MAX_IMPORT_ANALYSIS_PASSES - 1)
+    );
+    assert_eq!(limited.work.analyses, MAX_IMPORT_ANALYSES);
+    assert!(limited.active.is_empty());
+    assert!(read(dir.path(), &source, &mut limited)
+        .import_limit
+        .is_none());
+    assert_eq!(limited.work.analyses, 1);
+}
+
+/// A pass with any unreadable import cannot use its completed siblings to license a retry.
+#[test]
+fn import_analysis_retry_requires_only_reusable_progress() {
+    let dir = tempfile::tempdir().unwrap();
+    let valid = "export const value = 1;";
+    let source = fanout(dir.path(), MAX_IMPORT_ANALYSES + 1, valid);
+    fs::write(
+        dir.path().join(format!("m{}.ts", MAX_IMPORT_ANALYSES - 1)),
+        "export {",
+    )
+    .unwrap();
+    let mut modules = Modules::default();
+    let found = read(dir.path(), &source, &mut modules);
     assert_limit(
         &found,
         ImportLimitKind::Analyses,
         &format!("m{MAX_IMPORT_ANALYSES}.ts"),
         1,
         MAX_IMPORT_ANALYSES,
-        MAX_IMPORT_ANALYSES * "export const value = 1;".len(),
+        (MAX_IMPORT_ANALYSES - 1) * valid.len() + "export {".len(),
     );
-    assert_eq!(cold.work.analyses, MAX_IMPORT_ANALYSES);
-    assert!(cold.active.is_empty());
-    assert!(read(dir.path(), &source, &mut cold).import_limit.is_none());
-    assert_eq!(cold.work.analyses, 1);
+    assert_eq!(modules.work.prior_analyses, 0);
+    assert!(!modules.work.retry_safe);
+    assert!(crate::inventory::take_unread_imports());
 }
 
 /// Source work is admitted at the exact byte boundary and refused before parsing one more byte.
@@ -218,6 +297,27 @@ fn import_source_byte_boundary_is_aggregate() {
     assert_eq!(cold.work.bytes, MAX_IMPORT_SOURCE_BYTES);
     assert_eq!(cold.work.analyses, 3);
     assert!(cold.active.is_empty());
+}
+
+/// Retry passes share one source-byte budget rather than multiplying it.
+#[test]
+fn import_retry_does_not_reset_source_byte_work() {
+    let dir = tempfile::tempdir().unwrap();
+    let chunk = " ".repeat(MAX_IMPORT_SOURCE_BYTES / MAX_IMPORT_ANALYSES);
+    let source = fanout(dir.path(), MAX_IMPORT_ANALYSES + 1, &chunk);
+    fs::write(dir.path().join(format!("m{MAX_IMPORT_ANALYSES}.ts")), " ").unwrap();
+    let mut modules = Modules::default();
+    let found = read(dir.path(), &source, &mut modules);
+    assert_limit(
+        &found,
+        ImportLimitKind::SourceBytes,
+        &format!("m{MAX_IMPORT_ANALYSES}.ts"),
+        1,
+        MAX_IMPORT_ANALYSES + 1,
+        MAX_IMPORT_SOURCE_BYTES,
+    );
+    assert_eq!(modules.work.prior_analyses, MAX_IMPORT_ANALYSES);
+    assert_eq!(modules.work.analyses, 1);
 }
 
 /// A cycle consumes no additional analysis attempt and does not itself trigger a new refusal.
