@@ -684,6 +684,11 @@
       "otherReasons": [],
       "testsExcluded": 2
     },
+    "oracle/row-identity-prerequisites/cases.test.ts": {
+      "reason": "unresolved-context",
+      "otherReasons": [],
+      "testsExcluded": 3
+    },
     "oracle/row-value-tables/bindings.test.ts": {
       "reason": "unresolved-context",
       "otherReasons": [],

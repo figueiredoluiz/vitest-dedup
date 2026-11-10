@@ -1,0 +1,12 @@
+{
+  "files": {
+    "cases.test.ts": {
+      "tasks": 13,
+      "wrapperSites": [],
+      "next": {
+        "reasons": ["unresolved-context"],
+        "testsExcluded": 3
+      }
+    }
+  }
+}
