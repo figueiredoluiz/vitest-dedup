@@ -56,6 +56,10 @@ fn owned_import_cut_refuses_comparisons_and_retains_control() {
             assert_eq!(corpus.tests.len(), 2);
             if path == "deep.test.ts" {
                 assert_eq!(corpus.context_refusals, [Exclusion::ImportLimit]);
+                let limit = corpus.import_limit.as_ref().unwrap();
+                assert_eq!(limit.kind, crate::inventory::ImportLimitKind::Depth);
+                assert_eq!(limit.module, Path::new("m32.ts"));
+                assert_eq!((limit.depth, limit.analyses), (33, 32));
                 assert!(corpus
                     .tests
                     .iter()
@@ -80,6 +84,46 @@ fn import_cut_without_direct_tests_keeps_context_refusal() {
     let corpus = root_variant(|_| "import './m0';".to_owned());
     assert!(corpus.tests.is_empty());
     assert_eq!(corpus.context_refusals, [Exclusion::ImportLimit]);
+    assert!(corpus.import_limit.is_some());
+}
+
+/// The engine prefers bounded-work metadata but retains the stable fallback for synthetic corpora.
+#[test]
+fn import_cut_report_uses_specific_detail_and_keeps_the_fallback() {
+    let report = |import_limit| {
+        let mut engine = Engine::default();
+        let (entry, partial) = engine.record(
+            Path::new("deep.test.ts"),
+            Ok(Ok(FileCorpus {
+                context_refusals: vec![Exclusion::ImportLimit],
+                import_limit,
+                ..FileCorpus::default()
+            })),
+            false,
+            Vec::new(),
+            false,
+            None,
+        );
+        assert!(partial);
+        entry.unwrap().detail
+    };
+
+    let detail = report(Some(crate::inventory::ImportLimit {
+        kind: crate::inventory::ImportLimitKind::Depth,
+        module: Path::new("m32.ts").to_path_buf(),
+        depth: 33,
+        analyses: 32,
+        bytes: 942,
+    }));
+    assert_eq!(
+        detail,
+        "import analysis reached its depth limit at m32.ts (depth 33, 32 analyses, 942 source bytes), so imported effects and registrations are unknown"
+    );
+
+    assert_eq!(
+        report(None),
+        "import analysis reached its depth or aggregate work limit, so imported effects and registrations are unknown"
+    );
 }
 
 /// Erased imports consume no work and preserve same-file comparison eligibility.
@@ -89,6 +133,7 @@ fn erased_deep_import_keeps_duplicate_control() {
         root_variant(|source| source.replace("import './m0'", "import type { value } from './m0'"));
     assert_eq!(corpus.tests.len(), 2);
     assert!(corpus.context_refusals.is_empty());
+    assert!(corpus.import_limit.is_none());
     assert!(corpus.tests.iter().all(|test| test.exclusion.is_none()));
     assert_duplicate("deep.test.ts", corpus, ["visible first", "visible second"]);
 }

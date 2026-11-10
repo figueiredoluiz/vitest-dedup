@@ -934,7 +934,7 @@ impl Planner<'_> {
             },
             &mut run.modules,
         );
-        (!found.imports_limited).then_some(found)
+        found.import_limit.is_none().then_some(found)
     }
 
     /// Read an imported hook's body under the invocation bindings. A runner with an opaque hook

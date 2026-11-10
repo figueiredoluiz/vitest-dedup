@@ -1185,6 +1185,36 @@ fn the_analyzer_requires_git_for_reference_baselines() {
     assert!(output.stdout.is_empty(), "{flags:?}");
 }
 
+/// The owned depth cutoff identifies the first refused module and preserves the independent
+/// duplicate finding, exclusion population and stable reason code in both machine reports.
+#[test]
+fn an_import_cut_names_its_bound_module_and_work() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/recall/import-depth-cut");
+    let run = analyze(&fixture, &[]);
+    assert_listed(
+        &run,
+        &[Expect {
+            path: "deep.test.ts",
+            reason: "helper-export-unreadable",
+            others: &[],
+            excluded: 2,
+            total: 2,
+        }],
+    );
+    let entry = &run.json["excludedFiles"][0];
+    assert_eq!(
+        entry["detail"],
+        "import analysis reached its depth limit at m32.ts (depth 33, 32 analyses, 942 source bytes), so imported effects and registrations are unknown"
+    );
+    assert_eq!(run.json["testsAnalyzed"], 4);
+    assert_eq!(run.json["unresolvedTests"], 2);
+    assert_eq!(run.json["findings"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        run.json["findings"][0]["titles"],
+        serde_json::json!(["independent first", "independent second"])
+    );
+}
+
 /// Every code has a scenario here or a named unit test elsewhere.
 #[test]
 fn every_closed_code_has_a_scenario_or_a_named_unit_test() {

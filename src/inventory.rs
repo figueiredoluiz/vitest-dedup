@@ -169,6 +169,8 @@ pub struct InPlaceMock {
 pub struct Inventory {
     /// Import analysis reached a depth or aggregate work bound; its ambient effects are unknown.
     pub imports_limited: bool,
+    /// The first import analysis bound reached, retained for internal diagnostics.
+    pub(crate) import_limit: Option<ImportLimit>,
     /// Intrinsic direct eval may write lexical bindings without ordinary assignment references.
     pub direct_eval: bool,
     /// A `vi.doMock` or `vi.doUnmock`, or a mock call the framework does not hoist outside a
@@ -290,18 +292,60 @@ const ON_LOAD: &str = "\0load";
 const UNREADABLE_FIXTURE: &str = "\0fixture";
 /// How many imports deep a module's exports are followed. Reaching it refuses the whole root, so
 /// it sits above real import chains; the analysis and byte caps below bound the work.
-const MAX_DEPTH: usize = 24;
+const MAX_DEPTH: usize = 32;
 /// Uncached module analysis attempts allowed by one root inventory reading.
 const MAX_IMPORT_ANALYSES: usize = 64;
 /// Source bytes admitted to uncached import analysis by one root inventory reading.
 const MAX_IMPORT_SOURCE_BYTES: usize = 8 * 1024 * 1024;
+
+/// Which bounded import resource stopped one root's inventory.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ImportLimitKind {
+    /// The import chain passed [`MAX_DEPTH`].
+    Depth,
+    /// The root needed more than [`MAX_IMPORT_ANALYSES`] uncached module analyses.
+    Analyses,
+    /// Imported sources would pass [`MAX_IMPORT_SOURCE_BYTES`].
+    SourceBytes,
+}
+
+/// The first bounded import resource exhausted while reading one root.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ImportLimit {
+    /// The exhausted bound.
+    pub(crate) kind: ImportLimitKind,
+    /// The first module refused, relative to the analysis root when it is inside it.
+    pub(crate) module: PathBuf,
+    /// The import depth requested for that module.
+    pub(crate) depth: usize,
+    /// Uncached module analyses already attempted, including a source refused by the byte bound.
+    pub(crate) analyses: usize,
+    /// Imported source bytes admitted before the refusal.
+    pub(crate) bytes: usize,
+}
+
+impl ImportLimit {
+    /// A root-independent diagnostic for reports.
+    pub(crate) fn detail(&self) -> String {
+        let bound = match self.kind {
+            ImportLimitKind::Depth => "depth",
+            ImportLimitKind::Analyses => "module-analysis count",
+            ImportLimitKind::SourceBytes => "source-byte work",
+        };
+        let module = self.module.to_string_lossy().replace('\\', "/");
+        format!(
+            "import analysis reached its {bound} limit at {module} (depth {}, {} analyses, {} source bytes), so imported effects and registrations are unknown",
+            self.depth, self.analyses, self.bytes
+        )
+    }
+}
 
 /// Work already spent by one root reading; a refusal stops its remaining import analyses.
 #[derive(Debug, Default)]
 struct ImportWork {
     analyses: usize,
     bytes: usize,
-    refused: bool,
+    refusal: Option<ImportLimit>,
 }
 
 /// Export names whose value registers when called, per project module and globals setting (a
@@ -335,11 +379,29 @@ impl Modules {
         }
     }
 
+    /// Record only the first refusal: later imports stop before they can replace its cause.
+    fn refuse(&mut self, kind: ImportLimitKind, path: &Path, setting: Setting, depth: usize) {
+        if self.work.refusal.is_none() {
+            self.work.refusal = Some(ImportLimit {
+                kind,
+                module: self
+                    .sources
+                    .relative(path, setting.root)
+                    .or_else(|| path.strip_prefix(setting.root).ok().map(Path::to_path_buf))
+                    .or_else(|| path.file_name().map(PathBuf::from))
+                    .unwrap_or_else(|| PathBuf::from("<module>")),
+                depth,
+                analyses: self.work.analyses,
+                bytes: self.work.bytes,
+            });
+        }
+    }
+
     /// The registering exports of the module at `path`, with what each may register, analysed
     /// once unless a bound cut the analysis short. An empty map after a cutoff is partial:
     /// the root's inventory records the refusal and cannot license comparison claims.
     fn exports(&mut self, path: &Path, setting: Setting, depth: usize) -> HashMap<String, Export> {
-        if self.work.refused {
+        if self.work.refusal.is_some() {
             return HashMap::new();
         }
         let key = (path.to_path_buf(), setting.globals);
@@ -347,7 +409,7 @@ impl Modules {
             return found.clone();
         }
         if depth > MAX_DEPTH {
-            self.work.refused = true;
+            self.refuse(ImportLimitKind::Depth, path, setting, depth);
             return HashMap::new();
         }
         if !self.active.insert(path.to_path_buf()) {
@@ -355,7 +417,7 @@ impl Modules {
         }
         if self.work.analyses >= MAX_IMPORT_ANALYSES {
             self.active.remove(path);
-            self.work.refused = true;
+            self.refuse(ImportLimitKind::Analyses, path, setting, depth);
             return HashMap::new();
         }
         self.work.analyses += 1;
@@ -368,7 +430,7 @@ impl Modules {
             .read(path)
             .and_then(|source| {
                 if source.len() > MAX_IMPORT_SOURCE_BYTES - self.work.bytes {
-                    self.work.refused = true;
+                    self.refuse(ImportLimitKind::SourceBytes, path, setting, depth);
                     return None;
                 }
                 self.work.bytes += source.len();
@@ -392,7 +454,7 @@ impl Modules {
         // A module whose analysis saw a confinement refusal, a refused package manifest or a module
         // it could not parse is not cached, as with a cut: the next file re-reads it and records
         // its own refusal instead of inheriting silence.
-        if !self.work.refused
+        if self.work.refusal.is_none()
             && crate::lang::confinement_refusals() == confined_before
             && crate::lang::manifest_refusals() == refused_before
             && UNREAD_IMPORTS.with(std::cell::Cell::get) == unread_before

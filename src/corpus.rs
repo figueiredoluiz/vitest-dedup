@@ -14,7 +14,7 @@ pub use hooks::{Hook, Hooks};
 
 use crate::exclusions;
 use crate::framework::{Dialect, Registers};
-use crate::inventory::{self, Reach, Site, SiteKind};
+use crate::inventory::{self, ImportLimit, Reach, Site, SiteKind};
 use crate::lang::{self, Lines, NodeId, Refusal};
 use crate::model::{BlindFile, ExcludedFile, ExclusionReason, Position, Span};
 use crate::normal::{self, digest, Normalizer, Structure};
@@ -335,6 +335,8 @@ pub struct SiteRecord {
 pub struct FileCorpus {
     /// Module-wide uncertainty, retained even when no static test site was found.
     pub context_refusals: Vec<Exclusion>,
+    /// The first import cutoff, when [`Exclusion::ImportLimit`] is a context refusal.
+    pub(crate) import_limit: Option<ImportLimit>,
     /// Exact helper source snapshots used during expansion, once per relative source path.
     pub helper_sources: Vec<(PathBuf, String)>,
     /// Hook declarations and distinct lifecycle chains, separate from executable tests.
@@ -567,7 +569,7 @@ fn read_parsed(
         found.loads.clear();
         found.escapes.clear();
     }
-    let expanded = if frame.is_none() && !found.imports_limited {
+    let expanded = if frame.is_none() && found.import_limit.is_none() {
         runners::expand(path, source, parsed, &found, setting, run)
     } else {
         runners::Batch::default()
@@ -1038,7 +1040,7 @@ fn read_parsed(
                 tests.extend(excluded(Exclusion::UnprovedSuiteRow));
                 continue;
             }
-            if found.imports_limited {
+            if found.import_limit.is_some() {
                 tests.extend(excluded(Exclusion::ImportLimit));
                 continue;
             }
@@ -1619,8 +1621,12 @@ fn read_parsed(
             .map(|hook| (diagnostic_path.clone(), hook))
             .chain(imported_diagnostic_hooks)
             .collect(),
+        import_limit: found.import_limit.clone(),
         context_refusals: [
-            found.imports_limited.then_some(Exclusion::ImportLimit),
+            found
+                .import_limit
+                .is_some()
+                .then_some(Exclusion::ImportLimit),
             found.direct_eval.then_some(Exclusion::DynamicBindings),
             // Taken once per file, after every module its reading followed.
             (frame.is_none() && inventory::take_unread_imports())
@@ -1872,7 +1878,15 @@ impl Engine {
         let context_partial = !corpus.context_refusals.is_empty();
         for refusal in &corpus.context_refusals {
             if let Some((reason, detail)) = refusal.reason() {
-                reasons.push((reason, detail.to_owned()));
+                let detail = if *refusal == Exclusion::ImportLimit {
+                    corpus
+                        .import_limit
+                        .as_ref()
+                        .map_or_else(|| detail.to_owned(), ImportLimit::detail)
+                } else {
+                    detail.to_owned()
+                };
+                reasons.push((reason, detail));
             }
         }
         if corpus.parse_errors > 0 {
