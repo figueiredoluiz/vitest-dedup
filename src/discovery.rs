@@ -188,7 +188,9 @@ pub struct SourceFile {
     /// config IS there and could not be read -- the caller must fail closed on that rather than
     /// treat it as absent, because a config that exists and is unreadable is precisely where
     /// guessing is wrong.
-    pub config_scope: Option<Result<String, String>>,
+    /// Successful scopes share immutable text across files governed by the same config.
+    /// Construct a scope from owned text with `text.into()`.
+    pub config_scope: Option<Result<Arc<str>, String>>,
     /// The `globals` value of the project whose `includeSource` or `benchmark.includeSource` glob
     /// is why this file was discovered, when that is knowable.
     ///
@@ -407,7 +409,7 @@ pub fn discover(config: &Config, project_set: Option<&ProjectSet>) -> Result<Dis
     let exclude = compile_glob_set(&config.exclude, "exclude")?;
     // Per-DIRECTORY, not per-file: a directory of 200 tests reads its config once. Without this
     // the walk would re-read and re-mask the same config for every file under it.
-    let mut config_scopes: HashMap<PathBuf, Option<Result<String, String>>> = HashMap::new();
+    let mut config_scopes: HashMap<PathBuf, Option<Result<Arc<str>, String>>> = HashMap::new();
     let default_project_globs = match project_set {
         Some(_) => Some((
             compile_glob_set(&owned_default_include(), "include")?,
@@ -899,9 +901,9 @@ fn prepare_in_source_channel<'a>(
 fn nearest_config_scope(
     path: &Path,
     root: &Path,
-    cache: &mut HashMap<PathBuf, Option<Result<String, String>>>,
+    cache: &mut HashMap<PathBuf, Option<Result<Arc<str>, String>>>,
     refusals: &mut Vec<String>,
-) -> Option<Result<String, String>> {
+) -> Option<Result<Arc<str>, String>> {
     let mut dir = path.parent()?;
     loop {
         if dir == root || !dir.starts_with(root) {
@@ -928,7 +930,7 @@ fn nearest_config_scope(
             // scope -- keep walking up rather than stopping at it.
             let scope = match found {
                 Some(Ok(None)) | None => None,
-                Some(Ok(Some(text))) => Some(Ok(text)),
+                Some(Ok(Some(text))) => Some(Ok(Arc::from(text))),
                 Some(Err(reason)) => {
                     refusals.push(reason.clone());
                     Some(Err(reason))
@@ -1104,6 +1106,54 @@ mod tests {
                     .replace('\\', "/")
             })
             .collect()
+    }
+
+    /// Files governed by one nested config share its text through both first and cached reads.
+    #[test]
+    fn nested_config_scope_text_is_shared_across_files_and_descendants() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        fs::create_dir_all(root.join("nested/child")).unwrap();
+        fs::create_dir(root.join("other")).unwrap();
+        let source = include_str!("../fixtures/recall/shared-nested-config/nested/equal.test.ts");
+        let config =
+            include_str!("../fixtures/recall/shared-nested-config/nested/vitest.config.ts");
+        for name in [
+            "nested/a.test.ts",
+            "nested/b.test.ts",
+            "nested/child/c.test.ts",
+            "other/d.test.ts",
+        ] {
+            fs::write(root.join(name), source).unwrap();
+        }
+        fs::write(root.join("nested/vitest.config.ts"), config).unwrap();
+        fs::write(
+            root.join("other/vitest.config.ts"),
+            config.replace("owned-control", "other-control"),
+        )
+        .unwrap();
+
+        let discovered = discover(&load(root), None).unwrap();
+        assert_eq!(discovered.files.len(), 4);
+        let mut nested_scope: Option<&Arc<str>> = None;
+        let mut other_scope = None;
+        for file in &discovered.files {
+            let scope = file.config_scope.as_ref().unwrap().as_ref().unwrap();
+            if in_directory(file, "nested") {
+                if let Some(first) = nested_scope {
+                    assert!(
+                        Arc::ptr_eq(first, scope),
+                        "{} copied the config text",
+                        file.path.display()
+                    );
+                } else {
+                    nested_scope = Some(scope);
+                }
+            } else {
+                other_scope = Some(scope);
+            }
+        }
+        assert_ne!(nested_scope.unwrap(), other_scope.unwrap());
     }
 
     /// A CommonJS per-directory config is UNREADABLE, not "no config".
