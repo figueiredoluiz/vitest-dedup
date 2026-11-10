@@ -1,5 +1,39 @@
 use super::*;
-use crate::inventory::{MAX_DEPTH, MAX_IMPORT_ANALYSES, MAX_IMPORT_SOURCE_BYTES};
+use crate::inventory::{
+    ImportLimit, ImportLimitKind, MAX_DEPTH, MAX_IMPORT_ANALYSES, MAX_IMPORT_SOURCE_BYTES,
+};
+use std::path::PathBuf;
+
+/// Assert the first refusal and every counter that explains it.
+fn assert_limit(
+    found: &Inventory,
+    kind: ImportLimitKind,
+    module: &str,
+    depth: usize,
+    analyses: usize,
+    bytes: usize,
+) {
+    assert!(found.imports_limited);
+    let expected = ImportLimit {
+        kind,
+        module: PathBuf::from(module),
+        depth,
+        analyses,
+        bytes,
+    };
+    assert_eq!(found.import_limit, Some(expected.clone()));
+    let bound = match kind {
+        ImportLimitKind::Depth => "depth",
+        ImportLimitKind::Analyses => "module-analysis count",
+        ImportLimitKind::SourceBytes => "source-byte work",
+    };
+    assert_eq!(
+        expected.detail(),
+        format!(
+            "import analysis reached its {bound} limit at {module} (depth {depth}, {analyses} analyses, {bytes} source bytes), so imported effects and registrations are unknown"
+        )
+    );
+}
 
 /// Copy the permanent runtime/corpus case into an isolated project.
 fn project() -> tempfile::TempDir {
@@ -42,7 +76,14 @@ fn owned_import_cut_stops_work_and_recovers_from_nearer_root() {
     for _ in 0..2 {
         let found = read(dir.path(), &source, &mut modules);
         assert_eq!(found.sites.len(), 2);
-        assert!(found.imports_limited);
+        assert_limit(
+            &found,
+            ImportLimitKind::Depth,
+            &format!("m{MAX_DEPTH}.ts"),
+            MAX_DEPTH + 1,
+            MAX_DEPTH,
+            modules.work.bytes,
+        );
         assert_eq!(modules.work.analyses, MAX_DEPTH);
         assert!(modules.active.is_empty());
         for depth in 0..MAX_DEPTH {
@@ -54,17 +95,18 @@ fn owned_import_cut_stops_work_and_recovers_from_nearer_root() {
         let found = read(dir.path(), &control, &mut modules);
         assert_eq!(found.sites.len(), 2);
         assert!(!found.imports_limited);
+        assert!(found.import_limit.is_none());
         assert_eq!(modules.work.analyses, 0);
     }
     let near = source.replace("'./m0'", "'./m1'");
     let found = read(dir.path(), &near, &mut modules);
     assert_eq!((found.sites.len(), found.loads.len()), (2, 1));
-    assert!(!found.imports_limited);
+    assert!(found.import_limit.is_none());
     assert_eq!(modules.work.analyses, MAX_DEPTH);
     // Completed cache entries are evidence even when reused from a farther root.
     let found = read(dir.path(), &source, &mut modules);
     assert_eq!((found.sites.len(), found.loads.len()), (2, 1));
-    assert!(!found.imports_limited);
+    assert!(found.import_limit.is_none());
     assert_eq!(modules.work.analyses, 1);
 }
 
@@ -86,14 +128,17 @@ fn import_limits_cover_reexports_but_not_erased_imports() {
         let mut modules = Modules::default();
         let found = read(dir.path(), &source, &mut modules);
         assert_eq!(found.sites.len(), 2);
-        assert!(found.imports_limited);
+        assert_eq!(
+            found.import_limit.as_ref().map(|limit| limit.kind),
+            Some(ImportLimitKind::Depth)
+        );
         assert_eq!(modules.work.analyses, MAX_DEPTH);
     }
     let erased = source.replace("import './m0'", "import type { value } from './m0'");
     let mut modules = Modules::default();
     let found = read(dir.path(), &erased, &mut modules);
     assert_eq!(found.sites.len(), 2);
-    assert!(!found.imports_limited);
+    assert!(found.import_limit.is_none());
     assert_eq!(modules.work.analyses, 0);
 }
 
@@ -116,20 +161,27 @@ fn import_analysis_count_boundary_keeps_cached_proofs() {
     let mut modules = Modules::default();
     let found = read(dir.path(), &source, &mut modules);
     assert_eq!(found.sites.len(), 1);
-    assert!(!found.imports_limited);
+    assert!(found.import_limit.is_none());
     assert_eq!(modules.work.analyses, MAX_IMPORT_ANALYSES);
     source.push_str(&format!("import './m{MAX_IMPORT_ANALYSES}';\n"));
     let found = read(dir.path(), &source, &mut modules);
     assert_eq!(found.sites.len(), 1);
-    assert!(!found.imports_limited);
+    assert!(found.import_limit.is_none());
     assert_eq!(modules.work.analyses, 1);
     let mut cold = Modules::default();
     let found = read(dir.path(), &source, &mut cold);
     assert_eq!(found.sites.len(), 1);
-    assert!(found.imports_limited);
+    assert_limit(
+        &found,
+        ImportLimitKind::Analyses,
+        &format!("m{MAX_IMPORT_ANALYSES}.ts"),
+        1,
+        MAX_IMPORT_ANALYSES,
+        MAX_IMPORT_ANALYSES * "export const value = 1;".len(),
+    );
     assert_eq!(cold.work.analyses, MAX_IMPORT_ANALYSES);
     assert!(cold.active.is_empty());
-    assert!(!read(dir.path(), &source, &mut cold).imports_limited);
+    assert!(read(dir.path(), &source, &mut cold).import_limit.is_none());
     assert_eq!(cold.work.analyses, 1);
 }
 
@@ -150,12 +202,19 @@ fn import_source_byte_boundary_is_aggregate() {
     let mut modules = Modules::default();
     let found = read(dir.path(), source, &mut modules);
     assert_eq!(found.sites.len(), 1);
-    assert!(!found.imports_limited);
+    assert!(found.import_limit.is_none());
     assert_eq!(modules.work.bytes, MAX_IMPORT_SOURCE_BYTES);
     let mut cold = Modules::default();
     let found = read(dir.path(), &format!("{source} import './c';"), &mut cold);
     assert_eq!(found.sites.len(), 1);
-    assert!(found.imports_limited);
+    assert_limit(
+        &found,
+        ImportLimitKind::SourceBytes,
+        "c.ts",
+        1,
+        3,
+        MAX_IMPORT_SOURCE_BYTES,
+    );
     assert_eq!(cold.work.bytes, MAX_IMPORT_SOURCE_BYTES);
     assert_eq!(cold.work.analyses, 3);
     assert!(cold.active.is_empty());
@@ -171,7 +230,7 @@ fn import_cycle_retains_existing_within_bound_handling() {
     let mut modules = Modules::default();
     let found = read(dir.path(), source, &mut modules);
     assert_eq!(found.sites.len(), 1);
-    assert!(!found.imports_limited);
+    assert!(found.import_limit.is_none());
     assert_eq!(modules.work.analyses, 2);
     assert!(modules.active.is_empty());
 }
@@ -191,7 +250,10 @@ fn runner_plans_refuse_an_incomplete_import_inventory() {
     let mut modules = Modules::default();
     let found = read(dir.path(), source, &mut modules);
     assert_eq!(found.sites.len(), 1);
-    assert!(found.imports_limited);
+    assert_eq!(
+        found.import_limit.as_ref().map(|limit| limit.kind),
+        Some(ImportLimitKind::Depth)
+    );
     let parsed = parse(&path, source).unwrap();
     let callee = parsed
         .tree

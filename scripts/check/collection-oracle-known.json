@@ -259,14 +259,14 @@
       "path": "deep.test.ts",
       "kind": "missing-site",
       "item": "test@null",
-      "reason": "The owned depth-limit fixture registers hidden first in m24.ts beyond the uncached import bound. Its root must report helper-export-unreadable and remain incomplete; the unknown registration has no root-file site."
+      "reason": "The owned depth-limit fixture registers hidden first in m32.ts beyond the uncached import bound. Its root must report helper-export-unreadable and remain incomplete; the unknown registration has no root-file site."
     },
     {
       "dir": "fixtures/recall/import-depth-cut",
       "path": "deep.test.ts",
       "kind": "missing-site",
       "item": "test@null",
-      "reason": "The owned depth-limit fixture registers hidden second in m24.ts beyond the uncached import bound. Its root must report helper-export-unreadable and remain incomplete; the unknown registration has no root-file site."
+      "reason": "The owned depth-limit fixture registers hidden second in m32.ts beyond the uncached import bound. Its root must report helper-export-unreadable and remain incomplete; the unknown registration has no root-file site."
     },
     {
       "dir": "fixtures/recall/framework-package-parenthesised-registration",

@@ -1,6 +1,8 @@
-import { test } from 'vitest'
+import { beforeEach } from 'vitest'
+import { f25 } from './m25'
 
-/** Registers a test past the depth limit. */
+/** One link of the import chain. */
 export function f24() {
-  test('registered past the limit', () => {})
+  beforeEach(() => {})
+  f25()
 }

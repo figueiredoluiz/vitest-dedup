@@ -117,9 +117,10 @@ other call that registers nothing.
   8 MiB.
 - Helper files share the source limits: 8 MiB, 36,864 raw syntax units and lexical nesting depth
   256.
-- Each module inventory also bounds uncached import analysis at depth 24, 64 module-analysis
+- Each module inventory also bounds uncached import analysis at depth 32, 64 module-analysis
   attempts and 8 MiB of source. A limit makes the inventory incomplete and prevents runner
-  expansion from using its partial results; completed cached proofs remain reusable.
+  expansion from using its partial results; completed cached proofs remain reusable. Its diagnostic
+  names the exhausted bound, first refused root-relative module and the work already spent.
 
 A file past a budget is refused as a whole, with the outcome above.
 
