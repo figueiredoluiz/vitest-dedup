@@ -8,6 +8,35 @@ use std::path::Path;
 const FILES: usize = 10;
 const TESTS_PER_FILE: usize = 400;
 
+/// Large nested-config text must not consume the memory roof once per discovered file.
+#[test]
+fn shared_nested_config_retains_every_owned_case_under_the_memory_roof() {
+    let directory = tempfile::tempdir().unwrap();
+    let nested = directory.path().join("nested");
+    std::fs::create_dir(&nested).unwrap();
+    let source = include_str!("../fixtures/recall/shared-nested-config/nested/equal.test.ts");
+    let config = include_str!("../fixtures/recall/shared-nested-config/nested/vitest.config.ts")
+        .replace("owned-control", &"x".repeat(256 * 1024));
+    std::fs::write(nested.join("vitest.config.ts"), config).unwrap();
+    for index in 0..512 {
+        std::fs::write(nested.join(format!("case-{index:04}.test.ts")), source).unwrap();
+    }
+
+    let (code, report) = analyze(directory.path(), &["--max-memory", "64"]);
+    assert_eq!(report["filesAnalyzed"], 512);
+    assert_eq!(report["testsAnalyzed"], 1024);
+    assert_eq!(report["unresolvedTests"], 0);
+    assert_eq!(report["incomplete"], false);
+    assert_eq!(code, 1);
+    let duplicates = report["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|finding| finding["rule"] == "duplicate-test")
+        .count();
+    assert_eq!(duplicates, 512);
+}
+
 /// Writes `files` generated test files, named so discovery reads them in index order.
 fn write_tree(root: &Path, files: std::ops::Range<usize>) {
     for file in files {
