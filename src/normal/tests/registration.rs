@@ -346,3 +346,126 @@ fn a_nested_template_is_charged_at_every_level() {
         assert_eq!(within(copied - 1), None);
     });
 }
+
+/// The titles of a module's test registrations, in source order.
+fn test_titles(source: &str) -> Vec<Option<String>> {
+    crate::testing::project(source, &[], false, |_, parsed, found, _| {
+        found
+            .sites
+            .iter()
+            .filter(|site| site.kind == SiteKind::Registers(crate::framework::Registers::Test))
+            .map(|site| crate::normal::titles::title(parsed, site.node))
+            .collect()
+    })
+}
+
+/// A `let` title replays `=` statements its body runs before the read; every other write, branch
+/// or `replaceAll` operand the replay cannot prove refuses, each just past its edge.
+#[test]
+fn a_let_title_replays_only_proved_writes() {
+    let reads = |count: usize| "void counted;".repeat(count);
+    let source = format!(
+        "import {{test}} from 'vitest';
+         let decided = 'a'; if ('a' === 'a') {{ decided = 'b' }} else {{ decided = 'c' }}; test(decided,()=>{{}});
+         let loose = 'a'; if ('a' == 'a') {{ loose = 'b' }}; test(loose,()=>{{}});
+         let numbers = 'a'; if (0 === -0) {{ numbers = 'zero' }}; test(numbers,()=>{{}});
+         let later = 'a'; test(later,()=>{{}}); later = 'b';
+         let composite = 'a'; composite = ['b']; test(composite,()=>{{}});
+         let replaced = 'a-b-c'; replaced = replaced.replaceAll('-', '+'); test(replaced,()=>{{}});
+         let dollar = 'a-b'; dollar = dollar.replaceAll('-', '$'); test(dollar,()=>{{}});
+         let empty = 'ab'; empty = empty.replaceAll('', '.'); test(empty,()=>{{}});
+         let escaped = 'a\\uFFFDb'; escaped = escaped.replaceAll('a', 'c'); test(escaped,()=>{{}});
+         let lone = 'a\\uD800b'; lone = lone.replaceAll('a', 'c'); test(lone,()=>{{}});
+         let optional = 'ab'; optional = optional?.replaceAll('a', 'c'); test(optional,()=>{{}});
+         let restored = 'before'; const saved = restored; restored = 'after'; restored = saved; test(restored,()=>{{}});
+         let counted = 'at the cap'; {at} test(counted,()=>{{}});
+         let over = 'past the cap'; {past} test(over,()=>{{}});",
+        at = reads(255),
+        past = reads(256).replace("counted", "over"),
+    );
+    assert_eq!(
+        test_titles(&source),
+        [
+            Some("b".to_owned()),
+            None,
+            Some("zero".to_owned()),
+            None,
+            None,
+            Some("a+b+c".to_owned()),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some("at the cap".to_owned()),
+            None,
+        ]
+    );
+    // A module that may reach a built-in prototype may have replaced `replaceAll`; one that only
+    // converts with `String` or indexes with literals cannot.
+    let fold = |setup: &str| {
+        test_titles(&format!(
+            "import {{test, vi}} from 'vitest'; {setup} let p = 's'; p = p.replaceAll('s', 't'); test(p,()=>{{}}); test('kept',()=>{{}});"
+        ))
+    };
+    for patch in [
+        "String.prototype.replaceAll = () => 'patched';",
+        "vi.spyOn(String.prototype, 'replaceAll');",
+        "''.__proto__.replaceAll = () => 'patched';",
+        "String['prototype'].replaceAll = () => 'patched';",
+        "const S = String; S.raw;",
+        "''.constructor.raw;",
+        "Object.getPrototypeOf('').replaceAll = () => 'patched';",
+        "const key = 'x'; ({})[key];",
+        "globalThis.x = 1;",
+        "Function('return 1');",
+        "import('node:path');",
+        "eval('1');",
+    ] {
+        assert_eq!(fold(patch), [None, Some("kept".to_owned())], "{patch}");
+    }
+    for inert in ["String.raw`a`;", "String(1);", "[1][0]; ({ a: 1 })['a'];"] {
+        assert_eq!(
+            fold(inert),
+            [Some("t".to_owned()), Some("kept".to_owned())],
+            "{inert}"
+        );
+    }
+    // A global `eval` may assign any `let` in scope; a `const` cannot be assigned.
+    assert_eq!(
+        test_titles(
+            "import {test} from 'vitest'; let changed = 'a'; eval('1'); test(changed,()=>{}); const kept = 'k'; test(kept,()=>{});"
+        ),
+        [None, Some("k".to_owned())]
+    );
+}
+
+/// `replaceAll` measures what it would build before building it, so a value read in place, which
+/// the copy limit does not charge, still cannot grow past the template limit.
+#[test]
+fn a_replace_all_value_is_measured_before_it_is_built() {
+    let (fits, past) = ("0".repeat(16_384), "0".repeat(16_385));
+    let source = format!(
+        "import {{test}} from 'vitest'; const fits = '0000'.replaceAll('0', '{fits}'); const past = '0000'.replaceAll('0', '{past}'); test('a',()=>{{}});"
+    );
+    crate::testing::project(&source, &[], false, |_, parsed, _, _| {
+        let tree = &parsed.tree;
+        let lengths: Vec<_> = tree
+            .nodes()
+            .filter(|&node| tree.kind(node) == "VariableDeclarator")
+            .map(|declarator| {
+                let init = tree.child(declarator, "init").unwrap();
+                crate::normal::titles::value_with_bindings(
+                    parsed,
+                    init,
+                    0,
+                    &mut 256,
+                    &HashMap::new(),
+                )
+                .map(|value| value.as_str().unwrap().len())
+            })
+            .collect();
+        assert_eq!(lengths, [Some(65_536), None]);
+    });
+}

@@ -7,7 +7,7 @@
         "reasons": [
           "unresolved-context"
         ],
-        "testsExcluded": 2
+        "testsExcluded": 1
       }
     },
     "rendering.test.ts": {

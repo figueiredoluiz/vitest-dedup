@@ -1250,7 +1250,7 @@ fn owned_name_formats_match_runtime_without_widening_unknowns() {
         include_str!("../../fixtures/oracle/name-collisions/formats.test.ts"),
         "formats.test.ts",
         32,
-        2,
+        1,
         &[
             "constant",
             "array 1,,2,3",
@@ -1309,6 +1309,120 @@ fn dynamic_row_titles_refuse_before_identity_and_retain_readable_rows() {
     assert_eq!(corpus.tests[3].row_class, corpus.tests[4].row_class);
     assert_ne!(corpus.tests[3].row_class, corpus.tests[5].row_class);
     assert_owned_row_findings(corpus, &[("positive 1", 2)]);
+}
+
+/// The comparison names of a file's cases, sorted, with unnamed cases left out.
+fn sorted_names(corpus: &FileCorpus) -> Vec<String> {
+    let mut names: Vec<_> = corpus
+        .tests
+        .iter()
+        .filter_map(|case| case.name.as_ref().map(|name| name.join(" > ")))
+        .collect();
+    names.sort();
+    names
+}
+
+/// A title a `let` computes from the enclosing suite row is the one Vitest gives each strategy, so
+/// a repeated row is reported within its strategy and never across strategies.
+#[test]
+fn row_computed_titles_follow_each_strategy() {
+    let source = include_str!("../../fixtures/oracle/row-computed-titles/strategies.test.ts");
+    let corpus = counted_corpus(source, "cases.test.ts", 18, 0);
+    let mut expected = Vec::new();
+    for (strategy, format) in [
+        ("default", "{}"),
+        ("with-variant", "focus:{}"),
+        ("important", "{}!"),
+        ("prefix", "tw:{}"),
+    ] {
+        let spell = |candidate: &str| format.replace("{}", candidate);
+        for (index, (input, output)) in [("flex", "flex"), ("grid", "block"), ("flex", "flex")]
+            .into_iter()
+            .enumerate()
+        {
+            expected.push(format!(
+                "{strategy} > {} → {} ({index})",
+                spell(input),
+                spell(output)
+            ));
+        }
+    }
+    // A title without `%#`, so its repeated row is reported.
+    for strategy in ["plain", "important"] {
+        let mark = if strategy == "plain" { "" } else { "!" };
+        for (input, output) in [("flex", "flex"), ("grid", "block"), ("flex", "flex")] {
+            expected.push(format!(
+                "repeat {strategy} > {input}{mark} → {output}{mark}"
+            ));
+        }
+    }
+    expected.sort();
+    assert_eq!(sorted_names(&corpus), expected);
+    let outcome = owned_findings("cases.test.ts", corpus);
+    let mut groups: Vec<Vec<String>> = outcome
+        .findings
+        .iter()
+        .filter(|finding| finding.rule == crate::model::Rule::DuplicateEachRow)
+        .map(|finding| finding.titles.clone())
+        .collect();
+    groups.sort();
+    assert_eq!(
+        groups,
+        [
+            [
+                "repeat important > flex! → flex!",
+                "repeat important > flex! → flex!"
+            ],
+            ["repeat plain > flex → flex", "repeat plain > flex → flex"],
+        ]
+    );
+}
+
+/// A `let` title is read only when its writes are `=` statements the declaring body runs before
+/// the read, or, inside its suite callbacks, by the time it returns, under decided branches. The
+/// suite row values reach titles a test spells from them.
+#[test]
+fn let_titles_replay_direct_writes_and_refuse_the_rest() {
+    let admitted = include_str!("../../fixtures/oracle/row-computed-titles/admitted.test.ts");
+    let corpus = counted_corpus(admitted, "cases.test.ts", 11, 0);
+    assert_eq!(
+        sorted_names(&corpus),
+        [
+            "module > module after",
+            "outer > inner > nested after",
+            "plain let",
+            "second",
+            "x > base-x",
+            "x > x",
+            "x > x as template",
+            "y > base-other",
+            "y > y",
+            "y > y as template",
+            "é-é𝒳",
+        ]
+    );
+    let refused = include_str!("../../fixtures/oracle/row-computed-titles/refusals.test.ts");
+    let corpus = counted_corpus(refused, "cases.test.ts", 11, 11);
+    assert!(corpus
+        .tests
+        .iter()
+        .all(|case| case.exclusion == Some(Exclusion::UnresolvedTitle) && case.name.is_none()));
+    // A module that may replace `replaceAll` keeps its runtime title unknown.
+    let patched = include_str!("../../fixtures/oracle/row-computed-titles/patched.test.ts");
+    let corpus = counted_corpus(patched, "cases.test.ts", 1, 1);
+    assert_eq!(corpus.tests[0].exclusion, Some(Exclusion::UnresolvedTitle));
+    // A suite callback a sibling writes in, a body that may return early or that awaits, and a
+    // callback that runs while the body does.
+    let deferred = include_str!("../../fixtures/oracle/row-computed-titles/deferred.test.ts");
+    let corpus = counted_corpus(deferred, "cases.test.ts", 6, 5);
+    assert_eq!(
+        corpus
+            .tests
+            .iter()
+            .filter(|case| case.exclusion == Some(Exclusion::UnresolvedTitle))
+            .count(),
+        5
+    );
 }
 
 /// Pins the exact duplicate-row groups and their common source locations.

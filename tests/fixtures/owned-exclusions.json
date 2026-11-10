@@ -652,7 +652,7 @@
     "oracle/name-collisions/formats.test.ts": {
       "reason": "unresolved-context",
       "otherReasons": [],
-      "testsExcluded": 2
+      "testsExcluded": 1
     },
     "oracle/named-callback/declared.test.ts": {
       "reason": "named-callback",
@@ -683,6 +683,21 @@
       "reason": "order-dependent-state",
       "otherReasons": [],
       "testsExcluded": 2
+    },
+    "oracle/row-computed-titles/deferred.test.ts": {
+      "reason": "unresolved-context",
+      "otherReasons": [],
+      "testsExcluded": 5
+    },
+    "oracle/row-computed-titles/patched.test.ts": {
+      "reason": "unresolved-context",
+      "otherReasons": [],
+      "testsExcluded": 1
+    },
+    "oracle/row-computed-titles/refusals.test.ts": {
+      "reason": "unresolved-context",
+      "otherReasons": [],
+      "testsExcluded": 11
     },
     "oracle/row-identity-prerequisites/cases.test.ts": {
       "reason": "unresolved-context",

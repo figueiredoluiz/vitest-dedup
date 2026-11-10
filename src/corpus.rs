@@ -539,6 +539,23 @@ fn read_parsed(
     // Instantiation selects registrations, but every callback in the module still contributes
     // mutation facts used to reject order-dependent comparisons.
     let structure = Structure::of(parsed, &found);
+    // Functions holding a `return` of their own: a `let` read in a suite callback such a function
+    // registers may see a value the function never finished writing.
+    let returning: std::collections::HashSet<NodeId> = parsed
+        .tree
+        .nodes()
+        .filter(|&node| parsed.tree.kind(node) == "ReturnStatement")
+        .filter_map(|node| {
+            parsed
+                .tree
+                .ancestors(node)
+                .find(|&up| parsed.tree.is_function(up))
+        })
+        .collect();
+    let deferral = normal::titles::Deferral {
+        suites: &structure.suites,
+        returning: &returning,
+    };
     // Registrations through a test function's member (`test.describe`), by call.
     let members: HashMap<NodeId, NodeId> = found
         .sites
@@ -866,6 +883,15 @@ fn read_parsed(
             }
             let population = normalizer.population(site.node);
             let mut record = unkeyed(site, None);
+            // The title may read the enclosing suite rows' proved parameters, and a `let` the body
+            // around its suite callbacks leaves.
+            record.title = runners::title_in_suite(
+                parsed,
+                site.node,
+                frame.as_ref(),
+                &suite_frame.values,
+                &deferral,
+            );
             if let normal::Population::Known(iterations) = population {
                 record.iterations = iterations;
             }
@@ -962,7 +988,7 @@ fn read_parsed(
                         .map(|scope| suite_names.get(structure.suites.get(scope)?)?.clone())
                         .collect()
                 });
-            let pattern = runners::title(parsed, site.node, frame.as_ref());
+            let pattern = record.title.clone();
             // The one name a registration proves, for a compared test and for one refused only
             // for its callback alike.
             let comparison_name = |row: Option<&normal::TableRow>| -> Option<Vec<String>> {

@@ -36,6 +36,8 @@ const COLLISIONS: &[(&str, &str)] = &[
     ("src/lang/completion.rs", "test"),
     // The same field, a counted loop's condition.
     ("src/normal/population.rs", "test"),
+    // The same field, a branch a `let` title's writes are replayed under.
+    ("src/normal/titles.rs", "test"),
 ];
 
 /// The string literals in `source`, with `//` comments removed first so prose may name the API.
