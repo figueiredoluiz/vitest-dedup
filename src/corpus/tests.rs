@@ -1293,6 +1293,24 @@ fn owned_row_corpus(source: &str, tests: usize, excluded: usize) -> FileCorpus {
     corpus
 }
 
+/// Dynamic table titles refuse before row proofs, retaining every case and readable-row findings.
+#[test]
+fn dynamic_row_titles_refuse_before_identity_and_retain_readable_rows() {
+    let source = include_str!("../../fixtures/oracle/row-identity-prerequisites/cases.test.ts");
+    let corpus = owned_row_corpus(source, 12, 3);
+    assert!(corpus.tests[..3].iter().all(|case| {
+        case.exclusion == Some(Exclusion::UnresolvedTitle)
+            && case.row_class.is_none()
+            && case.name.is_none()
+    }));
+    assert!(corpus.tests[3..6]
+        .iter()
+        .all(|case| case.exclusion.is_none() && case.row_class.is_some()));
+    assert_eq!(corpus.tests[3].row_class, corpus.tests[4].row_class);
+    assert_ne!(corpus.tests[3].row_class, corpus.tests[5].row_class);
+    assert_owned_row_findings(corpus, &[("positive 1", 2)]);
+}
+
 /// Pins the exact duplicate-row groups and their common source locations.
 fn assert_owned_row_findings(corpus: FileCorpus, expected: &[(&str, usize)]) {
     let outcome = owned_findings("cases.test.ts", corpus);
