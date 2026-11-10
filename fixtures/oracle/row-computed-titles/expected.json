@@ -1,0 +1,39 @@
+{
+  "files": {
+    "strategies.test.ts": {
+      "tasks": 24,
+      "wrapperSites": [],
+      "next": {}
+    },
+    "admitted.test.ts": {
+      "tasks": 16,
+      "wrapperSites": [],
+      "next": {}
+    },
+    "deferred.test.ts": {
+      "tasks": 17,
+      "wrapperSites": [],
+      "next": {
+        "reasons": ["unresolved-context"],
+        "testsExcluded": 5
+      }
+    },
+    "refusals.test.ts": {
+      "tasks": 13,
+      "wrapperSites": [],
+      "next": {
+        "reasons": ["unresolved-context"],
+        "testsExcluded": 11
+      }
+    },
+    "patched.test.ts": {
+      "tasks": 1,
+      "wrapperSites": [],
+      "next": {
+        "reasons": ["unresolved-context"],
+        "testsExcluded": 1
+      }
+    }
+  },
+  "blindUnderCurrent": ["patched.test.ts", "refusals.test.ts"]
+}

@@ -65,6 +65,31 @@ pub(super) fn title(parsed: &Parsed, call: NodeId, frame: Option<&Frame>) -> Opt
     }
 }
 
+/// [`title`] inside enclosing suite rows, which also bind their proved parameters, and may read a
+/// `let` the body around the suite callbacks leaves. A value JSON
+/// cannot hold (undefined, bigint, a non-finite number) is left unbound, so reading it refuses.
+pub(super) fn title_in_suite(
+    parsed: &Parsed,
+    call: NodeId,
+    frame: Option<&Frame>,
+    suite: &HashMap<SymbolId, crate::lang::Scalar>,
+    deferral: &normal::titles::Deferral<'_>,
+) -> Option<String> {
+    use crate::lang::Scalar;
+    let mut values = frame.map(|frame| frame.values.clone()).unwrap_or_default();
+    values.extend(suite.iter().filter_map(|(&symbol, scalar)| {
+        let value = match scalar {
+            Scalar::Null => Value::Null,
+            Scalar::Bool(value) => Value::Bool(*value),
+            Scalar::Number(value) => Value::Number(serde_json::Number::from_f64(*value)?),
+            Scalar::String(text) => Value::String(text.clone()),
+            Scalar::Undefined | Scalar::BigInt(_) => return None,
+        };
+        Some((symbol, value))
+    }));
+    normal::titles::title_deferred(parsed, call, &values, Some(deferral))
+}
+
 /// Expand a closed root registration scope; other contexts retain their explicit exclusions.
 /// No subset of a failed batch may erase a wrapper's context or claim complete admission.
 pub(super) fn expand(

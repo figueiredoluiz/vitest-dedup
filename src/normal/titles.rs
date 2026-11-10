@@ -6,6 +6,27 @@ use crate::lang::{property_name, Declaration, Field, NodeId, Parsed, SymbolId, T
 use serde_json::{Map, Value};
 use std::collections::HashMap;
 
+/// What a read may assume beyond the source: invocation values, which suite callbacks run late,
+/// and, while a `let`'s writes are replayed, the value it holds inside the expression being run.
+#[derive(Clone, Copy)]
+struct Reading<'a> {
+    bindings: &'a HashMap<SymbolId, Value>,
+    deferral: Option<&'a Deferral<'a>>,
+    /// The replayed symbol, the expression it is read in at the replay point, and its value there.
+    current: Option<(SymbolId, crate::lang::Span, &'a Value)>,
+}
+
+impl<'a> Reading<'a> {
+    /// Invocation values only.
+    fn of(bindings: &'a HashMap<SymbolId, Value>) -> Self {
+        Self {
+            bindings,
+            deferral: None,
+            current: None,
+        }
+    }
+}
+
 /// A title string whose value is proved by the source, or a named function used as a title.
 pub(crate) fn title(parsed: &Parsed, call: NodeId) -> Option<String> {
     title_with_bindings(parsed, call, &HashMap::new())
@@ -16,6 +37,17 @@ pub(crate) fn title_with_bindings(
     parsed: &Parsed,
     call: NodeId,
     bindings: &HashMap<SymbolId, Value>,
+) -> Option<String> {
+    title_deferred(parsed, call, bindings, None)
+}
+
+/// [`title_with_bindings`] for a registration inside suite callbacks, which may read a `let` the
+/// body around them leaves.
+pub(crate) fn title_deferred(
+    parsed: &Parsed,
+    call: NodeId,
+    bindings: &HashMap<SymbolId, Value>,
+    deferral: Option<&Deferral<'_>>,
 ) -> Option<String> {
     let tree = &parsed.tree;
     let node = tree.inner(tree.list(call, "arguments").first().copied()??);
@@ -28,7 +60,11 @@ pub(crate) fn title_with_bindings(
     }
     // Numbers a template substitutes are not counted as they are read, so the title is measured
     // whole as well.
-    match read(parsed, node, 0, &mut 256, bindings, &mut Limit::title())? {
+    let reading = Reading {
+        deferral,
+        ..Reading::of(bindings)
+    };
+    match read(parsed, node, 0, &mut 256, reading, &mut Limit::title())? {
         Value::String(text) if text.len() <= MAX_TEXT_BYTES => Some(text),
         _ => None,
     }
@@ -48,7 +84,7 @@ pub(crate) fn value_within(
         copied: true,
         left: budget,
     };
-    let value = read(parsed, node, 0, &mut 256, bindings, &mut limit)?;
+    let value = read(parsed, node, 0, &mut 256, Reading::of(bindings), &mut limit)?;
     Some((value, budget - limit.left))
 }
 
@@ -240,7 +276,7 @@ pub(super) fn value(
         node,
         depth,
         &mut read.visits,
-        &HashMap::new(),
+        Reading::of(&HashMap::new()),
         &mut read.limit,
     )
 }
@@ -259,7 +295,7 @@ pub(crate) fn value_with_bindings(
         node,
         depth,
         budget,
-        bindings,
+        Reading::of(bindings),
         &mut Limit::in_place(),
     )
 }
@@ -271,7 +307,7 @@ fn read(
     node: NodeId,
     depth: usize,
     budget: &mut usize,
-    bindings: &HashMap<SymbolId, Value>,
+    reading: Reading<'_>,
     limit: &mut Limit,
 ) -> Option<Value> {
     if depth >= 32 || *budget == 0 {
@@ -280,8 +316,7 @@ fn read(
     *budget -= 1;
     let tree = &parsed.tree;
     let node = tree.inner(node);
-    let mut child =
-        |node, limit: &mut Limit| read(parsed, node, depth + 1, budget, bindings, limit);
+    let mut child = |node, limit: &mut Limit| read(parsed, node, depth + 1, budget, reading, limit);
     match tree.kind(node) {
         "Literal" => match tree.field_of(node, "value") {
             Field::Value(Value::String(text)) => {
@@ -295,21 +330,41 @@ fn read(
             _ => None,
         },
         "Identifier" => {
-            if let Some(value) = parsed
-                .scopes
-                .symbol_at(tree.span(node).start)
-                .and_then(|symbol| bindings.get(&symbol))
+            let symbol = parsed.scopes.symbol_at(tree.span(node).start);
+            // A replayed `let` read in the expression being run has the value the replay reached;
+            // read anywhere else, through another declaration, it is proved from its own position.
+            let current = reading.current.filter(|&(replayed, within, _)| {
+                symbol == Some(replayed) && within.contains(tree.span(node))
+            });
+            if let Some(value) = current
+                .map(|(_, _, value)| value)
+                .or_else(|| symbol.and_then(|symbol| reading.bindings.get(&symbol)))
             {
                 limit.supplied(text_bytes(value))?;
                 return Some(value.clone());
             }
-            let symbol = parsed
-                .scopes
-                .symbol(parsed.scopes.symbol_at(tree.span(node).start)?);
+            let id = parsed.scopes.symbol_at(tree.span(node).start)?;
+            let symbol = parsed.scopes.symbol(id);
             let Declaration::Variable(declaration) = symbol.declaration else {
                 return None;
             };
             let parent = tree.parent(declaration)?;
+            if tree.text(parent, "kind") == Some("let")
+                && tree.span(declaration).end <= tree.span(node).start
+                && tree.kind(tree.child(declaration, "id")?) == "Identifier"
+            {
+                let mut replay = Replay {
+                    parsed,
+                    symbol: id,
+                    depth,
+                    budget,
+                    reading,
+                    current: None,
+                    limit,
+                    writes: Vec::new(),
+                };
+                return replay.at(declaration, node);
+            }
             if tree.text(parent, "kind") != Some("const")
                 || tree.span(declaration).end > tree.span(node).start
                 || symbol.references.iter().any(|reference| reference.write)
@@ -358,6 +413,55 @@ fn read(
             }
             Some(Value::String(crate::lang::text::canonical(text)))
         }
+        "CallExpression" => {
+            // Only `text.replaceAll(pattern, replacement)` over strings, with neither a `$`
+            // substitution nor the empty pattern, which inserts between every code unit. A setup
+            // file replacing the method is not seen, as for `.each` tables and the array iterator.
+            let callee = tree.inner(tree.child(node, "callee")?);
+            // The built-in method, unless the module may have replaced it.
+            if parsed.scopes.may_replace_builtins()
+                || tree.flag(node, "optional")
+                || tree.kind(callee) != "MemberExpression"
+                || tree.flag(callee, "computed")
+                || tree.flag(callee, "optional")
+                || tree
+                    .child(callee, "property")
+                    .and_then(|property| tree.text(property, "name"))
+                    != Some("replaceAll")
+            {
+                return None;
+            }
+            let [Some(pattern), Some(replacement)] = tree.list(node, "arguments")[..] else {
+                return None;
+            };
+            let mut text = |node, limit: &mut Limit| match child(node, limit)? {
+                Value::String(text) => Some(text),
+                _ => None,
+            };
+            let subject = text(tree.child(callee, "object")?, limit)?;
+            let pattern = text(pattern, limit)?;
+            let replacement = text(replacement, limit)?;
+            // U+FFFD introduces an escaped code unit in the lossless text form; a match must not
+            // start or end inside one.
+            if pattern.is_empty()
+                || replacement.contains('$')
+                || [&subject, &pattern, &replacement]
+                    .iter()
+                    .any(|text| text.contains('\u{fffd}'))
+            {
+                return None;
+            }
+            let count = subject.matches(pattern.as_str()).count();
+            let length = (subject.len() - count * pattern.len())
+                .checked_add(count.checked_mul(replacement.len())?)?;
+            if length > MAX_TEMPLATE_BYTES {
+                return None;
+            }
+            limit.spelled(length)?;
+            Some(Value::String(
+                subject.replace(pattern.as_str(), &replacement),
+            ))
+        }
         "ArrayExpression" => tree
             .list(node, "elements")
             .into_iter()
@@ -376,6 +480,235 @@ fn read(
             Some(Value::Object(fields))
         }
         _ => None,
+    }
+}
+
+/// The most references one `let` may have for a read to replay its writes: each read checks them
+/// all.
+const MAX_LET_REFERENCES: usize = 256;
+
+/// Suite callbacks Vitest runs only after the body registering them returns, and the functions
+/// that may return before their body ends. Both are read once per file.
+pub(crate) struct Deferral<'a> {
+    /// Inline suite callbacks, by the call registering each.
+    pub suites: &'a HashMap<NodeId, NodeId>,
+    /// Functions holding a `return` of their own.
+    pub returning: &'a std::collections::HashSet<NodeId>,
+}
+
+/// What a `let` holds where it is read: its initializer, then each `=` its body runs before the
+/// statement reading it. A read inside suite callbacks the body registers runs after the body
+/// returns (measured: Vitest 5.1.0), so it takes the value the whole body leaves, which only a body
+/// that cannot return early, await or yield is known to leave. Proved only when every write is
+/// one of those assignments and every branch to one is decided by proved values.
+struct Replay<'a, 'b> {
+    parsed: &'a Parsed,
+    symbol: SymbolId,
+    depth: usize,
+    budget: &'b mut usize,
+    reading: Reading<'b>,
+    /// The `let`'s value so far.
+    current: Option<Value>,
+    limit: &'b mut Limit,
+    /// Where the symbol is assigned.
+    writes: Vec<crate::lang::Span>,
+}
+
+impl Replay<'_, '_> {
+    /// The value at `read` of the `let` that `declarator` declares.
+    fn at(&mut self, declarator: NodeId, read: NodeId) -> Option<Value> {
+        let (tree, scopes) = (&self.parsed.tree, &self.parsed.scopes);
+        let references = &scopes.symbol(self.symbol).references;
+        if scopes.reads_global_eval() || references.len() > MAX_LET_REFERENCES {
+            return None;
+        }
+        let declaration = tree.parent(declarator)?;
+        let body = tree.parent(declaration)?;
+        if !matches!(tree.kind(body), "BlockStatement" | "Program") {
+            return None;
+        }
+        // The body's statement holding the read, reached without entering code that may run at
+        // another time, other than a deferred suite callback, or resolve names another way.
+        let (mut statement, mut deferred) = (read, false);
+        loop {
+            let up = tree.parent(statement)?;
+            if up == body {
+                break;
+            }
+            if tree.is_function(up)
+                && self
+                    .reading
+                    .deferral
+                    .is_some_and(|deferral| deferral.suites.contains_key(&up))
+            {
+                deferred = true;
+            } else if tree.is_function(up)
+                || matches!(
+                    tree.kind(up),
+                    "ClassDeclaration" | "ClassExpression" | "WithStatement"
+                )
+            {
+                return None;
+            }
+            statement = up;
+        }
+        let from = tree.span(declaration).end;
+        let to = if deferred {
+            let ends = tree.kind(body) == "Program"
+                || tree.parent(body).is_some_and(|function| {
+                    tree.is_function(function)
+                        && !tree.flag(function, "async")
+                        && !tree.flag(function, "generator")
+                        && self
+                            .reading
+                            .deferral
+                            .is_some_and(|deferral| !deferral.returning.contains(&function))
+                });
+            if !ends {
+                return None;
+            }
+            tree.span(body).end
+        } else {
+            tree.span(statement).start
+        };
+        self.writes = references
+            .iter()
+            .filter(|reference| reference.write)
+            .map(|reference| reference.span)
+            .collect();
+        if from > to
+            || self
+                .writes
+                .iter()
+                .any(|write| write.start < from || write.end > to)
+        {
+            return None;
+        }
+        // The body's statements holding a write, in order: found from each write, so a long body
+        // costs no more than a short one.
+        let mut statements: Vec<NodeId> = Vec::new();
+        for reference in references.iter().filter(|reference| reference.write) {
+            let mut statement = reference.node?;
+            while tree.parent(statement)? != body {
+                statement = tree.parent(statement)?;
+            }
+            if statements.last() != Some(&statement) {
+                statements.push(statement);
+            }
+        }
+        // Every read copies what the `let` supplies, as for a `const`; a refused value spends
+        // nothing.
+        let (spelled, left) = (
+            std::mem::replace(&mut self.limit.copied, true),
+            self.limit.left,
+        );
+        let value = self.replay(declarator, &statements);
+        self.limit.copied = spelled;
+        if value.is_none() {
+            self.limit.left = left;
+        }
+        value
+    }
+
+    /// The initializer, then every statement of the body that writes the symbol.
+    fn replay(&mut self, declarator: NodeId, statements: &[NodeId]) -> Option<Value> {
+        self.current = Some(self.value(self.parsed.tree.child(declarator, "init")?)?);
+        for &statement in statements {
+            self.statement(statement)?;
+        }
+        self.current.take()
+    }
+
+    /// Runs one statement's writes; a statement holding none is skipped.
+    fn statement(&mut self, node: NodeId) -> Option<()> {
+        let tree = &self.parsed.tree;
+        if !self.holds_write(node) {
+            return Some(());
+        }
+        *self.budget = self.budget.checked_sub(1)?;
+        match tree.kind(node) {
+            "ExpressionStatement" => {
+                let assignment = tree.inner(tree.child(node, "expression")?);
+                let target = tree.inner(tree.child(assignment, "left")?);
+                let right = tree.child(assignment, "right")?;
+                if tree.kind(assignment) != "AssignmentExpression"
+                    || tree.text(assignment, "operator") != Some("=")
+                    || tree.kind(target) != "Identifier"
+                    || self.parsed.scopes.symbol_at(tree.span(target).start) != Some(self.symbol)
+                {
+                    return None;
+                }
+                self.current = Some(self.value(right)?);
+            }
+            "BlockStatement" => {
+                for statement in tree.list(node, "body") {
+                    self.statement(statement?)?;
+                }
+            }
+            "IfStatement" => {
+                // A condition is read, never run, so it cannot assign the symbol.
+                let test = tree.child(node, "test")?;
+                let branch = if self.condition(test)? {
+                    tree.child(node, "consequent")
+                } else {
+                    tree.child(node, "alternate")
+                };
+                if let Some(branch) = branch {
+                    self.statement(branch)?;
+                }
+            }
+            _ => return None,
+        }
+        Some(())
+    }
+
+    /// `===` or `!==` between proved primitives.
+    fn condition(&mut self, test: NodeId) -> Option<bool> {
+        let tree = &self.parsed.tree;
+        let test = tree.inner(test);
+        if tree.kind(test) != "BinaryExpression" {
+            return None;
+        }
+        let equal = match tree.text(test, "operator")? {
+            "===" => true,
+            "!==" => false,
+            _ => return None,
+        };
+        let left = self.value(tree.child(test, "left")?)?;
+        let right = self.value(tree.child(test, "right")?)?;
+        let same = match (&left, &right) {
+            (Value::Number(left), Value::Number(right)) => left.as_f64()? == right.as_f64()?,
+            (left, right) => left == right,
+        };
+        Some(same == equal)
+    }
+
+    /// A primitive read at the replay point; a composite may be mutated in place.
+    fn value(&mut self, node: NodeId) -> Option<Value> {
+        let current = self.current.clone();
+        let reading = Reading {
+            current: current
+                .as_ref()
+                .map(|value| (self.symbol, self.parsed.tree.span(node), value)),
+            ..self.reading
+        };
+        read(
+            self.parsed,
+            node,
+            self.depth + 1,
+            self.budget,
+            reading,
+            self.limit,
+        )
+        .filter(|value| !value.is_object() && !value.is_array())
+    }
+
+    /// Whether the symbol is assigned inside `node`.
+    fn holds_write(&self, node: NodeId) -> bool {
+        let span = self.parsed.tree.span(node);
+        self.writes
+            .iter()
+            .any(|write| span.start <= write.start && write.end <= span.end)
     }
 }
 

@@ -98,7 +98,11 @@ Rectangular tagged tables with unique static headers followed by a newline suppo
 destructuring; effectful cells or unsupported bindings leave the row unresolved. Tagged callbacks
 that read `this` or `arguments` also remain unresolved. Suite tables
 expand their children with the row's primitive bindings and title
-ancestry, including nested suite and test tables. Expansion is bounded to 2,048 enclosing suite
+ancestry, including nested suite and test tables. A child's title may read those bindings. Any
+test title may also read a `let` its declaring body assigns only through plain `=` statements,
+under `===`/`!==` branches over proved values: a registration in that body reads the value at that
+point, and one in a nested suite callback the value the body leaves, unless the body may return
+early, await or yield. Expansion is bounded to 2,048 enclosing suite
 invocations per declaration; unsupported inputs produce unresolved cases. Readonly literal arrays
 can retain child comparisons through their own scalar indices or `length`, with each invocation
 kept separate. They do not establish repeated-row input equality. Whole-suite table

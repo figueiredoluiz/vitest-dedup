@@ -82,9 +82,23 @@ pub struct Scopes {
     pub(super) symbols: Vec<Symbol>,
     pub(super) names: HashMap<u32, Name>,
     pub(super) top_level: HashMap<String, SymbolId>,
+    pub(super) global_eval: bool,
+    pub(super) builtins: bool,
 }
 
 impl Scopes {
+    /// Whether the module reads the global `eval`, through which code it does not spell may assign
+    /// any binding in scope at the call.
+    pub fn reads_global_eval(&self) -> bool {
+        self.global_eval
+    }
+
+    /// Whether the module may replace a built-in method, so a call to one proves nothing; see
+    /// `may_replace_builtins` in the builder for what counts.
+    pub fn may_replace_builtins(&self) -> bool {
+        self.builtins
+    }
+
     /// The symbol `id` names.
     pub fn symbol(&self, id: SymbolId) -> &Symbol {
         &self.symbols[id.0 as usize]

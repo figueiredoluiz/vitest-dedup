@@ -21,7 +21,8 @@ test('zero 0', () => expect(26).toBe(26))
 // Numeric prefix parsing must not treat .5 as an integer zero.
 test.each([['.5']])('integer %i', () => expect(27).toBe(27))
 test('integer 0', () => expect(28).toBe(28))
-// Runtime calls and mutable values cannot provide a proven static name.
+// Runtime calls cannot provide a proven static name; a reassigned `let` is named by the value it
+// holds when read, never by its initializer.
 test(`called ${String(1)}`, () => expect(29).toBe(29))
 test('called 1', () => expect(30).toBe(30))
 let changing = 'before'

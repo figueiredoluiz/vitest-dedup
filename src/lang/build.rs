@@ -1,7 +1,7 @@
 //! From oxc's AST and semantic analysis to the owned [`Tree`] and [`Scopes`].
 
 use super::scopes::{Declaration, Imported, Name, Reference, Scopes, Symbol, SymbolId};
-use super::tree::{Span, Tree};
+use super::tree::{NodeId, Span, Tree};
 use super::{Parsed, Refusal};
 use oxc_allocator::Allocator;
 use oxc_ast::ast::ModuleExportName;
@@ -59,6 +59,7 @@ fn scopes(semantic: &Semantic, tree: &Tree) -> Scopes {
     let scoping = semantic.scoping();
     let nodes = semantic.nodes();
     let mut names = HashMap::new();
+    let mut global_eval = false;
     for node in nodes.iter() {
         match node.kind() {
             AstKind::IdentifierReference(reference) => {
@@ -66,6 +67,7 @@ fn scopes(semantic: &Semantic, tree: &Tree) -> Scopes {
                     .reference_id
                     .get()
                     .and_then(|id| scoping.get_reference(id).symbol_id());
+                global_eval |= symbol.is_none() && reference.name.as_str() == "eval";
                 names.insert(reference.span.start, Name::Reference(symbol.map(owned)));
             }
             AstKind::BindingIdentifier(binding) => {
@@ -77,6 +79,7 @@ fn scopes(semantic: &Semantic, tree: &Tree) -> Scopes {
             _ => {}
         }
     }
+    let builtins = may_replace_builtins(tree, &names);
     let root = scoping.root_scope_id();
     let mut top_level = HashMap::new();
     let symbols = scoping
@@ -119,7 +122,64 @@ fn scopes(semantic: &Semantic, tree: &Tree) -> Scopes {
         symbols,
         names,
         top_level,
+        global_eval,
+        builtins,
     }
+}
+
+/// Member names through which code reaches a built-in prototype, or the constructors holding one.
+const PROTOTYPE_ROUTES: [&str; 6] = [
+    "prototype",
+    "__proto__",
+    "constructor",
+    "getPrototypeOf",
+    "String",
+    "Function",
+];
+
+/// Whether the module may replace a built-in method: it names a prototype route, computes a member
+/// name, uses the global `String` as a value, or reaches code built from text or the global object.
+/// Conservative by design: a module that does none of these cannot reach `String.prototype`.
+fn may_replace_builtins(tree: &Tree, names: &HashMap<u32, Name>) -> bool {
+    let global = |node: NodeId, name: &str| {
+        tree.kind(node) == "Identifier"
+            && tree.text(node, "name") == Some(name)
+            && names.get(&tree.span(node).start) == Some(&Name::Reference(None))
+    };
+    tree.nodes().any(|node| match tree.kind(node) {
+        "MemberExpression" => {
+            let Some(property) = tree.child(node, "property") else {
+                return true;
+            };
+            let name = if tree.flag(node, "computed") {
+                match tree.field_of(property, "value") {
+                    _ if tree.kind(property) != "Literal" => return true,
+                    super::Field::Value(serde_json::Value::String(name)) => Some(name.as_str()),
+                    super::Field::Value(serde_json::Value::Number(_)) => None,
+                    _ => return true,
+                }
+            } else {
+                tree.text(property, "name")
+            };
+            name.is_some_and(|name| PROTOTYPE_ROUTES.contains(&name))
+        }
+        "Identifier" if global(node, "String") => {
+            // `String(value)` and `String.raw` reach no prototype; the constructor as a value may.
+            let parent = tree.outer_parent(node);
+            !parent.is_some_and(|parent| {
+                let callee = tree.kind(parent) == "CallExpression"
+                    && tree.child(parent, "callee").map(|c| tree.inner(c)) == Some(node);
+                let object = tree.kind(parent) == "MemberExpression"
+                    && tree.child(parent, "object").map(|o| tree.inner(o)) == Some(node);
+                callee || object
+            })
+        }
+        "Identifier" => ["Function", "globalThis", "global", "window", "self", "eval"]
+            .iter()
+            .any(|name| global(node, name)),
+        "ImportExpression" => true,
+        _ => false,
+    })
 }
 
 /// The owned id of an oxc symbol: the same index.
