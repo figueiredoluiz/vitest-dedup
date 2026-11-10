@@ -139,7 +139,8 @@ const PROTOTYPE_ROUTES: [&str; 6] = [
 
 /// Whether the module may replace a built-in method: it names a prototype route, computes a member
 /// name, uses the global `String` as a value, or reaches code built from text or the global object.
-/// Conservative by design: a module that does none of these cannot reach `String.prototype`.
+/// It reads member syntax only: destructured keys, `with`, reflection with built strings and code
+/// another module runs (an import, `node:vm`, a setup file) can still replace one unseen.
 fn may_replace_builtins(tree: &Tree, names: &HashMap<u32, Name>) -> bool {
     let global = |node: NodeId, name: &str| {
         tree.kind(node) == "Identifier"
