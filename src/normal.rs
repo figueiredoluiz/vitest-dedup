@@ -484,6 +484,8 @@ pub struct Normalizer<'s> {
     loop_counts: HashMap<NodeId, Option<u64>>,
     /// Whether each enclosing function can return or throw before a site inside it.
     early_exits: HashMap<NodeId, bool>,
+    /// Completed parameterization uncertainty results for this module's nodes.
+    parameterization_uncertainty: RefCell<HashMap<NodeId, bool>>,
 }
 
 impl<'s> Normalizer<'s> {
@@ -510,6 +512,7 @@ impl<'s> Normalizer<'s> {
             hook_scheduling: None,
             loop_counts: HashMap::new(),
             early_exits: HashMap::new(),
+            parameterization_uncertainty: RefCell::new(HashMap::new()),
             discovering: None,
             resolving: false,
             shallow_imports: false,

@@ -7,6 +7,59 @@ use std::fs;
 
 mod registration;
 
+/// Ordinary tests retain completed helper and callback results across queries.
+#[test]
+fn parameterization_reuses_completed_reachability() {
+    let source = include_str!("../../fixtures/duplicates/parameterization-contract.test.ts");
+    with_normalizer(source, &[], false, |normalizer, tree, inventory| {
+        let callbacks: HashMap<_, _> = test_callbacks(tree, inventory).collect();
+        let first = callbacks["zero boundary"];
+        let second = callbacks["one boundary"];
+        let symbol = normalizer.scopes.top_level("isPositive").unwrap();
+        let helper = normalizer.scopes.declaration_node(symbol).unwrap();
+
+        assert!(!normalizer.parameterization_uncertain(first));
+        assert_eq!(
+            normalizer
+                .parameterization_uncertainty
+                .borrow()
+                .get(&helper),
+            Some(&false)
+        );
+        assert!(!normalizer.parameterization_uncertain(second));
+        let cached = normalizer.parameterization_uncertainty.borrow();
+        assert_eq!(cached.get(&first), Some(&false));
+        assert_eq!(cached.get(&second), Some(&false));
+    });
+}
+
+/// Both entries into the owned snapshot helper cycle reach the same source-sensitive assertion.
+#[test]
+fn parameterization_uncertainty_follows_cycles_in_either_order() {
+    let source =
+        include_str!("../../fixtures/duplicates/parameterization-inline-snapshots.test.ts");
+    for names in [
+        ["checkSnapshot", "assertSnapshot"],
+        ["assertSnapshot", "checkSnapshot"],
+    ] {
+        with_normalizer(source, &[], false, |normalizer, _, _| {
+            let [first, second] = names.map(|name| {
+                let symbol = normalizer.scopes.top_level(name).unwrap();
+                normalizer.scopes.declaration_node(symbol).unwrap()
+            });
+            assert!(normalizer.parameterization_uncertain(first));
+            assert_eq!(
+                normalizer
+                    .parameterization_uncertainty
+                    .borrow()
+                    .get(&second),
+                Some(&true)
+            );
+            assert!(normalizer.parameterization_uncertain(second));
+        });
+    }
+}
+
 /// Scalar readers keep a canonical owned string even when a pair joins across operands.
 #[test]
 fn nc65_scalar_concatenation_keeps_canonical_code_units() {
