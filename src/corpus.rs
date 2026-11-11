@@ -837,11 +837,11 @@ fn read_parsed(
         );
         for (suite_ordinal, suite_frame) in suite_frames.into_iter().enumerate() {
             let mut frame_normalizer;
-            let normalizer = if suite_frame.table {
+            let (normalizer, module_normalizer) = if suite_frame.table {
                 frame_normalizer = make_normalizer().for_suite_values(suite_frame.values.clone());
-                &mut frame_normalizer
+                (&mut frame_normalizer, Some(&normalizer))
             } else {
-                &mut normalizer
+                (&mut normalizer, None)
             };
             let mut frame_contexts = HashMap::new();
             if suite_frame.table {
@@ -1269,7 +1269,10 @@ fn read_parsed(
             // Each row's body, rendered flat and traced. An incomplete trace says nothing about the
             // flat form, so it excludes nothing here: only a rule reading traces skips the row. A flat
             // form past the depth bound can match nothing, so its test is excluded out loud.
-            let parameterization_uncertain = normalizer.parameterization_uncertain(body);
+            // Reachability uses the module's tree and scopes, independent of suite-row values.
+            let parameterization_uncertain = module_normalizer
+                .unwrap_or(normalizer)
+                .parameterization_uncertain(body);
             let mut traced: Vec<(String, crate::behavior::Trace, normal::CallbackForm)> =
                 Vec::new();
             let mut truncated = false;

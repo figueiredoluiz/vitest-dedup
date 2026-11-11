@@ -4,7 +4,7 @@ use super::{digest, Normalizer, Walk};
 use crate::framework::Dialect;
 use crate::lang::{Field, Name, NodeId, Tree};
 use serde_json::Value;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 use std::path::Path;
 
@@ -295,63 +295,95 @@ fn once_in_callback(tree: &Tree, node: NodeId, root: crate::lang::Span) -> bool 
 }
 
 /// Source-sensitive matchers, unknown selectors and potentially lossy text refuse consolidation.
-/// Local dependency reads and aliases share one graph; cycles are visited once.
+/// Reuse completed reachability results across queries in the same normalizer.
 pub(super) fn parameterization_uncertain(normalizer: &Normalizer, node: NodeId) -> bool {
+    let mut cached = normalizer.parameterization_uncertainty.borrow_mut();
+    if let Some(&uncertain) = cached.get(&node) {
+        return uncertain;
+    }
+
     let tree = normalizer.tree;
     let mut pending = vec![node];
     let mut seen = HashSet::new();
+    let mut uncertain = Vec::new();
+    let mut references = HashMap::<NodeId, Vec<NodeId>>::new();
     while let Some(node) = next_unseen(&mut pending, &mut seen) {
-        if tree.kind(node) == "ImportExpression"
-            && (tree
-                .child(node, "source")
-                .is_none_or(|source| !static_selector(tree, source))
-                || !is_empty(tree.field_of(node, "options")))
-        {
-            return true;
-        }
-        let property_field = match tree.kind(node) {
-            "MemberExpression" => Some("property"),
-            "Property"
-                if tree
-                    .parent(node)
-                    .is_some_and(|parent| tree.kind(parent) == "ObjectPattern") =>
-            {
-                Some("key")
+        if let Some(&result) = cached.get(&node) {
+            if result {
+                uncertain.push(node);
             }
-            _ => None,
-        };
-        if property_field.is_some()
-            && matches!(value(tree, node, "computed"), Value::Bool(true))
-            && property_field
-                .and_then(|field| tree.child(node, field))
-                .is_none_or(|property| !static_selector(tree, property))
-        {
-            return true;
+            continue;
         }
-        if tree
-            .text(node, "name")
-            .or_else(|| tree.text(node, "value"))
-            .is_some_and(|name| uncertain_text(normalizer.setting.dialect, name))
-        {
-            return true;
+        if directly_parameterization_uncertain(tree, node, normalizer.setting.dialect) {
+            uncertain.push(node);
+            continue;
         }
         if let Some(declaration) = (tree.kind(node) == "Identifier")
             .then(|| normalizer.scopes.symbol_at(tree.span(node).start))
             .flatten()
             .and_then(|symbol| normalizer.scopes.declaration_node(symbol))
         {
+            references.entry(declaration).or_default().push(node);
             pending.push(declaration);
-        }
-        if tree.kind(node) == "TemplateElement"
-            && quasi_text(tree, node, "cooked")
-                .as_str()
-                .is_some_and(|name| uncertain_text(normalizer.setting.dialect, name))
-        {
-            return true;
         }
         pending.extend(children(tree, node));
     }
-    false
+
+    // Propagate through both kinds of incoming edge before caching any false result.
+    // A declaration cycle can reach uncertainty through a branch visited after the cycle.
+    while let Some(node) = uncertain.pop() {
+        if seen.remove(&node) {
+            cached.insert(node, true);
+            uncertain.extend(tree.parent(node));
+            if let Some(referrers) = references.remove(&node) {
+                uncertain.extend(referrers);
+            }
+        }
+    }
+    cached.extend(seen.into_iter().map(|node| (node, false)));
+    cached[&node]
+}
+
+/// Whether this node alone prevents consolidation.
+fn directly_parameterization_uncertain(tree: &Tree, node: NodeId, dialect: &Dialect) -> bool {
+    if tree.kind(node) == "ImportExpression"
+        && (tree
+            .child(node, "source")
+            .is_none_or(|source| !static_selector(tree, source))
+            || !is_empty(tree.field_of(node, "options")))
+    {
+        return true;
+    }
+    let property_field = match tree.kind(node) {
+        "MemberExpression" => Some("property"),
+        "Property"
+            if tree
+                .parent(node)
+                .is_some_and(|parent| tree.kind(parent) == "ObjectPattern") =>
+        {
+            Some("key")
+        }
+        _ => None,
+    };
+    if property_field.is_some()
+        && matches!(value(tree, node, "computed"), Value::Bool(true))
+        && property_field
+            .and_then(|field| tree.child(node, field))
+            .is_none_or(|property| !static_selector(tree, property))
+    {
+        return true;
+    }
+    if tree
+        .text(node, "name")
+        .or_else(|| tree.text(node, "value"))
+        .is_some_and(|name| uncertain_text(dialect, name))
+    {
+        return true;
+    }
+    tree.kind(node) == "TemplateElement"
+        && quasi_text(tree, node, "cooked")
+            .as_str()
+            .is_some_and(|name| uncertain_text(dialect, name))
 }
 
 /// Whether `node` can observe a declaration's name: `.name`, `.constructor`, `.toString`, or a

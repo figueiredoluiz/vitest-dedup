@@ -418,13 +418,11 @@ fn parameterization_survives_whole_suite_suppression() {
 fn parameterization_refuses_source_keyed_snapshots() {
     let source =
         include_str!("../../../fixtures/duplicates/parameterization-inline-snapshots.test.ts");
-    let corpus = eligible(source, 12);
-    assert!(corpus.tests[..10]
-        .iter()
-        .all(|case| case.parameterization_key.is_none()));
-    assert!(corpus.tests[10..]
-        .iter()
-        .all(|case| case.parameterization_key.is_some()));
+    let corpus = eligible(source, 14);
+    for case in &corpus.tests {
+        let ordinary = matches!(case.title.as_deref(), Some("ordinary a" | "ordinary b"));
+        assert_eq!(case.parameterization_key.is_some(), ordinary, "{case:?}");
+    }
     let candidates: Vec<_> = owned_findings("a.test.ts", corpus)
         .findings
         .into_iter()
