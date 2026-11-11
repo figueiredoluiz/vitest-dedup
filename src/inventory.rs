@@ -311,16 +311,16 @@ pub(crate) enum ImportLimitKind {
     SourceBytes,
 }
 
-/// The first bounded import resource exhausted while reading one root.
+/// The bounded import resource that ended the final pass over one root.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ImportLimit {
     /// The exhausted bound.
     pub(crate) kind: ImportLimitKind,
-    /// The first module refused, relative to the analysis root when it is inside it.
+    /// The first module refused in the final pass, relative to the root when it is inside it.
     pub(crate) module: PathBuf,
     /// The import depth requested for that module.
     pub(crate) depth: usize,
-    /// Uncached module analyses already attempted, including a source refused by the byte bound.
+    /// Uncached analyses attempted across all passes, including a source refused by the byte bound.
     pub(crate) analyses: usize,
     /// Imported source bytes admitted before the refusal.
     pub(crate) bytes: usize,
