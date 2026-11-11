@@ -124,6 +124,7 @@ fn scopes(semantic: &Semantic, tree: &Tree) -> Scopes {
         top_level,
         global_eval,
         builtins,
+        receivers: Default::default(),
     }
 }
 

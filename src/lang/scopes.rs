@@ -1,6 +1,7 @@
 //! Owned scope analysis: which declaration every identifier binds or reads.
 
 use super::tree::{NodeId, Span};
+use std::cell::RefCell;
 use std::collections::HashMap;
 
 /// A declared binding of a module.
@@ -84,6 +85,9 @@ pub struct Scopes {
     pub(super) top_level: HashMap<String, SymbolId>,
     pub(super) global_eval: bool,
     pub(super) builtins: bool,
+    /// [`super::uses_receiver`]'s answers for this module's tree, by root: each is a walk of the
+    /// root's subtree, asked again for every row of every enclosing table suite of every test.
+    pub(super) receivers: RefCell<HashMap<NodeId, bool>>,
 }
 
 impl Scopes {
