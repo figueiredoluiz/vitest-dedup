@@ -42,6 +42,7 @@ pub(super) fn collect(
         .filter(|statement| tree.kind(*statement) == "IfStatement")
         .map(|statement| tree.span(statement).end)
         .min();
+    let unrun = Unrun::new(found, setting);
     let mut suites = Vec::new();
     for site in sites.values() {
         let Some(callback) = normalizer.callback(site.node).filter(|body| body.inline) else {
@@ -118,19 +119,9 @@ pub(super) fn collect(
             .collect();
         // Copies whose every child is skipped or a placeholder never run.
         let all_children_unrun = !children.is_empty()
-            && children.iter().all(|test| {
-                found.sites.iter().any(|site| {
-                    site.kind == SiteKind::Registers(Registers::Test)
-                        && site.span.start <= test.span.start_byte
-                        && test.span.end_byte <= site.span.end
-                        && site.chain.iter().any(|member| {
-                            matches!(
-                                setting.dialect.chain_member(member),
-                                Some(Chain::Skip | Chain::Todo)
-                            )
-                        })
-                })
-            });
+            && children
+                .iter()
+                .all(|test| unrun.contains(test.span.start_byte, test.span.end_byte));
         let registered_conditionally = conditional_from.is_some_and(|from| {
             let mut at = site.node;
             while tree.parent(at) != Some(tree.root()) {
@@ -165,6 +156,49 @@ pub(super) fn collect(
     }
     suites.sort_by_key(|suite| suite.span.start_byte);
     suites
+}
+
+/// The spans of a file's skipped and placeholder test registrations, built once per file so each
+/// enclosing suite's children are checked in logarithmic time instead of by a scan of every site.
+struct Unrun {
+    /// `(start, greatest end among spans starting at or before it)`, sorted by start.
+    reach: Vec<(u32, u32)>,
+}
+
+impl Unrun {
+    /// Collects the file's `skip` and `todo` test registrations.
+    fn new(found: &Inventory, setting: Setting<'_>) -> Self {
+        let mut spans: Vec<_> = found
+            .sites
+            .iter()
+            .filter(|site| {
+                site.kind == SiteKind::Registers(Registers::Test)
+                    && site.chain.iter().any(|member| {
+                        matches!(
+                            setting.dialect.chain_member(member),
+                            Some(Chain::Skip | Chain::Todo)
+                        )
+                    })
+            })
+            .map(|site| (site.span.start, site.span.end))
+            .collect();
+        spans.sort_unstable();
+        let mut furthest = 0;
+        let reach = spans
+            .into_iter()
+            .map(|(start, end)| {
+                furthest = furthest.max(end);
+                (start, furthest)
+            })
+            .collect();
+        Self { reach }
+    }
+
+    /// Whether some skipped or placeholder registration spans `start..end`.
+    fn contains(&self, start: u32, end: u32) -> bool {
+        let before = self.reach.partition_point(|&(from, _)| from <= start);
+        before > 0 && self.reach[before - 1].1 >= end
+    }
 }
 
 /// Repeated suite rows are row claims, not whole-suite equivalence admissions.

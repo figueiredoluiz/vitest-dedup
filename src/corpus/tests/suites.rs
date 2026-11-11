@@ -350,6 +350,33 @@ fn suite_claims_refuse_copies_that_cannot_behave_alike() {
     );
 }
 
+/// Unrun copies are those whose every child is skipped or a placeholder, judged child by child:
+/// one runnable child keeps the claim, and a skipped pair elsewhere in the file, before or after,
+/// does not reach a runnable pair. Placeholder copies are also inert, so their absence is checked
+/// on the keyed suites themselves.
+#[test]
+fn suite_claims_judge_unrun_children_one_by_one() {
+    let source = include_str!("../../../fixtures/oracle/duplicate-suites/unrun-children.test.ts");
+    let corpus = read(source, 12);
+    let mut keyed: Vec<_> = corpus
+        .suites
+        .iter()
+        .filter_map(|suite| suite.full_title.as_deref())
+        .collect();
+    keyed.sort_unstable();
+    keyed.dedup();
+    assert_eq!(keyed, ["one runnable child", "runnable"]);
+    let result = owned_findings("a.test.ts", corpus);
+    let mut claimed: Vec<_> = result
+        .findings
+        .iter()
+        .filter(|f| f.rule == Rule::DuplicateSuite)
+        .map(|f| f.titles[0].as_str())
+        .collect();
+    claimed.sort_unstable();
+    assert_eq!(claimed, ["one runnable child", "runnable"]);
+}
+
 #[test]
 fn probe_generated_sources_parse() {
     let block = |body: &str| format!("describe('s', () => {{ {body} }})");

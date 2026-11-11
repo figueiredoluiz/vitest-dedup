@@ -1,0 +1,11 @@
+import { describe, test, expect } from 'vitest'
+describe('skipped first', () => { test.skip('child', () => { expect(2).toBe(2) }) })
+describe('skipped first', () => { test.skip('child', () => { expect(2).toBe(2) }) })
+describe('placeholder', () => { test.todo('child', () => { expect(6).toBe(6) }) })
+describe('placeholder', () => { test.todo('child', () => { expect(6).toBe(6) }) })
+describe('runnable', () => { test('child', () => { expect(1).toBe(1) }) })
+describe('runnable', () => { test('child', () => { expect(1).toBe(1) }) })
+describe('one runnable child', () => { test.skip('a', () => { expect(3).toBe(3) }); test('b', () => { expect(4).toBe(4) }) })
+describe('one runnable child', () => { test.skip('a', () => { expect(3).toBe(3) }); test('b', () => { expect(4).toBe(4) }) })
+describe('skipped last', () => { test.skip('child', () => { expect(5).toBe(5) }) })
+describe('skipped last', () => { test.skip('child', () => { expect(5).toBe(5) }) })

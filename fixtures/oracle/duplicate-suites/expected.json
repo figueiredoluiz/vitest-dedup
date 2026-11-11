@@ -9,6 +9,11 @@
       "tasks": 40,
       "wrapperSites": [],
       "next": {}
+    },
+    "unrun-children.test.ts": {
+      "tasks": 22,
+      "wrapperSites": [],
+      "next": {}
     }
   }
 }
