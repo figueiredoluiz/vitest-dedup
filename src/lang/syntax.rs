@@ -9,7 +9,19 @@ use super::{NodeId, Scopes, SymbolId, Tree};
 /// invoked as plain calls, so `new.target` is absent in those frames. Constructed runners are
 /// refused by inventory. `import.meta` is fixed per module; cross-module expansion checks its
 /// provenance separately before admitting a helper.
+/// `scopes` must be the scopes of `tree`'s module, whose answers it keeps.
 pub fn uses_receiver(tree: &Tree, scopes: &Scopes, root: NodeId) -> bool {
+    let known = scopes.receivers.borrow().get(&root).copied();
+    if let Some(known) = known {
+        return known;
+    }
+    let reads = reads_receiver(tree, scopes, root);
+    scopes.receivers.borrow_mut().insert(root, reads);
+    reads
+}
+
+/// [`uses_receiver`], walked.
+fn reads_receiver(tree: &Tree, scopes: &Scopes, root: NodeId) -> bool {
     let binds = |ancestor, read| {
         matches!(
             tree.kind(ancestor),
@@ -147,5 +159,42 @@ mod tests {
     fn this_and_arguments_remain_receiver_reads() {
         assert!(body_reads("() => this.value"));
         assert!(body_reads("() => arguments.length"));
+    }
+
+    /// A kept answer is the walk's answer for that root, whichever roots were asked first.
+    #[test]
+    fn kept_answers_match_a_fresh_walk_for_every_root() {
+        let source = "const a = () => this.value;\n\
+                      const b = () => { function own() { return this } return own };\n\
+                      const c = () => arguments.length;\n\
+                      const d = (arguments) => arguments;\n\
+                      class E extends Object { f = this.g; static { this.h = 1 } [this.k]() { return super.m() } }\n\
+                      const g = () => { const h = () => this.i; return h };\n";
+        let parsed = parse(Path::new("a.test.ts"), source).expect("parses");
+        let (tree, scopes) = (&parsed.tree, &parsed.scopes);
+        let nodes: Vec<_> = tree.nodes().collect();
+        let walked: Vec<_> = nodes
+            .iter()
+            .map(|&node| reads_receiver(tree, scopes, node))
+            .collect();
+        assert!(walked.contains(&true) && walked.contains(&false));
+        for order in [nodes.clone(), nodes.iter().rev().copied().collect()] {
+            for &node in &order {
+                let index = nodes.iter().position(|&n| n == node).unwrap();
+                assert_eq!(uses_receiver(tree, scopes, node), walked[index]);
+                assert_eq!(uses_receiver(tree, scopes, node), walked[index]);
+            }
+        }
+        assert_eq!(scopes.receivers.borrow().len(), nodes.len());
+    }
+
+    /// A root asked before is answered from what was kept, without walking its subtree again.
+    #[test]
+    fn a_kept_answer_is_not_walked_again() {
+        let (parsed, body) = arrow_body("() => this.value");
+        let (tree, scopes) = (&parsed.tree, &parsed.scopes);
+        assert!(uses_receiver(tree, scopes, body));
+        scopes.receivers.borrow_mut().insert(body, false);
+        assert!(!uses_receiver(tree, scopes, body));
     }
 }
