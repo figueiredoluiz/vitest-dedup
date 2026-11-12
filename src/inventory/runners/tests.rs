@@ -407,9 +407,9 @@ fn returned_parameter_binding_work_is_bounded() {
     ));
 }
 
-/// A linear alias chain reuses proofs and refuses before exceeding the remaining work.
+/// Alias visits remain charged after binding facts are cached; exhausted work still refuses.
 #[test]
-fn returned_factory_setup_proofs_share_actual_work() {
+fn returned_factory_setup_proofs_charge_expanded_work() {
     let root = tempfile::tempdir().unwrap();
     let path = root.path().join("factory.ts");
     std::fs::write(
@@ -425,7 +425,10 @@ fn returned_factory_setup_proofs_share_actual_work() {
     let template =
         factory_template(&Sources::default(), &path, "make", setting, 8 * 1024 * 1024).unwrap();
     assert!(template.work > 400);
-    assert!(template.work <= template.parsed.tree.nodes().count() * 6);
+    assert!(
+        template.work > template.parsed.tree.nodes().count() * 6,
+        "cached binding facts must not erase expanded value visits"
+    );
     assert!(matches!(
         factory_template(
             &Sources::default(),

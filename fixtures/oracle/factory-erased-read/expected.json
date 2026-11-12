@@ -1,0 +1,10 @@
+{
+  "blindUnderCurrent": ["enum.test.ts", "interface.test.ts", "type.test.ts", "local.test.ts"],
+  "files": {
+    "enum.test.ts": {"oracle": "collection-error", "next": {"reasons": ["registered-elsewhere"], "testsExcluded": 3}},
+    "interface.test.ts": {"oracle": "collection-error", "next": {"reasons": ["registered-elsewhere"], "testsExcluded": 3}},
+    "type.test.ts": {"oracle": "collection-error", "next": {"reasons": ["registered-elsewhere"], "testsExcluded": 3}},
+    "local.test.ts": {"oracle": "collection-error", "next": {"reasons": ["registered-elsewhere", "helper-effects-unproved"], "testsExcluded": 4}},
+    "control.test.ts": {"tasks": 2, "wrapperSites": ["wrapper@2", "wrapper@3", "wrapper@4"], "next": {}}
+  }
+}

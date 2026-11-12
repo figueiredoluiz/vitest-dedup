@@ -3,6 +3,77 @@ use super::*;
 use crate::model::Rule;
 use std::path::PathBuf;
 
+/// Erased declarations cannot stand in for initialized factory parameters.
+#[test]
+fn returned_factory_erased_reads_stay_opaque() {
+    let results = corpora(
+        &[
+            (
+                "factory.ts",
+                include_str!("../../../fixtures/oracle/factory-erased-read/factory.ts"),
+            ),
+            (
+                "enum.test.ts",
+                include_str!("../../../fixtures/oracle/factory-erased-read/enum.test.ts"),
+            ),
+            (
+                "interface.test.ts",
+                include_str!("../../../fixtures/oracle/factory-erased-read/interface.test.ts"),
+            ),
+            (
+                "type.test.ts",
+                include_str!("../../../fixtures/oracle/factory-erased-read/type.test.ts"),
+            ),
+            (
+                "local.test.ts",
+                include_str!("../../../fixtures/oracle/factory-erased-read/local.test.ts"),
+            ),
+            (
+                "control.test.ts",
+                include_str!("../../../fixtures/oracle/factory-erased-read/control.test.ts"),
+            ),
+        ],
+        &[
+            "enum.test.ts",
+            "interface.test.ts",
+            "type.test.ts",
+            "local.test.ts",
+            "control.test.ts",
+        ],
+    );
+    assert_eq!(
+        results
+            .iter()
+            .map(|result| result.tests.len())
+            .collect::<Vec<_>>(),
+        [3, 3, 3, 4, 2]
+    );
+    assert_all_wrappers_refused(&results[..3]);
+    assert!(results[3].tests.iter().all(|case| case.exclusion.is_some()));
+    for (path, result) in [
+        "enum.test.ts",
+        "interface.test.ts",
+        "type.test.ts",
+        "local.test.ts",
+    ]
+    .into_iter()
+    .zip(&results[..4])
+    {
+        let outcome = owned_findings(path, result.clone());
+        assert_rule_absent(outcome, Rule::DuplicateTest);
+    }
+    assert!(results[4].tests.iter().all(|case| case.exclusion.is_none()));
+    let retained = owned_findings("control.test.ts", results[4].clone());
+    assert_eq!(
+        retained
+            .findings
+            .iter()
+            .filter(|finding| finding.rule == Rule::DuplicateTest)
+            .count(),
+        1
+    );
+}
+
 /// Copy costs refuse a repeated large modifier before preparation, retaining the small control.
 #[test]
 fn returned_modifier_copies_obey_the_work_bound() {

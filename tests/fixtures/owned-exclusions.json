@@ -1641,6 +1641,28 @@
       "reason": "registered-elsewhere",
       "otherReasons": [],
       "testsExcluded": 2
+    },
+    "oracle/factory-erased-read/local.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 4
+    },
+    "oracle/factory-erased-read/interface.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [],
+      "testsExcluded": 3
+    },
+    "oracle/factory-erased-read/type.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [],
+      "testsExcluded": 3
+    },
+    "oracle/factory-erased-read/enum.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [],
+      "testsExcluded": 3
     }
   }
 }
