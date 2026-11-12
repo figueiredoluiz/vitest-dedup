@@ -639,6 +639,136 @@ fn wrappers_are_found_to_a_fixpoint_across_modules() {
     );
 }
 
+/// A function returning a registration function is a wrapper: its call and every call through what
+/// it returns are sites, here and in an importer. A wrapper's other results, a type read and a
+/// nested function's return are not registration functions; an awaited result (`lateIt`), a held
+/// API (`holder`) and one returned through a local alias (`selected`) are not read.
+#[test]
+fn calls_through_a_returned_registration_function_are_sites() {
+    let local = sites(
+        "import { test } from 'vitest'\n\
+         function make() { return test.extend({ n: 1 }) }\n\
+         async function later() { return test }\n\
+         const it = make()\n\
+         const lateIt = await later()\n\
+         it('a', () => {})\n\
+         lateIt('b', () => {})\n\
+         make().skip('c', () => {})",
+        &[],
+        false,
+    );
+    assert_eq!(
+        local,
+        [
+            "wrapper@4:12  via-wrapper",
+            "wrapper@5:22  via-wrapper",
+            "wrapper@6:1  via-wrapper",
+            "wrapper@8:8 ().skip via-wrapper",
+            "wrapper@8:1  via-wrapper"
+        ]
+    );
+    let factories = "import { test } from 'vitest'\n\
+                     export const arrow = () => test.extend({ n: 1 })\n\
+                     export function holder() { return { it: test } }\n\
+                     export function selected(flag) { const t = test.extend({}); return flag ? t : t.skip }";
+    let imported = sites(
+        "import { arrow, holder, selected } from './factories'\n\
+         const it = arrow()\n\
+         const { it: held } = holder()\n\
+         it('a', () => {})\n\
+         held('b', () => {})\n\
+         selected(true)('c', () => {})",
+        &[("factories.ts", factories)],
+        false,
+    );
+    assert_eq!(
+        imported,
+        ["wrapper@2:12  via-wrapper", "wrapper@4:1  via-wrapper"]
+    );
+    let controls = sites(
+        "import { expect, test } from 'vitest'\n\
+         import { run } from './run'\n\
+         function inner() { const nested = () => test.extend({}); return 1 }\n\
+         function typed() { return null as unknown as typeof test }\n\
+         const value = inner()\n\
+         const t = typed()\n\
+         t('x', () => {})\n\
+         const { stderr } = await run()\n\
+         expect(stderr).toBe('')\n\
+         test('kept', () => { expect(value).toBe(1) })\n\
+         function wrapped() { return run() }\n\
+         const { exitCode } = await wrapped()\n\
+         expect(exitCode).toBe(0)",
+        &[(
+            "run.ts",
+            "import { onTestFinished } from 'vitest'\n\
+             export async function run() { onTestFinished(() => {}); return { stderr: '' } }",
+        )],
+        false,
+    );
+    assert_eq!(
+        controls,
+        [
+            "wrapper@8:26  via-wrapper",
+            "test@10:1 ",
+            "wrapper@11:29  via-wrapper",
+            "wrapper@12:28  via-wrapper"
+        ]
+    );
+}
+
+/// Only a returned registration value itself makes a factory. One consumed by an operator, a call
+/// argument or a template, a member the dialect does not know such as `.name`, one read through a
+/// local alias or a conditional, a member of a factory or of its result, and a return after a
+/// return make none; neither does one inside `||`, a sequence, an array, or a factory's call.
+#[test]
+fn only_a_returned_registration_value_itself_makes_a_factory() {
+    let consumed = sites(
+        "import { test } from 'vitest'\n\
+         function supports() { return typeof test === 'function' }\n\
+         function named() { return `${test.name}` }\n\
+         function first() { return test && 1 }\n\
+         function later() { return 1; return test.extend({}) }\n\
+         function passed() { return String(test) }\n\
+         function title() { return test.name }\n\
+         function size() { return test.skip.length }\n\
+         function aliased() { const n = test.name; const m = n; return m }\n\
+         function chosen(f) { const n = f ? test.name : test.skip.name; return n }\n\
+         function alias() { const a = test.skip; return a }\n\
+         function factory() { return test.extend({}) }\n\
+         function label() { return factory.name }\n\
+         function member() { return factory().name }\n\
+         supports(); named(); first(); later(); passed(); title(); size(); aliased()\n\
+         chosen(true); alias(); label(); member()\n\
+         test('kept', () => {})",
+        &[],
+        false,
+    );
+    // `member` calls the factory, so its body registers: a wrapper by the body, not its return.
+    assert_eq!(
+        consumed,
+        [
+            "wrapper@14:28  via-wrapper",
+            "wrapper@16:33  via-wrapper",
+            "test@17:1 "
+        ]
+    );
+    let contained = sites(
+        "import { test } from 'vitest'\n\
+         function either(x) { return x || test }\n\
+         function last() { return (0, test) }\n\
+         function list() { return [test] }\n\
+         function chained() { return list() }\n\
+         either(0)('a', () => {})\n\
+         last()('b', () => {})\n\
+         list()[0]('c', () => {})\n\
+         chained()[0]('d', () => {})",
+        &[],
+        false,
+    );
+    assert_eq!(contained, Vec::<String>::new());
+}
+
 /// A function expression named inside a `const` is a wrapper under either name, and a module that
 /// re-exports any name of a registering module registers when it loads.
 #[test]

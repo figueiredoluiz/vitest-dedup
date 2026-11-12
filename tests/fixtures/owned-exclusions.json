@@ -469,6 +469,43 @@
       "otherReasons": [],
       "testsExcluded": 2
     },
+    "oracle/factory-returned-api/arrow.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [],
+      "testsExcluded": 3
+    },
+    "oracle/factory-returned-api/imported.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 4
+    },
+    "oracle/factory-returned-api/inline.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [],
+      "testsExcluded": 2
+    },
+    "oracle/factory-returned-api/label.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [],
+      "testsExcluded": 1
+    },
+    "oracle/factory-returned-api/local.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [],
+      "testsExcluded": 3
+    },
+    "oracle/factory-returned-api/name.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [],
+      "testsExcluded": 2
+    },
+    "oracle/factory-returned-api/plain.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [],
+      "testsExcluded": 2
+    },
     "oracle/hook-proof-boundaries/reset-alias.test.ts": {
       "reason": "order-dependent-state",
       "otherReasons": [],
