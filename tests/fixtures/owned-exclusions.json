@@ -479,6 +479,11 @@
       "otherReasons": [],
       "testsExcluded": 3
     },
+    "oracle/factory-returned-api/holder.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [],
+      "testsExcluded": 2
+    },
     "oracle/factory-returned-api/imported.test.ts": {
       "reason": "registered-elsewhere",
       "otherReasons": [
@@ -499,7 +504,7 @@
     "oracle/factory-returned-api/local.test.ts": {
       "reason": "registered-elsewhere",
       "otherReasons": [],
-      "testsExcluded": 3
+      "testsExcluded": 4
     },
     "oracle/factory-returned-api/name.test.ts": {
       "reason": "registered-elsewhere",

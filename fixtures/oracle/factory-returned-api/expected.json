@@ -30,10 +30,7 @@
           "registered-elsewhere"
         ],
         "testsExcluded": 2
-      },
-      "wrapperSitesToday": [],
-      "nextToday": {},
-      "waitsOn": "a test API returned inside a value, through await or another factory"
+      }
     },
     "imported.test.ts": {
       "tasks": 3,
@@ -99,19 +96,7 @@
           "registered-elsewhere"
         ],
         "testsExcluded": 4
-      },
-      "wrapperSitesToday": [
-        "wrapper@13",
-        "wrapper@14",
-        "wrapper@15"
-      ],
-      "nextToday": {
-        "reasons": [
-          "registered-elsewhere"
-        ],
-        "testsExcluded": 3
-      },
-      "waitsOn": "a test API returned inside a value, through await or another factory"
+      }
     },
     "name.test.ts": {
       "tasks": 1,
@@ -144,29 +129,6 @@
       "item": "test@5",
       "reason": "`selected` returns `flag ? t : t.skip` for a local `t`, which is not read as the API, so the call through its result has no site.",
       "waitsOn": "a test API returned through a local alias or a conditional"
-    },
-    {
-      "path": "holder.test.ts",
-      "kind": "missing-site",
-      "item": "test@5",
-      "reason": "`holder` returns `{ it: test.extend(...) }`; an API inside a returned object is not read, so the call through its member has no site.",
-      "waitsOn": "a test API returned inside a value, through await or another factory"
-    },
-    {
-      "path": "local.test.ts",
-      "kind": "missing-site",
-      "item": "test@16",
-      "reason": "`lateIt` is `await later()`; what awaiting a factory's result resolves to is not read, so the call through it has no site.",
-      "waitsOn": "a test API returned inside a value, through await or another factory"
-    }
-  ],
-  "knownTitles": [
-    {
-      "path": "holder.test.ts",
-      "kind": "missing-test",
-      "item": "a",
-      "reason": "The only test is registered through the held API, which is not read, and the file is not excluded.",
-      "waitsOn": "a test API returned inside a value, through await or another factory"
     }
   ]
 }

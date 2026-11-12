@@ -81,6 +81,9 @@ struct Module<'s> {
     /// Functions of this module whose body holds a registration, by the symbol naming them, with
     /// what calling them may register.
     wrappers: HashMap<SymbolId, Reach>,
+    /// Functions of this module whose returned value may be a registration function: calling
+    /// what one returns may register tests.
+    returners: HashSet<SymbolId>,
     /// Bindings a declarator gave a registration value: what they hold is read elsewhere.
     aliased: HashSet<SymbolId>,
     loads: Vec<u32>,
@@ -120,6 +123,7 @@ pub(super) fn analyse(
         setting,
         origins: HashMap::new(),
         wrappers: HashMap::new(),
+        returners: HashSet::new(),
         aliased: HashSet::new(),
         loads: Vec::new(),
         values: HashSet::new(),
@@ -867,6 +871,11 @@ impl<'s> Module<'s> {
                     steps.push(Step::Call);
                     node = tree.child(node, "callee")?;
                 }
+                // What awaiting a registration function resolves to is not read: it may register.
+                "AwaitExpression" if self.holds_api(tree.child(node, "argument")?) => {
+                    steps.reverse();
+                    return Some((Origin::Wrapper(Reach::Tasks), Provenance::Wrapper, steps));
+                }
                 "TaggedTemplateExpression" => {
                     steps.push(Step::Call);
                     node = tree.child(node, "tag")?;
@@ -1260,6 +1269,7 @@ impl<'s> Module<'s> {
             // wrapper's result already may, so one keeps the reach of its own call.
             for symbol in self.returns_registration() {
                 self.wrappers.entry(symbol).or_insert(Reach::Tasks);
+                self.returners.insert(symbol);
             }
             let aliases = self.origins.clone();
             self.collect_aliases();
@@ -1337,10 +1347,11 @@ impl<'s> Module<'s> {
         bound.chain(free)
     }
 
-    /// Whether `node`'s value is seen here to be a registration function or the API's namespace:
-    /// read from the framework's own binding (an import, a namespace member, a global) through
-    /// members the dialect knows. Through a local alias or another module's export the value is not
-    /// read here, and `test.name` is a string.
+    /// Whether `node`'s value is seen here to be a registration function or the API's namespace, or
+    /// is what a call of a function returning one returns. A registration value must be read from
+    /// the framework's own binding (an import, a namespace member, a global) through members the
+    /// dialect knows: through a local alias, a conditional or another module's export the value is
+    /// not read here, and `test.name` is a string.
     fn holds_api(&self, node: NodeId) -> bool {
         let tree = self.tree;
         let mut root = tree.inner(node);
@@ -1348,19 +1359,32 @@ impl<'s> Module<'s> {
             "MemberExpression" => tree.child(root, "object"),
             "CallExpression" => tree.child(root, "callee"),
             "TaggedTemplateExpression" => tree.child(root, "tag"),
+            "AwaitExpression" => tree.child(root, "argument"),
             _ => None,
         } {
             root = tree.inner(next);
         }
-        if tree.kind(root) != "Identifier"
-            || !matches!(
-                self.value_origin(node),
-                Some(Origin::Api(_) | Origin::Namespace)
-            )
-        {
+        if tree.kind(root) != "Identifier" {
             return false;
         }
-        let own = self.read(root).is_none_or(|symbol| {
+        let symbol = self.read(root);
+        if !matches!(
+            self.value_origin(node),
+            Some(Origin::Api(_) | Origin::Namespace)
+        ) {
+            // Only the call itself: `make.name` and `make().name` are not what `make` returns.
+            let mut value = tree.inner(node);
+            if tree.kind(value) == "AwaitExpression" {
+                let Some(argument) = tree.child(value, "argument") else {
+                    return false;
+                };
+                value = tree.inner(argument);
+            }
+            return tree.kind(value) == "CallExpression"
+                && tree.child(value, "callee").map(|callee| tree.inner(callee)) == Some(root)
+                && symbol.is_some_and(|symbol| self.returners.contains(&symbol));
+        }
+        let own = symbol.is_none_or(|symbol| {
             !self.aliased.contains(&symbol)
                 && matches!(
                     self.origins.get(&symbol),
@@ -1380,15 +1404,14 @@ impl<'s> Module<'s> {
         })
     }
 
-    /// The symbols of functions that return a registration value: a `return` argument or an arrow's
-    /// expression body that is, but for parentheses and TS expression wrappers, a read of one
-    /// through its member and call steps ([`Self::holds_api`]), and reachable.
+    /// The symbols of functions whose returned value may hold a registration value: a read of one,
+    /// still a registration value after its member and call steps, within a `return` argument or
+    /// an arrow's expression body and no nested function, and reachable. Type positions are erased.
     fn returns_registration(&self) -> Vec<SymbolId> {
         let tree = self.tree;
         let mut symbols = Vec::new();
         for read in self.registration_reads() {
             let mut value = read;
-            let mut outer = None;
             while let Some(parent) = tree.parent(value) {
                 let holds = |key| tree.child(parent, key) == Some(value);
                 match tree.kind(parent) {
@@ -1401,24 +1424,27 @@ impl<'s> Module<'s> {
                     | "TSNonNullExpression"
                     | "TSTypeAssertion"
                     | "TSInstantiationExpression" => value = parent,
-                    _ => {
-                        outer = Some(parent);
-                        break;
-                    }
+                    _ => break,
                 }
             }
-            let Some(outer) = outer else {
-                continue;
-            };
-            let function = if tree.kind(outer) == "ReturnStatement" {
-                tree.ancestors(outer).find(|&node| tree.is_function(node))
-            } else {
-                (tree.is_function(outer)
-                    && tree.child(outer, "body") == Some(value)
-                    && tree.kind(value) != "BlockStatement")
-                    .then_some(outer)
-            };
-            let Some(function) = function else {
+            let mut inner = value;
+            let function = tree.ancestors(value).find_map(|outer| {
+                let found = if tree.kind(outer) == "ReturnStatement" {
+                    tree.ancestors(outer).find(|&node| tree.is_function(node))
+                } else if tree.is_function(outer) {
+                    (tree.child(outer, "body") == Some(inner)
+                        && tree.kind(inner) != "BlockStatement")
+                        .then_some(outer)
+                } else {
+                    None
+                };
+                let stop = found.is_some()
+                    || tree.is_function(outer)
+                    || !self.may_evaluate_to(outer, inner);
+                inner = outer;
+                stop.then_some(found)
+            });
+            let Some(Some(function)) = function else {
                 continue;
             };
             if self.unreachable(read) || !self.holds_api(value) {
@@ -1432,6 +1458,34 @@ impl<'s> Module<'s> {
             );
         }
         symbols
+    }
+
+    /// Whether `outer`'s value may be, or hold, its child `inner`'s value. Operators that consume a
+    /// value (`typeof`, comparison, a call argument, a template) and type positions do not.
+    fn may_evaluate_to(&self, outer: NodeId, inner: NodeId) -> bool {
+        let tree = self.tree;
+        let holds = |key| tree.child(outer, key) == Some(inner);
+        match tree.kind(outer) {
+            "ParenthesizedExpression"
+            | "TSAsExpression"
+            | "TSSatisfiesExpression"
+            | "TSNonNullExpression"
+            | "TSTypeAssertion"
+            | "TSInstantiationExpression"
+            | "AwaitExpression"
+            | "ArrayExpression"
+            | "ObjectExpression"
+            | "SpreadElement" => true,
+            "ConditionalExpression" => holds("consequent") || holds("alternate"),
+            "LogicalExpression" => {
+                holds("right")
+                    || (holds("left") && matches!(tree.text(outer, "operator"), Some("||" | "??")))
+            }
+            "SequenceExpression" => tree.list(outer, "expressions").last() == Some(&Some(inner)),
+            "Property" => holds("value"),
+            "AssignmentExpression" => holds("right"),
+            _ => false,
+        }
     }
 
     /// Whether `symbol` may hold anything but what it was declared with: it is declared more than
