@@ -806,6 +806,24 @@ fn nested_awaits_of_the_api_are_read_in_linear_time() {
     assert!(started.elapsed() < std::time::Duration::from_secs(2));
 }
 
+/// Consecutive `await`s do not rescan the rest of the chain at each level.
+#[test]
+fn consecutive_awaits_of_the_api_are_read_in_linear_time() {
+    let source = format!(
+        "import {{ test }} from 'vitest'\nconst t = {}test\ntest('a', () => {{}})",
+        "await ".repeat(10_000)
+    );
+    let started = std::time::Instant::now();
+    let found = std::thread::Builder::new()
+        .stack_size(crate::lang::limits::EXTRACTION_STACK_BYTES)
+        .spawn(move || sites(&source, &[], false))
+        .unwrap()
+        .join()
+        .unwrap();
+    assert_eq!(found, ["test@3:1 "]);
+    assert!(started.elapsed() < std::time::Duration::from_secs(2));
+}
+
 /// A function expression named inside a `const` is a wrapper under either name, and a module that
 /// re-exports any name of a registering module registers when it loads.
 #[test]

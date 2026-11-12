@@ -1360,11 +1360,18 @@ impl<'s> Module<'s> {
     fn holds_api(&self, node: NodeId) -> bool {
         let tree = self.tree;
         let mut root = tree.inner(node);
+        // Only `await make()` holds the API through an `await`: a chain through one is a wrapper
+        // (`walk`), so the scan stops at the next and nested awaits stay linear.
+        if tree.kind(root) == "AwaitExpression" {
+            let Some(argument) = tree.child(root, "argument") else {
+                return false;
+            };
+            root = tree.inner(argument);
+        }
         while let Some(next) = match tree.kind(root) {
             "MemberExpression" => tree.child(root, "object"),
             "CallExpression" => tree.child(root, "callee"),
             "TaggedTemplateExpression" => tree.child(root, "tag"),
-            "AwaitExpression" => tree.child(root, "argument"),
             _ => None,
         } {
             root = tree.inner(next);
