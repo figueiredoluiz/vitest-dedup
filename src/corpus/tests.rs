@@ -14,6 +14,7 @@ mod local_helpers;
 mod module_meta;
 mod nc64;
 mod nc65;
+mod normal_properties;
 mod runners;
 
 /// The corpus of each of `tests` (paths among `files`), read in one run.
