@@ -3,6 +3,122 @@
 use super::*;
 use crate::framework::vitest::DIALECT;
 
+/// Locate one top-level initializer in an owned proof input.
+fn proof_initializer(parsed: &Parsed, name: &str) -> NodeId {
+    let symbol = parsed
+        .scopes
+        .symbols()
+        .find(|&symbol| parsed.scopes.symbol(symbol).name == name)
+        .unwrap();
+    let Declaration::Variable(declaration) = parsed.scopes.symbol(symbol).declaration else {
+        panic!("expected a variable")
+    };
+    parsed.tree.child(declaration, "init").unwrap()
+}
+
+/// Binding-fact reuse preserves each existing inert-expression admission barrier.
+#[test]
+fn inert_binding_shapes_keep_their_existing_result() {
+    for (source, expected) in [
+        ("const source=1;const value=source", true),
+        (
+            "const source=1;function f(){let source=2;source=3}const value=source",
+            true,
+        ),
+        (
+            "function source(){}function source(){}const value=source",
+            false,
+        ),
+        (
+            "function source(x:number):number;function source(x){return x}const value=source",
+            true,
+        ),
+        ("let source=1;const value=source", false),
+        ("const source=1;source=2;const value=source", false),
+        ("const value=source;const source=1", false),
+        ("const source=unknown;const value=source", false),
+        ("const source=1;const value=[source,source]", true),
+        ("const source=1;const value={x:source}", true),
+        ("const source={};const value=source.x", false),
+        ("const source=1;const value={[source]:1}", false),
+        ("const source=1;const value={__proto__:source}", false),
+        (
+            "import type {source} from './dep';const value=source",
+            false,
+        ),
+        ("declare function source():void;const value=source", false),
+    ] {
+        let parsed = lang::parse(Path::new("proof.ts"), source).unwrap();
+        assert_eq!(parsed.parse_errors, 0);
+        assert_eq!(
+            inert_value(&parsed, proof_initializer(&parsed, "value"), &mut 4096),
+            expected,
+            "{source}"
+        );
+    }
+}
+
+/// Repeated references still consume the full expression allowance after facts become cached.
+#[test]
+fn inert_binding_proofs_retain_the_expression_limit() {
+    for (references, expected, remaining) in [(2047, true, 1), (2048, false, 0)] {
+        let items = vec!["source"; references].join(",");
+        let source = format!("const source=1;const value=[{items}]");
+        let parsed = lang::parse(Path::new("proof.ts"), &source).unwrap();
+        assert_eq!(parsed.parse_errors, 0);
+        let mut left = 4096;
+        assert_eq!(
+            inert_value(&parsed, proof_initializer(&parsed, "value"), &mut left),
+            expected
+        );
+        assert_eq!(left, remaining);
+    }
+}
+
+/// The permanent alias input reuses source scans without reducing logical expression work.
+#[test]
+fn inert_binding_facts_reuse_bounded_source_work() {
+    let source = include_str!("../../../fixtures/oracle/runner-binding-facts/runner.ts");
+    let parsed = lang::parse(Path::new("runner.ts"), source).unwrap();
+    assert_eq!(parsed.parse_errors, 0);
+    let node = proof_initializer(&parsed, "a127");
+    let mut proof = InertProof::new(&parsed, usize::MAX);
+    let mut left = 4096;
+    assert!(proof.value(node, &mut left));
+    let steps = 4096 - left;
+    assert_eq!(steps, 128);
+    let work = usize::MAX - proof.left;
+    let before = proof.left;
+    left = 4096;
+    assert!(proof.value(node, &mut left));
+    assert_eq!(4096 - left, steps);
+    assert!(before - proof.left <= steps * 2);
+    assert!(work < parsed.tree.nodes().count() * 4);
+    let symbols = parsed.scopes.symbols().count();
+    assert!(proof.declarations.as_ref().unwrap().len() <= symbols);
+    assert!(proof.symbols.len() <= symbols && proof.unwritten.len() <= symbols);
+    let mut short = InertProof::new(&parsed, work - 1);
+    assert!(!short.value(node, &mut 4096));
+    assert!(short.limited);
+}
+
+/// A repeated recorded-write query consumes one lookup rather than rescanning references.
+#[test]
+fn inert_binding_write_facts_are_reused() {
+    let source = include_str!("../../../fixtures/oracle/runner-binding-facts/runner.ts");
+    let parsed = lang::parse(Path::new("runner.ts"), source).unwrap();
+    let symbol = parsed
+        .scopes
+        .symbols()
+        .find(|&s| parsed.scopes.symbol(s).name == "a0")
+        .unwrap();
+    let mut proof = InertProof::new(&parsed, usize::MAX);
+    assert!(proof.unwritten(symbol));
+    let before = proof.left;
+    assert!(proof.unwritten(symbol));
+    assert_eq!(before - proof.left, 1);
+}
+
 /// Read one temporary project's export with the ordinary source authority.
 fn read(files: &[(&str, &str)], export: &str) -> Result<Template, Refusal> {
     let root = tempfile::tempdir().unwrap();

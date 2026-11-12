@@ -552,24 +552,31 @@ fn immutable(parsed: &Parsed, symbol: SymbolId) -> Result<(), Refusal> {
     if binding.references.iter().any(|reference| reference.write) {
         return Err(Refusal::Callable);
     }
-    let declarations = parsed
-        .tree
-        .nodes()
-        .filter(|&node| {
-            parsed.tree.kind(node) == "Identifier"
-                && parsed.scopes.name_at(parsed.tree.span(node).start)
-                    == Some(Name::Binding(Some(symbol)))
-                // An overload signature is erased: only the implementation declares at runtime.
-                && parsed
-                    .tree
-                    .parent(node)
-                    .is_none_or(|parent| parsed.tree.kind(parent) != "TSDeclareFunction")
-        })
+    let declarations = runtime_bindings(parsed)
+        .filter(|&binding| binding == symbol)
         .count();
     if declarations != 1 {
         return Err(Refusal::Callable);
     }
     Ok(())
+}
+
+/// Runtime declaration identities, excluding erased overload signatures.
+fn runtime_bindings(parsed: &Parsed) -> impl Iterator<Item = SymbolId> + '_ {
+    parsed.tree.nodes().filter_map(|node| {
+        if parsed.tree.kind(node) != "Identifier" {
+            return None;
+        }
+        let Some(Name::Binding(Some(symbol))) = parsed.scopes.name_at(parsed.tree.span(node).start)
+        else {
+            return None;
+        };
+        parsed
+            .tree
+            .parent(node)
+            .is_none_or(|parent| parsed.tree.kind(parent) != "TSDeclareFunction")
+            .then_some(symbol)
+    })
 }
 
 /// Only synchronous functions with plain, immutable positional parameters have binding templates.
@@ -648,59 +655,161 @@ pub(crate) fn inert_declaration(parsed: &Parsed, node: NodeId) -> bool {
 
 /// Inert construction only: property reads, spreads, coercions and computed execution are unknown.
 fn inert_value(parsed: &Parsed, node: NodeId, left: &mut usize) -> bool {
-    if *left == 0 {
-        return false;
+    InertProof::new(parsed, usize::MAX).value(node, left)
+}
+
+/// Reuse static binding facts within one source-local inert-expression proof.
+struct InertProof<'a> {
+    parsed: &'a Parsed,
+    left: usize,
+    limited: bool,
+    symbols: HashMap<SymbolId, bool>,
+    unwritten: HashMap<SymbolId, bool>,
+    declarations: Option<HashMap<SymbolId, usize>>,
+}
+
+impl<'a> InertProof<'a> {
+    /// Begin with an independent allowance for scans, reference checks and cached lookups.
+    fn new(parsed: &'a Parsed, budget: usize) -> Self {
+        Self {
+            parsed,
+            left: budget,
+            limited: false,
+            symbols: HashMap::new(),
+            unwritten: HashMap::new(),
+            declarations: None,
+        }
     }
-    *left -= 1;
-    let tree = &parsed.tree;
-    let node = tree.inner(node);
-    match tree.kind(node) {
-        "Literal" | "FunctionExpression" | "ArrowFunctionExpression" => true,
-        "Identifier" => {
-            let Some(symbol) = parsed.scopes.symbol_at(tree.span(node).start) else {
-                return false;
-            };
-            if immutable(parsed, symbol).is_err() {
-                return false;
+
+    /// Charge before doing proof work; exhausted work never establishes a fact.
+    fn spend(&mut self, work: usize) -> bool {
+        if self.limited {
+            return false;
+        }
+        match self.left.checked_sub(work) {
+            Some(left) => {
+                self.left = left;
+                true
             }
-            match parsed.scopes.symbol(symbol).declaration {
-                Declaration::Function(_) => true,
-                Declaration::Import {
-                    import, specifier, ..
-                } => {
-                    tree.text(import, "importKind") != Some("type")
-                        && tree.text(specifier, "importKind") != Some("type")
-                }
-                Declaration::Variable(declaration) => {
-                    tree.parent(declaration)
-                        .and_then(|parent| tree.text(parent, "kind"))
-                        == Some("const")
-                        && tree.span(declaration).end < tree.span(node).start
-                        && tree
-                            .child(declaration, "init")
-                            .is_some_and(|init| inert_value(parsed, init, left))
-                }
-                _ => false,
+            None => {
+                self.limited = true;
+                false
             }
         }
-        "ArrayExpression" => tree
-            .list(node, "elements")
-            .into_iter()
-            .all(|element| element.is_none_or(|element| inert_value(parsed, element, left))),
-        "ObjectExpression" => tree
-            .list(node, "properties")
-            .into_iter()
-            .flatten()
-            .all(|property| {
-                tree.kind(property) == "Property"
-                    && !tree.flag(property, "computed")
-                    && tree.text(property, "kind") == Some("init")
-                    && lang::property_name(tree, property) != Some("__proto__")
-                    && tree
-                        .child(property, "value")
-                        .is_some_and(|value| inert_value(parsed, value, left))
-            }),
-        _ => false,
+    }
+
+    /// Retain the existing write-first barrier and index runtime declarations once.
+    fn immutable(&mut self, symbol: SymbolId) -> bool {
+        if !self.spend(1) {
+            return false;
+        }
+        if let Some(&stable) = self.symbols.get(&symbol) {
+            return stable;
+        }
+        if !self.unwritten(symbol) {
+            if !self.limited {
+                self.symbols.insert(symbol, false);
+            }
+            return false;
+        }
+        if self.declarations.is_none() {
+            if !self.spend(self.parsed.tree.nodes().count().saturating_mul(2)) {
+                return false;
+            }
+            let mut declarations = HashMap::new();
+            for binding in runtime_bindings(self.parsed) {
+                *declarations.entry(binding).or_insert(0) += 1;
+            }
+            self.declarations = Some(declarations);
+        }
+        let stable = self
+            .declarations
+            .as_ref()
+            .and_then(|counts| counts.get(&symbol))
+            == Some(&1);
+        self.symbols.insert(symbol, stable);
+        stable
+    }
+
+    /// Recorded writes belong to the immutable source, independently of value evaluation.
+    fn unwritten(&mut self, symbol: SymbolId) -> bool {
+        if !self.spend(1) {
+            return false;
+        }
+        if let Some(&stable) = self.unwritten.get(&symbol) {
+            return stable;
+        }
+        let binding = self.parsed.scopes.symbol(symbol);
+        if !self.spend(binding.references.len()) {
+            return false;
+        }
+        let stable = !binding.references.iter().any(|reference| reference.write);
+        self.unwritten.insert(symbol, stable);
+        stable
+    }
+
+    /// Keep the existing value walk and logical expression allowance at every visit.
+    fn value(&mut self, node: NodeId, left: &mut usize) -> bool {
+        if !self.spend(1) {
+            return false;
+        }
+        if *left == 0 {
+            self.limited = true;
+            return false;
+        }
+        *left -= 1;
+        let parsed = self.parsed;
+        let tree = &parsed.tree;
+        let node = tree.inner(node);
+        match tree.kind(node) {
+            "Literal" | "FunctionExpression" | "ArrowFunctionExpression" => true,
+            "Identifier" => {
+                let Some(symbol) = parsed.scopes.symbol_at(tree.span(node).start) else {
+                    return false;
+                };
+                if !self.immutable(symbol) {
+                    return false;
+                }
+                match parsed.scopes.symbol(symbol).declaration {
+                    Declaration::Function(_) => true,
+                    Declaration::Import {
+                        import, specifier, ..
+                    } => {
+                        tree.text(import, "importKind") != Some("type")
+                            && tree.text(specifier, "importKind") != Some("type")
+                    }
+                    Declaration::Variable(declaration) => {
+                        tree.parent(declaration)
+                            .and_then(|parent| tree.text(parent, "kind"))
+                            == Some("const")
+                            && tree.span(declaration).end < tree.span(node).start
+                            && tree
+                                .child(declaration, "init")
+                                .is_some_and(|init| self.value(init, left))
+                    }
+                    _ => false,
+                }
+            }
+            "ArrayExpression" => tree
+                .list(node, "elements")
+                .into_iter()
+                .all(|element| element.is_none_or(|element| self.value(element, left))),
+            "ObjectExpression" => {
+                tree.list(node, "properties")
+                    .into_iter()
+                    .flatten()
+                    .all(|property| {
+                        tree.kind(property) == "Property"
+                            && !tree.flag(property, "computed")
+                            && tree.text(property, "kind") == Some("init")
+                            && lang::property_name(tree, property) != Some("__proto__")
+                            && tree
+                                .child(property, "value")
+                                .is_some_and(|value| self.value(value, left))
+                    })
+            }
+            _ => false,
+        }
     }
 }
 
