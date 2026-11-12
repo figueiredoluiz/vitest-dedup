@@ -1256,6 +1256,8 @@ impl<'s> Module<'s> {
             let found = self.scan();
             let reaches = ReachIndex::new(found.iter().map(|(_, span, kind, ..)| (*span, *kind)));
             let before = self.wrappers.clone();
+            // A new returner can make its callers return the API without changing a wrapper.
+            let returners = self.returners.len();
             // Vitest calls a suite factory with its `test` API, so a call through a parameter of a
             // suite callback may register tests the inventory cannot attribute.
             for symbol in self.suite_parameters(&found) {
@@ -1278,7 +1280,10 @@ impl<'s> Module<'s> {
             }
             let aliases = self.origins.clone();
             self.collect_aliases();
-            if self.wrappers == before && self.origins == aliases {
+            if self.wrappers == before
+                && self.origins == aliases
+                && self.returners.len() == returners
+            {
                 break;
             }
         }

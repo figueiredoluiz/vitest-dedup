@@ -479,6 +479,13 @@
       "otherReasons": [],
       "testsExcluded": 3
     },
+    "oracle/factory-returned-api/chained.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 8
+    },
     "oracle/factory-returned-api/holder.test.ts": {
       "reason": "registered-elsewhere",
       "otherReasons": [],

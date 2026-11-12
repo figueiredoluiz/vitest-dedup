@@ -14,6 +14,22 @@
         "testsExcluded": 3
       }
     },
+    "chained.test.ts": {
+      "tasks": 4,
+      "wrapperSites": [
+        "wrapper@12",
+        "wrapper@18",
+        "wrapper@21",
+        "wrapper@22"
+      ],
+      "next": {
+        "reasons": [
+          "registered-elsewhere",
+          "helper-effects-unproved"
+        ],
+        "testsExcluded": 8
+      }
+    },
     "control.test.ts": {
       "tasks": 3,
       "wrapperSites": [],

@@ -806,6 +806,23 @@ fn nested_awaits_of_the_api_are_read_in_linear_time() {
     assert!(started.elapsed() < std::time::Duration::from_secs(2));
 }
 
+/// A factory returning a factory's result is found however many levels down the API is returned,
+/// even when every level already registers and so is a wrapper from the first pass.
+#[test]
+fn factories_returning_factories_are_found_at_any_depth() {
+    let source = "import { test } from 'vitest'
+function leaf() { test('leaf', () => {}); return test }
+function middle() { test('middle', () => {}); return leaf() }
+function outer() { test('outer', () => {}); return middle() }
+const t = await outer()
+t('returned', () => {})";
+    let found = sites(source, &[], false);
+    assert!(
+        found.iter().any(|site| site.starts_with("wrapper@6:1 ")),
+        "{found:?}"
+    );
+}
+
 /// Consecutive `await`s do not rescan the rest of the chain at each level.
 #[test]
 fn consecutive_awaits_of_the_api_are_read_in_linear_time() {
