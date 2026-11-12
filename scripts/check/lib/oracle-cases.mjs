@@ -11,6 +11,8 @@
 //           or {oracle: 'not-collected', next, nextToday?, waitsOn?}}
 //   knownSites?, knownTitles?: [{path, kind, item, reason, waitsOn}]
 //   blindUnderCurrent?: [path]
+// `oracle: 'collection-error'` instead requires a directly observed error with zero tasks, no
+// stub reads and an explicit analyzer refusal; it does not count as a successfully compared file.
 // `tasks` is the exact number of tests and suites Vitest collects from the file. `wrapperSites` is
 // its exact list of `wrapper@L` and `hook-wrapper@L`, which the site comparison cannot pin: it only
 // sees a task with no site. `next` is the analyzer's `{reasons, testsExcluded}` for the file,
@@ -73,7 +75,7 @@ function fileProblems(entry, where) {
     problems.push(`${where}: waitsOn without a held value`)
   }
   if (entry.oracle !== undefined) {
-    if (entry.oracle !== 'not-collected') problems.push(`${where}: oracle must be "not-collected"`)
+    if (!['not-collected', 'collection-error'].includes(entry.oracle)) problems.push(`${where}: oracle must be "not-collected" or "collection-error"`)
     if (entry.tasks !== undefined || entry.wrapperSites !== undefined || entry.wrapperSitesToday !== undefined) {
       problems.push(`${where}: a file not collected pins no tasks or sites`)
     }
@@ -237,7 +239,13 @@ export function judgeCase({ dir, expected }, { vitest, located, titles, sites, e
   for (const [path, entry] of Object.entries(expected.files)) {
     const where = `${dir}/${path}`
     const { waitsOn } = entry
-    if (entry.oracle === 'not-collected') {
+    if (entry.oracle === 'collection-error') {
+      const file = vitest.get(path)
+      if (!file || file.unprobed || file.overlapping || file.tasks.length !== 0 || !file.collectErrors?.length || file.stubReads?.length) {
+        out.failures.push(`${where}: expected a directly observed collection error with zero tasks and no stub reads`)
+      }
+      if (!exclusions.has(path)) out.failures.push(`${where}: collection error needs an explicit analyzer refusal`)
+    } else if (entry.oracle === 'not-collected') {
       if (vitest.has(path)) out.failures.push(`${where}: declared not collected, and Vitest collected it`)
       if (!sites.has(path) && !exclusions.has(path)) out.failures.push(`${where}: declared, but the analyzer reports nothing for it`)
     } else if (!compared.has(path)) {
