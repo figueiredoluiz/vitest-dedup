@@ -724,7 +724,7 @@ fn calls_through_a_returned_registration_function_are_sites() {
 }
 
 /// A returned value that consumes the registration value (`typeof`, a comparison, a template, a
-/// call argument, the left of `&&`, a member the dialect does not know such as `.name`), one read
+/// call argument, the left of `&&`, a compound assignment, a member the dialect does not know such as `.name`), one read
 /// through a local alias or a conditional, a member of a factory or of its result, or a return after
 /// a return makes no factory; a branch of `||`, a sequence's last expression, an array element or a
 /// call of a factory does.
@@ -744,9 +744,9 @@ fn only_a_returned_value_that_may_be_the_registration_value_makes_a_factory() {
          function alias() { const a = test.skip; return a }\n\
          function factory() { return test.extend({}) }\n\
          function label() { return factory.name }\n\
-         function member() { return factory().name }\n\
+         function member() { return factory().name } function summed() { let r = ''; return r += test }\n\
          supports(); named(); first(); later(); passed(); title(); size(); aliased()\n\
-         chosen(true); alias(); label(); member()\n\
+         chosen(true); alias(); label(); member(); summed()\n\
          test('kept', () => {})",
         &[],
         false,
@@ -762,14 +762,15 @@ fn only_a_returned_value_that_may_be_the_registration_value_makes_a_factory() {
     );
     let retained = sites(
         "import { test } from 'vitest'\n\
-         function either(x) { return x || test }\n\
+         function either(x) { return x || test } function assigned() { let r; return r ??= test }\n\
          function last() { return (0, test) }\n\
          function list() { return [test] }\n\
          function chained() { return list() }\n\
          either(0)('a', () => {})\n\
          last()('b', () => {})\n\
          list()[0]('c', () => {})\n\
-         chained()[0]('d', () => {})",
+         chained()[0]('d', () => {})\n\
+         assigned()('e', () => {})",
         &[],
         false,
     );
@@ -782,9 +783,27 @@ fn only_a_returned_value_that_may_be_the_registration_value_makes_a_factory() {
             "wrapper@7:7 () via-wrapper",
             "wrapper@7:1  via-wrapper",
             "wrapper@8:1  via-wrapper",
-            "wrapper@9:1  via-wrapper"
+            "wrapper@9:1  via-wrapper",
+            "wrapper@10:11 () via-wrapper",
+            "wrapper@10:1  via-wrapper"
         ]
     );
+}
+
+/// Each `await` of an API builder asks once whether its argument holds the API, so nesting stays
+/// linear.
+#[test]
+fn nested_awaits_of_the_api_are_read_in_linear_time() {
+    let mut value = String::from("test");
+    for _ in 0..40 {
+        value = format!("await test.skipIf({value})");
+    }
+    let source = format!(
+        "import {{ test }} from 'vitest'\nasync function make() {{ return {value} }}\ntest('a', () => {{}})"
+    );
+    let started = std::time::Instant::now();
+    assert_eq!(sites(&source, &[], false), ["test@3:1 "]);
+    assert!(started.elapsed() < std::time::Duration::from_secs(2));
 }
 
 /// A function expression named inside a `const` is a wrapper under either name, and a module that

@@ -1001,6 +1001,11 @@ impl<'s> Module<'s> {
     /// `test.extend({...})`, `v.describe`), or the namespace.
     fn value_origin(&self, node: NodeId) -> Option<Origin> {
         let (origin, _, steps) = self.chain(node)?;
+        self.chained_origin(node, origin, &steps)
+    }
+
+    /// [`Self::value_origin`] of `node` from its walked [`Self::chain`].
+    fn chained_origin(&self, node: NodeId, origin: Origin, steps: &[Step]) -> Option<Origin> {
         if let Some(reach) = origin.reach() {
             if matches!(origin, Origin::Derived(_)) && steps.is_empty() {
                 return Some(origin);
@@ -1013,7 +1018,7 @@ impl<'s> Module<'s> {
             };
             return Some(Origin::Wrapper(reach));
         }
-        let applied = self.apply_at(node, origin, &steps)?;
+        let applied = self.apply_at(node, origin, steps)?;
         if applied.evaluated {
             return Some(Origin::Wrapper(Reach::Tasks));
         }
@@ -1368,10 +1373,12 @@ impl<'s> Module<'s> {
             return false;
         }
         let symbol = self.read(root);
-        if !matches!(
-            self.value_origin(node),
-            Some(Origin::Api(_) | Origin::Namespace)
-        ) {
+        // One walk: each `await` in the chain asks this again, so walking twice doubles per level.
+        let chained = self.chain(node);
+        let value = chained
+            .as_ref()
+            .and_then(|(origin, _, steps)| self.chained_origin(node, *origin, steps));
+        if !matches!(value, Some(Origin::Api(_) | Origin::Namespace)) {
             // Only the call itself: `make.name` and `make().name` are not what `make` returns.
             let mut value = tree.inner(node);
             if tree.kind(value) == "AwaitExpression" {
@@ -1392,7 +1399,7 @@ impl<'s> Module<'s> {
                 )
         });
         let dialect = &self.setting.dialect;
-        own && self.chain(node).is_some_and(|(_, _, steps)| {
+        own && chained.is_some_and(|(_, _, steps)| {
             steps.iter().all(|step| match step {
                 Step::Member(name) => {
                     dialect.registration(name).is_some()
@@ -1461,7 +1468,7 @@ impl<'s> Module<'s> {
     }
 
     /// Whether `outer`'s value may be, or hold, its child `inner`'s value. Operators that consume a
-    /// value (`typeof`, comparison, a call argument, a template) and type positions do not.
+    /// value (`typeof`, comparison, a call argument, a template, `+=`) and type positions do not.
     fn may_evaluate_to(&self, outer: NodeId, inner: NodeId) -> bool {
         let tree = self.tree;
         let holds = |key| tree.child(outer, key) == Some(inner);
@@ -1483,7 +1490,14 @@ impl<'s> Module<'s> {
             }
             "SequenceExpression" => tree.list(outer, "expressions").last() == Some(&Some(inner)),
             "Property" => holds("value"),
-            "AssignmentExpression" => holds("right"),
+            // `+=` and the other compound assignments compute a new value.
+            "AssignmentExpression" => {
+                holds("right")
+                    && matches!(
+                        tree.text(outer, "operator"),
+                        Some("=" | "||=" | "&&=" | "??=")
+                    )
+            }
             _ => false,
         }
     }
