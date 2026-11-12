@@ -1,5 +1,10 @@
 {
   "files": {
+    "oracle/runner-binding-facts/bounded.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [],
+      "testsExcluded": 2
+    },
     "oracle/collection-error/case.test.ts": {
       "reason": "registered-elsewhere",
       "otherReasons": ["helper-effects-unproved"],

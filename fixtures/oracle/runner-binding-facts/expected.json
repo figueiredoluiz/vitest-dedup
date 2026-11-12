@@ -1,0 +1,7 @@
+{
+  "blindUnderCurrent": ["bounded.test.ts"],
+  "files": {
+    "case.test.ts": {"tasks": 2, "wrapperSites": ["wrapper@2", "wrapper@3"], "next": {}},
+    "bounded.test.ts": {"tasks": 2, "wrapperSites": ["wrapper@2", "wrapper@3"], "next": {"reasons": ["registered-elsewhere"], "testsExcluded": 2}}
+  }
+}
