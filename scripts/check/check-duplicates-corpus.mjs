@@ -174,6 +174,8 @@ const DELIBERATE_BLIND_FILES = new Set([
   // Owned factory controls intentionally exceed proof/copy budgets or retain an API escape.
   'oracle/factory-inventory-work/large.test.ts',
   'oracle/factory-modifier-work/large.test.ts',
+  'oracle/factory-parameter-work/large.test.ts',
+  'oracle/factory-parameter-work/split.test.ts',
   'oracle/factory-proof-handoff/local.test.ts',
   'oracle/factory-resource-work/copies.test.ts',
   'recall/runner-unproved-scope-retention/unsafe.test.ts',

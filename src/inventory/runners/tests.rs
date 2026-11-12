@@ -349,6 +349,37 @@ fn returned_object_templates_refuse_effects_and_uncertain_outcomes() {
     }
 }
 
+/// The permanent large pattern stops before owning every amplified path, even before final checks.
+#[test]
+fn returned_parameter_paths_stop_before_allocation_limit() {
+    let source = include_str!("../../../fixtures/oracle/factory-parameter-work/factory.ts");
+    let parsed = lang::parse(std::path::Path::new("factory.ts"), source).unwrap();
+    let tree = &parsed.tree;
+    let function = tree
+        .nodes()
+        .find(|&node| {
+            tree.kind(node) == "FunctionDeclaration"
+                && tree
+                    .child(node, "id")
+                    .is_some_and(|id| tree.text(id, "name") == Some("makeLarge"))
+        })
+        .unwrap();
+    let pattern = tree.list(function, "params")[0].unwrap();
+    let mut bindings = Vec::new();
+    let mut left = MAX_PARAMETER_WORK;
+    let result = parameter_bindings(
+        &parsed,
+        pattern,
+        &mut Vec::new(),
+        &mut bindings,
+        &binding_declarations(&parsed),
+        tree.nodes().count(),
+        &mut left,
+    );
+    assert!(matches!(result, Err(Refusal::Limit)));
+    assert!(!bindings.is_empty() && bindings.len() < 600);
+}
+
 /// Flattened destructuring bindings participate in the same bounded parameter work estimate.
 #[test]
 fn returned_parameter_binding_work_is_bounded() {

@@ -793,6 +793,9 @@ fn parameters(
     Ok(parameters)
 }
 
+/// The shared per-function allowance for parameter proofs and owned path copies.
+const MAX_PARAMETER_WORK: usize = 8 * 1024 * 1024;
+
 /// Synchronous returned factories and leaves may destructure static object data.
 pub(crate) fn returned_parameters(
     parsed: &Parsed,
@@ -820,10 +823,11 @@ pub(crate) fn returned_parameters(
         return Ok(Vec::new());
     }
     let nodes = tree.nodes().count();
-    if params.len().saturating_mul(nodes) > 8 * 1024 * 1024 {
+    if params.len().saturating_mul(nodes) > MAX_PARAMETER_WORK {
         return Err(Refusal::Limit);
     }
     let declarations = binding_declarations(parsed);
+    let mut left = MAX_PARAMETER_WORK;
     let parameters: Vec<_> = params
         .into_iter()
         .map(|parameter| {
@@ -835,6 +839,8 @@ pub(crate) fn returned_parameters(
                 &mut Vec::new(),
                 &mut bindings,
                 &declarations,
+                nodes,
+                &mut left,
             )?;
             if bindings.is_empty() {
                 return Err(Refusal::Parameters);
@@ -846,23 +852,32 @@ pub(crate) fn returned_parameters(
         .iter()
         .map(|parameter| parameter.bindings.len())
         .sum::<usize>();
-    if bindings.saturating_mul(nodes) > 8 * 1024 * 1024 {
+    if bindings.saturating_mul(nodes) > MAX_PARAMETER_WORK {
         return Err(Refusal::Limit);
     }
     Ok(parameters)
 }
 
-/// Flatten an identifier or static object pattern into owned value selections.
+/// Flatten static patterns, reserving shared node/copy work before owning each selection.
 fn parameter_bindings(
     parsed: &Parsed,
     pattern: NodeId,
     path: &mut Vec<String>,
     bindings: &mut Vec<ParameterBinding>,
     declarations: &HashMap<SymbolId, (u32, u32, bool)>,
+    nodes: usize,
+    left_work: &mut usize,
 ) -> Result<(), Refusal> {
     let tree = &parsed.tree;
     match tree.kind(pattern) {
         "Identifier" => {
+            let cost = path.iter().fold(
+                nodes
+                    .saturating_add(std::mem::size_of::<ParameterBinding>())
+                    .saturating_add(path.len().saturating_mul(std::mem::size_of::<String>())),
+                |cost, key| cost.saturating_add(key.len()),
+            );
+            *left_work = left_work.checked_sub(cost).ok_or(Refusal::Limit)?;
             let symbol = parsed
                 .scopes
                 .symbol_at(tree.span(pattern).start)
@@ -881,7 +896,7 @@ fn parameter_bindings(
                 return Err(Refusal::Parameters);
             }
             let before = bindings.len();
-            parameter_bindings(parsed, left, path, bindings, declarations)?;
+            parameter_bindings(parsed, left, path, bindings, declarations, nodes, left_work)?;
             if bindings.len() != before + 1 {
                 return Err(Refusal::Parameters);
             }
@@ -912,6 +927,8 @@ fn parameter_bindings(
                     path,
                     bindings,
                     declarations,
+                    nodes,
+                    left_work,
                 )?;
                 path.pop();
             }

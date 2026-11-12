@@ -1631,6 +1631,16 @@
       "reason": "registered-elsewhere",
       "otherReasons": [],
       "testsExcluded": 81
+    },
+    "oracle/factory-parameter-work/large.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [],
+      "testsExcluded": 2
+    },
+    "oracle/factory-parameter-work/split.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [],
+      "testsExcluded": 2
     }
   }
 }

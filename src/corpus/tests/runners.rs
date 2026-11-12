@@ -10,6 +10,7 @@ fn returned_modifier_copies_obey_the_work_bound() {
         include_str!("../../../fixtures/oracle/factory-modifier-work/factory.ts"),
         include_str!("../../../fixtures/oracle/factory-modifier-work/large.test.ts"),
         include_str!("../../../fixtures/oracle/factory-modifier-work/control.test.ts"),
+        81,
     );
 }
 
@@ -20,11 +21,34 @@ fn returned_inventory_copies_obey_the_work_bound() {
         include_str!("../../../fixtures/oracle/factory-inventory-work/factory.ts"),
         include_str!("../../../fixtures/oracle/factory-inventory-work/large.test.ts"),
         include_str!("../../../fixtures/oracle/factory-inventory-work/control.test.ts"),
+        81,
     );
 }
 
-/// Refuse eighty costly calls without losing the small caller's duplicate positive.
-fn assert_factory_copy_bound(factory: &str, large: &str, control: &str) {
+/// Parameter path storage is reserved before a large flattened selection is allocated.
+#[test]
+fn returned_parameter_paths_obey_copy_work_bound() {
+    assert_factory_copy_bound(
+        include_str!("../../../fixtures/oracle/factory-parameter-work/factory.ts"),
+        include_str!("../../../fixtures/oracle/factory-parameter-work/large.test.ts"),
+        include_str!("../../../fixtures/oracle/factory-parameter-work/control.test.ts"),
+        2,
+    );
+}
+
+/// Multiple parameters consume one allowance rather than restarting copy work for each pattern.
+#[test]
+fn returned_parameter_paths_share_copy_work_bound() {
+    assert_factory_copy_bound(
+        include_str!("../../../fixtures/oracle/factory-parameter-work/factory.ts"),
+        include_str!("../../../fixtures/oracle/factory-parameter-work/split.test.ts"),
+        include_str!("../../../fixtures/oracle/factory-parameter-work/control.test.ts"),
+        2,
+    );
+}
+
+/// Refuse a costly caller without losing the small caller's duplicate positive.
+fn assert_factory_copy_bound(factory: &str, large: &str, control: &str, refused: usize) {
     let results = corpora(
         &[
             ("factory.ts", factory),
@@ -33,7 +57,7 @@ fn assert_factory_copy_bound(factory: &str, large: &str, control: &str) {
         ],
         &["large.test.ts", "control.test.ts"],
     );
-    assert_eq!(results[0].tests.len(), 81);
+    assert_eq!(results[0].tests.len(), refused);
     assert_all_wrappers_refused(&results[..1]);
     assert_eq!(results[1].tests.len(), 2);
     assert!(results[1].tests.iter().all(|case| case.exclusion.is_none()));
