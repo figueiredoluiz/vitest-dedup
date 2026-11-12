@@ -171,6 +171,10 @@ const DELIBERATE_BLIND_FILES = new Set([
   'recall/local-helper-member-write/run.test.ts',
   'recall/local-helper-return-describe/run.test.ts',
   'recall/local-helper-unused-default/run.test.ts',
+  // Owned factory controls intentionally exceed proof/copy budgets or retain an API escape.
+  'oracle/factory-modifier-work/large.test.ts',
+  'oracle/factory-proof-handoff/local.test.ts',
+  'oracle/factory-resource-work/copies.test.ts',
   'recall/runner-unproved-scope-retention/unsafe.test.ts',
   'recall/suite-user-wrapper-withheld/a.test.ts',
   // Registrations a wrapper call, star re-export or namespace export makes where the file does

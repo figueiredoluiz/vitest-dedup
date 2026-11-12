@@ -1,0 +1,7 @@
+{
+  "blindUnderCurrent": ["late.test.ts"],
+  "files": {
+    "late.test.ts": {"oracle": "collection-error", "next": {"reasons": ["registered-inside-function", "registered-elsewhere"], "testsExcluded": 3}},
+    "ready.test.ts": {"tasks": 3, "wrapperSites": ["wrapper@4", "wrapper@6"], "next": {}}
+  }
+}

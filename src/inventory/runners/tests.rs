@@ -160,7 +160,11 @@ fn immutable_export_shapes_retain_the_registration_plan() {
         assert_eq!(template.source, source);
         assert_eq!(template.parameters.len(), 1, "{source}");
         assert_eq!(
-            template.parsed.scopes.symbol(template.parameters[0]).name,
+            template
+                .parsed
+                .scopes
+                .symbol(template.parameters[0].bindings[0].symbol)
+                .name,
             "label"
         );
         assert_eq!(template.steps.len(), 1, "{source}");
@@ -300,6 +304,107 @@ fn uncertain_callables_and_parameters_never_return_a_partial_plan() {
         };
         assert!(read(&[("runner.ts", &source)], export).is_err(), "{source}");
     }
+}
+
+/// Returned factories expose only one inert object reached after inert setup.
+#[test]
+fn returned_object_templates_refuse_effects_and_uncertain_outcomes() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("factory.ts");
+    let setting = Setting {
+        dialect: &DIALECT,
+        globals: false,
+        root: root.path(),
+    };
+    for source in [
+        "export function make(mode){const cases={run:()=>mode};return cases}",
+        "export function make({enabled=true}){return {run:()=>enabled}}",
+        "export function make(mode){const prefix=mode;return {run:()=>prefix}}",
+    ] {
+        std::fs::write(&path, source).unwrap();
+        let template =
+            factory_template(&Sources::default(), &path, "make", setting, 8 * 1024 * 1024)
+                .unwrap_or_else(|error| panic!("{source}: {error:?}"));
+        assert_eq!(template.parameters.len(), 1, "{source}");
+        assert_eq!(
+            template.parsed.tree.kind(template.object),
+            "ObjectExpression"
+        );
+    }
+    for source in [
+        "export function make(){effect();return {run(){}}}",
+        "export function make(flag){if(flag)return {run(){}};return {run(){}}}",
+        "export function make(){const cases={run(){}};read(cases);return cases}",
+        "export function make(){return {...other}}",
+        "export function make(){return {get run(){return ()=>{}}}}",
+        "export function make(){return {run(){},run:()=>{}}}",
+        "export function make(){return {run(){}}}",
+        "export async function make(){return {run(){}}}",
+    ] {
+        std::fs::write(&path, source).unwrap();
+        assert!(
+            factory_template(&Sources::default(), &path, "make", setting, 8 * 1024 * 1024).is_err(),
+            "{source}"
+        );
+    }
+}
+
+/// Flattened destructuring bindings participate in the same bounded parameter work estimate.
+#[test]
+fn returned_parameter_binding_work_is_bounded() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("factory.ts");
+    let properties = (0..4000)
+        .map(|index| format!("p{index}=0"))
+        .collect::<Vec<_>>()
+        .join(",");
+    let source = format!("export function make({{{properties}}}){{return {{run:()=>0}}}}");
+    std::fs::write(&path, source).unwrap();
+    assert!(matches!(
+        factory_template(
+            &Sources::default(),
+            &path,
+            "make",
+            Setting {
+                dialect: &DIALECT,
+                globals: false,
+                root: root.path(),
+            },
+            8 * 1024 * 1024,
+        ),
+        Err(Refusal::Limit)
+    ));
+}
+
+/// A linear alias chain reuses proofs and refuses before exceeding the remaining work.
+#[test]
+fn returned_factory_setup_proofs_share_actual_work() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("factory.ts");
+    std::fs::write(
+        &path,
+        include_str!("../../../fixtures/oracle/factory-resource-work/aliases-short.ts"),
+    )
+    .unwrap();
+    let setting = Setting {
+        dialect: &DIALECT,
+        globals: false,
+        root: root.path(),
+    };
+    let template =
+        factory_template(&Sources::default(), &path, "make", setting, 8 * 1024 * 1024).unwrap();
+    assert!(template.work > 400);
+    assert!(template.work <= template.parsed.tree.nodes().count() * 6);
+    assert!(matches!(
+        factory_template(
+            &Sources::default(),
+            &path,
+            "make",
+            setting,
+            template.work - 1
+        ),
+        Err(Refusal::Limit)
+    ));
 }
 
 /// Returned registrations terminate the sequence, retaining a direct positive before the return.

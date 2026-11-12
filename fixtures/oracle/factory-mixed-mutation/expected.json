@@ -1,0 +1,6 @@
+{
+  "files": {
+    "a.test.ts": {"tasks": 2, "wrapperSites": ["wrapper@1", "wrapper@1", "wrapper@1"], "next": {"reasons": ["order-dependent-state"], "testsExcluded": 1}},
+    "b.test.ts": {"tasks": 1, "wrapperSites": ["wrapper@1"], "next": {}}
+  }
+}

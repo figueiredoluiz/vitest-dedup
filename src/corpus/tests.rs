@@ -17,7 +17,54 @@ mod nc65;
 mod normal_properties;
 mod runners;
 
-/// The corpus of each of `tests` (paths among `files`), read in one run.
+/// Require the requested rule to stay silent while retaining diagnostics on failure.
+fn assert_rule_absent(outcome: crate::rules::Outcome, rule: crate::model::Rule) {
+    assert!(
+        outcome.findings.iter().all(|finding| finding.rule != rule),
+        "{:?}",
+        outcome.findings
+    );
+}
+
+/// Read one caller together with its imported factory.
+fn factory_corpus(factory: &str, caller: &str) -> FileCorpus {
+    corpora(
+        &[("case.test.ts", caller), ("factory.ts", factory)],
+        &["case.test.ts"],
+    )
+    .remove(0)
+}
+
+/// Assert the writer/read batch refuses its reader while an isolated reader stays eligible.
+fn assert_mutation_reader(results: &[FileCorpus]) {
+    assert_eq!(results[0].tests.len(), 2);
+    assert_eq!(results[1].tests.len(), 1);
+    assert_eq!(
+        results[0].tests[1].exclusion,
+        Some(Exclusion::OrderDependentState)
+    );
+    assert_eq!(results[1].tests[0].exclusion, None);
+    assert_rule_absent(
+        owned_outcome(vec![
+            ("a.test.ts", results[0].clone()),
+            ("b.test.ts", results[1].clone()),
+        ]),
+        crate::model::Rule::CrossFileDuplicate,
+    );
+}
+
+/// Retain the explicit wrapper-refusal expectation across independently read callers.
+fn assert_all_wrappers_refused(results: &[FileCorpus]) {
+    assert!(
+        results
+            .iter()
+            .flat_map(|corpus| &corpus.tests)
+            .all(|case| case.exclusion == Some(Exclusion::RegisteredElsewhere)),
+        "{results:?}"
+    );
+}
+
+/// Read selected files under one shared project authority.
 fn corpora(files: &[(&str, &str)], tests: &[&str]) -> Vec<FileCorpus> {
     runs(files, &[tests]).remove(0)
 }
@@ -1154,6 +1201,843 @@ describe('without', () => {
         "{:?}",
         corpus.tests
     );
+}
+
+/// A static returned-object leaf and an independent proved helper expand in one atomic batch.
+#[test]
+fn an_inert_factory_result_can_coexist_with_a_proved_helper() {
+    let runner = include_str!("../../fixtures/oracle/factory-result-binding/runner.ts");
+    let factory = include_str!("../../fixtures/oracle/factory-result-binding/factory.ts");
+    for (path, source) in [
+        (
+            "direct.test.ts",
+            include_str!("../../fixtures/oracle/factory-result-binding/direct.test.ts"),
+        ),
+        (
+            "destructured.test.ts",
+            include_str!("../../fixtures/oracle/factory-result-binding/destructured.test.ts"),
+        ),
+    ] {
+        let corpus = corpora(
+            &[
+                (path, source),
+                ("factory.ts", factory),
+                ("runner.ts", runner),
+            ],
+            &[path],
+        )
+        .remove(0);
+        assert_eq!(corpus.tests.len(), 2, "{path}: {:?}", corpus.tests);
+        assert!(
+            corpus.tests.iter().all(|case| case.exclusion.is_none()),
+            "{path}: {:?}",
+            corpus.tests
+        );
+    }
+
+    let source = "import {make} from './factory';import {run} from './runner';\
+        run();const result=make('shared');result.cases.nested.read(1)";
+    let ordered = corpora(
+        &[
+            ("ordered.test.ts", source),
+            ("factory.ts", factory),
+            ("runner.ts", runner),
+        ],
+        &["ordered.test.ts"],
+    )
+    .remove(0);
+    assert_eq!(
+        ordered
+            .tests
+            .iter()
+            .map(|case| case.title.as_deref())
+            .collect::<Vec<_>>(),
+        [Some("inside"), Some("shared 1")],
+        "{:?}",
+        ordered.tests
+    );
+
+    let unused_object = corpora(
+        &[
+            (
+                "unused-object.test.ts",
+                "import {make} from './factory';const r=make();r.cases.read()",
+            ),
+            (
+                "factory.ts",
+                "import {test,expect} from 'vitest';export function make(){const defaults={timeout:5};\
+                 return {cases:{read:()=>test('unused object',()=>expect(1).toBe(1))}}}",
+            ),
+        ],
+        &["unused-object.test.ts"],
+    )
+    .remove(0);
+    assert_eq!(unused_object.tests.len(), 1, "{:?}", unused_object.tests);
+    assert_eq!(
+        unused_object.tests[0].exclusion, None,
+        "{:?}",
+        unused_object.tests
+    );
+
+    let derived_factory = "import {test} from 'vitest';export function make({enabled=true}){\
+        const identity=fn=>fn;const conditional=fn=>fn.runIf(enabled);return {cases:{\
+        plain:value=>identity(test)('plain',()=>value),\
+        conditional:value=>conditional(test)('conditional',()=>value)}}}";
+    let derived_caller = "import {make} from './factory';const {cases}=make({});\
+        cases.plain(1);cases.conditional(1)";
+    let derived = corpora(
+        &[
+            ("derived.test.ts", derived_caller),
+            ("factory.ts", derived_factory),
+        ],
+        &["derived.test.ts"],
+    )
+    .remove(0);
+    assert_eq!(derived.tests.len(), 2, "{:?}", derived.tests);
+    assert!(
+        derived.tests.iter().all(|case| case.exclusion.is_none()),
+        "{:?}",
+        derived.tests
+    );
+    assert_ne!(derived.tests[0].key, derived.tests[1].key);
+
+    let imported_transform = corpora(
+        &[
+            (
+                "imported.test.ts",
+                "import {make} from './factory';const result=make();result.cases.read(1)",
+            ),
+            (
+                "factory.ts",
+                "import {test} from 'vitest';import {only} from './only';export function make(){\
+                 const r=only;return {cases:{read:value=>r(test)('imported',()=>value)}}}",
+            ),
+            ("only.ts", "export function only(fn){return fn.runIf(true)}"),
+        ],
+        &["imported.test.ts"],
+    )
+    .remove(0);
+    assert_eq!(
+        imported_transform.tests.len(),
+        1,
+        "{:?}",
+        imported_transform.tests
+    );
+    assert!(
+        imported_transform.tests[0].exclusion.is_none(),
+        "{:?}",
+        imported_transform.tests
+    );
+
+    let imported_data = corpora(
+        &[
+            (
+                "data.test.ts",
+                "import {make} from './factory';const result=make();result.cases.read()",
+            ),
+            (
+                "factory.ts",
+                "import {test,expect} from 'vitest';import {data} from './data';export function make(){\
+                 const captured=data;return {cases:{read:()=>test('data',()=>expect(captured).toBe(1))}}}",
+            ),
+            ("data.ts", "export const data=1"),
+        ],
+        &["data.test.ts"],
+    )
+    .remove(0);
+    assert!(
+        imported_data
+            .tests
+            .iter()
+            .any(|case| case.exclusion == Some(Exclusion::RegisteredElsewhere)),
+        "{:?}",
+        imported_data.tests
+    );
+
+    let uncertain_transform = corpora(
+        &[
+            (
+                "uncertain.test.ts",
+                "import {make} from './factory';const result=make();result.cases.read(1)",
+            ),
+            (
+                "factory.ts",
+                "import {test} from 'vitest';import {only} from './only';export function make(){\
+                 const r=flag?only:fn=>fn;return {cases:{read:value=>r(test)('uncertain',()=>value)}}}",
+            ),
+            ("only.ts", "export function only(fn){return fn.runIf(true)}"),
+        ],
+        &["uncertain.test.ts"],
+    )
+    .remove(0);
+    assert!(
+        uncertain_transform
+            .tests
+            .iter()
+            .any(|case| case.exclusion == Some(Exclusion::RegisteredElsewhere)),
+        "{:?}",
+        uncertain_transform.tests
+    );
+
+    let caller = |binding: &str| {
+        format!("import {{make}} from './factory';import {{run}} from './runner';{binding};run();")
+    };
+    for (factory, binding) in [
+        (
+            "export function make(){effect();return {cases:{}}}",
+            "const cases=make()",
+        ),
+        (
+            "export function make(flag){if(flag)return {cases:{}};return {cases:{}}}",
+            "const cases=make(true)",
+        ),
+        (
+            "export function make(){return {...other}}",
+            "const cases=make()",
+        ),
+        (
+            "export function make(){return {cases:{run(){}}}}",
+            "const cases=make();cases[key]()",
+        ),
+    ] {
+        let source = caller(binding);
+        let corpus = corpora(
+            &[
+                ("a.test.ts", &source),
+                ("factory.ts", factory),
+                ("runner.ts", runner),
+            ],
+            &["a.test.ts"],
+        )
+        .remove(0);
+        assert!(
+            corpus
+                .tests
+                .iter()
+                .any(|case| case.exclusion == Some(Exclusion::RegisteredElsewhere)),
+            "{binding}: {:?}",
+            corpus.tests
+        );
+    }
+}
+
+/// Factory and leaf frames both participate in the final comparison outcome.
+#[test]
+fn returned_closure_frames_preserve_equivalence_and_conflicts() {
+    let factory = include_str!("../../fixtures/oracle/factory-result-binding/factory.ts");
+    let callers = [
+        (
+            "same-a.test.ts",
+            "import {make} from './factory';const r=make('same');r.cases.nested.read(1)",
+        ),
+        (
+            "same-b.test.ts",
+            "import {make} from './factory';const r=make('same');r.cases.nested.read(1)",
+        ),
+        (
+            "factory-diff.test.ts",
+            "import {make} from './factory';const r=make('other');r.cases.nested.read(1)",
+        ),
+        (
+            "leaf-diff.test.ts",
+            "import {make} from './factory';const r=make('same');r.cases.nested.read(2)",
+        ),
+    ];
+    let mut files = callers.to_vec();
+    files.push(("factory.ts", factory));
+    let paths: Vec<_> = callers.iter().map(|(path, _)| *path).collect();
+    let corpora = corpora(&files, &paths);
+    let keys: Vec<_> = corpora
+        .iter()
+        .map(|corpus| {
+            assert_eq!(corpus.tests.len(), 1, "{:?}", corpus.tests);
+            assert!(corpus.tests[0].exclusion.is_none(), "{:?}", corpus.tests);
+            corpus.tests[0].key
+        })
+        .collect();
+    assert_eq!(keys[0], keys[1]);
+    assert_ne!(keys[0], keys[2]);
+    assert_ne!(keys[0], keys[3]);
+}
+
+/// Invocation substitution refuses runtime identity and array-hole distinctions JSON erases.
+#[test]
+fn invocation_frames_refuse_erased_reference_semantics() {
+    for (name, helper, first, second) in [
+        (
+            "identity",
+            "import {test,expect} from 'vitest';function inner(x,y,title){test(title,()=>expect(x===y).toBe(true))}\
+             export function same(a){inner(a,a,'same')}export function distinct(a){inner(a,{},'distinct')}",
+            "import {same} from './helper';same({})",
+            "import {distinct} from './helper';distinct({})",
+        ),
+        (
+            "holes",
+            "import {test,expect} from 'vitest';export function run(a,title){test(title,()=>expect(a[0]).toBe(null))}",
+            "import {run} from './helper';run([,],'hole')",
+            "import {run} from './helper';run([null],'null')",
+        ),
+    ] {
+        let paths = [format!("{name}-a.test.ts"), format!("{name}-b.test.ts")];
+        let files = [
+            (paths[0].as_str(), first),
+            (paths[1].as_str(), second),
+            ("helper.ts", helper),
+        ];
+        let corpora = corpora(&files, &[paths[0].as_str(), paths[1].as_str()]);
+        assert_eq!(
+            corpora.iter().map(|corpus| corpus.tests.len()).sum::<usize>(),
+            2,
+            "{name}: {corpora:?}"
+        );
+        let outcome = owned_outcome(
+            paths
+                .iter()
+                .zip(corpora)
+                .map(|(path, corpus)| (path.as_str(), corpus))
+                .collect(),
+        );
+        assert!(
+            outcome
+                .findings
+                .iter()
+                .all(|finding| finding.rule != crate::model::Rule::CrossFileDuplicate),
+            "{name}: {:?}",
+            outcome.findings
+        );
+    }
+}
+
+/// Returned factories refuse defaults and transforms whose actual JavaScript result is unmodeled.
+#[test]
+fn returned_factories_refuse_inherited_defaults_and_async_transforms() {
+    let inherited_factory =
+        "import {test,expect} from 'vitest';export function make({constructor=1}){\
+        return {cases:{read:()=>test('case',()=>expect(constructor).toBe(1))}}}";
+    let paths = ["inherited.test.ts", "own.test.ts"];
+    let files = [
+        (
+            paths[0],
+            "import {make} from './factory';const r=make({});r.cases.read()",
+        ),
+        (
+            paths[1],
+            "import {make} from './factory';const r=make({constructor:1});r.cases.read()",
+        ),
+        ("factory.ts", inherited_factory),
+    ];
+    let results: Vec<_> = runs(&files, &[&[paths[0]], &[paths[1]]])
+        .into_iter()
+        .map(|mut run| run.remove(0))
+        .collect();
+    assert!(
+        results[0]
+            .tests
+            .iter()
+            .all(|case| case.exclusion == Some(Exclusion::RegisteredElsewhere)),
+        "{:?}",
+        results[0].tests
+    );
+    assert_eq!(results[1].tests.len(), 1, "{:?}", results[1].tests);
+    assert!(
+        results[1].tests[0].exclusion.is_none(),
+        "{:?}",
+        results[1].tests
+    );
+    let outcome = owned_outcome(paths.iter().copied().zip(results).collect());
+    assert_rule_absent(outcome, crate::model::Rule::CrossFileDuplicate);
+
+    let nested_factory =
+        "import {test,expect} from 'vitest';export function make({ignored:{},value}){\
+        return {cases:{read:()=>test('case',()=>expect(value).toBe(1))}}}";
+    let paths = ["missing-nested.test.ts", "present-nested.test.ts"];
+    let files = [
+        (
+            paths[0],
+            "import {make} from './factory';const r=make({value:1});r.cases.read()",
+        ),
+        (
+            paths[1],
+            "import {make} from './factory';const r=make({ignored:{},value:1});r.cases.read()",
+        ),
+        ("factory.ts", nested_factory),
+    ];
+    let nested_results: Vec<_> = runs(&files, &[&[paths[0]], &[paths[1]]])
+        .into_iter()
+        .map(|mut run| run.remove(0))
+        .collect();
+    assert_all_wrappers_refused(&nested_results);
+    let outcome = owned_outcome(paths.iter().copied().zip(nested_results).collect());
+    assert_rule_absent(outcome, crate::model::Rule::CrossFileDuplicate);
+
+    for transform in ["async fn=>fn", "function*(fn){return fn}"] {
+        let factory = format!(
+            "import {{test}} from 'vitest';export function make(){{const identity={transform};\
+             return {{cases:{{read:()=>identity(test)('case',()=>{{}})}}}}}}"
+        );
+        let corpus = factory_corpus(
+            &factory,
+            "import {make} from './factory';const r=make();r.cases.read()",
+        );
+        assert!(
+            corpus
+                .tests
+                .iter()
+                .any(|case| case.exclusion == Some(Exclusion::RegisteredElsewhere)),
+            "{transform}: {:?}",
+            corpus.tests
+        );
+    }
+
+    for (factory, call) in [
+        (
+            "import {test} from 'vitest';export function make(unused=test('hidden',()=>{})){\
+             return {cases:{read:()=>test('case',()=>{})}}}",
+            "make()",
+        ),
+        (
+            "import {test} from 'vitest';export function make({unused=boom()}){\
+             return {cases:{read:()=>test('case',()=>{})}}}",
+            "make({})",
+        ),
+    ] {
+        let caller = format!("import {{make}} from './factory';const r={call};r.cases.read()");
+        let corpus = corpora(
+            &[("case.test.ts", &caller), ("factory.ts", factory)],
+            &["case.test.ts"],
+        )
+        .remove(0);
+        assert!(
+            corpus
+                .tests
+                .iter()
+                .any(|case| case.exclusion == Some(Exclusion::RegisteredElsewhere)),
+            "{factory}: {:?}",
+            corpus.tests
+        );
+    }
+
+    for condition in ["test('hidden',()=>{})", "boom()"] {
+        let factory = format!(
+            "import {{test}} from 'vitest';export function make(){{\
+             const conditional=fn=>fn.runIf({condition});\
+             return {{cases:{{read:()=>conditional(test)('case',()=>{{}})}}}}}}"
+        );
+        let corpus = factory_corpus(
+            &factory,
+            "import {make} from './factory';const r=make();r.cases.read()",
+        );
+        assert!(
+            corpus
+                .tests
+                .iter()
+                .any(|case| case.exclusion == Some(Exclusion::RegisteredElsewhere)),
+            "{condition}: {:?}",
+            corpus.tests
+        );
+    }
+
+    let mutable_factory = "import {test,expect} from 'vitest';export function make(){\
+        const id=fn=>fn;return {cases:{\
+        left:(x,y)=>id(test)('left',()=>{x=2;expect(y).toBe(1)}),\
+        right:(x,y)=>id(test)('right',()=>{y=2;expect(y).toBe(1)})}}}";
+    let mutable = corpora(
+        &[
+            (
+                "mutable.test.ts",
+                "import {make} from './factory';const r=make();r.cases.left(1,1);r.cases.right(1,1)",
+            ),
+            ("factory.ts", mutable_factory),
+        ],
+        &["mutable.test.ts"],
+    )
+    .remove(0);
+    assert_eq!(mutable.tests.len(), 3, "{:?}", mutable.tests);
+    assert!(
+        mutable
+            .tests
+            .iter()
+            .all(|case| case.exclusion == Some(Exclusion::RegisteredElsewhere)),
+        "{:?}",
+        mutable.tests
+    );
+    let outcome = owned_findings("mutable.test.ts", mutable);
+    assert_rule_absent(outcome, crate::model::Rule::DuplicateTest);
+
+    let captured_factory = "import {test,expect} from 'vitest';export function make(mode){\
+        function get(){return mode}return {cases:{read:()=>test('case',()=>expect(get()).toBe(1))}}}";
+    let paths = ["captured-a.test.ts", "captured-b.test.ts"];
+    let files = [
+        (
+            paths[0],
+            "import {make} from './factory';const r=make(1);r.cases.read()",
+        ),
+        (
+            paths[1],
+            "import {make} from './factory';const r=make(2);r.cases.read()",
+        ),
+        ("factory.ts", captured_factory),
+    ];
+    let captured_results: Vec<_> = runs(&files, &[&[paths[0]], &[paths[1]]])
+        .into_iter()
+        .map(|mut run| run.remove(0))
+        .collect();
+    assert_all_wrappers_refused(&captured_results);
+    let outcome = owned_outcome(paths.iter().copied().zip(captured_results).collect());
+    assert_rule_absent(outcome, crate::model::Rule::CrossFileDuplicate);
+
+    let nested_callable_factory = "import {test,expect} from 'vitest';export function make(mode){\
+        function get(){return ()=>mode}return {cases:{\
+        read:()=>test('case',()=>expect(get()()).toBe(1))}}}";
+    let files = [
+        (
+            paths[0],
+            "import {make} from './factory';const r=make(1);r.cases.read()",
+        ),
+        (
+            paths[1],
+            "import {make} from './factory';const r=make(2);r.cases.read()",
+        ),
+        ("factory.ts", nested_callable_factory),
+    ];
+    let nested_results = corpora(&files, &paths);
+    assert_all_wrappers_refused(&nested_results);
+    let outcome = owned_outcome(paths.iter().copied().zip(nested_results).collect());
+    assert_rule_absent(outcome, crate::model::Rule::CrossFileDuplicate);
+
+    let sibling_factory = "import {test,expect} from 'vitest';let state=0;const id=fn=>fn;\
+        export function make(){return {cases:{\
+        write:()=>id(test)('write',()=>{state=1}),\
+        read:()=>id(test)('read',()=>expect(state).toBe(0))}}}";
+    let files = [
+        (
+            paths[0],
+            "import {make} from './factory';const r=make();r.cases.write();r.cases.read()",
+        ),
+        (
+            paths[1],
+            "import {make} from './factory';const r=make();r.cases.read()",
+        ),
+        ("factory.ts", sibling_factory),
+    ];
+    let sibling_results = corpora(&files, &paths);
+    let read_cases: Vec<_> = sibling_results
+        .iter()
+        .flat_map(|corpus| &corpus.tests)
+        .filter(|case| case.title.as_deref() == Some("read"))
+        .collect();
+    assert_eq!(read_cases.len(), 2, "{sibling_results:?}");
+    assert_eq!(
+        read_cases[0].exclusion,
+        Some(Exclusion::OrderDependentState),
+        "{sibling_results:?}"
+    );
+    assert_eq!(read_cases[1].exclusion, None, "{sibling_results:?}");
+    let outcome = owned_outcome(paths.iter().copied().zip(sibling_results).collect());
+    assert_rule_absent(outcome, crate::model::Rule::CrossFileDuplicate);
+
+    let redeclared_transform = "import {test} from 'vitest';export function make(){\
+        function id(fn){return fn}function id(fn){return fn.fails}\
+        return {cases:{read:()=>id(test)('derived',()=>{})}}}";
+    let source = "import {test} from 'vitest';import {make} from './factory';\
+        const r=make();r.cases.read();test('ordinary',()=>{})";
+    let corpus = corpora(
+        &[
+            ("redeclared-transform.test.ts", source),
+            ("factory.ts", redeclared_transform),
+        ],
+        &["redeclared-transform.test.ts"],
+    )
+    .remove(0);
+    assert!(
+        corpus
+            .tests
+            .iter()
+            .any(|case| case.exclusion == Some(Exclusion::RegisteredElsewhere)),
+        "{:?}",
+        corpus.tests
+    );
+    let outcome = owned_findings("redeclared-transform.test.ts", corpus);
+    assert_rule_absent(outcome, crate::model::Rule::DuplicateTest);
+}
+
+/// Direct runner expansion retains JavaScript's harmless arity differences and refuses a
+/// parameter whose runtime binding is replaced by a hoisted declaration.
+#[test]
+fn returned_transform_aliases_require_initialized_bindings() {
+    for (setup, admitted) in [
+        ("const second=only;", true),
+        ("const second=first;const first=only;", false),
+    ] {
+        let factory = format!(
+            "import {{test,expect}} from 'vitest';import {{only}} from './only';\
+             export function make(){{{setup}return {{cases:{{read:()=>\
+             second(test)('alias',()=>expect(1).toBe(1))}}}}}}"
+        );
+        let corpus = corpora(
+            &[
+                (
+                    "alias.test.ts",
+                    "import {make} from './factory';const r=make();r.cases.read()",
+                ),
+                ("factory.ts", &factory),
+                ("only.ts", "export function only(fn){return fn}"),
+            ],
+            &["alias.test.ts"],
+        )
+        .remove(0);
+        if admitted {
+            assert_eq!(corpus.tests.len(), 1, "{:?}", corpus.tests);
+            assert_eq!(corpus.tests[0].exclusion, None);
+        } else {
+            assert_eq!(corpus.tests.len(), 2, "{:?}", corpus.tests);
+            assert!(corpus
+                .tests
+                .iter()
+                .all(|case| case.exclusion == Some(Exclusion::RegisteredElsewhere)));
+        }
+    }
+}
+
+/// Mutation facts cross factory instances and empty local factories still execute their setup.
+#[test]
+fn returned_batches_share_mutation_and_require_initialized_factories() {
+    let factory = include_str!("../../fixtures/oracle/factory-batch-mutation/factory.ts");
+    let results = corpora(
+        &[
+            (
+                "a.test.ts",
+                include_str!("../../fixtures/oracle/factory-batch-mutation/a.test.ts"),
+            ),
+            (
+                "b.test.ts",
+                include_str!("../../fixtures/oracle/factory-batch-mutation/b.test.ts"),
+            ),
+            ("factory.ts", factory),
+        ],
+        &["a.test.ts", "b.test.ts"],
+    );
+    assert_mutation_reader(&results);
+    let reversed = corpora(
+        &[
+            (
+                "reversed.test.ts",
+                include_str!("../../fixtures/oracle/factory-batch-mutation/reversed.test.ts"),
+            ),
+            ("factory.ts", factory),
+        ],
+        &["reversed.test.ts"],
+    )
+    .remove(0);
+    assert_eq!(reversed.tests.len(), 2);
+    assert_eq!(
+        reversed.tests[0].exclusion,
+        Some(Exclusion::OrderDependentState)
+    );
+    for (body, admitted) in [
+        (
+            include_str!("../../fixtures/oracle/factory-initialization/late-call.test.ts"),
+            false,
+        ),
+        (
+            include_str!("../../fixtures/oracle/factory-initialization/late-read.test.ts"),
+            false,
+        ),
+        (
+            include_str!("../../fixtures/oracle/factory-initialization/control.test.ts"),
+            true,
+        ),
+    ] {
+        let result = corpora(
+            &[
+                ("case.test.ts", body),
+                (
+                    "runner.ts",
+                    include_str!("../../fixtures/oracle/factory-initialization/runner.ts"),
+                ),
+            ],
+            &["case.test.ts"],
+        )
+        .remove(0);
+        assert!(!result.tests.is_empty());
+        assert_eq!(
+            result.tests.iter().all(|test| test.exclusion.is_none()),
+            admitted,
+            "{body}: {:?}",
+            result.tests
+        );
+    }
+}
+
+/// Captured setup strings must pay for every leaf's rendered substitutions.
+#[test]
+fn returned_factory_capture_work_refuses_amplification() {
+    let factory = include_str!("../../fixtures/oracle/factory-resource-work/copies.ts");
+    let caller = include_str!("../../fixtures/oracle/factory-resource-work/copies.test.ts");
+    let analyze = |factory: &str, caller: &str| {
+        corpora(
+            &[("copies.ts", factory), ("case.test.ts", caller)],
+            &["case.test.ts"],
+        )
+        .remove(0)
+    };
+    let refused = analyze(factory, caller);
+    assert_eq!(refused.tests.len(), 2, "{:?}", refused.tests);
+    assert!(refused.tests.iter().all(|case| case.exclusion.is_some()));
+    let caller = include_str!("../../fixtures/oracle/factory-resource-work/copies-control.test.ts");
+    let retained = analyze(factory, caller);
+    assert_eq!(retained.tests.len(), 2, "{:?}", retained.tests);
+    assert!(retained.tests.iter().all(|case| case.exclusion.is_none()));
+    assert_eq!(retained.tests[0].key, retained.tests[1].key);
+    let outcome = owned_findings("case.test.ts", retained);
+    assert!(outcome
+        .findings
+        .iter()
+        .any(|finding| finding.rule == crate::model::Rule::DuplicateTest));
+}
+
+/// Proved local returned leaves use their invocation frames exactly once.
+#[test]
+fn returned_local_leaves_preserve_equal_and_conflicting_frames() {
+    let source = include_str!("../../fixtures/oracle/factory-local-leaves/case.test.ts");
+    for source in [
+        source,
+        include_str!("../../fixtures/oracle/factory-local-leaves/const.test.ts"),
+        include_str!("../../fixtures/oracle/factory-local-leaves/overload.test.ts"),
+        include_str!("../../fixtures/oracle/factory-local-leaves/unused.test.ts"),
+    ] {
+        let corpus = corpora(&[("case.test.ts", source)], &["case.test.ts"]).remove(0);
+        assert_eq!(corpus.tests.len(), 3, "{:?}", corpus.tests);
+        assert!(corpus.tests.iter().all(|case| case.exclusion.is_none()));
+        assert_eq!(corpus.tests[0].key, corpus.tests[1].key);
+        assert_ne!(corpus.tests[0].key, corpus.tests[2].key);
+        let outcome = owned_findings("case.test.ts", corpus);
+        let duplicates: Vec<_> = outcome
+            .findings
+            .iter()
+            .filter(|finding| finding.rule == crate::model::Rule::DuplicateTest)
+            .collect();
+        assert_eq!(duplicates.len(), 1, "{:?}", outcome.findings);
+    }
+    for source in [
+        format!("{source}\nconst escaped=make"),
+        source.replace("a.read()", "make=()=>({read:()=>{}});a.read()"),
+    ] {
+        let corpus = corpora(&[("case.test.ts", &source)], &["case.test.ts"]).remove(0);
+        assert!(!corpus.tests.is_empty());
+        assert!(corpus.tests.iter().any(|case| case.exclusion.is_some()));
+        assert_rule_absent(
+            owned_findings("case.test.ts", corpus),
+            crate::model::Rule::DuplicateTest,
+        );
+    }
+}
+
+/// Derived conditions retain discovery and identity while controlling hook activation.
+#[test]
+fn derived_conditional_registration_preserves_activation() {
+    let factory = include_str!("../../fixtures/oracle/factory-conditional-activation/factory.ts");
+    let source = include_str!("../../fixtures/oracle/factory-conditional-activation/case.test.ts");
+    for (input, truthy) in [
+        ("false", false),
+        ("true", true),
+        ("0", false),
+        ("-0", false),
+        ("null", false),
+        ("''", false),
+        ("1", true),
+        ("-2", true),
+        ("'x'", true),
+    ] {
+        let caller = source.replace("make(false)", &format!("make({input})"));
+        let corpus = factory_corpus(factory, &caller);
+        assert_eq!(corpus.tests.len(), 4, "{input}: {:?}", corpus.tests);
+        assert!(corpus.tests.iter().all(|case| case.exclusion.is_none()));
+        for (case, inert) in corpus.tests.iter().zip([!truthy, truthy, false, true]) {
+            assert_eq!(case.inert, inert, "{input}: {:?}", corpus.tests);
+            assert_eq!(case.witnesses_hooks(), !inert, "{input}");
+        }
+        if !truthy {
+            assert_ne!(corpus.tests[0].key, corpus.tests[2].key, "{input}");
+        }
+    }
+}
+
+/// An ordinary imported reader observes writes registered by a factory in the same module.
+#[test]
+fn ordinary_runner_frames_share_factory_mutation_facts() {
+    let results = corpora(
+        &[
+            (
+                "a.test.ts",
+                include_str!("../../fixtures/oracle/factory-mixed-mutation/a.test.ts"),
+            ),
+            (
+                "b.test.ts",
+                include_str!("../../fixtures/oracle/factory-mixed-mutation/b.test.ts"),
+            ),
+            (
+                "factory.ts",
+                include_str!("../../fixtures/oracle/factory-mixed-mutation/factory.ts"),
+            ),
+        ],
+        &["a.test.ts", "b.test.ts"],
+    );
+    assert_mutation_reader(&results);
+}
+
+/// Direct helpers retain harmless arity differences while refusing replaced parameter bindings.
+#[test]
+fn runner_arity_and_parameter_redeclaration_keep_javascript_semantics() {
+    let helper = "import {test,expect} from 'vitest';export function run(unused){test('constant',()=>expect(1).toBe(1))}";
+    let paths = ["missing.test.ts", "extra.test.ts"];
+    let files = [
+        (paths[0], "import {run} from './helper';run()"),
+        (paths[1], "import {run} from './helper';run(1,2)"),
+        ("helper.ts", helper),
+    ];
+    let arity_results = corpora(&files, &paths);
+    assert!(
+        arity_results
+            .iter()
+            .flat_map(|corpus| &corpus.tests)
+            .all(|case| case.exclusion.is_none()),
+        "{arity_results:?}"
+    );
+    let outcome = owned_outcome(paths.iter().copied().zip(arity_results).collect());
+    assert_eq!(
+        outcome
+            .findings
+            .iter()
+            .filter(|finding| finding.rule == crate::model::Rule::CrossFileDuplicate)
+            .count(),
+        1,
+        "{:?}",
+        outcome.findings
+    );
+
+    let redeclared = "import {test,expect} from 'vitest';export function run(a){function a(){};\
+        test('redeclared',()=>expect(a).toBe(1))}";
+    let ordinary = "import {test,expect} from 'vitest';export function run(a){\
+        test('ordinary',()=>expect(a).toBe(1))}";
+    let paths = ["redeclared.test.ts", "ordinary.test.ts"];
+    let files = [
+        (paths[0], "import {run} from './redeclared';run(1)"),
+        (paths[1], "import {run} from './ordinary';run(1)"),
+        ("redeclared.ts", redeclared),
+        ("ordinary.ts", ordinary),
+    ];
+    let redeclared_results = corpora(&files, &paths);
+    assert_eq!(
+        redeclared_results
+            .iter()
+            .map(|corpus| corpus.tests.len())
+            .sum::<usize>(),
+        2,
+        "{redeclared_results:?}"
+    );
+    let outcome = owned_outcome(paths.iter().copied().zip(redeclared_results).collect());
+    assert_rule_absent(outcome, crate::model::Rule::CrossFileDuplicate);
 }
 
 /// A participant is named the way a report spells it: the suite path, then the title, when every

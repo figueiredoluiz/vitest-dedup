@@ -87,6 +87,32 @@ fn import_cut_without_direct_tests_keeps_context_refusal() {
     assert!(corpus.import_limit.is_some());
 }
 
+/// An ordinary runner call cannot restore comparisons after the caller hits its import bound.
+#[test]
+fn import_cut_refuses_runner_expansion() {
+    let mut sources = sources();
+    let (_, source) = sources
+        .iter_mut()
+        .find(|(path, _)| path == "deep.test.ts")
+        .unwrap();
+    source.push_str("\nimport { run } from './runner'\nrun()\n");
+    sources.push((
+        "runner.ts".to_owned(),
+        "import {test} from 'vitest';export function run(){test('expanded',()=>{})}".to_owned(),
+    ));
+    let files: Vec<_> = sources
+        .iter()
+        .map(|(path, source)| (path.as_str(), source.as_str()))
+        .collect();
+    let corpus = corpora(&files, &["deep.test.ts"]).remove(0);
+    assert_eq!(corpus.context_refusals, [Exclusion::ImportLimit]);
+    assert_eq!(corpus.tests.len(), 2, "{:?}", corpus.tests);
+    assert!(corpus
+        .tests
+        .iter()
+        .all(|test| test.exclusion == Some(Exclusion::ImportLimit)));
+}
+
 /// The engine prefers bounded-work metadata but retains the stable fallback for synthetic corpora.
 #[test]
 fn import_cut_report_uses_specific_detail_and_keeps_the_fallback() {

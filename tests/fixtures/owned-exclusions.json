@@ -7,7 +7,9 @@
     },
     "oracle/collection-error/case.test.ts": {
       "reason": "registered-elsewhere",
-      "otherReasons": ["helper-effects-unproved"],
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
       "testsExcluded": 2
     },
     "behavior-runtime/trace-expressions.test.tsx": {
@@ -1575,6 +1577,55 @@
         "helper-effects-unproved"
       ],
       "testsExcluded": 25
+    },
+    "oracle/factory-batch-mutation/a.test.ts": {
+      "reason": "order-dependent-state",
+      "otherReasons": [],
+      "testsExcluded": 1
+    },
+    "oracle/factory-batch-mutation/reversed.test.ts": {
+      "reason": "order-dependent-state",
+      "otherReasons": [],
+      "testsExcluded": 1
+    },
+    "oracle/factory-initialization/late-call.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [],
+      "testsExcluded": 1
+    },
+    "oracle/factory-initialization/late-read.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [],
+      "testsExcluded": 1
+    },
+    "oracle/factory-mixed-mutation/a.test.ts": {
+      "reason": "order-dependent-state",
+      "otherReasons": [],
+      "testsExcluded": 1
+    },
+    "oracle/factory-modifier-work/large.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [],
+      "testsExcluded": 81
+    },
+    "oracle/factory-proof-handoff/local.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 8
+    },
+    "oracle/factory-suite-capture/late.test.ts": {
+      "reason": "registered-inside-function",
+      "otherReasons": [
+        "registered-elsewhere"
+      ],
+      "testsExcluded": 3
+    },
+    "oracle/factory-resource-work/copies.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [],
+      "testsExcluded": 2
     }
   }
 }

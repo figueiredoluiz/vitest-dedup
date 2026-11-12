@@ -1,0 +1,7 @@
+{
+  "files": {
+    "async.test.ts": {"tasks": 1, "wrapperSites": ["wrapper@2", "wrapper@3"], "next": {}},
+    "sync.test.ts": {"tasks": 1, "wrapperSites": ["wrapper@2", "wrapper@3"], "next": {}},
+    "local.test.ts": {"tasks": 5, "wrapperSites": ["wrapper@3", "wrapper@4", "wrapper@5"], "next": {"reasons": ["registered-elsewhere", "helper-effects-unproved"], "testsExcluded": 8}}
+  }
+}

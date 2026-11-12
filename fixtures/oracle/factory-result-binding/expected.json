@@ -1,0 +1,14 @@
+{
+  "files": {
+    "direct.test.ts": {
+      "tasks": 2,
+      "wrapperSites": ["wrapper@4", "wrapper@5", "wrapper@6"],
+      "next": {}
+    },
+    "destructured.test.ts": {
+      "tasks": 2,
+      "wrapperSites": ["wrapper@4", "wrapper@5", "wrapper@6"],
+      "next": {}
+    }
+  }
+}
