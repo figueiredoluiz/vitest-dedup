@@ -1,5 +1,10 @@
 {
   "files": {
+    "oracle/collection-error/case.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": ["helper-effects-unproved"],
+      "testsExcluded": 2
+    },
     "behavior-runtime/trace-expressions.test.tsx": {
       "reason": "incomplete-trace",
       "otherReasons": [],

@@ -82,6 +82,24 @@ test('a file declared not collected must not be collected, and still pins its le
   assert.match(failures(bench, { ...empty, exclusions, vitest: new Map([[PATH, { tasks: [] }]]) }), /declared not collected, and Vitest collected it/)
 })
 
+test('collection errors require observed errors, zero tasks and an analyzer refusal', () => {
+  const entry = { oracle: 'collection-error', next: { reasons: ['registered-elsewhere'], testsExcluded: 1 } }
+  const oracleCase = { dir: 'd', expected: { files: { [PATH]: entry } } }
+  assert.deepEqual(expectedProblems(oracleCase.expected, 'd'), [])
+  const file = { tasks: [], collectErrors: ['ReferenceError'], stubReads: [], unprobed: false, overlapping: false }
+  const view = observed({ vitest: new Map([[PATH, file]]), exclusions: new Map([[PATH, entry.next]]) })
+  assert.deepEqual(judgeCase(oracleCase, view), {failures: [], held: [], files: 0})
+  for (const changed of [{ collectErrors: [] }, { tasks: [{}] }, { unprobed: true }, { overlapping: true }, { stubReads: ['missing'] }]) {
+    assert.match(failures(oracleCase, { ...view, vitest: new Map([[PATH, { ...file, ...changed }]]) }), /expected a directly observed collection error/)
+  }
+  assert.match(failures(oracleCase, { ...view, exclusions: new Map() }), /explicit analyzer refusal/)
+  assert.match(failures(oracleCase, { ...view, vitest: new Map() }), /expected a directly observed collection error/)
+  assert.match(failures(oracleCase, { ...view, exclusions: new Map([[PATH, { reasons: ['registered-elsewhere'], testsExcluded: 2 }]]) }), /next is/)
+  for (const extra of [{ tasks: 1 }, { wrapperSites: [] }, { wrapperSitesToday: [] }]) {
+    assert.match(expectedProblems({files: {[PATH]: {...entry, ...extra}}}, 'd').join('\n'), /pins no tasks or sites/)
+  }
+})
+
 test('site and title disagreements are matched with their lists, unlisted and stale both failing', () => {
   const disagreement = { path: PATH, kind: 'missing-site', item: 'test@4' }
   const listed = { ...disagreement, reason: 'r', waitsOn: WAITS }
