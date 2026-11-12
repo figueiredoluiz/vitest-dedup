@@ -41,7 +41,12 @@ fn immutable_export_shapes_retain_the_registration_plan() {
             "run"
         };
         let template = read(&[("runner.ts", &source)], export).unwrap();
+        assert_eq!(template.source, source);
         assert_eq!(template.parameters.len(), 1, "{source}");
+        assert_eq!(
+            template.parsed.scopes.symbol(template.parameters[0]).name,
+            "label"
+        );
         assert_eq!(template.steps.len(), 1, "{source}");
         assert!(matches!(template.steps[0], Step::Registration(_, _)));
         assert!(template.parsed.tree.is_function(template.function));
@@ -52,16 +57,30 @@ fn immutable_export_shapes_retain_the_registration_plan() {
 #[test]
 fn reexports_are_bounded_and_do_not_skip_hop_effects() {
     let source = "import {test,expect} from 'vitest'; export function declare(){test('a',()=>expect(1).toBe(1))}";
-    let template = read(
-        &[
-            ("entry.ts", "export {declare as run} from './body'"),
-            ("body.ts", source),
-        ],
-        "run",
-    )
-    .unwrap();
+    let entry = "export {declare as run} from './body'";
+    let template = read(&[("entry.ts", entry), ("body.ts", source)], "run").unwrap();
     assert_eq!(template.steps.len(), 1);
+    assert_eq!(template.source, source);
     assert_eq!(template.dependencies.len(), 2);
+    assert_eq!(template.resolution_depth, 2);
+    assert_eq!(
+        template
+            .dependencies
+            .iter()
+            .map(|path| path.file_name().unwrap().to_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["body.ts", "entry.ts"]
+    );
+    let mut bytes: Vec<_> = template
+        .dependency_bytes
+        .iter()
+        .map(|(path, bytes)| (path.file_name().unwrap().to_str().unwrap(), *bytes))
+        .collect();
+    bytes.sort();
+    assert_eq!(
+        bytes,
+        [("body.ts", source.len()), ("entry.ts", entry.len())]
+    );
     assert!(template.path.ends_with("body.ts"));
     for entry in [
         "sideEffect(); export {declare as run} from './body'",
@@ -143,6 +162,7 @@ fn parameter_validation_refuses_work_beyond_its_owned_bound() {
 #[test]
 fn uncertain_callables_and_parameters_never_return_a_partial_plan() {
     for source in [
+        "export function run(){return {leaf:()=>test('a',()=>{})}}",
         "export let run = () => test('a',()=>{});",
         "export function run(){test('a',()=>{})} run = replacement;",
         "export default run; const run = () => test('a',()=>{});",
