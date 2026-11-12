@@ -77,19 +77,24 @@ pub(crate) struct Plan {
 }
 
 /// Read a local callable without guessing that a function-local const has been initialized.
-pub(crate) fn local(parsed: &Parsed, found: &Inventory, callee: NodeId) -> Result<Plan, Refusal> {
+fn local_binding(parsed: &Parsed, found: &Inventory, callee: NodeId) -> Result<(), Refusal> {
     if found.import_limit.is_some() {
         return Err(Refusal::Limit);
     }
-    let tree = &parsed.tree;
     let symbol = parsed
         .scopes
-        .symbol_at(tree.span(callee).start)
+        .symbol_at(parsed.tree.span(callee).start)
         .ok_or(Refusal::Callable)?;
     let binding = parsed.scopes.symbol(symbol);
     if matches!(binding.declaration, Declaration::Variable(_)) && !binding.top_level {
         return Err(Refusal::Callable);
     }
+    Ok(())
+}
+
+/// Build a direct runner plan from its checked local binding.
+pub(crate) fn local(parsed: &Parsed, found: &Inventory, callee: NodeId) -> Result<Plan, Refusal> {
+    local_binding(parsed, found, callee)?;
     let function = callable(parsed, callee, None)?;
     let parameters = parameters(parsed, function, found.direct_eval)?;
     let mut steps = Vec::new();
@@ -112,6 +117,52 @@ pub fn template(
     export: &str,
     setting: Setting<'_>,
 ) -> Result<Template, Refusal> {
+    let resolved = resolved_template(sources, path, export, setting)?;
+    let parameters = parameters(
+        &resolved.parsed,
+        resolved.function,
+        resolved.found.direct_eval,
+    )?;
+    let mut steps = Vec::new();
+    let body = BodyReader {
+        parsed: &resolved.parsed,
+        found: &resolved.found,
+    };
+    body.body(resolved.function, &mut steps, &mut 2000)?;
+    let mut dependencies: Vec<_> = resolved.dependencies.into_iter().collect();
+    dependencies.sort();
+    Ok(Template {
+        path: resolved.path,
+        source: resolved.source,
+        parsed: resolved.parsed,
+        function: resolved.function,
+        parameters,
+        steps,
+        dependencies,
+        resolution_depth: resolved.resolution_depth,
+        dependency_bytes: resolved.dependency_bytes.into_iter().collect(),
+    })
+}
+
+/// Resolved source/module facts, before parameter and registration-body admission.
+struct ResolvedTemplate {
+    path: PathBuf,
+    source: String,
+    parsed: Parsed,
+    function: NodeId,
+    found: Inventory,
+    dependencies: HashSet<PathBuf>,
+    resolution_depth: usize,
+    dependency_bytes: HashMap<PathBuf, usize>,
+}
+
+/// Resolve a callable and retain the completed dependency and inventory proof.
+fn resolved_template(
+    sources: &Sources,
+    path: &Path,
+    export: &str,
+    setting: Setting<'_>,
+) -> Result<ResolvedTemplate, Refusal> {
     let mut reader = Reader {
         sources,
         setting,
@@ -137,25 +188,15 @@ pub fn template(
                 if found.import_limit.is_some() {
                     return Err(Refusal::Limit);
                 }
-                let parameters = parameters(&parsed, function, found.direct_eval)?;
-                let mut steps = Vec::new();
-                let body = BodyReader {
-                    parsed: &parsed,
-                    found: &found,
-                };
-                body.body(function, &mut steps, &mut 2000)?;
-                let mut dependencies: Vec<_> = reader.checked.into_iter().collect();
-                dependencies.sort();
-                return Ok(Template {
+                return Ok(ResolvedTemplate {
                     path: at.0,
                     source,
                     parsed,
                     function,
-                    parameters,
-                    steps,
-                    dependencies,
+                    found,
+                    dependencies: reader.checked,
                     resolution_depth: depth,
-                    dependency_bytes: reader.read_sizes.into_iter().collect(),
+                    dependency_bytes: reader.read_sizes,
                 });
             }
             Export::From(specifier, name) => {
