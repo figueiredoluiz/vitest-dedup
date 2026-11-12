@@ -179,6 +179,12 @@ const DELIBERATE_BLIND_FILES = new Set([
   'oracle/api-reexports/star-second.test.ts',
   'oracle/binding-stability/namespace-export-declared.test.ts',
   'oracle/binding-stability/namespace-export-type.test.ts',
+  // Calls through what a function returning a registration function returns.
+  'oracle/factory-returned-api/arrow.test.ts',
+  'oracle/factory-returned-api/imported.test.ts',
+  'oracle/factory-returned-api/inline.test.ts',
+  'oracle/factory-returned-api/local.test.ts',
+  'oracle/factory-returned-api/plain.test.ts',
   'recall/runner-arguments-receiver/caller.test.ts',
   'recall/runner-eval-binding-guard/unsafe.test.ts',
   // A suite-local helper that registers inside a function its caller decides.

@@ -81,6 +81,8 @@ struct Module<'s> {
     /// Functions of this module whose body holds a registration, by the symbol naming them, with
     /// what calling them may register.
     wrappers: HashMap<SymbolId, Reach>,
+    /// Bindings a declarator gave a registration value: what they hold is read elsewhere.
+    aliased: HashSet<SymbolId>,
     loads: Vec<u32>,
     values: HashSet<NodeId>,
     /// Bindings declared more than once, replacing their value.
@@ -118,6 +120,7 @@ pub(super) fn analyse(
         setting,
         origins: HashMap::new(),
         wrappers: HashMap::new(),
+        aliased: HashSet::new(),
         loads: Vec::new(),
         values: HashSet::new(),
         redeclared: HashSet::new(),
@@ -1179,6 +1182,7 @@ impl<'s> Module<'s> {
                         };
                         if let Some(origin) = origin {
                             self.alias(symbol, origin);
+                            self.aliased.insert(symbol);
                         }
                     }
                     // A destructured binding holds a member of the wrapper, which may register
@@ -1252,6 +1256,11 @@ impl<'s> Module<'s> {
                     *held = (*held).max(reach);
                 }
             }
+            // What a call of a function returning a registration value returns may register. A
+            // wrapper's result already may, so one keeps the reach of its own call.
+            for symbol in self.returns_registration() {
+                self.wrappers.entry(symbol).or_insert(Reach::Tasks);
+            }
             let aliases = self.origins.clone();
             self.collect_aliases();
             if self.wrappers == before && self.origins == aliases {
@@ -1304,6 +1313,125 @@ impl<'s> Module<'s> {
             .flat_map(|callback| tree.list(callback, "params").into_iter().flatten())
             .flat_map(|param| bound_symbols(tree, &self.parsed.scopes, param))
             .collect()
+    }
+
+    /// Every read of a registration function: of a binding that holds one, and, when free names
+    /// are the API, of a free name the dialect registers with.
+    fn registration_reads(&self) -> impl Iterator<Item = NodeId> + '_ {
+        let tree = self.tree;
+        let scopes = &self.parsed.scopes;
+        let bound = self
+            .origins
+            .keys()
+            .chain(self.wrappers.keys())
+            .flat_map(|&symbol| scopes.symbol(symbol).references.iter())
+            .filter_map(|reference| reference.node);
+        let free = tree.nodes().filter(move |&node| {
+            self.setting.globals
+                && tree.kind(node) == "Identifier"
+                && scopes.is_global_at(tree.span(node).start)
+                && tree
+                    .text(node, "name")
+                    .is_some_and(|name| self.setting.dialect.registration(name).is_some())
+        });
+        bound.chain(free)
+    }
+
+    /// Whether `node`'s value is seen here to be a registration function or the API's namespace:
+    /// read from the framework's own binding (an import, a namespace member, a global) through
+    /// members the dialect knows. Through a local alias or another module's export the value is not
+    /// read here, and `test.name` is a string.
+    fn holds_api(&self, node: NodeId) -> bool {
+        let tree = self.tree;
+        let mut root = tree.inner(node);
+        while let Some(next) = match tree.kind(root) {
+            "MemberExpression" => tree.child(root, "object"),
+            "CallExpression" => tree.child(root, "callee"),
+            "TaggedTemplateExpression" => tree.child(root, "tag"),
+            _ => None,
+        } {
+            root = tree.inner(next);
+        }
+        if tree.kind(root) != "Identifier"
+            || !matches!(
+                self.value_origin(node),
+                Some(Origin::Api(_) | Origin::Namespace)
+            )
+        {
+            return false;
+        }
+        let own = self.read(root).is_none_or(|symbol| {
+            !self.aliased.contains(&symbol)
+                && matches!(
+                    self.origins.get(&symbol),
+                    Some(Origin::Api(_) | Origin::Namespace)
+                )
+        });
+        let dialect = &self.setting.dialect;
+        own && self.chain(node).is_some_and(|(_, _, steps)| {
+            steps.iter().all(|step| match step {
+                Step::Member(name) => {
+                    dialect.registration(name).is_some()
+                        || dialect.test_member(name).is_some()
+                        || dialect.chain_member(name).is_some()
+                }
+                Step::Call => true,
+            })
+        })
+    }
+
+    /// The symbols of functions that return a registration value: a `return` argument or an arrow's
+    /// expression body that is, but for parentheses and TS expression wrappers, a read of one
+    /// through its member and call steps ([`Self::holds_api`]), and reachable.
+    fn returns_registration(&self) -> Vec<SymbolId> {
+        let tree = self.tree;
+        let mut symbols = Vec::new();
+        for read in self.registration_reads() {
+            let mut value = read;
+            let mut outer = None;
+            while let Some(parent) = tree.parent(value) {
+                let holds = |key| tree.child(parent, key) == Some(value);
+                match tree.kind(parent) {
+                    "MemberExpression" if holds("object") => value = parent,
+                    "CallExpression" if holds("callee") => value = parent,
+                    "TaggedTemplateExpression" if holds("tag") => value = parent,
+                    "ParenthesizedExpression"
+                    | "TSAsExpression"
+                    | "TSSatisfiesExpression"
+                    | "TSNonNullExpression"
+                    | "TSTypeAssertion"
+                    | "TSInstantiationExpression" => value = parent,
+                    _ => {
+                        outer = Some(parent);
+                        break;
+                    }
+                }
+            }
+            let Some(outer) = outer else {
+                continue;
+            };
+            let function = if tree.kind(outer) == "ReturnStatement" {
+                tree.ancestors(outer).find(|&node| tree.is_function(node))
+            } else {
+                (tree.is_function(outer)
+                    && tree.child(outer, "body") == Some(value)
+                    && tree.kind(value) != "BlockStatement")
+                    .then_some(outer)
+            };
+            let Some(function) = function else {
+                continue;
+            };
+            if self.unreachable(read) || !self.holds_api(value) {
+                continue;
+            }
+            symbols.extend(
+                tree.child(function, "id")
+                    .and_then(|id| self.declares(id))
+                    .into_iter()
+                    .chain(self.declarator_symbol(function)),
+            );
+        }
+        symbols
     }
 
     /// Whether `symbol` may hold anything but what it was declared with: it is declared more than
@@ -1902,25 +2030,8 @@ impl<'s> Module<'s> {
     /// Registration functions read as values rather than called.
     fn escapes(&self) -> Vec<Escape> {
         let tree = self.tree;
-        let scopes = &self.parsed.scopes;
         let mut escapes = Vec::new();
-        // Every read of a registration function: of a binding that holds one, and, when free names
-        // are the API, of a free name the dialect registers with.
-        let bound = self
-            .origins
-            .keys()
-            .chain(self.wrappers.keys())
-            .flat_map(|&symbol| scopes.symbol(symbol).references.iter())
-            .filter_map(|reference| reference.node);
-        let free = tree.nodes().filter(|&node| {
-            self.setting.globals
-                && tree.kind(node) == "Identifier"
-                && scopes.is_global_at(tree.span(node).start)
-                && tree
-                    .text(node, "name")
-                    .is_some_and(|name| self.setting.dialect.registration(name).is_some())
-        });
-        for read in bound.chain(free) {
+        for read in self.registration_reads() {
             let mut current = read;
             let escaped = loop {
                 let Some(parent) = tree.parent(current) else {
