@@ -1102,6 +1102,83 @@ impl Planner<'_> {
         MAX_WORK.saturating_sub(self.work)
     }
 
+    /// Reserve a complete inventory's owned storage before cloning it.
+    fn inventory_copy_work(&mut self, found: &Inventory) -> Option<()> {
+        self.charge(std::mem::size_of::<Inventory>())?;
+        for cost in [
+            found
+                .sites
+                .len()
+                .saturating_mul(std::mem::size_of::<inventory::Site>()),
+            found.loads.len().saturating_mul(std::mem::size_of::<u32>()),
+            found
+                .escapes
+                .len()
+                .saturating_mul(std::mem::size_of::<inventory::Escape>()),
+            found
+                .in_place_mocks
+                .len()
+                .saturating_mul(std::mem::size_of::<inventory::InPlaceMock>()),
+            found
+                .registration_values
+                .capacity()
+                .saturating_mul(std::mem::size_of::<NodeId>().saturating_add(1))
+                .saturating_mul(2),
+        ] {
+            self.charge(cost)?;
+        }
+        if let Some(limit) = &found.import_limit {
+            self.charge(limit.module.as_os_str().len())?;
+        }
+        for site in &found.sites {
+            self.charge(
+                site.chain
+                    .len()
+                    .saturating_mul(std::mem::size_of::<String>())
+                    .saturating_add(
+                        site.labels
+                            .len()
+                            .saturating_mul(std::mem::size_of::<inventory::Label>()),
+                    )
+                    .saturating_add(site.title.as_ref().map_or(0, String::len)),
+            )?;
+            for member in &site.chain {
+                self.charge(member.len())?;
+            }
+        }
+        for escape in &found.escapes {
+            self.charge(escape.text.len())?;
+        }
+        for mock in &found.in_place_mocks {
+            self.charge(mock.callee.len())?;
+        }
+        Some(())
+    }
+
+    /// Reserve facts copied by an invocation frame or its private normalization consumer.
+    fn frame_facts_copy_work(&mut self, frame: &Frame) -> Option<()> {
+        if let Some(found) = &frame.inventory {
+            self.inventory_copy_work(found)?;
+        }
+        self.derived_copy_work(&frame.derived)
+    }
+
+    /// Reuse checked parent facts only after reserving their private invocation copy.
+    fn invocation_inventory(
+        &mut self,
+        module: Module<'_>,
+        parent: Option<&Frame>,
+        run: &mut Run,
+    ) -> Option<Inventory> {
+        match parent.and_then(|frame| frame.inventory.as_ref()) {
+            Some(found) => {
+                self.inventory_copy_work(found)?;
+                Some((**found).clone())
+            }
+            None => self.inventory(module, run),
+        }
+    }
+
     /// Reserve owned modifier storage before copying a derived map or its consumer values.
     fn derived_copy_work(&mut self, derived: &HashMap<NodeId, normal::Modifiers>) -> Option<()> {
         for modifiers in derived.values() {
@@ -1319,6 +1396,7 @@ impl Planner<'_> {
         let mut frame = self.frame(factory, plan.function, &plan.parameters, &actual, None)?;
         self.bind_factory_setup(factory, &plan.setup, &mut frame)?;
         let found = self.inventory(factory, run)?;
+        self.inventory_copy_work(&found)?;
         frame.inventory = Some(Box::new(found.clone()));
         if calls.binding.calls.len() > 2000 {
             return None;
@@ -1386,7 +1464,7 @@ impl Planner<'_> {
                     .start,
                 calls.caller.parsed.tree.span(call).start,
             ];
-            self.derived_copy_work(&frame.derived)?;
+            self.frame_facts_copy_work(&frame)?;
             let mut parent = frame.clone();
             self.derived_copy_work(&all_derived)?;
             parent.derived.clone_from(&all_derived);
@@ -1804,10 +1882,7 @@ impl Planner<'_> {
                 depth,
             )
         } else {
-            let found = match parent.and_then(|frame| frame.inventory.as_ref()) {
-                Some(found) => (**found).clone(),
-                None => self.inventory(module, run)?,
-            };
+            let found = self.invocation_inventory(module, parent, run)?;
             let plan = inventory::runners::local(parsed, &found, callee).ok()?;
             self.execute(module, plan, actual, parent, run, depth - 1)
         }
@@ -1909,10 +1984,7 @@ impl Planner<'_> {
         }
         let result = (|| {
             self.left = self.left.checked_sub(plan.steps.len().max(1))?;
-            let mut found = match parent.and_then(|frame| frame.inventory.as_ref()) {
-                Some(found) => (**found).clone(),
-                None => self.inventory(module, run)?,
-            };
+            let mut found = self.invocation_inventory(module, parent, run)?;
             if let Some(known) = self.sources.get(&relative) {
                 if known != module.source {
                     return None;
@@ -1923,6 +1995,7 @@ impl Planner<'_> {
             }
             let mut frame = self.frame(module, plan.function, &plan.parameters, &actual, parent)?;
             frame.promote_inventory(parsed, &mut found);
+            self.inventory_copy_work(&found)?;
             frame.inventory = Some(Box::new(found.clone()));
             frame.registrations = if relative == self.owner {
                 self.registrations.clone()
@@ -1963,9 +2036,9 @@ impl Planner<'_> {
                 })
                 .collect();
             if !frame.sites.is_empty() {
-                self.derived_copy_work(&frame.derived)?;
-                // read_parsed takes a frame copy and one owned modifier per selected site.
-                self.derived_copy_work(&frame.derived)?;
+                self.frame_facts_copy_work(&frame)?;
+                // read_parsed privately copies the inventory and selected modifiers once more.
+                self.frame_facts_copy_work(&frame)?;
                 let corpus = super::read_parsed(
                     module.path,
                     module.source,
@@ -1986,8 +2059,8 @@ impl Planner<'_> {
                 }
             }
             if run.diagnostics && !hook_sites.is_empty() {
-                self.derived_copy_work(&frame.derived)?;
-                self.derived_copy_work(&frame.derived)?;
+                self.frame_facts_copy_work(&frame)?;
+                self.frame_facts_copy_work(&frame)?;
                 let mut diagnostic_frame = frame.clone();
                 diagnostic_frame.sites.extend(hook_sites.iter().copied());
                 let diagnostics = super::read_parsed(

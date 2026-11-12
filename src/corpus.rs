@@ -525,6 +525,7 @@ fn read_parsed(
     frame: Option<runners::Frame>,
 ) -> Result<FileCorpus, Refusal> {
     let mut found = if let Some(found) = frame.as_ref().and_then(|frame| frame.inventory.as_ref()) {
+        // The planner reserves this private copy before handing over an invocation frame.
         (**found).clone()
     } else {
         inventory::inventory(

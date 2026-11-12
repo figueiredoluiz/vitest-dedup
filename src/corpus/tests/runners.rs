@@ -6,9 +6,25 @@ use std::path::PathBuf;
 /// Copy costs refuse a repeated large modifier before preparation, retaining the small control.
 #[test]
 fn returned_modifier_copies_obey_the_work_bound() {
-    let factory = include_str!("../../../fixtures/oracle/factory-modifier-work/factory.ts");
-    let large = include_str!("../../../fixtures/oracle/factory-modifier-work/large.test.ts");
-    let control = include_str!("../../../fixtures/oracle/factory-modifier-work/control.test.ts");
+    assert_factory_copy_bound(
+        include_str!("../../../fixtures/oracle/factory-modifier-work/factory.ts"),
+        include_str!("../../../fixtures/oracle/factory-modifier-work/large.test.ts"),
+        include_str!("../../../fixtures/oracle/factory-modifier-work/control.test.ts"),
+    );
+}
+
+/// Full inventories are reserved before repeated frame and normalization copies.
+#[test]
+fn returned_inventory_copies_obey_the_work_bound() {
+    assert_factory_copy_bound(
+        include_str!("../../../fixtures/oracle/factory-inventory-work/factory.ts"),
+        include_str!("../../../fixtures/oracle/factory-inventory-work/large.test.ts"),
+        include_str!("../../../fixtures/oracle/factory-inventory-work/control.test.ts"),
+    );
+}
+
+/// Refuse eighty costly calls without losing the small caller's duplicate positive.
+fn assert_factory_copy_bound(factory: &str, large: &str, control: &str) {
     let results = corpora(
         &[
             ("factory.ts", factory),
