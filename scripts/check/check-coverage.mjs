@@ -238,6 +238,8 @@ const RUST_MODULES = {
   'src/inventory/reach.rs': 99,
   // Runner invocation proofs: first measured at 89.52% (487/544 lines).
   'src/inventory/runners.rs': 89.5,
+  // Returned-object construction: first measured 199/211 lines (94.31%).
+  'src/inventory/runners/returned.rs': 94,
   'src/normal.rs': 96,
   'src/normal/form.rs': 90,
   'src/normal/identity.rs': 90,
