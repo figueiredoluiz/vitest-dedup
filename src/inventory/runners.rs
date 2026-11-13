@@ -10,6 +10,9 @@ use crate::lang::{self, Declaration, Name, NodeId, Parsed, Sources, SymbolId};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
+mod returned;
+pub use returned::{returned_template, ReturnedTemplate};
+
 /// Why a runner template could not be established.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Refusal {
