@@ -65,20 +65,19 @@ where
 {
     let (object, setup, work) =
         returned_object(&resolved.parsed, resolved.function, &parameters[..], budget)?;
-    let mut dependencies: Vec<_> = resolved.dependencies.into_iter().collect();
-    dependencies.sort();
+    let callable = resolved.into_callable();
     Ok(ReturnedTemplate {
-        path: resolved.path,
-        source: resolved.source,
-        parsed: resolved.parsed,
-        function: resolved.function,
+        path: callable.path,
+        source: callable.source,
+        parsed: callable.parsed,
+        function: callable.function,
         parameters,
         object,
         setup,
         work,
-        dependencies,
-        resolution_depth: resolved.resolution_depth,
-        dependency_bytes: resolved.dependency_bytes.into_iter().collect(),
+        dependencies: callable.dependencies,
+        resolution_depth: callable.resolution_depth,
+        dependency_bytes: callable.dependency_bytes,
     })
 }
 

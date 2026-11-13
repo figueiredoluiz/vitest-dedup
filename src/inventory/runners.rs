@@ -224,18 +224,17 @@ pub fn template(
         found: &resolved.found,
     };
     body.body(resolved.function, &mut steps, &mut 2000)?;
-    let mut dependencies: Vec<_> = resolved.dependencies.into_iter().collect();
-    dependencies.sort();
+    let callable = resolved.into_callable();
     Ok(Template {
-        path: resolved.path,
-        source: resolved.source,
-        parsed: resolved.parsed,
-        function: resolved.function,
+        path: callable.path,
+        source: callable.source,
+        parsed: callable.parsed,
+        function: callable.function,
         parameters,
         steps,
-        dependencies,
-        resolution_depth: resolved.resolution_depth,
-        dependency_bytes: resolved.dependency_bytes.into_iter().collect(),
+        dependencies: callable.dependencies,
+        resolution_depth: callable.resolution_depth,
+        dependency_bytes: callable.dependency_bytes,
     })
 }
 
@@ -264,18 +263,7 @@ pub fn callable_template(
     export: &str,
     setting: Setting<'_>,
 ) -> Result<CallableTemplate, Refusal> {
-    let resolved = resolved_template(sources, path, export, setting)?;
-    let mut dependencies: Vec<_> = resolved.dependencies.into_iter().collect();
-    dependencies.sort();
-    Ok(CallableTemplate {
-        path: resolved.path,
-        source: resolved.source,
-        parsed: resolved.parsed,
-        function: resolved.function,
-        dependencies,
-        resolution_depth: resolved.resolution_depth,
-        dependency_bytes: resolved.dependency_bytes.into_iter().collect(),
-    })
+    Ok(resolved_template(sources, path, export, setting)?.into_callable())
 }
 
 /// Resolved source/module facts, before parameter and registration-body admission.
@@ -288,6 +276,23 @@ struct ResolvedTemplate {
     dependencies: HashSet<PathBuf>,
     resolution_depth: usize,
     dependency_bytes: HashMap<PathBuf, usize>,
+}
+
+impl ResolvedTemplate {
+    /// Move checked callable metadata into its owned result with stable dependency order.
+    fn into_callable(self) -> CallableTemplate {
+        let mut dependencies: Vec<_> = self.dependencies.into_iter().collect();
+        dependencies.sort();
+        CallableTemplate {
+            path: self.path,
+            source: self.source,
+            parsed: self.parsed,
+            function: self.function,
+            dependencies,
+            resolution_depth: self.resolution_depth,
+            dependency_bytes: self.dependency_bytes.into_iter().collect(),
+        }
+    }
 }
 
 /// Resolve a callable and retain the completed dependency and inventory proof.
