@@ -24,6 +24,12 @@ export function holder() {
   return { it: test.extend({ n: 1 }) }
 }
 
+/** Appends the test API to a string; the result is a string. */
+export function joined() {
+  let label = ''
+  return label += test
+}
+
 /** Registers a hook and returns a plain result. */
 export async function run() {
   onTestFinished(() => {})

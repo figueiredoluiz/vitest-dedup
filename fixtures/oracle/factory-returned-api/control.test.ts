@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest'
-import { run } from './factories'
+import { joined, run } from './factories'
 
 /** Builds an API only inside a nested arrow. */
 function inner() {
@@ -25,6 +25,7 @@ function later() {
 
 supports()
 later()
+joined()
 
 test('a', async () => {
   const { stderr, exitCode } = await run()

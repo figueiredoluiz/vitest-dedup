@@ -641,8 +641,8 @@ fn wrappers_are_found_to_a_fixpoint_across_modules() {
 
 /// A function returning a registration function is a wrapper: its call and every call through what
 /// it returns are sites, here and in an importer. A wrapper's other results, a type read and a
-/// nested function's return are not registration functions; an awaited result (`lateIt`), a held
-/// API (`holder`) and one returned through a local alias (`selected`) are not read.
+/// nested function's return are not registration functions, and an API returned through a local
+/// alias (`selected`) is not read.
 #[test]
 fn calls_through_a_returned_registration_function_are_sites() {
     let local = sites(
@@ -663,6 +663,7 @@ fn calls_through_a_returned_registration_function_are_sites() {
             "wrapper@4:12  via-wrapper",
             "wrapper@5:22  via-wrapper",
             "wrapper@6:1  via-wrapper",
+            "wrapper@7:1  via-wrapper",
             "wrapper@8:8 ().skip via-wrapper",
             "wrapper@8:1  via-wrapper"
         ]
@@ -683,7 +684,12 @@ fn calls_through_a_returned_registration_function_are_sites() {
     );
     assert_eq!(
         imported,
-        ["wrapper@2:12  via-wrapper", "wrapper@4:1  via-wrapper"]
+        [
+            "wrapper@2:12  via-wrapper",
+            "wrapper@3:22  via-wrapper",
+            "wrapper@4:1  via-wrapper",
+            "wrapper@5:1  via-wrapper"
+        ]
     );
     let controls = sites(
         "import { expect, test } from 'vitest'\n\
@@ -717,12 +723,13 @@ fn calls_through_a_returned_registration_function_are_sites() {
     );
 }
 
-/// Only a returned registration value itself makes a factory. One consumed by an operator, a call
-/// argument or a template, a member the dialect does not know such as `.name`, one read through a
-/// local alias or a conditional, a member of a factory or of its result, and a return after a
-/// return make none; neither does one inside `||`, a sequence, an array, or a factory's call.
+/// A returned value that consumes the registration value (`typeof`, a comparison, a template, a
+/// call argument, the left of `&&`, a compound assignment, a member the dialect does not know such as `.name`), one read
+/// through a local alias or a conditional, a member of a factory or of its result, or a return after
+/// a return makes no factory; a branch of `||`, a sequence's last expression, an array element or a
+/// call of a factory does.
 #[test]
-fn only_a_returned_registration_value_itself_makes_a_factory() {
+fn only_a_returned_value_that_may_be_the_registration_value_makes_a_factory() {
     let consumed = sites(
         "import { test } from 'vitest'\n\
          function supports() { return typeof test === 'function' }\n\
@@ -737,9 +744,9 @@ fn only_a_returned_registration_value_itself_makes_a_factory() {
          function alias() { const a = test.skip; return a }\n\
          function factory() { return test.extend({}) }\n\
          function label() { return factory.name }\n\
-         function member() { return factory().name }\n\
+         function member() { return factory().name } function summed() { let r = ''; return r += test }\n\
          supports(); named(); first(); later(); passed(); title(); size(); aliased()\n\
-         chosen(true); alias(); label(); member()\n\
+         chosen(true); alias(); label(); member(); summed()\n\
          test('kept', () => {})",
         &[],
         false,
@@ -753,20 +760,85 @@ fn only_a_returned_registration_value_itself_makes_a_factory() {
             "test@17:1 "
         ]
     );
-    let contained = sites(
+    let retained = sites(
         "import { test } from 'vitest'\n\
-         function either(x) { return x || test }\n\
+         function either(x) { return x || test } function assigned() { let r; return r ??= test }\n\
          function last() { return (0, test) }\n\
          function list() { return [test] }\n\
          function chained() { return list() }\n\
          either(0)('a', () => {})\n\
          last()('b', () => {})\n\
          list()[0]('c', () => {})\n\
-         chained()[0]('d', () => {})",
+         chained()[0]('d', () => {})\n\
+         assigned()('e', () => {})",
         &[],
         false,
     );
-    assert_eq!(contained, Vec::<String>::new());
+    assert_eq!(
+        retained,
+        [
+            "wrapper@5:29  via-wrapper",
+            "wrapper@6:10 () via-wrapper",
+            "wrapper@6:1  via-wrapper",
+            "wrapper@7:7 () via-wrapper",
+            "wrapper@7:1  via-wrapper",
+            "wrapper@8:1  via-wrapper",
+            "wrapper@9:1  via-wrapper",
+            "wrapper@10:11 () via-wrapper",
+            "wrapper@10:1  via-wrapper"
+        ]
+    );
+}
+
+/// Each `await` of an API builder asks once whether its argument holds the API, so nesting stays
+/// linear.
+#[test]
+fn nested_awaits_of_the_api_are_read_in_linear_time() {
+    let mut value = String::from("test");
+    for _ in 0..40 {
+        value = format!("await test.skipIf({value})");
+    }
+    let source = format!(
+        "import {{ test }} from 'vitest'\nasync function make() {{ return {value} }}\ntest('a', () => {{}})"
+    );
+    let started = std::time::Instant::now();
+    assert_eq!(sites(&source, &[], false), ["test@3:1 "]);
+    assert!(started.elapsed() < std::time::Duration::from_secs(2));
+}
+
+/// A factory returning a factory's result is found however many levels down the API is returned,
+/// even when every level already registers and so is a wrapper from the first pass.
+#[test]
+fn factories_returning_factories_are_found_at_any_depth() {
+    let source = "import { test } from 'vitest'
+function leaf() { test('leaf', () => {}); return test }
+function middle() { test('middle', () => {}); return leaf() }
+function outer() { test('outer', () => {}); return middle() }
+const t = await outer()
+t('returned', () => {})";
+    let found = sites(source, &[], false);
+    assert!(
+        found.iter().any(|site| site.starts_with("wrapper@6:1 ")),
+        "{found:?}"
+    );
+}
+
+/// Consecutive `await`s do not rescan the rest of the chain at each level.
+#[test]
+fn consecutive_awaits_of_the_api_are_read_in_linear_time() {
+    let source = format!(
+        "import {{ test }} from 'vitest'\nconst t = {}test\ntest('a', () => {{}})",
+        "await ".repeat(10_000)
+    );
+    let started = std::time::Instant::now();
+    let found = std::thread::Builder::new()
+        .stack_size(crate::lang::limits::EXTRACTION_STACK_BYTES)
+        .spawn(move || sites(&source, &[], false))
+        .unwrap()
+        .join()
+        .unwrap();
+    assert_eq!(found, ["test@3:1 "]);
+    assert!(started.elapsed() < std::time::Duration::from_secs(2));
 }
 
 /// A function expression named inside a `const` is a wrapper under either name, and a module that
