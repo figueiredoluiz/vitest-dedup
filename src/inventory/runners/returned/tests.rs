@@ -157,7 +157,14 @@ fn returned_objects_keep_linkage_and_registration_boundaries() {
     };
     let sources = Sources::default();
     let found = returned_template(&sources, &path, "make", setting, usize::MAX).unwrap();
-    assert_eq!(found.path, helper.canonicalize().unwrap());
+    assert_eq!(
+        found.path,
+        sources.resolve(&path, "./factory", root.path()).unwrap()
+    );
+    assert_eq!(
+        found.path.canonicalize().unwrap(),
+        helper.canonicalize().unwrap()
+    );
     assert_eq!(found.source, source);
     assert_eq!(found.resolution_depth, 2);
     assert_eq!(found.dependencies.len(), 2);
