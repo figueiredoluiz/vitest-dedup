@@ -6,7 +6,7 @@ use super::*;
 /// This proves construction only. Reading a member or invoking a returned closure needs a
 /// separate proof of argument binding, initialization order and registration effects.
 #[derive(Debug)]
-pub struct ReturnedTemplate {
+pub struct ReturnedTemplate<P = SymbolId> {
     /// The module containing the resolved callable.
     pub path: PathBuf,
     /// Exact source bytes used by the proof.
@@ -15,8 +15,8 @@ pub struct ReturnedTemplate {
     pub parsed: Parsed,
     /// The synchronous function invoked.
     pub function: NodeId,
-    /// Plain immutable positional bindings, in call order.
-    pub parameters: Vec<SymbolId>,
+    /// Positional bindings in the selected reader's owned parameter model, in call order.
+    pub parameters: Vec<P>,
     /// The returned object expression, whose callbacks remain uninterpreted.
     pub object: NodeId,
     /// Inert declarations evaluated before selecting the returned object.
@@ -45,25 +45,39 @@ pub fn returned_template(
         &resolved.parsed,
         resolved.function,
         resolved.found.direct_eval,
-    )?;
+    )?
+    .into_iter()
+    .map(|parameter| parameter.bindings[0].symbol)
+    .collect::<Vec<_>>();
+    let mut template = prove_template(resolved, parameters, budget)?;
+    template.dependency_bytes.sort();
+    Ok(template)
+}
+
+/// Prove construction once and retain the selected reader's parameter metadata and work.
+pub(super) fn prove_template<P>(
+    resolved: ResolvedTemplate,
+    parameters: Vec<P>,
+    budget: usize,
+) -> Result<ReturnedTemplate<P>, Refusal>
+where
+    [P]: ParameterBindings,
+{
     let (object, setup, work) =
-        returned_object(&resolved.parsed, resolved.function, &parameters, budget)?;
-    let mut dependencies: Vec<_> = resolved.dependencies.into_iter().collect();
-    dependencies.sort();
-    let mut dependency_bytes: Vec<_> = resolved.dependency_bytes.into_iter().collect();
-    dependency_bytes.sort();
+        returned_object(&resolved.parsed, resolved.function, &parameters[..], budget)?;
+    let callable = resolved.into_callable();
     Ok(ReturnedTemplate {
-        path: resolved.path,
-        source: resolved.source,
-        parsed: resolved.parsed,
-        function: resolved.function,
+        path: callable.path,
+        source: callable.source,
+        parsed: callable.parsed,
+        function: callable.function,
         parameters,
         object,
         setup,
         work,
-        dependencies,
-        resolution_depth: resolved.resolution_depth,
-        dependency_bytes,
+        dependencies: callable.dependencies,
+        resolution_depth: callable.resolution_depth,
+        dependency_bytes: callable.dependency_bytes,
     })
 }
 
@@ -76,11 +90,52 @@ fn refusal(proof: &InertProof<'_>) -> Refusal {
     }
 }
 
+/// Borrow parameter identities without constructing another flattened binding table.
+pub(super) trait ParameterBindings {
+    /// Charge each membership step before using an immutable parameter binding.
+    fn contains(&self, proof: &mut InertProof<'_>, symbol: SymbolId) -> bool;
+}
+
+impl ParameterBindings for [SymbolId] {
+    /// Plain reader bindings retain one charged membership step per symbol.
+    fn contains(&self, proof: &mut InertProof<'_>, symbol: SymbolId) -> bool {
+        for &parameter in self {
+            if !proof.spend(1) {
+                return false;
+            }
+            if parameter == symbol {
+                return true;
+            }
+        }
+        false
+    }
+}
+
+impl ParameterBindings for [Parameter] {
+    /// Factory patterns retain their charged parameter-group and selected-binding steps.
+    fn contains(&self, proof: &mut InertProof<'_>, symbol: SymbolId) -> bool {
+        for parameter in self {
+            if !proof.spend(1) {
+                return false;
+            }
+            for binding in &parameter.bindings {
+                if !proof.spend(1) {
+                    return false;
+                }
+                if binding.symbol == symbol {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+}
+
 /// Read a final object return after inert setup without interpreting any returned closure.
-fn returned_object(
+pub(super) fn returned_object<P: ParameterBindings + ?Sized>(
     parsed: &Parsed,
     function: NodeId,
-    parameters: &[SymbolId],
+    parameters: &P,
     budget: usize,
 ) -> Result<(NodeId, Vec<NodeId>, usize), Refusal> {
     let tree = &parsed.tree;
@@ -146,10 +201,10 @@ fn returned_object(
 }
 
 /// Const setup copies inert data or a stable parameter/import without invoking user code.
-fn factory_declaration(
+fn factory_declaration<P: ParameterBindings + ?Sized>(
     proof: &mut InertProof<'_>,
     statement: NodeId,
-    parameters: &[SymbolId],
+    parameters: &P,
 ) -> bool {
     let parsed = proof.parsed;
     let tree = &parsed.tree;
@@ -169,11 +224,11 @@ fn factory_declaration(
 }
 
 /// Parameter identity uses recorded symbols; same-spelled bindings do not establish a proof.
-fn factory_value(
+fn factory_value<P: ParameterBindings + ?Sized>(
     proof: &mut InertProof<'_>,
     node: NodeId,
     left: &mut usize,
-    parameters: &[SymbolId],
+    parameters: &P,
 ) -> bool {
     if proof.value(node, left) {
         return true;
@@ -197,17 +252,7 @@ fn factory_value(
             }
             let binding = parsed.scopes.symbol(symbol);
             match binding.declaration {
-                Declaration::Other(_) => {
-                    for &parameter in parameters {
-                        if !proof.spend(1) {
-                            return false;
-                        }
-                        if parameter == symbol {
-                            return true;
-                        }
-                    }
-                    false
-                }
+                Declaration::Other(_) => parameters.contains(proof, symbol),
                 Declaration::Import {
                     import, specifier, ..
                 } => {

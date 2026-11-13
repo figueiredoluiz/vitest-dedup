@@ -1,0 +1,8 @@
+{
+  "files": {
+    "case.test.ts": {"tasks": 3, "wrapperSites": ["wrapper@3", "wrapper@4", "wrapper@5", "wrapper@6", "wrapper@7", "wrapper@8"], "next": {}},
+    "const.test.ts": {"tasks": 3, "wrapperSites": ["wrapper@3", "wrapper@4", "wrapper@5", "wrapper@6", "wrapper@7", "wrapper@8"], "next": {}},
+    "overload.test.ts": {"tasks": 3, "wrapperSites": ["wrapper@4", "wrapper@5", "wrapper@6", "wrapper@7", "wrapper@8", "wrapper@9"], "next": {}},
+    "unused.test.ts": {"tasks": 3, "wrapperSites": ["wrapper@3", "wrapper@4", "wrapper@5", "wrapper@6", "wrapper@7", "wrapper@8"], "next": {}}
+  }
+}

@@ -43,6 +43,24 @@ pub enum Step {
     Call(NodeId),
 }
 
+/// One plain positional parameter, including bounded object destructuring.
+#[derive(Clone, Debug)]
+pub struct Parameter {
+    /// Values bound from this actual argument.
+    pub bindings: Vec<ParameterBinding>,
+}
+
+/// One symbol selected from a positional value.
+#[derive(Clone, Debug)]
+pub struct ParameterBinding {
+    /// The template-local binding receiving the selected value.
+    pub symbol: SymbolId,
+    /// Static object keys below the positional argument.
+    pub path: Vec<String>,
+    /// A literal/default expression in this template's tree.
+    pub default: Option<NodeId>,
+}
+
 /// A first-party callable's owned source and ordered registration template.
 ///
 /// This is not an admitted invocation: parameters are symbols in this module, not caller
@@ -58,7 +76,7 @@ pub struct Template {
     /// The function or arrow invoked.
     pub function: NodeId,
     /// Plain positional bindings, in parameter order.
-    pub parameters: Vec<SymbolId>,
+    pub parameters: Vec<Parameter>,
     /// Reachable registration operations; statements after an unconditional return are absent.
     pub steps: Vec<Step>,
     /// Project modules whose import-time behavior was checked, including re-export hops.
@@ -69,14 +87,47 @@ pub struct Template {
     pub dependency_bytes: Vec<(PathBuf, usize)>,
 }
 
+/// A first-party callable whose module and export path are proved, before its body is interpreted.
+pub struct CallableTemplate {
+    /// The resolved module.
+    pub path: PathBuf,
+    /// Exact parsed source.
+    pub source: String,
+    /// Owned tree and bindings.
+    pub parsed: Parsed,
+    /// The resolved implementation function.
+    pub function: NodeId,
+    /// Every eagerly evaluated project dependency.
+    pub dependencies: Vec<PathBuf>,
+    /// Export-resolution steps charged to the caller.
+    pub resolution_depth: usize,
+    /// Every source read by the proof.
+    pub dependency_bytes: Vec<(PathBuf, usize)>,
+}
+
 /// A callable plan within an already checked module; symbols belong to that module alone.
+#[derive(Clone)]
 pub(crate) struct Plan {
     /// The invocation boundary, within this module's tree.
     pub function: NodeId,
     /// Plain positional parameter bindings, in call order.
-    pub parameters: Vec<SymbolId>,
+    pub parameters: Vec<Parameter>,
     /// Reachable operations, in execution order.
     pub steps: Vec<Step>,
+}
+
+/// A returned-object plan within an already checked module.
+pub(crate) struct ReturnedPlan {
+    /// The invocation boundary, within this module's tree.
+    pub function: NodeId,
+    /// Plain positional parameter bindings, in call order.
+    pub parameters: Vec<Parameter>,
+    /// The inert object expression returned on the proved path.
+    pub object: NodeId,
+    /// Inert declarations evaluated once for this factory invocation.
+    pub setup: Vec<NodeId>,
+    /// Actual work spent proving inert setup and its returned object.
+    pub work: usize,
 }
 
 /// Read a local callable without guessing that a function-local const has been initialized.
@@ -110,6 +161,47 @@ pub(crate) fn local(parsed: &Parsed, found: &Inventory, callee: NodeId) -> Resul
     })
 }
 
+/// Read a local callable whose only runtime work before returning is inert construction.
+pub(crate) fn returned_local(
+    parsed: &Parsed,
+    found: &Inventory,
+    callee: NodeId,
+    budget: usize,
+) -> Result<ReturnedPlan, Refusal> {
+    local_binding(parsed, found, callee)?;
+    let tree = &parsed.tree;
+    let before = tree.span(callee).start;
+    let function = callable(parsed, callee, Some(before))?;
+    let function_span = tree.span(function);
+    if parsed.scopes.symbols().any(|symbol| {
+        let binding = parsed.scopes.symbol(symbol);
+        matches!(
+            binding.declaration,
+            Declaration::Variable(_) | Declaration::Class(_)
+        ) && !function_span.contains(binding.span)
+            && binding
+                .references
+                .iter()
+                .any(|reference| function_span.contains(reference.span))
+            && parsed
+                .scopes
+                .declaration_node(symbol)
+                .is_none_or(|node| tree.span(node).end > before)
+    }) {
+        return Err(Refusal::Callable);
+    }
+    let parameters = returned_parameters(parsed, function, found.direct_eval)?;
+    let (object, setup, work) =
+        returned::returned_object(parsed, function, &parameters[..], budget)?;
+    Ok(ReturnedPlan {
+        function,
+        parameters,
+        object,
+        setup,
+        work,
+    })
+}
+
 /// Read a named or default first-party runner through one explicit source authority.
 ///
 /// Every re-export hop and eagerly loaded project dependency is checked before returning a
@@ -132,19 +224,46 @@ pub fn template(
         found: &resolved.found,
     };
     body.body(resolved.function, &mut steps, &mut 2000)?;
-    let mut dependencies: Vec<_> = resolved.dependencies.into_iter().collect();
-    dependencies.sort();
+    let callable = resolved.into_callable();
     Ok(Template {
-        path: resolved.path,
-        source: resolved.source,
-        parsed: resolved.parsed,
-        function: resolved.function,
+        path: callable.path,
+        source: callable.source,
+        parsed: callable.parsed,
+        function: callable.function,
         parameters,
         steps,
-        dependencies,
-        resolution_depth: resolved.resolution_depth,
-        dependency_bytes: resolved.dependency_bytes.into_iter().collect(),
+        dependencies: callable.dependencies,
+        resolution_depth: callable.resolution_depth,
+        dependency_bytes: callable.dependency_bytes,
     })
+}
+
+/// Read a named or default first-party callable that returns one inert object value.
+pub(crate) fn factory_template(
+    sources: &Sources,
+    path: &Path,
+    export: &str,
+    setting: Setting<'_>,
+    budget: usize,
+) -> Result<ReturnedTemplate<Parameter>, Refusal> {
+    let resolved = resolved_template(sources, path, export, setting)?;
+    let parameters = returned_parameters(
+        &resolved.parsed,
+        resolved.function,
+        resolved.found.direct_eval,
+    )?;
+    returned::prove_template(resolved, parameters, budget)
+}
+
+/// Resolve a first-party callable while retaining its exact implementation for a specialized
+/// bounded body proof.
+pub fn callable_template(
+    sources: &Sources,
+    path: &Path,
+    export: &str,
+    setting: Setting<'_>,
+) -> Result<CallableTemplate, Refusal> {
+    Ok(resolved_template(sources, path, export, setting)?.into_callable())
 }
 
 /// Resolved source/module facts, before parameter and registration-body admission.
@@ -157,6 +276,23 @@ struct ResolvedTemplate {
     dependencies: HashSet<PathBuf>,
     resolution_depth: usize,
     dependency_bytes: HashMap<PathBuf, usize>,
+}
+
+impl ResolvedTemplate {
+    /// Move checked callable metadata into its owned result with stable dependency order.
+    fn into_callable(self) -> CallableTemplate {
+        let mut dependencies: Vec<_> = self.dependencies.into_iter().collect();
+        dependencies.sort();
+        CallableTemplate {
+            path: self.path,
+            source: self.source,
+            parsed: self.parsed,
+            function: self.function,
+            dependencies,
+            resolution_depth: self.resolution_depth,
+            dependency_bytes: self.dependency_bytes.into_iter().collect(),
+        }
+    }
 }
 
 /// Resolve a callable and retain the completed dependency and inventory proof.
@@ -472,7 +608,11 @@ fn exported(parsed: &Parsed, name: &str) -> Result<Export, Refusal> {
 }
 
 /// Resolve a callable expression, without executing calls or treating objects as functions.
-fn callable(parsed: &Parsed, node: NodeId, before: Option<u32>) -> Result<NodeId, Refusal> {
+pub(crate) fn callable(
+    parsed: &Parsed,
+    node: NodeId,
+    before: Option<u32>,
+) -> Result<NodeId, Refusal> {
     let tree = &parsed.tree;
     let node = tree.inner(node);
     match tree.kind(node) {
@@ -550,7 +690,7 @@ fn symbol_callable(
 }
 
 /// A binding has one runtime declaration and no recorded writes after it is initialized.
-fn immutable(parsed: &Parsed, symbol: SymbolId) -> Result<(), Refusal> {
+pub(crate) fn immutable(parsed: &Parsed, symbol: SymbolId) -> Result<(), Refusal> {
     let binding = parsed.scopes.symbol(symbol);
     if binding.references.iter().any(|reference| reference.write) {
         return Err(Refusal::Callable);
@@ -567,19 +707,61 @@ fn immutable(parsed: &Parsed, symbol: SymbolId) -> Result<(), Refusal> {
 /// Runtime declaration identities, excluding erased overload signatures.
 fn runtime_bindings(parsed: &Parsed) -> impl Iterator<Item = SymbolId> + '_ {
     parsed.tree.nodes().filter_map(|node| {
-        if parsed.tree.kind(node) != "Identifier" {
+        if parsed.tree.kind(node) != "Identifier"
+            || parsed
+                .tree
+                .parent(node)
+                .is_some_and(|parent| parsed.tree.kind(parent) == "TSDeclareFunction")
+        {
             return None;
         }
-        let Some(Name::Binding(Some(symbol))) = parsed.scopes.name_at(parsed.tree.span(node).start)
-        else {
-            return None;
-        };
-        parsed
-            .tree
-            .parent(node)
-            .is_none_or(|parent| parsed.tree.kind(parent) != "TSDeclareFunction")
-            .then_some(symbol)
+        match parsed.scopes.name_at(parsed.tree.span(node).start) {
+            Some(Name::Binding(Some(symbol))) => Some(symbol),
+            _ => None,
+        }
     })
+}
+
+/// A parameter has one runtime binding span and no later writes. Destructuring wrappers may expose
+/// the same binding node more than once, while a hoisted redeclaration has a distinct span.
+fn immutable_parameter(
+    parsed: &Parsed,
+    symbol: SymbolId,
+    declarations: &HashMap<SymbolId, (u32, u32, bool)>,
+) -> Result<(), Refusal> {
+    let binding = parsed.scopes.symbol(symbol);
+    if binding.references.iter().any(|reference| reference.write) {
+        return Err(Refusal::Parameters);
+    }
+    declarations
+        .get(&symbol)
+        .is_some_and(|(_, _, multiple)| !multiple)
+        .then_some(())
+        .ok_or(Refusal::Parameters)
+}
+
+/// Unique runtime binding spans for every symbol, computed once for all flattened parameters.
+fn binding_declarations(parsed: &Parsed) -> HashMap<SymbolId, (u32, u32, bool)> {
+    let tree = &parsed.tree;
+    let mut declarations = HashMap::new();
+    for node in tree.nodes().filter(|&node| {
+        tree.kind(node) == "Identifier"
+            && tree
+                .parent(node)
+                .is_none_or(|parent| tree.kind(parent) != "TSDeclareFunction")
+    }) {
+        let Some(Name::Binding(Some(symbol))) = parsed.scopes.name_at(tree.span(node).start) else {
+            continue;
+        };
+        let span = tree.span(node);
+        declarations
+            .entry(symbol)
+            .and_modify(|(start, end, multiple)| {
+                *multiple |= *start != span.start || *end != span.end;
+            })
+            .or_insert((span.start, span.end, false));
+    }
+    declarations
 }
 
 /// Only synchronous functions with plain, immutable positional parameters have binding templates.
@@ -587,15 +769,33 @@ fn parameters(
     parsed: &Parsed,
     function: NodeId,
     direct_eval: bool,
-) -> Result<Vec<SymbolId>, Refusal> {
+) -> Result<Vec<Parameter>, Refusal> {
+    let parameters = returned_parameters(parsed, function, direct_eval)?;
+    if parameters.iter().any(|parameter| {
+        !matches!(
+            parameter.bindings.as_slice(),
+            [ParameterBinding { path, default: None, .. }] if path.is_empty()
+        )
+    }) {
+        return Err(Refusal::Parameters);
+    }
+    Ok(parameters)
+}
+
+/// The shared per-function allowance for parameter proofs and owned path copies.
+const MAX_PARAMETER_WORK: usize = 8 * 1024 * 1024;
+
+/// Synchronous returned factories and leaves may destructure static object data.
+pub(crate) fn returned_parameters(
+    parsed: &Parsed,
+    function: NodeId,
+    direct_eval: bool,
+) -> Result<Vec<Parameter>, Refusal> {
     if direct_eval {
         return Err(Refusal::Parameters);
     }
     let tree = &parsed.tree;
     let params = tree.list(function, "params");
-    if params.len().saturating_mul(tree.nodes().count()) > 8 * 1024 * 1024 {
-        return Err(Refusal::Limit);
-    }
     if tree.flag(function, "async")
         || tree.flag(function, "generator")
         || tree.child(function, "body").is_none()
@@ -608,21 +808,123 @@ fn parameters(
     {
         return Err(Refusal::Callable);
     }
-    params
+    if params.is_empty() {
+        return Ok(Vec::new());
+    }
+    let nodes = tree.nodes().count();
+    if params.len().saturating_mul(nodes) > MAX_PARAMETER_WORK {
+        return Err(Refusal::Limit);
+    }
+    let declarations = binding_declarations(parsed);
+    let mut left = MAX_PARAMETER_WORK;
+    let parameters: Vec<_> = params
         .into_iter()
         .map(|parameter| {
             let parameter = parameter.ok_or(Refusal::Parameters)?;
-            if tree.kind(parameter) != "Identifier" {
+            let mut bindings = Vec::new();
+            parameter_bindings(
+                parsed,
+                parameter,
+                &mut Vec::new(),
+                &mut bindings,
+                &declarations,
+                nodes,
+                &mut left,
+            )?;
+            if bindings.is_empty() {
                 return Err(Refusal::Parameters);
             }
+            Ok(Parameter { bindings })
+        })
+        .collect::<Result<_, _>>()?;
+    let bindings = parameters
+        .iter()
+        .map(|parameter| parameter.bindings.len())
+        .sum::<usize>();
+    if bindings.saturating_mul(nodes) > MAX_PARAMETER_WORK {
+        return Err(Refusal::Limit);
+    }
+    Ok(parameters)
+}
+
+/// Flatten static patterns, reserving shared node/copy work before owning each selection.
+fn parameter_bindings(
+    parsed: &Parsed,
+    pattern: NodeId,
+    path: &mut Vec<String>,
+    bindings: &mut Vec<ParameterBinding>,
+    declarations: &HashMap<SymbolId, (u32, u32, bool)>,
+    nodes: usize,
+    left_work: &mut usize,
+) -> Result<(), Refusal> {
+    let tree = &parsed.tree;
+    match tree.kind(pattern) {
+        "Identifier" => {
+            let cost = path.iter().fold(
+                nodes
+                    .saturating_add(std::mem::size_of::<ParameterBinding>())
+                    .saturating_add(path.len().saturating_mul(std::mem::size_of::<String>())),
+                |cost, key| cost.saturating_add(key.len()),
+            );
+            *left_work = left_work.checked_sub(cost).ok_or(Refusal::Limit)?;
             let symbol = parsed
                 .scopes
-                .symbol_at(tree.span(parameter).start)
+                .symbol_at(tree.span(pattern).start)
                 .ok_or(Refusal::Parameters)?;
-            immutable(parsed, symbol).map_err(|_| Refusal::Parameters)?;
-            Ok(symbol)
-        })
-        .collect()
+            immutable_parameter(parsed, symbol, declarations)?;
+            bindings.push(ParameterBinding {
+                symbol,
+                path: path.clone(),
+                default: None,
+            });
+            Ok(())
+        }
+        "AssignmentPattern" => {
+            let left = tree.child(pattern, "left").ok_or(Refusal::Parameters)?;
+            if tree.kind(left) != "Identifier" {
+                return Err(Refusal::Parameters);
+            }
+            let before = bindings.len();
+            parameter_bindings(parsed, left, path, bindings, declarations, nodes, left_work)?;
+            if bindings.len() != before + 1 {
+                return Err(Refusal::Parameters);
+            }
+            bindings[before].default = tree.child(pattern, "right");
+            Ok(())
+        }
+        "ObjectPattern" => {
+            let properties = tree.list(pattern, "properties");
+            if properties.is_empty() {
+                return Err(Refusal::Parameters);
+            }
+            let mut names = std::collections::HashSet::new();
+            for property in properties.into_iter().flatten() {
+                if tree.kind(property) != "Property"
+                    || tree.flag(property, "computed")
+                    || tree.text(property, "kind") != Some("init")
+                {
+                    return Err(Refusal::Parameters);
+                }
+                let name = lang::property_name(tree, property).ok_or(Refusal::Parameters)?;
+                if name == "__proto__" || !names.insert(name) {
+                    return Err(Refusal::Parameters);
+                }
+                path.push(name.to_owned());
+                parameter_bindings(
+                    parsed,
+                    tree.child(property, "value").ok_or(Refusal::Parameters)?,
+                    path,
+                    bindings,
+                    declarations,
+                    nodes,
+                    left_work,
+                )?;
+                path.pop();
+            }
+            Ok(())
+        }
+        _ => Err(Refusal::Parameters),
+    }
 }
 
 /// Definition-time syntax whose evaluation runs no user code and reads no unknown value.
@@ -814,6 +1116,33 @@ impl<'a> InertProof<'a> {
             _ => false,
         }
     }
+}
+
+/// Executable statements shared by factory and transform body readers, after TS erasure.
+pub(crate) fn runtime_statements(tree: &lang::Tree, body: NodeId) -> Vec<NodeId> {
+    tree.list(body, "body")
+        .into_iter()
+        .flatten()
+        .filter(|&statement| {
+            !tree.erased_declaration(statement) && tree.kind(statement) != "EmptyStatement"
+        })
+        .collect()
+}
+
+/// Read one returned-object leaf as an ordinary registration template.
+pub(crate) fn returned_leaf(
+    parsed: &Parsed,
+    found: &Inventory,
+    function: NodeId,
+) -> Result<Plan, Refusal> {
+    let parameters = returned_parameters(parsed, function, found.direct_eval)?;
+    let mut steps = Vec::new();
+    BodyReader { parsed, found }.body(function, &mut steps, &mut 2000)?;
+    Ok(Plan {
+        function,
+        parameters,
+        steps,
+    })
 }
 
 /// One module's template reader over what its inventory recorded.

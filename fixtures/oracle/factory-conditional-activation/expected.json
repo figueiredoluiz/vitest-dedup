@@ -1,0 +1,9 @@
+{
+  "files": {
+    "case.test.ts": {
+      "tasks": 4,
+      "wrapperSites": ["wrapper@2", "wrapper@3", "wrapper@4", "wrapper@5", "wrapper@6", "wrapper@7"],
+      "next": {}
+    }
+  }
+}

@@ -524,20 +524,34 @@ fn read_parsed(
     parsed: &lang::Parsed,
     frame: Option<runners::Frame>,
 ) -> Result<FileCorpus, Refusal> {
-    let mut found = inventory::inventory(
-        path,
-        source,
-        parsed,
-        inventory::Setting {
-            dialect: setting.dialect,
-            globals: setting.globals,
-            root: setting.root,
-        },
-        &mut run.modules,
-    );
+    let mut found = if let Some(found) = frame.as_ref().and_then(|frame| frame.inventory.as_ref()) {
+        // The planner reserves this private copy before handing over an invocation frame.
+        (**found).clone()
+    } else {
+        inventory::inventory(
+            path,
+            source,
+            parsed,
+            inventory::Setting {
+                dialect: setting.dialect,
+                globals: setting.globals,
+                root: setting.root,
+            },
+            &mut run.modules,
+        )
+    };
     // The inventory resolved every import the file makes: a package manifest one of them needed
     // and the bounded reader refused leaves every test of the file unresolved.
     let manifest_refused = frame.is_none() && lang::take_manifest_refusal();
+    if let Some(frame) = &frame {
+        frame.promote_inventory(parsed, &mut found);
+    }
+    let expanded = if frame.is_none() && found.import_limit.is_none() {
+        runners::expand(path, source, parsed, &found, setting, run)
+    } else {
+        runners::Batch::default()
+    };
+    expanded.promote_inventory(parsed, &mut found);
     // Instantiation selects registrations, but every callback in the module still contributes
     // mutation facts used to reject order-dependent comparisons.
     let structure = Structure::of(parsed, &found);
@@ -569,11 +583,6 @@ fn read_parsed(
         found.loads.clear();
         found.escapes.clear();
     }
-    let expanded = if frame.is_none() && found.import_limit.is_none() {
-        runners::expand(path, source, parsed, &found, setting, run)
-    } else {
-        runners::Batch::default()
-    };
     let mut admitted: std::collections::HashSet<_> = expanded
         .calls
         .iter()
@@ -919,7 +928,10 @@ fn read_parsed(
             };
             record.full_title = record.title.as_deref().and_then(display_title);
             let callee = tree.child(site.node, "callee");
-            let modifiers = callee.map(|callee| normalizer.modifiers(callee, site.member));
+            let modifiers = frame
+                .as_ref()
+                .and_then(|frame| frame.derived.get(&site.node).cloned())
+                .or_else(|| callee.map(|callee| normalizer.modifiers(callee, site.member)));
             let row_titles = modifiers
                 .as_ref()
                 .and_then(|m| {

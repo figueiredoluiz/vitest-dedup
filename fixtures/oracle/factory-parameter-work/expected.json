@@ -1,0 +1,7 @@
+{
+  "files": {
+    "large.test.ts": {"tasks": 1, "wrapperSites": ["wrapper@2", "wrapper@3"], "next": {"reasons": ["registered-elsewhere"], "testsExcluded": 2}},
+    "split.test.ts": {"tasks": 1, "wrapperSites": ["wrapper@2", "wrapper@3"], "next": {"reasons": ["registered-elsewhere"], "testsExcluded": 2}},
+    "control.test.ts": {"tasks": 2, "wrapperSites": ["wrapper@2", "wrapper@3", "wrapper@4", "wrapper@5"], "next": {}}
+  }
+}

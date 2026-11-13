@@ -3,6 +3,358 @@ use super::*;
 use crate::model::Rule;
 use std::path::PathBuf;
 
+/// Erased declarations cannot stand in for initialized factory parameters.
+#[test]
+fn returned_factory_erased_reads_stay_opaque() {
+    let results = corpora(
+        &[
+            (
+                "factory.ts",
+                include_str!("../../../fixtures/oracle/factory-erased-read/factory.ts"),
+            ),
+            (
+                "enum.test.ts",
+                include_str!("../../../fixtures/oracle/factory-erased-read/enum.test.ts"),
+            ),
+            (
+                "interface.test.ts",
+                include_str!("../../../fixtures/oracle/factory-erased-read/interface.test.ts"),
+            ),
+            (
+                "type.test.ts",
+                include_str!("../../../fixtures/oracle/factory-erased-read/type.test.ts"),
+            ),
+            (
+                "local.test.ts",
+                include_str!("../../../fixtures/oracle/factory-erased-read/local.test.ts"),
+            ),
+            (
+                "control.test.ts",
+                include_str!("../../../fixtures/oracle/factory-erased-read/control.test.ts"),
+            ),
+        ],
+        &[
+            "enum.test.ts",
+            "interface.test.ts",
+            "type.test.ts",
+            "local.test.ts",
+            "control.test.ts",
+        ],
+    );
+    assert_eq!(
+        results
+            .iter()
+            .map(|result| result.tests.len())
+            .collect::<Vec<_>>(),
+        [3, 3, 3, 4, 2]
+    );
+    assert_all_wrappers_refused(&results[..3]);
+    assert!(results[3].tests.iter().all(|case| case.exclusion.is_some()));
+    for (path, result) in [
+        "enum.test.ts",
+        "interface.test.ts",
+        "type.test.ts",
+        "local.test.ts",
+    ]
+    .into_iter()
+    .zip(&results[..4])
+    {
+        let outcome = owned_findings(path, result.clone());
+        assert_rule_absent(outcome, Rule::DuplicateTest);
+    }
+    assert!(results[4].tests.iter().all(|case| case.exclusion.is_none()));
+    let retained = owned_findings("control.test.ts", results[4].clone());
+    assert_eq!(
+        retained
+            .findings
+            .iter()
+            .filter(|finding| finding.rule == Rule::DuplicateTest)
+            .count(),
+        1
+    );
+}
+
+/// Copy costs refuse a repeated large modifier before preparation, retaining the small control.
+#[test]
+fn returned_modifier_copies_obey_the_work_bound() {
+    assert_factory_copy_bound(
+        include_str!("../../../fixtures/oracle/factory-modifier-work/factory.ts"),
+        include_str!("../../../fixtures/oracle/factory-modifier-work/large.test.ts"),
+        include_str!("../../../fixtures/oracle/factory-modifier-work/control.test.ts"),
+        81,
+    );
+}
+
+/// Full inventories are reserved before repeated frame and normalization copies.
+#[test]
+fn returned_inventory_copies_obey_the_work_bound() {
+    assert_factory_copy_bound(
+        include_str!("../../../fixtures/oracle/factory-inventory-work/factory.ts"),
+        include_str!("../../../fixtures/oracle/factory-inventory-work/large.test.ts"),
+        include_str!("../../../fixtures/oracle/factory-inventory-work/control.test.ts"),
+        81,
+    );
+}
+
+/// Parameter path storage is reserved before a large flattened selection is allocated.
+#[test]
+fn returned_parameter_paths_obey_copy_work_bound() {
+    assert_factory_copy_bound(
+        include_str!("../../../fixtures/oracle/factory-parameter-work/factory.ts"),
+        include_str!("../../../fixtures/oracle/factory-parameter-work/large.test.ts"),
+        include_str!("../../../fixtures/oracle/factory-parameter-work/control.test.ts"),
+        2,
+    );
+}
+
+/// Multiple parameters consume one allowance rather than restarting copy work for each pattern.
+#[test]
+fn returned_parameter_paths_share_copy_work_bound() {
+    assert_factory_copy_bound(
+        include_str!("../../../fixtures/oracle/factory-parameter-work/factory.ts"),
+        include_str!("../../../fixtures/oracle/factory-parameter-work/split.test.ts"),
+        include_str!("../../../fixtures/oracle/factory-parameter-work/control.test.ts"),
+        2,
+    );
+}
+
+/// Refuse a costly caller without losing the small caller's duplicate positive.
+fn assert_factory_copy_bound(factory: &str, large: &str, control: &str, refused: usize) {
+    let results = corpora(
+        &[
+            ("factory.ts", factory),
+            ("large.test.ts", large),
+            ("control.test.ts", control),
+        ],
+        &["large.test.ts", "control.test.ts"],
+    );
+    assert_eq!(results[0].tests.len(), refused);
+    assert_all_wrappers_refused(&results[..1]);
+    assert_eq!(results[1].tests.len(), 2);
+    assert!(results[1].tests.iter().all(|case| case.exclusion.is_none()));
+    let outcome = owned_findings("control.test.ts", results[1].clone());
+    assert_eq!(
+        outcome
+            .findings
+            .iter()
+            .filter(|finding| finding.rule == Rule::DuplicateTest)
+            .count(),
+        1
+    );
+}
+
+/// Suite-local captures obey invocation-time initialization while ready captures stay eligible.
+#[test]
+fn returned_factory_enclosing_capture_requires_initialization() {
+    let late = include_str!("../../../fixtures/oracle/factory-suite-capture/late.test.ts");
+    let ready = include_str!("../../../fixtures/oracle/factory-suite-capture/ready.test.ts");
+    let results = corpora(
+        &[("late.test.ts", late), ("ready.test.ts", ready)],
+        &["late.test.ts", "ready.test.ts"],
+    );
+    assert_eq!(results[0].tests.len(), 3);
+    assert_eq!(
+        results[0].tests[0].exclusion,
+        Some(Exclusion::RegisteredInsideFunction)
+    );
+    assert!(results[0].tests[1..]
+        .iter()
+        .all(|case| case.exclusion == Some(Exclusion::RegisteredElsewhere)));
+    assert_eq!(results[1].tests.len(), 2);
+    assert!(results[1].tests.iter().all(|case| case.exclusion.is_none()));
+    assert_rule_absent(
+        owned_outcome(vec![
+            ("late.test.ts", results[0].clone()),
+            ("ready.test.ts", results[1].clone()),
+        ]),
+        Rule::CrossFileDuplicate,
+    );
+}
+
+/// A real parsed caller and its dependency files before batch planning.
+struct ProofProject {
+    root: tempfile::TempDir,
+    path: PathBuf,
+    source: String,
+    parsed: crate::lang::Parsed,
+    found: crate::inventory::Inventory,
+    run: Run,
+}
+
+impl ProofProject {
+    /// Parse the permanent oracle input with the same inventory the planner receives.
+    fn new(caller: &str, source: &str, dependencies: &[(&str, &str)]) -> Self {
+        let root = tempfile::tempdir().unwrap();
+        for (name, content) in dependencies.iter().copied().chain([(caller, source)]) {
+            fs::write(root.path().join(name), content).unwrap();
+        }
+        let path = root.path().join(caller);
+        let parsed = crate::lang::parse(&path, source).unwrap();
+        let mut run = Run::default();
+        let found = crate::inventory::inventory(
+            &path,
+            source,
+            &parsed,
+            crate::inventory::Setting {
+                dialect: &DIALECT,
+                globals: false,
+                root: root.path(),
+            },
+            &mut run.modules,
+        );
+        Self {
+            root,
+            path,
+            source: source.to_owned(),
+            parsed,
+            found,
+            run,
+        }
+    }
+
+    /// Run the production planner over the current caller inventory.
+    fn batch(&mut self) -> crate::corpus::runners::Batch {
+        crate::corpus::runners::expand(
+            &self.path,
+            &self.source,
+            &self.parsed,
+            &self.found,
+            Setting {
+                dialect: &DIALECT,
+                globals: false,
+                root: self.root.path(),
+                benchmarks: false,
+            },
+            &mut self.run,
+        )
+    }
+}
+
+/// Scheduling metadata follows selected derived callbacks.
+#[test]
+fn derived_handoff_scheduling_uses_selected_callbacks() {
+    let factory = include_str!("../../../fixtures/oracle/factory-proof-handoff/factory.ts");
+    for (caller, safe) in [
+        (
+            include_str!("../../../fixtures/oracle/factory-proof-handoff/async.test.ts"),
+            false,
+        ),
+        (
+            include_str!("../../../fixtures/oracle/factory-proof-handoff/sync.test.ts"),
+            true,
+        ),
+    ] {
+        let mut project = ProofProject::new("case.test.ts", caller, &[("factory.ts", factory)]);
+        let batch = project.batch();
+        assert!(batch.refused.is_empty());
+        assert_eq!(batch.calls.len(), 2);
+        let invoked: Vec<_> = batch
+            .calls
+            .iter()
+            .filter(|call| !call.tests.is_empty())
+            .collect();
+        assert_eq!(invoked.len(), 1);
+        assert_eq!(invoked[0].tests.len(), 1);
+        assert_eq!(invoked[0].scheduling_safe, safe);
+    }
+}
+
+/// A completed supplier batch protects caller readers while retaining independent duplicates.
+#[test]
+fn derived_handoff_reaches_caller_mutation_analysis() {
+    let source = include_str!("../../../fixtures/oracle/factory-proof-handoff/local.test.ts");
+    let guarded = corpora(&[("local.test.ts", source)], &["local.test.ts"]).remove(0);
+    assert_eq!(guarded.tests.len(), 8);
+    assert!(guarded.tests.iter().all(|case| case.exclusion.is_some()));
+    assert_rule_absent(
+        owned_findings("local.test.ts", guarded),
+        Rule::DuplicateTest,
+    );
+    let mut project = ProofProject::new("local.test.ts", source, &[]);
+    assert_eq!(project.found.escapes.len(), 1);
+    // Exercise the consumer boundary after its supplier has discharged the escape precondition.
+    // This modifies only the test inventory; production admission keeps the existing guard.
+    project.found.escapes.clear();
+    let batch = project.batch();
+    assert!(batch.refused.is_empty());
+    assert_eq!(batch.calls.len(), 2);
+    assert_eq!(batch.mutation_sites.len(), 1);
+    let sites = project
+        .found
+        .sites
+        .iter()
+        .filter(|site| {
+            matches!(
+                site.kind,
+                crate::inventory::SiteKind::Registers(crate::framework::Registers::Test)
+            )
+        })
+        .map(|site| site.node)
+        .collect();
+    let registrations = batch.calls.iter().map(|call| call.call).collect();
+    batch.promote_inventory(&project.parsed, &mut project.found);
+    let frame = crate::corpus::runners::Frame {
+        mutation_sites: Default::default(),
+        inventory: Some(Box::new(project.found.clone())),
+        function: project.parsed.tree.root(),
+        bindings: Default::default(),
+        values: Default::default(),
+        sites,
+        registrations,
+        derived: Default::default(),
+    };
+    let corpus = crate::corpus::read_parsed(
+        &project.path,
+        &project.source,
+        Setting {
+            dialect: &DIALECT,
+            globals: false,
+            root: project.root.path(),
+            benchmarks: false,
+        },
+        &mut project.run,
+        &project.parsed,
+        Some(frame),
+    )
+    .unwrap();
+    assert_eq!(corpus.tests.len(), 4, "{:?}", corpus.tests);
+    let readers: Vec<_> = corpus
+        .tests
+        .iter()
+        .filter(|case| {
+            case.title
+                .as_deref()
+                .is_some_and(|title| title.starts_with("reader"))
+        })
+        .collect();
+    assert_eq!(readers.len(), 2);
+    assert!(
+        readers
+            .iter()
+            .all(|case| case.exclusion == Some(Exclusion::OrderDependentState)),
+        "{readers:?}"
+    );
+    assert_eq!(
+        corpus
+            .tests
+            .iter()
+            .filter(|case| case.exclusion.is_none())
+            .count(),
+        2
+    );
+    let outcome = owned_findings("local.test.ts", corpus);
+    assert_eq!(
+        outcome
+            .findings
+            .iter()
+            .filter(|finding| finding.rule == Rule::DuplicateTest)
+            .count(),
+        1,
+        "{:?}",
+        outcome.findings
+    );
+}
+
 /// Never-invoked async registrations do not invalidate a synchronous runner's hook proof.
 #[test]
 fn unused_runner_callbacks_preserve_the_registered_hook_positive() {
