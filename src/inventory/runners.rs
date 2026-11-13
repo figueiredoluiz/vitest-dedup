@@ -253,23 +253,7 @@ pub(crate) fn factory_template(
         resolved.function,
         resolved.found.direct_eval,
     )?;
-    let (object, setup, work) =
-        returned::returned_object(&resolved.parsed, resolved.function, &parameters[..], budget)?;
-    let mut dependencies: Vec<_> = resolved.dependencies.into_iter().collect();
-    dependencies.sort();
-    Ok(ReturnedTemplate {
-        path: resolved.path,
-        source: resolved.source,
-        parsed: resolved.parsed,
-        function: resolved.function,
-        parameters,
-        object,
-        setup,
-        work,
-        dependencies,
-        resolution_depth: resolved.resolution_depth,
-        dependency_bytes: resolved.dependency_bytes.into_iter().collect(),
-    })
+    returned::prove_template(resolved, parameters, budget)
 }
 
 /// Resolve a first-party callable while retaining its exact implementation for a specialized

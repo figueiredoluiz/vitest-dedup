@@ -49,12 +49,24 @@ pub fn returned_template(
     .into_iter()
     .map(|parameter| parameter.bindings[0].symbol)
     .collect::<Vec<_>>();
+    let mut template = prove_template(resolved, parameters, budget)?;
+    template.dependency_bytes.sort();
+    Ok(template)
+}
+
+/// Prove construction once and retain the selected reader's parameter metadata and work.
+pub(super) fn prove_template<P>(
+    resolved: ResolvedTemplate,
+    parameters: Vec<P>,
+    budget: usize,
+) -> Result<ReturnedTemplate<P>, Refusal>
+where
+    [P]: ParameterBindings,
+{
     let (object, setup, work) =
         returned_object(&resolved.parsed, resolved.function, &parameters[..], budget)?;
     let mut dependencies: Vec<_> = resolved.dependencies.into_iter().collect();
     dependencies.sort();
-    let mut dependency_bytes: Vec<_> = resolved.dependency_bytes.into_iter().collect();
-    dependency_bytes.sort();
     Ok(ReturnedTemplate {
         path: resolved.path,
         source: resolved.source,
@@ -66,7 +78,7 @@ pub fn returned_template(
         work,
         dependencies,
         resolution_depth: resolved.resolution_depth,
-        dependency_bytes,
+        dependency_bytes: resolved.dependency_bytes.into_iter().collect(),
     })
 }
 
