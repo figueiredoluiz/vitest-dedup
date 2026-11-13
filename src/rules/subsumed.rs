@@ -56,8 +56,9 @@ pub(super) fn run(
                 } else {
                     continue;
                 };
-                // A larger test that does not run (`.skip`, `.todo`) covers nothing.
-                if members[1].case.inert {
+                // A larger test that does not run, or may not (`.skip`, `{ todo: flag }`, an
+                // enclosing skipped suite), covers nothing proved.
+                if members[1].case.may_skip {
                     continue;
                 }
                 let claim = (

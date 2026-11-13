@@ -47,7 +47,8 @@ not establish strict subsumption. These comparisons remain review prompts.
 `subsumed-test` claims a pair only when both tests are known to expect to pass and the larger one
 runs. An expected failure (`.fails`, `{ fails: true }`, a failing suite) and options that could
 set one without spelling it (`{ fails: flag }`, `{ ...options }`, options passed as a variable)
-withhold the claim, as does a larger test that is skipped or a todo.
+withhold the claim. So does a larger test that is, or may be, skipped or a todo: by its own chain
+or options or an enclosing suite's, including an option read from a value (`{ skip: flag }`).
 
 Parameterization candidates retain the identity of shared helpers. Unknown computed dependencies
 withhold consolidation. Numeric data indexes whose immutable value is proved primitive can become

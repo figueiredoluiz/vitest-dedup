@@ -308,6 +308,48 @@ fn callback_exclusions_keep_their_names() {
     assert!(!inert("empty") && !inert("compared"));
 }
 
+/// A test is proved to run only when no chain or option of it or an enclosing suite can skip or
+/// todo it; an option read from a value may.
+#[test]
+fn may_skip_follows_skip_and_todo_through_options_and_suites() {
+    let tests = by_title(
+        "import { describe, expect, test } from 'vitest';\n\
+         const off = true; const skip = true;\n\
+         test('bound', { skip: off }, () => { expect(1).toBe(1) });\n\
+         test('bound todo', { todo: off }, () => { expect(1).toBe(1) });\n\
+         test('shorthand', { skip }, () => { expect(1).toBe(1) });\n\
+         test('literal', { skip: true }, () => { expect(1).toBe(1) });\n\
+         test('chained', { retry: 1 }, () => { expect(1).toBe(1) });\n\
+         test.skip('chain', () => { expect(1).toBe(1) });\n\
+         test('runs', { skip: false, todo: false }, () => { expect(1).toBe(1) });\n\
+         test('plain', () => { expect(1).toBe(1) });\n\
+         describe('pending', { todo: true }, () => { test('in pending', () => { expect(1).toBe(1) }) });\n\
+         describe('held', { skip: off }, () => { test('in held', () => { expect(1).toBe(1) }) });\n\
+         describe.skip('skipped', () => { describe('inner', () => { test('in skipped', () => { expect(1).toBe(1) }) }) });\n\
+         describe('open', { skip: false }, () => { test('in open', () => { expect(1).toBe(1) }) });\n",
+    );
+    assert_eq!(tests.len(), 12, "{:?}", tests.keys());
+    assert!(tests.values().all(|test| test.exclusion.is_none()));
+    let may_skip = |title: &str| tests[title].may_skip;
+    for title in [
+        "bound",
+        "bound todo",
+        "shorthand",
+        "literal",
+        "chain",
+        "in pending",
+        "in held",
+        "in skipped",
+    ] {
+        assert!(may_skip(title), "{title}");
+    }
+    for title in ["chained", "runs", "plain", "in open"] {
+        assert!(!may_skip(title), "{title}");
+    }
+    // Only a skip the test itself writes is `inert`; the suite routes do not change it.
+    assert!(!tests["in pending"].inert && !tests["bound"].inert);
+}
+
 /// A scoped mock changes dynamic imports at runtime, so no test in its file is comparable.
 #[test]
 fn non_hoisted_mock_excludes_the_file_but_hoisted_mock_controls_remain_comparable() {

@@ -38,6 +38,7 @@ fn case(line: u32, site: u32, key: u64, module_key: u64) -> TestCase {
         subsumption_key: Some(0),
         callback_form: crate::normal::CallbackForm::Interchangeable,
         inert: false,
+        may_skip: false,
         bodyless: false,
         benchmark: false,
         iterations: 1,

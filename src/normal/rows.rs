@@ -354,6 +354,18 @@ impl Normalizer<'_> {
     /// Whether an options object among `arguments` keeps the test from running, the way
     /// [`Modifiers::inert`] records it for a chain (`{ skip: true }`, `{ todo: true }`).
     pub fn inert_options(&self, arguments: &[NodeId]) -> bool {
+        self.skip_options(arguments, |written| written == Some(true))
+    }
+
+    /// Whether an options object among `arguments` may keep the test from running: a `skip` or
+    /// `todo` whose value is anything but literal `false` (`{ skip: flag }`, `{ todo }`).
+    pub fn may_skip_options(&self, arguments: &[NodeId]) -> bool {
+        self.skip_options(arguments, |written| written != Some(false))
+    }
+
+    /// Whether an options object among `arguments` has a `skip` or `todo` property whose
+    /// boolean-literal value (`None` when it is not one) satisfies `counts`.
+    fn skip_options(&self, arguments: &[NodeId], counts: impl Fn(Option<bool>) -> bool) -> bool {
         let tree = self.tree;
         let dialect = self.setting.dialect;
         arguments
@@ -369,7 +381,7 @@ impl Normalizer<'_> {
                 matches!(
                     name.and_then(|name| dialect.chain_member(name)),
                     Some(Chain::Skip | Chain::Todo)
-                ) && self.literal_bool(property) == Some(true)
+                ) && counts(self.literal_bool(property))
             })
     }
 

@@ -286,6 +286,9 @@ pub struct TestCase {
     pub callback_form: normal::CallbackForm,
     /// Whether the chain keeps the test from running (`skip`, `todo`).
     pub inert: bool,
+    /// Whether it is not proved to run: [`Self::inert`], or a `skip`/`todo` chain or option, read
+    /// or not (`{ skip: flag }`), on the test or an enclosing suite.
+    pub may_skip: bool,
     /// Whether the declaration has no callback, so Vitest reports it as a todo: decided apart from
     /// which exclusion wins, since another refusal can be recorded first.
     pub bodyless: bool,
@@ -497,6 +500,7 @@ fn unkeyed_case(span: Span, title: Option<String>, exclusion: Option<Exclusion>)
         subsumption_key: None,
         callback_form: normal::CallbackForm::Interchangeable,
         inert: false,
+        may_skip: false,
         bodyless: false,
         benchmark: false,
         iterations: 1,
@@ -1148,6 +1152,8 @@ fn read_parsed(
             let mut repeat_count = normal::RepeatCount::ProjectDefault;
             // A suite's options that may make it an expected failure without spelling it.
             let mut suite_outcome_unknown = false;
+            // A suite that is, or may be, skipped or a todo.
+            let mut suite_may_skip = false;
             for scope in &suites {
                 // An enclosing suite's run condition, table or expected failure applies to the test
                 // as well. How deep the suites nest changes nothing; only what each one adds does.
@@ -1170,6 +1176,7 @@ fn read_parsed(
                     let fails = suite.fails || suite_expected == normal::Expected::Failure;
                     suite_expects_failure |= fails;
                     suite_outcome_unknown |= suite_expected == normal::Expected::Unknown;
+                    suite_may_skip |= suite.inert || normalizer.may_skip_options(&suite_arguments);
                     if suite.chain.contains('.') || fails || !suite_options.is_empty() {
                         context.push('|');
                         context.push_str(&suite.chain);
@@ -1185,6 +1192,8 @@ fn read_parsed(
                 }
             }
             let (options, expected) = normalizer.options(&arguments, body, &mut repeat_count);
+            let may_skip =
+                record.inert || suite_may_skip || normalizer.may_skip_options(&arguments);
             match repeat_count {
                 normal::RepeatCount::ProjectDefault => {}
                 normal::RepeatCount::Fixed(count) => {
@@ -1402,6 +1411,7 @@ fn read_parsed(
                     name,
                     full_title,
                     inert: record.inert,
+                    may_skip,
                     exclusion: modifiers.rows.as_ref().and_then(|rows| {
                         (matches!(rows[index].value, normal::Row::Fields(_)) && !unbound.is_empty())
                             .then_some(Exclusion::UnprovedTableRow)

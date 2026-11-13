@@ -5129,6 +5129,33 @@
       ]
     },
     {
+      "name": "subsumed-test-may-skip-larger",
+      "path": "subsumed-test-may-skip-larger",
+      "arguments": ["--rule", "subsumed-test=warning"],
+      "rule": "subsumed-test",
+      "role": "negative",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-14",
+      "expectedTests": 20,
+      "expectedIncomplete": false,
+      "expectedUnresolved": 0,
+      "expectedFindings": [
+        { "rule": "subsumed-test", "severity": "warning", "titles": ["reads more c", "reads more c and d"] },
+        { "rule": "subsumed-test", "severity": "warning", "titles": ["reads more e", "plain > reads more e and f"] },
+        { "rule": "subsumed-test", "severity": "warning", "titles": ["reads more g", "reads more g and h"] }
+      ],
+      "expectedAbsent": [
+        { "rule": "subsumed-test", "titles": ["reads a", "reads a and b"] },
+        { "rule": "subsumed-test", "titles": ["reads c", "reads c and d"] },
+        { "rule": "subsumed-test", "titles": ["reads e", "reads e and f"] },
+        { "rule": "subsumed-test", "titles": ["reads g", "pending > reads g and h"] },
+        { "rule": "subsumed-test", "titles": ["reads i", "held > reads i and j"] },
+        { "rule": "subsumed-test", "titles": ["reads k", "skipped > reads k and l"] },
+        { "rule": "subsumed-test", "titles": ["reads more a", "planned > reads more a and b"] }
+      ]
+    },
+    {
       "name": "subsumed-test-unread-expected-failure",
       "path": "subsumed-test-unread-expected-failure",
       "rule": "subsumed-test",
