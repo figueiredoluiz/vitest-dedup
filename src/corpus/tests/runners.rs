@@ -3,6 +3,28 @@ use super::*;
 use crate::model::Rule;
 use std::path::PathBuf;
 
+/// Repeated calls retain distinct argument identities without billing the entire caller each time.
+#[test]
+fn repeated_cheap_calls_fit_the_caller_work_budget() {
+    let results = corpora(
+        &[
+            (
+                "cheap.ts",
+                include_str!("../../../fixtures/oracle/runner-call-work/cheap.ts"),
+            ),
+            (
+                "many.test.ts",
+                include_str!("../../../fixtures/oracle/runner-call-work/many.test.ts"),
+            ),
+        ],
+        &["many.test.ts"],
+    );
+    let cases = &results[0].tests;
+    assert_eq!(cases.len(), 1999);
+    assert!(cases.iter().all(|case| case.exclusion.is_none()));
+    assert_ne!(cases[0].key, cases[1998].key);
+}
+
 /// Erased declarations cannot stand in for initialized factory parameters.
 #[test]
 fn returned_factory_erased_reads_stay_opaque() {
