@@ -223,6 +223,8 @@ fn closed_batch(
         active: HashSet::new(),
         left: 2000,
         work: 0,
+        caller: parsed,
+        unwritten_caller_bindings: HashSet::new(),
         registrations: HashSet::new(),
         invocation: Vec::new(),
         preparing: false,
@@ -1038,6 +1040,9 @@ struct Planner<'a> {
     active: HashSet<(PathBuf, u32, u32)>,
     left: usize,
     work: usize,
+    /// Calls in this exact parsed caller can share source-local write checks.
+    caller: &'a Parsed,
+    unwritten_caller_bindings: HashSet<SymbolId>,
     /// The calling file's top-level registering calls; see [`Frame::registrations`].
     registrations: HashSet<NodeId>,
     /// The registering calls of the invocation being planned, by start byte, outermost first: the
@@ -1100,6 +1105,28 @@ impl Planner<'_> {
     /// The work the batch may still do.
     fn left(&self) -> usize {
         MAX_WORK.saturating_sub(self.work)
+    }
+
+    /// Prove an unchanged binding once in the caller, retaining the old charge elsewhere.
+    fn prove_unwritten(&mut self, parsed: &Parsed, symbol: SymbolId) -> Option<()> {
+        let in_caller = std::ptr::eq(parsed, self.caller);
+        if in_caller && self.unwritten_caller_bindings.contains(&symbol) {
+            return self.charge(1);
+        }
+        let references = &parsed.scopes.symbol(symbol).references;
+        let cost = if in_caller {
+            references.len().saturating_add(1)
+        } else {
+            parsed.tree.nodes().count()
+        };
+        self.charge(cost)?;
+        if references.iter().any(|reference| reference.write) {
+            return None;
+        }
+        if in_caller {
+            self.unwritten_caller_bindings.insert(symbol);
+        }
+        Some(())
     }
 
     /// Reserve a complete inventory's owned storage before cloning it.
@@ -1274,20 +1301,13 @@ impl Planner<'_> {
         }
         let parsed = caller.parsed;
         let tree = &parsed.tree;
-        self.charge(tree.nodes().count())?;
         let callee = tree.inner(tree.child(binding.factory_call, "callee")?);
         if tree.kind(callee) != "Identifier" {
             return None;
         }
         let symbol = parsed.scopes.symbol_at(tree.span(callee).start)?;
         let symbol_binding = parsed.scopes.symbol(symbol);
-        if symbol_binding
-            .references
-            .iter()
-            .any(|reference| reference.write)
-        {
-            return None;
-        }
+        self.prove_unwritten(parsed, symbol)?;
         let actual = self.arguments(caller, binding.factory_call, &HashMap::new())?;
         let invocations = if let Declaration::Import {
             import,
@@ -1821,16 +1841,13 @@ impl Planner<'_> {
         }
         let parsed = module.parsed;
         let tree = &parsed.tree;
-        self.charge(tree.nodes().count())?;
         let callee = tree.inner(tree.child(call, "callee")?);
         if tree.kind(callee) != "Identifier" {
             return None;
         }
         let symbol = parsed.scopes.symbol_at(tree.span(callee).start)?;
         let binding = parsed.scopes.symbol(symbol);
-        if binding.references.iter().any(|reference| reference.write) {
-            return None;
-        }
+        self.prove_unwritten(parsed, symbol)?;
         let empty = HashMap::new();
         let values = parent.map_or(&empty, |frame| &frame.values);
         let arguments = tree.list(call, "arguments");
