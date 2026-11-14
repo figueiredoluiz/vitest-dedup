@@ -170,7 +170,7 @@ export function hookScope(paths) {
     else if (path.startsWith('scripts/dev/') || /^\.githooks\/pre-(?:commit|push)$/.test(path)) scopes.add('tooling')
     else if (path.startsWith('scripts/check/') || path.startsWith('scripts/vitest-harness/')) scopes.add('gates')
     else if (path.startsWith('fixtures/')) scopes.add('fixtures')
-    // The npm manifests define every npm gate and pin the Vitest the oracle runs; no Rust reads them.
+    // The npm manifests define every npm gate and pin the Vitest the oracle runs; no Rust test reads them.
     else if (path === 'package.json' || path === 'package-lock.json') scopes.add('node')
     // Rust integration tests read `tests/fixtures/`, and nothing else does.
     else if (/^(?:src|tests|examples|benches)\/.+\.rs$/.test(path) || /^Cargo\.(?:toml|lock)$/.test(path) || path.startsWith('tests/fixtures/')) scopes.add('rust')
@@ -195,7 +195,8 @@ const RUST_COVERAGE = ['npm', 'run', 'check:coverage:rust']
  * Consumers decide this, not file types: Rust tests read most of `fixtures/`, so a fixture runs
  * them, and `npm/test` reads the workflows, so a workflow runs that. The Rust suite runs once: the
  * coverage gate runs every test target, so when it is selected it takes the suite's place.
- * A manifest change runs the whole npm chain, which holds every npm gate, and no Rust compile.
+ * A manifest change runs the whole npm chain, which holds every npm gate and builds the release
+ * binary for the corpus gates, but no Rust lint or test.
  */
 export function hookCommands(mode, paths, docDiff) {
   const scopes = hookScope(paths)

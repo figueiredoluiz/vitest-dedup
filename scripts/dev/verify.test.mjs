@@ -926,7 +926,24 @@ test('a mixed change selects each surface once', () => {
   assert.ok(steps.includes('npm run check:coverage:rust') && steps.includes('npm run check:coverage:js'))
 })
 
-test('the npm manifests run the whole npm chain and no Rust compile', () => {
+/**
+ * Every command `npm run <script>` reaches, expanding nested `npm run` commands. Only command
+ * positions count: `check:not-run` prints text that names `cargo test` and `npm run mutants`.
+ */
+const npmChain = (script, scripts = JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8')).scripts, seen = new Set()) => {
+  if (seen.has(script)) return []
+  seen.add(script)
+  const body = scripts[script]
+  assert.equal(typeof body, 'string', `npm script ${script}`)
+  const commands = body.split(/&&|\|\||;/).map(command => command.trim())
+  return [...commands, ...commands.flatMap(command => /^npm run ([\w:.-]+)$/.exec(command)?.[1] ?? []).flatMap(name => npmChain(name, scripts, seen))]
+}
+
+test('the npm manifests run the whole npm chain, with the oracle it pins, and no Rust lint or test', () => {
+  // The manifest pins the Vitest the oracle runs, so the corpus gates and their release build stay.
+  const chain = npmChain('check')
+  for (const gate of ['node scripts/check/check-collection-oracle.mjs', 'node scripts/check/check-duplicates-corpus.mjs', 'cargo build --release --locked']) assert.ok(chain.includes(gate), gate)
+  for (const rust of ['cargo test', 'cargo clippy', 'cargo llvm-cov', 'npm run check:coverage:rust', 'npm run mutants']) assert.equal(chain.some(command => command.startsWith(rust)), false, rust)
   for (const path of ['package.json', 'package-lock.json']) {
     assert.deepEqual(hookScope([path]), ['node'])
     const steps = prePush([path])

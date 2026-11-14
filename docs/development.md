@@ -312,7 +312,7 @@ scope.
 | `scripts/dev/`, `.githooks/pre-commit` and `.githooks/pre-push` | Static checks and developer/check-helper tests | Same, plus duplication and JS coverage |
 | `scripts/check/` and `scripts/vitest-harness/` | Static checks and developer/check-helper tests | Same, plus the release build, corpus gates, duplication and JS coverage |
 | `fixtures/` | Static checks and developer/check-helper tests | Same, plus Rust tests, which read fixtures, the release build, corpus gates, duplication and JS coverage |
-| `package.json`, `package-lock.json` | Static checks, npm tests and developer/check-helper tests | Static checks and the whole `npm run check` chain, without Rust compilation |
+| `package.json`, `package-lock.json` | Static checks, npm tests and developer/check-helper tests | Static checks and the whole `npm run check` chain, whose corpus gates build the release binary; no Rust lint or test |
 | Rust sources, `Cargo.toml`, `Cargo.lock`, `tests/fixtures/` | Static checks and format | Same, plus Clippy, rustdoc, the Rust suite, the corpus gates and duplication; a source change runs the suite under Rust coverage |
 | `.cargo/`, other paths, or unknown push scope | Compilation-free fast checks | Full checks, including Rust coverage |
 
