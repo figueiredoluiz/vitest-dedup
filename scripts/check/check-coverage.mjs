@@ -68,13 +68,13 @@
 //   - no production source file is unaccounted for -- every file matched by the scope globs must
 //     either carry a floor or be named in `JS_NOT_MEASURED` with a reason. A new file cannot
 //     arrive uncovered and unnoticed.
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import * as fs from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { coverageOnHost } from './lib/coverage-platform.mjs'
+import { coverageOnHost, missingTestTargets, targetReportingEnv } from './lib/coverage-platform.mjs'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
 
@@ -546,29 +546,20 @@ function checkRust(failures) {
   try {
     // Output is redirected, not streamed: an instrumented `cargo test` over the oxc dependency
     // tree prints thousands of lines ; keep command output bounded.
-    let log
-    try {
-      log = execFileSync(
-        'cargo',
-        [
-          'llvm-cov',
-          '--all-features',
-          '--workspace',
-          '--locked',
-          '--summary-only',
-          '--json',
-          '--output-path',
-          reportPath,
-        ],
-        { cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 256 * 1024 * 1024 },
-      )
-    } catch (error) {
-      log = `${error.stdout ?? ''}${error.stderr ?? ''}`
+    // Both streams are kept on success as well: Cargo names each test target it runs on stderr,
+    // and the target check below reads those lines.
+    const run = spawnSync(
+      'cargo',
+      ['llvm-cov', '--all-features', '--workspace', '--locked', '--summary-only', '--json', '--output-path', reportPath],
+      { cwd: ROOT, env: targetReportingEnv(), encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 256 * 1024 * 1024 },
+    )
+    const log = `${run.stdout ?? ''}${run.stderr ?? ''}`
+    if (run.error || run.status !== 0) {
       writeFileSync(logPath, log)
       console.error(log.split('\n').slice(-100).join('\n'))
       throw new Error(
-        `cargo llvm-cov exited ${error.status}. Last 100 lines above. Install it with ` +
-          '`cargo install cargo-llvm-cov` if it is missing.',
+        `cargo llvm-cov ${run.error ? `failed to start: ${run.error.message}` : `exited ${run.status ?? run.signal}`}. ` +
+          'Last 100 lines above. Install it with `cargo install cargo-llvm-cov` if it is missing.',
       )
     }
     // Written unconditionally, kept only when asked for. On a run that SUCCEEDS this text is
@@ -591,6 +582,10 @@ function checkRust(failures) {
           'A coverage percentage over a suite that did not run is not a measurement.',
       )
     }
+    // The push hook runs the Rust suite only through this gate, so every integration target must
+    // have run here: a summed count cannot show that one whole target was skipped.
+    const missing = missingTestTargets(log, globSync('tests/*.rs', { cwd: ROOT }).map(path => path.replaceAll('\\', '/')).sort())
+    if (missing.length) failures.push(`rust: the coverage run did not run these test targets: ${missing.join(', ')}`)
 
     let report
     try {
