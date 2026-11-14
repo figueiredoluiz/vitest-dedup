@@ -367,32 +367,29 @@ export function quickChange(root, env = process.env) {
  * @returns {{module: string, paths: string[]}[]} Owned paths; one ending in `/` is a directory.
  */
 export function rootModules(source) {
-  const modules = []
-  let path = null
-  for (const line of source.split(/\r?\n/)) {
-    const attribute = /^\s*#\[path\s*=\s*"([^"]+)"\]\s*$/.exec(line)
-    const declaration = /^\s*(?:pub(?:\([^)]*\))?\s+)?mod\s+(\w+)\s*;/.exec(line)
-    if (attribute) path = attribute[1]
-    else if (declaration) {
-      const module = declaration[1]
-      modules.push({ module, paths: path ? [`src/${path}`] : [`src/${module}.rs`, `src/${module}/`] })
-      path = null
-    } else if (!/^\s*#\[/.test(line)) path = null
-  }
-  return modules
+  // Comments are whitespace to Rust, so an attribute applies across them; strip them first.
+  const code = source.replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, ' ')
+  // The attributes directly before a declaration, on its line or earlier ones, are its own.
+  return [...code.matchAll(/((?:#\[[^\]]*\]\s*)*)(?:pub(?:\([^)]*\))?\s+)?mod\s+(\w+)\s*;/g)].map(([, attributes, module]) => {
+    const path = /#\[\s*path\s*=\s*"([^"]+)"\s*\]/.exec(attributes)?.[1]
+    return { module, paths: path ? [`src/${path}`] : [`src/${module}.rs`, `src/${module}/`] }
+  })
 }
 
 /**
  * Read the crate layout test selection needs from the checkout itself.
  * @param {string} root Checkout directory.
  * @returns {{bin: string[], lib: {module: string, paths: string[]}[], testTargets: string[]}} Paths
- *   the binary owns, the library's file modules, and the `tests/*.rs` target names.
+ *   the binary owns, the library's file modules, and the integration target names.
  */
 export function crateLayout(root) {
   /** Read a crate root's declarations, or none when it is absent. */
   const declared = name => existsSync(join(root, 'src', name)) ? rootModules(readFileSync(join(root, 'src', name), 'utf8')) : []
   const tests = join(root, 'tests')
-  const testTargets = existsSync(tests) ? readdirSync(tests).flatMap(name => /^(.+)\.rs$/.exec(name)?.[1] ?? []) : []
+  // Cargo discovers `tests/<name>.rs` and `tests/<name>/main.rs`; a directory without `main.rs` is a helper.
+  const testTargets = existsSync(tests) ? readdirSync(tests, { withFileTypes: true }).flatMap(entry => entry.isDirectory()
+    ? (existsSync(join(tests, entry.name, 'main.rs')) ? [entry.name] : [])
+    : (/^(.+)\.rs$/.exec(entry.name)?.[1] ?? [])) : []
   return { bin: ['src/main.rs', ...declared('main.rs').flatMap(module => module.paths)], lib: declared('lib.rs'), testTargets }
 }
 

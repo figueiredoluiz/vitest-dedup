@@ -1198,6 +1198,16 @@ test('the crate layout is read from this checkout', () => {
   assert.equal(layout.testTargets.includes('support'), false)
 })
 
+test('a test directory with main.rs is an integration target; a helper directory is not', () => fixture(root => {
+  for (const [path, text] of [['tests/flat.rs', ''], ['tests/nested/main.rs', 'mod part;\n'], ['tests/nested/part.rs', ''], ['tests/support/mod.rs', '']]) {
+    mkdirSync(dirname(join(root, path)), { recursive: true })
+    writeFileSync(join(root, path), text)
+  }
+  const layout = crateLayout(root)
+  assert.deepEqual(layout.testTargets.sort(), ['flat', 'nested'])
+  assert.deepEqual(quickRustTests(['tests/nested/part.rs'], layout), [['node', 'scripts/dev/cargo-tests.mjs', 'test', 'nested']])
+}))
+
 test('a crate root owns its declared files, honouring #[path] through other attributes', () => {
   assert.deepEqual(rootModules('pub mod cli;\n#[cfg(test)]\n#[path = "cli/tests/x.rs"]\nmod x_tests;\nmod tests {\n}\npub(crate) mod testing;\n'), [
     { module: 'cli', paths: ['src/cli.rs', 'src/cli/'] },
@@ -1206,6 +1216,11 @@ test('a crate root owns its declared files, honouring #[path] through other attr
   ])
   // A `#[path]` separated from its declaration by code applies to nothing.
   assert.deepEqual(rootModules('#[path = "a/b.rs"]\nfn f() {}\nmod c;\n'), [{ module: 'c', paths: ['src/c.rs', 'src/c/'] }])
+  // Comments and blank lines are whitespace, and an attribute may share the declaration's line.
+  const commented = rootModules('#[path = "cli/tests/x.rs"]\n// Binary-only tests.\n\n/* kept */ /// doc\nmod x_tests;\n#[cfg(test)] #[path = "y.rs"] mod y; // mod z;\nmod tests_inline {}\n')
+  assert.deepEqual(commented, [{ module: 'x_tests', paths: ['src/cli/tests/x.rs'] }, { module: 'y', paths: ['src/y.rs'] }])
+  const layout = { bin: ['src/main.rs', ...commented.flatMap(entry => entry.paths)], lib: [{ module: 'cli', paths: ['src/cli.rs', 'src/cli/'] }], testTargets: [] }
+  assert.deepEqual(quickRustTests(['src/cli/tests/x.rs'], layout), [['node', 'scripts/dev/cargo-tests.mjs', 'bin']])
 })
 
 test('the Windows cross-check follows changed Rust lines that name cfg, filesystem calls or paths', () => {
