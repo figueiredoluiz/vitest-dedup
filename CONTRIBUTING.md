@@ -15,6 +15,7 @@ cargo build
 
 ```sh
 cargo test           # the Rust suite
+npm run verify:quick # before a review: lints, duplication, the changed area's tests
 npm run verify:fast  # cheap checks, format, gate helper tests (no compilation)
 npm run check        # the npm gates
 ```

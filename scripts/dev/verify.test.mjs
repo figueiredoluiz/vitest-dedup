@@ -4,7 +4,7 @@ import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, realpathSync,
 import { tmpdir } from 'node:os'
 import { basename, delimiter, dirname, join, resolve, sep } from 'node:path'
 import { test } from 'node:test'
-import { LANES, changedPaths, cleanEnvironment, laneShare, pause, commands, hookCommands, hookScope, installHooks, main, pruneLogs, pushCommits, repositoryKey, runSteps, rustChanged, withLock, withNodeModules, withSnapshot, withTargetCache } from './verify.mjs'
+import { LANES, changedPaths, cleanEnvironment, crateLayout, laneShare, pause, commands, hookCommands, hookScope, installHooks, main, pruneLogs, pushCommits, quickChange, quickCommands, quickRustTests, repositoryKey, runSteps, rustChanged, windowsSensitive, withLock, withNodeModules, withSnapshot, withTargetCache } from './verify.mjs'
 import { coverage } from '../check/check-docstrings.mjs'
 
 const oid = 'a'.repeat(40)
@@ -1110,4 +1110,129 @@ test('a failed ref-grouping command cannot become an empty successful push check
     assert.notEqual(run.status, 0)
     assert.doesNotMatch(run.stderr, /driver should not run/)
   })
+}))
+
+/** The quick lane's commands for `paths`, as command lines. */
+const LAYOUT = { binModules: ['diagnostics', 'rss', 'stdout', 'memory_roof_tests'], testTargets: ['cli_ux', 'sarif_paths', 'next_modes'] }
+const quick = (paths, diff = '') => quickCommands(paths, diff, 'scope.diff', LAYOUT).map(step => step.join(' '))
+const MANIFEST_SCRIPTS = JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8')).scripts
+
+/**
+ * Every command a quick step reaches, expanding `npm run` and `npm test` chains, so a slow gate
+ * nested in a selected script is seen.
+ */
+const reached = step => {
+  if (step === 'npm test') return [step, ...npmChain('test')]
+  const name = /^npm run ([\w:.-]+)$/.exec(step)?.[1]
+  return name ? [step, ...npmChain(name, MANIFEST_SCRIPTS)] : [step]
+}
+// What the push hook runs and the quick lane never does.
+const PUSH_ONLY = ['cargo build --release', 'cargo test', 'cargo llvm-cov', 'npm run check:coverage', 'npm run check:corpus', 'npm run check:recall', 'npm run check:oracle', 'npm run verify:titles', 'npm run check:hooks', 'npm run check:behavior-runtime', 'npm run check:parameterization-runtime', 'npm run check:title-properties', 'npm run mutants', 'node scripts/check/check-coverage.mjs', 'node scripts/check/check-collection-oracle.mjs', 'node scripts/check/check-duplicates-corpus.mjs']
+const assertQuick = steps => {
+  for (const command of steps.flatMap(reached)) {
+    assert.equal(command === 'npm run check' || PUSH_ONLY.some(slow => command.startsWith(slow)), false, `${command} in ${steps.join(', ')}`)
+  }
+}
+
+test('the quick lane never reaches a push-only gate, for any scope, through any npm chain', () => {
+  const shapes = [[], ['README.md'], ['.github/workflows/ci.yml'], ['action.yml'], ['npm/a.mjs'], ['scripts/dev/a.mjs'], ['scripts/check/a.mjs'], ['fixtures/a.test.ts'], ['package.json'], ['src/model.rs'], ['src/main.rs'], ['tests/cli_ux.rs'], ['tests/support/mod.rs'], ['Cargo.lock'], ['.cargo/config.toml'], null]
+  for (const paths of shapes) assertQuick(quick(paths, '+#[cfg(windows)]\n'))
+  // The chain expansion itself is live: `check:coverage:js` reaches the coverage script it names.
+  assert.ok(reached('npm run check:coverage:js').includes('node scripts/check/check-coverage.mjs --js'))
+})
+
+test('documentation and an empty change run the static checks only', () => {
+  for (const paths of [['docs/development.md', 'README.md'], []]) {
+    const steps = quick(paths)
+    assert.deepEqual(steps, hookCommands('pre-commit', paths, 'scope.diff').map(step => step.join(' ')))
+    assert.equal(steps.some(step => step.startsWith('cargo') || step.includes('test') || step.includes('duplication')), false, steps.join())
+  }
+})
+
+test('a library module runs format, lints, rustdoc, duplication and its own unit tests', () => {
+  const steps = quick(['src/lang/js_text.rs', 'src/rules.rs'])
+  // Cheapest first: format and duplication precede the first compile.
+  assert.deepEqual(steps.slice(-5), [
+    'cargo fmt --all --check',
+    'npm run check:duplication',
+    'cargo clippy --all-targets --all-features --locked',
+    'cargo doc --no-deps --document-private-items --locked',
+    'node scripts/dev/cargo-tests.mjs lib lang rules',
+  ])
+  assert.equal(steps.some(step => step.includes('x86_64-pc-windows-gnu') || step.endsWith(' bin') || step.includes('cargo-tests.mjs test')), false, steps.join())
+})
+
+test('the binary, the shared roots and integration targets select their own tests', () => {
+  assert.deepEqual(quickRustTests(['src/main.rs'], LAYOUT), [['node', 'scripts/dev/cargo-tests.mjs', 'bin']])
+  assert.deepEqual(quickRustTests(['src/stdout.rs'], LAYOUT), [['node', 'scripts/dev/cargo-tests.mjs', 'bin']])
+  for (const path of ['src/lib.rs', 'src/testing.rs', 'Cargo.toml', 'Cargo.lock']) assert.deepEqual(quickRustTests([path, 'src/rules.rs'], LAYOUT), [['node', 'scripts/dev/cargo-tests.mjs', 'lib']], path)
+  assert.deepEqual(quickRustTests(['tests/cli_ux.rs', 'tests/next_modes/case.rs'], LAYOUT), [['node', 'scripts/dev/cargo-tests.mjs', 'test', 'cli_ux', 'next_modes']])
+  for (const path of ['tests/support/mod.rs', 'tests/fixtures/config-globs/vitest.config.ts']) assert.deepEqual(quickRustTests([path], LAYOUT), [['node', 'scripts/dev/cargo-tests.mjs', 'test', 'cli_ux', 'next_modes', 'sarif_paths']], path)
+  assert.deepEqual(quickRustTests(['src/model.rs', 'src/main.rs', 'tests/cli_ux.rs'], LAYOUT).map(step => step.slice(2).join(' ')), ['lib model', 'bin', 'test cli_ux'])
+  assert.deepEqual(quickRustTests(null, LAYOUT), [['node', 'scripts/dev/cargo-tests.mjs', 'lib']])
+  assert.deepEqual(quickRustTests(['examples/depth.rs', 'README.md'], LAYOUT), [])
+})
+
+test('the crate layout is read from this checkout', () => {
+  const layout = crateLayout(resolve('.'))
+  for (const module of ['diagnostics', 'rss', 'stdout', 'memory_roof_tests']) assert.ok(layout.binModules.includes(module), module)
+  assert.equal(layout.binModules.includes('tests'), false, 'an inline module has no file to change')
+  for (const target of ['cli_ux', 'docs_contract', 'next_modes']) assert.ok(layout.testTargets.includes(target), target)
+  assert.equal(layout.testTargets.includes('support'), false)
+})
+
+test('the Windows cross-check follows changed Rust lines that name cfg, filesystem calls or paths', () => {
+  const rustDiff = line => `diff --git a/src/a.rs b/src/a.rs\n--- a/src/a.rs\n+++ b/src/a.rs\n@@ -1 +1 @@\n${line}\n`
+  for (const line of ['+#[cfg(windows)]', '-    std::fs::write(path, bytes)?;', '+fn read(path: &Path) {}', '+let p = PathBuf::new();', '+    path.canonicalize()', '+use std::os::unix::fs::symlink;', '+const S: char = std::path::MAIN_SEPARATOR;']) {
+    assert.equal(windowsSensitive(['src/a.rs'], rustDiff(line)), true, line)
+  }
+  for (const line of ['+let total = count + 1;', ' #[cfg(windows)]']) assert.equal(windowsSensitive(['src/a.rs'], rustDiff(line)), false, line)
+  // The `---`/`+++` headers name the file, which is not a changed line, even when the name would match.
+  assert.equal(windowsSensitive(['src/Path.rs'], 'diff --git a/src/Path.rs b/src/Path.rs\n--- a/src/Path.rs\n+++ b/src/Path.rs\n+let n = 1;\n'), false)
+  // Only Rust lines count; a Cargo manifest or an unknown scope always does.
+  assert.equal(windowsSensitive(['docs/a.md'], 'diff --git a/docs/a.md b/docs/a.md\n+std::fs::write and cfg\n'), false)
+  assert.equal(windowsSensitive(['Cargo.toml'], ''), true)
+  assert.equal(windowsSensitive(null, ''), true)
+  assert.ok(quick(['src/a.rs'], rustDiff('+#[cfg(windows)]')).includes('cargo check --all-targets --all-features --locked --target x86_64-pc-windows-gnu'))
+})
+
+test('an unknown path runs every quick check, and still no push-only gate', () => {
+  const steps = quick(['.cargo/config.toml'])
+  for (const step of ['cargo fmt --all --check', 'npm run test:action', 'npm test', 'npm run pack:check', 'npm run test:dev-checks', 'npm run test:check-lib', 'npm run check:duplication', 'cargo clippy --all-targets --all-features --locked', 'cargo doc --no-deps --document-private-items --locked', 'cargo check --all-targets --all-features --locked --target x86_64-pc-windows-gnu', 'node scripts/dev/cargo-tests.mjs lib']) assert.ok(steps.includes(step), step)
+  assert.deepEqual(steps, quick(null))
+  assert.equal(new Set(steps).size, steps.length)
+})
+
+test('a script change runs its suites and duplication, and compiles nothing', () => {
+  for (const [path, suite] of [['scripts/dev/a.mjs', 'npm run test:dev-checks'], ['action.yml', 'npm run test:action'], ['npm/a.mjs', 'npm run pack:check']]) {
+    const steps = quick([path])
+    assert.ok(steps.includes(suite) && steps.includes('npm run check:duplication'), steps.join())
+    assert.equal(steps.some(step => step.startsWith('cargo') || step.includes('cargo-tests')), false, steps.join())
+  }
+})
+
+test('the quick scope is the working tree against main, untracked files included', () => fixture(root => {
+  git(root, 'update-ref', 'refs/remotes/origin/main', git(root, 'rev-parse', 'HEAD'))
+  commitChanges(root, { 'README.md': '# Documentation\n' })
+  commitChanges(root, { '.gitignore': 'ignored.rs\n/target\n' })
+  writeFileSync(join(root, 'README.md'), '# Edited, not staged\n')
+  mkdirSync(join(root, 'src'))
+  writeFileSync(join(root, 'src', 'new.rs'), '#[cfg(windows)]\npub fn added() {}\n')
+  writeFileSync(join(root, 'ignored.rs'), 'fn ignored() {}\n')
+  const change = quickChange(root)
+  assert.deepEqual(change.paths.sort(), ['.gitignore', 'README.md', 'src/new.rs'])
+  assert.match(change.diff, /\+#\[cfg\(windows\)\]/)
+  assert.match(change.diff, /\+# Edited, not staged/)
+  assert.doesNotMatch(change.diff, /fn ignored/)
+  assert.equal(windowsSensitive(change.paths, change.diff), true)
+  // `.gitignore` is an unknown path, so the planned run is every quick check.
+  const [unknown] = plannedChecks(root, 'quick')
+  assert.ok(unknown.includes('node scripts/dev/cargo-tests.mjs lib'), unknown.join())
+  git(root, 'update-ref', 'refs/remotes/origin/main', git(root, 'rev-parse', 'HEAD'))
+  const [steps] = plannedChecks(root, 'quick')
+  assert.ok(steps.includes('node scripts/dev/cargo-tests.mjs lib new'), steps.join())
+  assert.ok(steps.includes('cargo check --all-targets --all-features --locked --target x86_64-pc-windows-gnu'), steps.join())
+  assert.equal(steps.some(step => step.includes('test:')), false, steps.join())
+  git(root, 'update-ref', '-d', 'refs/remotes/origin/main')
+  assert.equal(quickChange(root).paths, null)
 }))

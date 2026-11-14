@@ -244,6 +244,127 @@ export function rustChanged(paths) {
   return paths.some(path => path.endsWith('.rs') || /(^|\/)Cargo\.(toml|lock)$/.test(path) || path === 'scripts/check/check-coverage.mjs')
 }
 
+const FORMAT = ['cargo', 'fmt', '--all', '--check']
+const CLIPPY = ['cargo', 'clippy', '--all-targets', '--all-features', '--locked']
+const RUSTDOC = ['cargo', 'doc', '--no-deps', '--document-private-items', '--locked']
+const WINDOWS_CHECK = ['cargo', 'check', '--all-targets', '--all-features', '--locked', '--target', 'x86_64-pc-windows-gnu']
+const CARGO_TESTS = ['node', 'scripts/dev/cargo-tests.mjs']
+// The compilation-free JavaScript suites, all of which an unknown scope runs.
+const JS_TESTS = [['npm', 'run', 'test:action'], ['npm', 'test'], ['npm', 'run', 'pack:check'], ['npm', 'run', 'test:dev-checks'], ['npm', 'run', 'test:check-lib']]
+// What a changed Rust line names when its behaviour can differ on Windows.
+const WINDOWS_SENSITIVE = /\bcfg\b|\bfs::|\bPath(?:Buf)?\b|canonicali[sz]e|symlink|MAIN_SEPARATOR|\bjunction\b/
+
+/**
+ * Decide whether a change needs the Windows cross-check: a Cargo manifest, a changed Rust line that
+ * names `cfg`, filesystem calls or paths, or a scope that is not known.
+ * @param {string[]|null} paths Changed paths, or null when the scope is unknown.
+ * @param {string} diff Unified diff of the change.
+ * @returns {boolean} Whether to run the cross-check.
+ */
+export function windowsSensitive(paths, diff) {
+  if (paths === null || paths.some(path => /^Cargo\.(?:toml|lock)$/.test(path))) return true
+  let rust = false
+  for (const line of diff.split('\n')) {
+    const file = /^diff --git a\/.* b\/(.*)$/.exec(line)
+    if (file) rust = file[1].endsWith('.rs')
+    else if (rust && /^[+-](?![+-]{2} )/.test(line) && WINDOWS_SENSITIVE.test(line)) return true
+  }
+  return false
+}
+
+/**
+ * Select the Rust tests of what changed: the unit tests of each changed library module, the binary's
+ * tests for its own modules, and the changed integration targets. Dependents are not selected.
+ * @param {string[]|null} paths Changed paths, or null when the scope is unknown.
+ * @param {{binModules: string[], testTargets: string[]}} layout Modules `src/main.rs` declares,
+ *   and the `tests/*.rs` target names.
+ * @returns {string[][]} `cargo-tests.mjs` invocations.
+ */
+export function quickRustTests(paths, { binModules, testTargets }) {
+  if (paths === null) return [[...CARGO_TESTS, 'lib']]
+  const modules = new Set()
+  const targets = new Set()
+  let wholeLibrary = false
+  let bin = false
+  for (const path of paths) {
+    const source = /^src\/([^/]+?)(?:\.rs|\/.+)$/.exec(path)?.[1]
+    const test = /^tests\/([^/]+?)(?:\.rs|\/.+)$/.exec(path)?.[1]
+    if (/^Cargo\.(?:toml|lock)$/.test(path) || source === 'lib' || source === 'testing') wholeLibrary = true
+    else if (source === 'main' || binModules.includes(source)) bin = true
+    else if (source && path.endsWith('.rs')) modules.add(source)
+    else if (test && testTargets.includes(test)) targets.add(test)
+    // `tests/support/` and `tests/fixtures/` are read by integration targets this cannot name.
+    else if (test) for (const target of testTargets) targets.add(target)
+  }
+  const steps = []
+  if (wholeLibrary) steps.push([...CARGO_TESTS, 'lib'])
+  else if (modules.size) steps.push([...CARGO_TESTS, 'lib', ...[...modules].sort()])
+  if (bin) steps.push([...CARGO_TESTS, 'bin'])
+  if (targets.size) steps.push([...CARGO_TESTS, 'test', ...[...targets].sort()])
+  return steps
+}
+
+/**
+ * Build the pre-review lane: what a review or the push hook would otherwise find first, in minutes.
+ * Static checks, format, the compilation-free JavaScript suites, duplication, Clippy, rustdoc, the
+ * Windows cross-check when the change can differ there, and the Rust tests of what changed. Never a
+ * release build, corpus gate, coverage or the whole Rust suite: the push hook runs those.
+ * @param {string[]|null} paths Changed paths, or null when the scope is unknown.
+ * @param {string} diff Unified diff of the change.
+ * @param {string} [docDiff] File holding that diff, for the docstring check.
+ * @param {{binModules: string[], testTargets: string[]}} [layout] Crate layout for test selection.
+ * @returns {string[][]} Commands in execution order.
+ */
+export function quickCommands(paths, diff, docDiff, layout = { binModules: [], testTargets: [] }) {
+  const scopes = hookScope(paths)
+  const full = scopes.includes('full')
+  const rust = full || scopes.includes('rust')
+  const steps = full ? [...staticCommands(docDiff), FORMAT, ...JS_TESTS] : hookCommands('pre-commit', paths, docDiff)
+  if (full || scopes.some(scope => scope !== 'docs')) steps.push(['npm', 'run', 'check:duplication'])
+  if (!rust) return steps
+  steps.push(CLIPPY, RUSTDOC)
+  if (windowsSensitive(full ? null : paths, diff)) steps.push(WINDOWS_CHECK)
+  steps.push(...quickRustTests(full ? null : paths, layout))
+  return steps
+}
+
+/**
+ * Read the working checkout's change against its merge base with `origin/main`: tracked edits,
+ * committed or not, plus untracked files that are not ignored.
+ * @param {string} root Checkout directory.
+ * @param {NodeJS.ProcessEnv} [env] Git environment.
+ * @returns {{paths: string[]|null, diff: string, reason: string}} Null paths when no base is readable.
+ */
+export function quickChange(root, env = process.env) {
+  /** Run Git, returning stdout even when it exits 1, as `diff --no-index` does on a difference. */
+  const run = args => {
+    const result = spawnSync('git', args, { cwd: root, env, encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER })
+    if (result.error || (result.status !== 0 && result.status !== 1)) throw new Error(`git ${args.join(' ')} failed`)
+    return result.stdout
+  }
+  const untracked = run(['ls-files', '--others', '--exclude-standard', '-z']).split('\0').filter(Boolean)
+  const added = untracked.map(path => run(['-c', 'core.quotePath=false', 'diff', '--no-index', '--no-ext-diff', '--no-color', '--unified=0', '--', '/dev/null', path])).join('')
+  let base
+  try { base = git(root, ['merge-base', 'HEAD', 'origin/main'], env) }
+  catch { return { paths: null, diff: `${scopeDiff(root, { env })}\n${added}`, reason: 'no merge base with origin/main' } }
+  const tracked = execFileSync('git', ['diff', '--no-ext-diff', '--no-renames', '--name-only', '-z', base, '--'], { cwd: root, env, encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER }).split('\0').filter(Boolean)
+  return { paths: [...new Set([...tracked, ...untracked])], diff: `${scopeDiff(root, { env })}\n${added}`, reason: 'working tree against the merge base with origin/main' }
+}
+
+/**
+ * Read the crate layout test selection needs from the checkout itself.
+ * @param {string} root Checkout directory.
+ * @returns {{binModules: string[], testTargets: string[]}} Modules `src/main.rs` declares as files,
+ *   and the `tests/*.rs` target names.
+ */
+export function crateLayout(root) {
+  const main = join(root, 'src', 'main.rs')
+  const binModules = existsSync(main) ? [...readFileSync(main, 'utf8').matchAll(/^\s*(?:pub(?:\([^)]*\))?\s+)?mod\s+(\w+)\s*;/gm)].map(match => match[1]) : []
+  const tests = join(root, 'tests')
+  const testTargets = existsSync(tests) ? readdirSync(tests).flatMap(name => /^(.+)\.rs$/.exec(name)?.[1] ?? []) : []
+  return { binModules, testTargets }
+}
+
 /** Build the inexpensive checks shared by every local profile and scope. */
 function staticCommands(docDiff) {
   return [
@@ -529,7 +650,7 @@ export function installHooks(root) {
  */
 export function main(args = process.argv.slice(2), { env = process.env, input, check = runSteps, print = console.log, root = process.cwd() } = {}) {
   const [mode, ...rest] = args
-  if (!['fast', 'full', 'pre-commit', 'pre-push', 'install'].includes(mode) || (mode !== 'pre-push' && rest.length)) throw new Error('Usage: verify.mjs fast|full|pre-commit|pre-push|install')
+  if (!['quick', 'fast', 'full', 'pre-commit', 'pre-push', 'install'].includes(mode) || (mode !== 'pre-push' && rest.length)) throw new Error('Usage: verify.mjs quick|fast|full|pre-commit|pre-push|install')
   root = resolve(git(root, ['rev-parse', '--show-toplevel'], env))
   if (mode === 'install') { print(`Hooks installed for this worktree: ${installHooks(root)}`); return }
   const updates = mode === 'pre-push' ? pushUpdates(input ?? readFileSync(0, 'utf8')) : []
@@ -543,7 +664,19 @@ export function main(args = process.argv.slice(2), { env = process.env, input, c
   const share = String(laneShare())
   const runEnv = { ...env, CARGO_BUILD_JOBS: env.CARGO_BUILD_JOBS || share, RUST_TEST_THREADS: env.RUST_TEST_THREADS || share, CARGO_TARGET_DIR: cache, CARGO_LLVM_COV_TARGET_DIR: env.CARGO_LLVM_COV_TARGET_DIR ? resolve(root, env.CARGO_LLVM_COV_TARGET_DIR) : join(cache, 'llvm-cov-target') }
   // A manual run builds in the checkout's own cache, which a second run must not share.
+  const manual = ['quick', 'fast', 'full'].includes(mode)
   withLock(common, lane => {
+    if (mode === 'quick') {
+      const { paths, diff, reason } = quickChange(root, env)
+      const scope = hookScope(paths)
+      print(`Quick check scope: ${scope.join(', ') || 'no changed paths'} (${paths === null ? reason : `${paths.length} changed paths; ${reason}`})`)
+      mkdirSync(logs, { recursive: true })
+      const docDiff = join(logs, 'docstrings.diff')
+      writeFileSync(docDiff, diff)
+      const meta = { mode, scope, reason, changedPaths: paths?.length ?? null }
+      withTargetCache(root, cache, () => check(root, quickCommands(paths, diff, docDiff, crateLayout(root)), { env: runEnv, logRoot: logs, meta, print }))
+      return
+    }
     if (mode === 'fast' || mode === 'full') {
       withTargetCache(root, cache, () => check(root, commands(mode), { env: runEnv, logRoot: logs, meta: { mode, scope: ['manual'], reason: 'manual profile' }, print }))
       return
@@ -589,7 +722,7 @@ export function main(args = process.argv.slice(2), { env = process.env, input, c
         withNodeModules(snapshot, root, () => withTargetCache(snapshot, hookCache, () => check(snapshot, hookCommands(mode, paths, docDiff), { env: hookEnv, logRoot: join(logs, String(i)), meta, print })))
       }, env, work)
     }
-  }, { lanes: mode === 'fast' || mode === 'full' ? 1 : LANES, waitMs: QUEUE_MS, print })
+  }, { lanes: manual ? 1 : LANES, waitMs: QUEUE_MS, print })
   print(`Verification complete. Logs: ${logs}`)
 }
 
