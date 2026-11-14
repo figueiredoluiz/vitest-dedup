@@ -1177,6 +1177,9 @@ test('the binary, the shared roots and integration targets select their own test
   // files, may belong to either root, so both run.
   for (const path of ['src/cli/tests/imported_delivery.rs', 'src/cli/tests/cases.rs']) assert.deepEqual(quickRustTests([path], LAYOUT), [['node', 'scripts/dev/cargo-tests.mjs', 'lib', 'cli'], ['node', 'scripts/dev/cargo-tests.mjs', 'bin']], path)
   assert.deepEqual(quickRustTests(['src/cli/parse.rs'], LAYOUT), [['node', 'scripts/dev/cargo-tests.mjs', 'lib', 'cli']])
+  // Two `#[path]` modules sharing a directory both run for a file in it.
+  const shared = { bin: [], lib: rootModules('#[path = "shared/a.rs"] mod a;\n#[path = "shared/b.rs"] mod b;\n'), testTargets: [] }
+  assert.deepEqual(quickRustTests(['src/shared/b.rs'], shared), [['node', 'scripts/dev/cargo-tests.mjs', 'lib', 'a', 'b']])
   // A source file neither root declares runs the library suite rather than a guessed filter.
   assert.deepEqual(quickRustTests(['src/undeclared.rs'], LAYOUT), [['node', 'scripts/dev/cargo-tests.mjs', 'lib']])
   for (const path of ['src/lib.rs', 'src/testing.rs', 'Cargo.toml', 'Cargo.lock']) assert.deepEqual(quickRustTests([path, 'src/rules.rs'], LAYOUT), [['node', 'scripts/dev/cargo-tests.mjs', 'lib']], path)

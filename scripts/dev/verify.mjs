@@ -289,13 +289,13 @@ export function quickRustTests(paths, { bin, lib, testTargets }, wholeLibrary = 
   let binary = false
   for (const path of paths) {
     const test = /^tests\/([^/]+?)(?:\.rs|\/.+)$/.exec(path)?.[1]
-    const module = lib.find(entry => owns(entry.paths, path))?.module
+    // Ownership over-approximates, so every module and root that may hold a file runs its tests.
+    const owners = lib.filter(entry => owns(entry.paths, path)).map(entry => entry.module)
     const inBinary = owns(bin, path)
-    if (/^Cargo\.(?:toml|lock)$/.test(path) || path === 'src/lib.rs' || module === 'testing') wholeLibrary = true
-    // Ownership over-approximates, so a file both roots may hold runs the tests of both.
-    else if (inBinary || module) {
+    if (/^Cargo\.(?:toml|lock)$/.test(path) || path === 'src/lib.rs' || owners.includes('testing')) wholeLibrary = true
+    else if (inBinary || owners.length) {
       binary ||= inBinary
-      if (module) modules.add(module)
+      for (const owner of owners) modules.add(owner)
     }
     // A source file neither root declares is reached some other way; the library suite runs.
     else if (path.startsWith('src/') && path.endsWith('.rs')) wholeLibrary = true
