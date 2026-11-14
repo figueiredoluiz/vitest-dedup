@@ -4,7 +4,7 @@ import { execFileSync, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { existsSync, realpathSync, readdirSync, symlinkSync, unlinkSync, mkdirSync, mkdtempSync, openSync, closeSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { availableParallelism, tmpdir } from 'node:os'
-import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
+import { dirname, isAbsolute, join, posix, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const SELF = fileURLToPath(import.meta.url)
@@ -372,7 +372,8 @@ export function rootModules(source) {
   // The attributes directly before a declaration, on its line or earlier ones, are its own.
   return [...code.matchAll(/((?:#\[[^\]]*\]\s*)*)(?:pub(?:\([^)]*\))?\s+)?mod\s+(\w+)\s*;/g)].map(([, attributes, module]) => {
     const path = /#\[\s*path\s*=\s*"([^"]+)"\s*\]/.exec(attributes)?.[1]
-    return { module, paths: path ? [`src/${path}`] : [`src/${module}.rs`, `src/${module}/`] }
+    // Git reports normalized forward-slash paths, so `./a.rs` and `a\\b.rs` must match them.
+    return { module, paths: path ? [posix.normalize(`src/${path.replaceAll('\\', '/')}`)] : [`src/${module}.rs`, `src/${module}/`] }
   })
 }
 

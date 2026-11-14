@@ -1221,6 +1221,10 @@ test('a crate root owns its declared files, honouring #[path] through other attr
   assert.deepEqual(commented, [{ module: 'x_tests', paths: ['src/cli/tests/x.rs'] }, { module: 'y', paths: ['src/y.rs'] }])
   const layout = { bin: ['src/main.rs', ...commented.flatMap(entry => entry.paths)], lib: [{ module: 'cli', paths: ['src/cli.rs', 'src/cli/'] }], testTargets: [] }
   assert.deepEqual(quickRustTests(['src/cli/tests/x.rs'], layout), [['node', 'scripts/dev/cargo-tests.mjs', 'bin']])
+  // A `#[path]` value names the file Git reports, whatever its spelling.
+  for (const spelling of ['./cli/tests/x.rs', 'cli/./tests/../tests/x.rs', 'cli\\\\tests\\\\x.rs']) {
+    assert.deepEqual(rootModules(`#[path = "${spelling}"]\nmod x_tests;\n`), [{ module: 'x_tests', paths: ['src/cli/tests/x.rs'] }], spelling)
+  }
 })
 
 test('the Windows cross-check follows changed Rust lines that name cfg, filesystem calls or paths', () => {
