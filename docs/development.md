@@ -230,9 +230,11 @@ npm run hooks:install        # opt in for this checkout/worktree
 runs every quick check. To what pre-commit runs it adds duplication, unless only documentation
 changed, JavaScript coverage where the push hook runs it, and, for Rust, Clippy, rustdoc, the unit
 tests of each changed library module (the whole library suite for a module with none of its own,
-or a file neither crate root declares), the binary's tests for `src/main.rs` and its modules, and
-each changed `tests/*.rs` target. It does not run the tests of a changed module's dependents. When a changed Rust line names `cfg`, filesystem calls or paths, or a Cargo manifest
-changes, it also runs `cargo check --target x86_64-pc-windows-gnu`
+or a file neither crate root declares), the binary's tests for `src/main.rs` and the files it
+declares (a `#[path]` module's whole directory, running both suites where the library may also
+hold the file), and each changed integration target. It does not run the tests of a changed
+module's dependents. When a changed Rust line names `cfg`, filesystem calls or paths, or a Cargo
+manifest changes, it also runs `cargo check --target x86_64-pc-windows-gnu`
 (`rustup target add x86_64-pc-windows-gnu` once). A test step that ran no test fails. It never
 builds the release binary or runs the corpus gates, Rust coverage or the whole Rust suite; the push
 hook does.

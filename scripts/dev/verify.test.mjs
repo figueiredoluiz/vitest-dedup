@@ -1114,7 +1114,7 @@ test('a failed ref-grouping command cannot become an empty successful push check
 
 /** The quick lane's commands for `paths`, as command lines. */
 const LAYOUT = {
-  bin: ['src/main.rs', 'src/stdout.rs', 'src/stdout/', 'src/cli/tests/imported_delivery.rs'],
+  bin: ['src/main.rs', 'src/stdout.rs', 'src/stdout/', 'src/cli/tests/imported_delivery.rs', 'src/cli/tests/'],
   lib: [{ module: 'cli', paths: ['src/cli.rs', 'src/cli/'] }, { module: 'lang', paths: ['src/lang.rs', 'src/lang/'] }, { module: 'model', paths: ['src/model.rs', 'src/model/'] }, { module: 'rules', paths: ['src/rules.rs', 'src/rules/'] }, { module: 'testing', paths: ['src/testing.rs', 'src/testing/'] }],
   testTargets: ['cli_ux', 'sarif_paths', 'next_modes'],
 }
@@ -1173,8 +1173,9 @@ test('a library module runs format, lints, rustdoc, duplication and its own unit
 test('the binary, the shared roots and integration targets select their own tests', () => {
   assert.deepEqual(quickRustTests(['src/main.rs'], LAYOUT), [['node', 'scripts/dev/cargo-tests.mjs', 'bin']])
   assert.deepEqual(quickRustTests(['src/stdout.rs'], LAYOUT), [['node', 'scripts/dev/cargo-tests.mjs', 'bin']])
-  // A `#[path]` module of the binary inside a library module's directory belongs to the binary.
-  assert.deepEqual(quickRustTests(['src/cli/tests/imported_delivery.rs'], LAYOUT), [['node', 'scripts/dev/cargo-tests.mjs', 'bin']])
+  // A `#[path]` module of the binary inside a library module's directory, or one of its child
+  // files, may belong to either root, so both run.
+  for (const path of ['src/cli/tests/imported_delivery.rs', 'src/cli/tests/cases.rs']) assert.deepEqual(quickRustTests([path], LAYOUT), [['node', 'scripts/dev/cargo-tests.mjs', 'lib', 'cli'], ['node', 'scripts/dev/cargo-tests.mjs', 'bin']], path)
   assert.deepEqual(quickRustTests(['src/cli/parse.rs'], LAYOUT), [['node', 'scripts/dev/cargo-tests.mjs', 'lib', 'cli']])
   // A source file neither root declares runs the library suite rather than a guessed filter.
   assert.deepEqual(quickRustTests(['src/undeclared.rs'], LAYOUT), [['node', 'scripts/dev/cargo-tests.mjs', 'lib']])
@@ -1193,7 +1194,8 @@ test('the crate layout is read from this checkout', () => {
   for (const path of ['src/main.rs', 'src/diagnostics.rs', 'src/rss.rs', 'src/stdout.rs', 'src/memory_roof_tests.rs', 'src/cli/tests/imported_delivery.rs']) assert.ok(layout.bin.includes(path), path)
   assert.equal(layout.bin.includes('src/tests.rs'), false, 'an inline module has no file to change')
   for (const module of ['cli', 'lang', 'rules', 'testing', 'confine']) assert.ok(layout.lib.some(entry => entry.module === module), module)
-  assert.deepEqual(quickRustTests(['src/cli/tests/imported_delivery.rs'], layout), [['node', 'scripts/dev/cargo-tests.mjs', 'bin']])
+  assert.ok(layout.bin.includes('src/cli/tests/'))
+  assert.ok(quickRustTests(['src/cli/tests/imported_delivery.rs'], layout).some(step => step.join(' ') === 'node scripts/dev/cargo-tests.mjs bin'))
   for (const target of ['cli_ux', 'docs_contract', 'next_modes']) assert.ok(layout.testTargets.includes(target), target)
   assert.equal(layout.testTargets.includes('support'), false)
 })
@@ -1211,19 +1213,19 @@ test('a test directory with main.rs is an integration target; a helper directory
 test('a crate root owns its declared files, honouring #[path] through other attributes', () => {
   assert.deepEqual(rootModules('pub mod cli;\n#[cfg(test)]\n#[path = "cli/tests/x.rs"]\nmod x_tests;\nmod tests {\n}\npub(crate) mod testing;\n'), [
     { module: 'cli', paths: ['src/cli.rs', 'src/cli/'] },
-    { module: 'x_tests', paths: ['src/cli/tests/x.rs'] },
+    { module: 'x_tests', paths: ['src/cli/tests/x.rs', 'src/cli/tests/'] },
     { module: 'testing', paths: ['src/testing.rs', 'src/testing/'] },
   ])
   // A `#[path]` separated from its declaration by code applies to nothing.
   assert.deepEqual(rootModules('#[path = "a/b.rs"]\nfn f() {}\nmod c;\n'), [{ module: 'c', paths: ['src/c.rs', 'src/c/'] }])
   // Comments and blank lines are whitespace, and an attribute may share the declaration's line.
   const commented = rootModules('#[path = "cli/tests/x.rs"]\n// Binary-only tests.\n\n/* kept */ /// doc\nmod x_tests;\n#[cfg(test)] #[path = "y.rs"] mod y; // mod z;\nmod tests_inline {}\n')
-  assert.deepEqual(commented, [{ module: 'x_tests', paths: ['src/cli/tests/x.rs'] }, { module: 'y', paths: ['src/y.rs'] }])
+  assert.deepEqual(commented, [{ module: 'x_tests', paths: ['src/cli/tests/x.rs', 'src/cli/tests/'] }, { module: 'y', paths: ['src/y.rs', 'src/'] }])
   const layout = { bin: ['src/main.rs', ...commented.flatMap(entry => entry.paths)], lib: [{ module: 'cli', paths: ['src/cli.rs', 'src/cli/'] }], testTargets: [] }
-  assert.deepEqual(quickRustTests(['src/cli/tests/x.rs'], layout), [['node', 'scripts/dev/cargo-tests.mjs', 'bin']])
+  for (const path of ['src/cli/tests/x.rs', 'src/cli/tests/x/child.rs', 'src/cli/tests/sibling.rs']) assert.ok(quickRustTests([path], layout).some(step => step.join(' ') === 'node scripts/dev/cargo-tests.mjs bin'), path)
   // A `#[path]` value names the file Git reports, whatever its spelling.
   for (const spelling of ['./cli/tests/x.rs', 'cli/./tests/../tests/x.rs', 'cli\\\\tests\\\\x.rs']) {
-    assert.deepEqual(rootModules(`#[path = "${spelling}"]\nmod x_tests;\n`), [{ module: 'x_tests', paths: ['src/cli/tests/x.rs'] }], spelling)
+    assert.deepEqual(rootModules(`#[path = "${spelling}"]\nmod x_tests;\n`), [{ module: 'x_tests', paths: ['src/cli/tests/x.rs', 'src/cli/tests/'] }], spelling)
   }
 })
 

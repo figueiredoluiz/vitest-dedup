@@ -290,9 +290,13 @@ export function quickRustTests(paths, { bin, lib, testTargets }, wholeLibrary = 
   for (const path of paths) {
     const test = /^tests\/([^/]+?)(?:\.rs|\/.+)$/.exec(path)?.[1]
     const module = lib.find(entry => owns(entry.paths, path))?.module
+    const inBinary = owns(bin, path)
     if (/^Cargo\.(?:toml|lock)$/.test(path) || path === 'src/lib.rs' || module === 'testing') wholeLibrary = true
-    else if (owns(bin, path)) binary = true
-    else if (module) modules.add(module)
+    // Ownership over-approximates, so a file both roots may hold runs the tests of both.
+    else if (inBinary || module) {
+      binary ||= inBinary
+      if (module) modules.add(module)
+    }
     // A source file neither root declares is reached some other way; the library suite runs.
     else if (path.startsWith('src/') && path.endsWith('.rs')) wholeLibrary = true
     else if (test && testTargets.includes(test)) targets.add(test)
@@ -362,7 +366,8 @@ export function quickChange(root, env = process.env) {
 
 /**
  * Read the file modules a crate root declares, honouring `#[path]`: `mod x;` owns `src/x.rs` and
- * everything under `src/x/`, and `#[path = "p"] mod x;` owns `src/p`.
+ * everything under `src/x/`, and `#[path = "d/p.rs"] mod x;` owns `src/d/p.rs` and everything under
+ * `src/d/`, where Rust resolves that file's own child modules.
  * @param {string} source The crate root's text.
  * @returns {{module: string, paths: string[]}[]} Owned paths; one ending in `/` is a directory.
  */
@@ -373,7 +378,9 @@ export function rootModules(source) {
   return [...code.matchAll(/((?:#\[[^\]]*\]\s*)*)(?:pub(?:\([^)]*\))?\s+)?mod\s+(\w+)\s*;/g)].map(([, attributes, module]) => {
     const path = /#\[\s*path\s*=\s*"([^"]+)"\s*\]/.exec(attributes)?.[1]
     // Git reports normalized forward-slash paths, so `./a.rs` and `a\\b.rs` must match them.
-    return { module, paths: path ? [posix.normalize(`src/${path.replaceAll('\\', '/')}`)] : [`src/${module}.rs`, `src/${module}/`] }
+    if (!path) return { module, paths: [`src/${module}.rs`, `src/${module}/`] }
+    const file = posix.normalize(`src/${path.replaceAll('\\', '/')}`)
+    return { module, paths: [file, `${posix.dirname(file)}/`] }
   })
 }
 
