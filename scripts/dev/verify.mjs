@@ -278,13 +278,14 @@ export function windowsSensitive(paths, diff) {
  * @param {string[]|null} paths Changed paths, or null when the scope is unknown.
  * @param {ReturnType<typeof crateLayout>} layout Which root owns each source file, and the
  *   integration target names.
+ * @param {boolean} [wholeLibrary] Run the whole library suite beside the other selections, as an
+ *   unknown path does.
  * @returns {string[][]} `cargo-tests.mjs` invocations.
  */
-export function quickRustTests(paths, { bin, lib, testTargets }) {
+export function quickRustTests(paths, { bin, lib, testTargets }, wholeLibrary = false) {
   if (paths === null) return [[...CARGO_TESTS, 'lib']]
   const modules = new Set()
   const targets = new Set()
-  let wholeLibrary = false
   let binary = false
   for (const path of paths) {
     const test = /^tests\/([^/]+?)(?:\.rs|\/.+)$/.exec(path)?.[1]
@@ -308,9 +309,10 @@ export function quickRustTests(paths, { bin, lib, testTargets }) {
 
 /**
  * Build the pre-review lane: what a review or the push hook would otherwise find first, in minutes.
- * Static checks, format, the compilation-free JavaScript suites, duplication, Clippy, rustdoc, the
- * Windows cross-check when the change can differ there, and the Rust tests of what changed. Never a
- * release build, corpus gate, coverage or the whole Rust suite: the push hook runs those.
+ * Static checks, format, the compilation-free JavaScript suites, duplication, JavaScript coverage,
+ * Clippy, rustdoc, the Windows cross-check when the change can differ there, and the Rust tests of
+ * what changed. Never a release build, corpus gate, Rust coverage or the whole Rust suite: the push
+ * hook runs those.
  * @param {string[]|null} paths Changed paths, or null when the scope is unknown.
  * @param {string} diff Unified diff of the change.
  * @param {string} [docDiff] File holding that diff, for the docstring check.
@@ -323,10 +325,13 @@ export function quickCommands(paths, diff, docDiff, layout = { bin: [], lib: [],
   const rust = full || scopes.includes('rust')
   const steps = full ? [...staticCommands(docDiff), FORMAT, ...JS_TESTS] : hookCommands('pre-commit', paths, docDiff)
   if (full || scopes.some(scope => scope !== 'docs')) steps.push(['npm', 'run', 'check:duplication'])
+  // JavaScript coverage runs where the push hook runs it; Rust coverage never does here.
+  if (full || ['action', 'npm', 'tooling', 'gates', 'fixtures'].some(scope => scopes.includes(scope))) steps.push(['npm', 'run', 'check:coverage:js'])
   if (!rust) return steps
   steps.push(CLIPPY, RUSTDOC)
   if (windowsSensitive(full ? null : paths, diff)) steps.push(WINDOWS_CHECK)
-  steps.push(...quickRustTests(full ? null : paths, layout))
+  // An unknown path adds the whole library suite and keeps what the known paths select.
+  steps.push(...quickRustTests(paths, layout, full))
   return steps
 }
 

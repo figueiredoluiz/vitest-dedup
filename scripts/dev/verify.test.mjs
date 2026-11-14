@@ -1131,10 +1131,12 @@ const reached = step => {
   return name ? [step, ...npmChain(name, MANIFEST_SCRIPTS)] : [step]
 }
 // What the push hook runs and the quick lane never does.
-const PUSH_ONLY = ['cargo build --release', 'cargo test', 'cargo llvm-cov', 'npm run check:coverage', 'npm run check:corpus', 'npm run check:recall', 'npm run check:oracle', 'npm run verify:titles', 'npm run check:hooks', 'npm run check:behavior-runtime', 'npm run check:parameterization-runtime', 'npm run check:title-properties', 'npm run mutants', 'node scripts/check/check-coverage.mjs', 'node scripts/check/check-collection-oracle.mjs', 'node scripts/check/check-duplicates-corpus.mjs']
+const PUSH_ONLY = ['cargo build --release', 'cargo test', 'cargo llvm-cov', 'npm run check:coverage:rust', 'npm run check:corpus', 'npm run check:recall', 'npm run check:oracle', 'npm run verify:titles', 'npm run check:hooks', 'npm run check:behavior-runtime', 'npm run check:parameterization-runtime', 'npm run check:title-properties', 'npm run mutants', 'node scripts/check/check-coverage.mjs --rust', 'node scripts/check/check-collection-oracle.mjs', 'node scripts/check/check-duplicates-corpus.mjs']
 const assertQuick = steps => {
   for (const command of steps.flatMap(reached)) {
-    assert.equal(command === 'npm run check' || PUSH_ONLY.some(slow => command.startsWith(slow)), false, `${command} in ${steps.join(', ')}`)
+    // Bare coverage commands run Rust coverage too; only their `:js` and `--js` forms may run here.
+    const exact = ['npm run check', 'npm run check:coverage', 'node scripts/check/check-coverage.mjs']
+    assert.equal(exact.includes(command) || PUSH_ONLY.some(slow => command.startsWith(slow)), false, `${command} in ${steps.join(', ')}`)
   }
 }
 
@@ -1163,7 +1165,9 @@ test('a library module runs format, lints, rustdoc, duplication and its own unit
     'cargo doc --no-deps --document-private-items --locked',
     'node scripts/dev/cargo-tests.mjs lib lang rules',
   ])
-  assert.equal(steps.some(step => step.includes('x86_64-pc-windows-gnu') || step.endsWith(' bin') || step.includes('cargo-tests.mjs test')), false, steps.join())
+  assert.equal(steps.some(step => step.includes('x86_64-pc-windows-gnu') || step.endsWith(' bin') || step.includes('cargo-tests.mjs test') || step.includes('coverage')), false, steps.join())
+  // The push hook runs no JavaScript coverage for a workflow or manifest change, and neither does this.
+  for (const path of ['.github/workflows/ci.yml', 'package.json']) assert.equal(quick([path]).includes('npm run check:coverage:js'), false, path)
 })
 
 test('the binary, the shared roots and integration targets select their own tests', () => {
@@ -1179,6 +1183,8 @@ test('the binary, the shared roots and integration targets select their own test
   for (const path of ['tests/support/mod.rs', 'tests/fixtures/config-globs/vitest.config.ts']) assert.deepEqual(quickRustTests([path], LAYOUT), [['node', 'scripts/dev/cargo-tests.mjs', 'test', 'cli_ux', 'next_modes', 'sarif_paths']], path)
   assert.deepEqual(quickRustTests(['src/model.rs', 'src/main.rs', 'tests/cli_ux.rs'], LAYOUT).map(step => step.slice(2).join(' ')), ['lib model', 'bin', 'test cli_ux'])
   assert.deepEqual(quickRustTests(null, LAYOUT), [['node', 'scripts/dev/cargo-tests.mjs', 'lib']])
+  // An unknown path beside known ones widens the library and keeps the binary and targets.
+  assert.deepEqual(quick(['src/main.rs', 'tests/cli_ux.rs', '.gitignore']).filter(step => step.includes('cargo-tests')), ['node scripts/dev/cargo-tests.mjs lib', 'node scripts/dev/cargo-tests.mjs bin', 'node scripts/dev/cargo-tests.mjs test cli_ux'])
   assert.deepEqual(quickRustTests(['examples/depth.rs', 'README.md'], LAYOUT), [])
 })
 
@@ -1219,15 +1225,15 @@ test('the Windows cross-check follows changed Rust lines that name cfg, filesyst
 
 test('an unknown path runs every quick check, and still no push-only gate', () => {
   const steps = quick(['.cargo/config.toml'])
-  for (const step of ['cargo fmt --all --check', 'npm run test:action', 'npm test', 'npm run pack:check', 'npm run test:dev-checks', 'npm run test:check-lib', 'npm run check:duplication', 'cargo clippy --all-targets --all-features --locked', 'cargo doc --no-deps --document-private-items --locked', 'cargo check --all-targets --all-features --locked --target x86_64-pc-windows-gnu', 'node scripts/dev/cargo-tests.mjs lib']) assert.ok(steps.includes(step), step)
+  for (const step of ['cargo fmt --all --check', 'npm run test:action', 'npm test', 'npm run pack:check', 'npm run test:dev-checks', 'npm run test:check-lib', 'npm run check:duplication', 'npm run check:coverage:js', 'cargo clippy --all-targets --all-features --locked', 'cargo doc --no-deps --document-private-items --locked', 'cargo check --all-targets --all-features --locked --target x86_64-pc-windows-gnu', 'node scripts/dev/cargo-tests.mjs lib']) assert.ok(steps.includes(step), step)
   assert.deepEqual(steps, quick(null))
   assert.equal(new Set(steps).size, steps.length)
 })
 
-test('a script change runs its suites and duplication, and compiles nothing', () => {
-  for (const [path, suite] of [['scripts/dev/a.mjs', 'npm run test:dev-checks'], ['action.yml', 'npm run test:action'], ['npm/a.mjs', 'npm run pack:check']]) {
+test('a script change runs its suites, duplication and JavaScript coverage, and compiles nothing', () => {
+  for (const [path, suite] of [['scripts/dev/a.mjs', 'npm run test:dev-checks'], ['scripts/check/a.mjs', 'npm run test:check-lib'], ['fixtures/a.test.ts', 'npm run test:dev-checks'], ['action.yml', 'npm run test:action'], ['npm/a.mjs', 'npm run pack:check']]) {
     const steps = quick([path])
-    assert.ok(steps.includes(suite) && steps.includes('npm run check:duplication'), steps.join())
+    assert.ok(steps.includes(suite) && steps.includes('npm run check:duplication') && steps.includes('npm run check:coverage:js'), steps.join())
     assert.equal(steps.some(step => step.startsWith('cargo') || step.includes('cargo-tests')), false, steps.join())
   }
 })
