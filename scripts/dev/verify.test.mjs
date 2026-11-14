@@ -4,7 +4,7 @@ import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, realpathSync,
 import { tmpdir } from 'node:os'
 import { basename, delimiter, dirname, join, resolve, sep } from 'node:path'
 import { test } from 'node:test'
-import { LANES, changedPaths, cleanEnvironment, crateLayout, laneShare, pause, commands, hookCommands, hookScope, installHooks, main, pruneLogs, pushCommits, quickChange, quickCommands, quickRustTests, repositoryKey, runSteps, rustChanged, windowsSensitive, withLock, withNodeModules, withSnapshot, withTargetCache } from './verify.mjs'
+import { LANES, changedPaths, cleanEnvironment, crateLayout, rootModules, laneShare, pause, commands, hookCommands, hookScope, installHooks, main, pruneLogs, pushCommits, quickChange, quickCommands, quickRustTests, repositoryKey, runSteps, rustChanged, windowsSensitive, withLock, withNodeModules, withSnapshot, withTargetCache } from './verify.mjs'
 import { coverage } from '../check/check-docstrings.mjs'
 
 const oid = 'a'.repeat(40)
@@ -1113,7 +1113,11 @@ test('a failed ref-grouping command cannot become an empty successful push check
 }))
 
 /** The quick lane's commands for `paths`, as command lines. */
-const LAYOUT = { binModules: ['diagnostics', 'rss', 'stdout', 'memory_roof_tests'], testTargets: ['cli_ux', 'sarif_paths', 'next_modes'] }
+const LAYOUT = {
+  bin: ['src/main.rs', 'src/stdout.rs', 'src/stdout/', 'src/cli/tests/imported_delivery.rs'],
+  lib: [{ module: 'cli', paths: ['src/cli.rs', 'src/cli/'] }, { module: 'lang', paths: ['src/lang.rs', 'src/lang/'] }, { module: 'model', paths: ['src/model.rs', 'src/model/'] }, { module: 'rules', paths: ['src/rules.rs', 'src/rules/'] }, { module: 'testing', paths: ['src/testing.rs', 'src/testing/'] }],
+  testTargets: ['cli_ux', 'sarif_paths', 'next_modes'],
+}
 const quick = (paths, diff = '') => quickCommands(paths, diff, 'scope.diff', LAYOUT).map(step => step.join(' '))
 const MANIFEST_SCRIPTS = JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8')).scripts
 
@@ -1165,6 +1169,11 @@ test('a library module runs format, lints, rustdoc, duplication and its own unit
 test('the binary, the shared roots and integration targets select their own tests', () => {
   assert.deepEqual(quickRustTests(['src/main.rs'], LAYOUT), [['node', 'scripts/dev/cargo-tests.mjs', 'bin']])
   assert.deepEqual(quickRustTests(['src/stdout.rs'], LAYOUT), [['node', 'scripts/dev/cargo-tests.mjs', 'bin']])
+  // A `#[path]` module of the binary inside a library module's directory belongs to the binary.
+  assert.deepEqual(quickRustTests(['src/cli/tests/imported_delivery.rs'], LAYOUT), [['node', 'scripts/dev/cargo-tests.mjs', 'bin']])
+  assert.deepEqual(quickRustTests(['src/cli/parse.rs'], LAYOUT), [['node', 'scripts/dev/cargo-tests.mjs', 'lib', 'cli']])
+  // A source file neither root declares runs the library suite rather than a guessed filter.
+  assert.deepEqual(quickRustTests(['src/undeclared.rs'], LAYOUT), [['node', 'scripts/dev/cargo-tests.mjs', 'lib']])
   for (const path of ['src/lib.rs', 'src/testing.rs', 'Cargo.toml', 'Cargo.lock']) assert.deepEqual(quickRustTests([path, 'src/rules.rs'], LAYOUT), [['node', 'scripts/dev/cargo-tests.mjs', 'lib']], path)
   assert.deepEqual(quickRustTests(['tests/cli_ux.rs', 'tests/next_modes/case.rs'], LAYOUT), [['node', 'scripts/dev/cargo-tests.mjs', 'test', 'cli_ux', 'next_modes']])
   for (const path of ['tests/support/mod.rs', 'tests/fixtures/config-globs/vitest.config.ts']) assert.deepEqual(quickRustTests([path], LAYOUT), [['node', 'scripts/dev/cargo-tests.mjs', 'test', 'cli_ux', 'next_modes', 'sarif_paths']], path)
@@ -1175,10 +1184,22 @@ test('the binary, the shared roots and integration targets select their own test
 
 test('the crate layout is read from this checkout', () => {
   const layout = crateLayout(resolve('.'))
-  for (const module of ['diagnostics', 'rss', 'stdout', 'memory_roof_tests']) assert.ok(layout.binModules.includes(module), module)
-  assert.equal(layout.binModules.includes('tests'), false, 'an inline module has no file to change')
+  for (const path of ['src/main.rs', 'src/diagnostics.rs', 'src/rss.rs', 'src/stdout.rs', 'src/memory_roof_tests.rs', 'src/cli/tests/imported_delivery.rs']) assert.ok(layout.bin.includes(path), path)
+  assert.equal(layout.bin.includes('src/tests.rs'), false, 'an inline module has no file to change')
+  for (const module of ['cli', 'lang', 'rules', 'testing', 'confine']) assert.ok(layout.lib.some(entry => entry.module === module), module)
+  assert.deepEqual(quickRustTests(['src/cli/tests/imported_delivery.rs'], layout), [['node', 'scripts/dev/cargo-tests.mjs', 'bin']])
   for (const target of ['cli_ux', 'docs_contract', 'next_modes']) assert.ok(layout.testTargets.includes(target), target)
   assert.equal(layout.testTargets.includes('support'), false)
+})
+
+test('a crate root owns its declared files, honouring #[path] through other attributes', () => {
+  assert.deepEqual(rootModules('pub mod cli;\n#[cfg(test)]\n#[path = "cli/tests/x.rs"]\nmod x_tests;\nmod tests {\n}\npub(crate) mod testing;\n'), [
+    { module: 'cli', paths: ['src/cli.rs', 'src/cli/'] },
+    { module: 'x_tests', paths: ['src/cli/tests/x.rs'] },
+    { module: 'testing', paths: ['src/testing.rs', 'src/testing/'] },
+  ])
+  // A `#[path]` separated from its declaration by code applies to nothing.
+  assert.deepEqual(rootModules('#[path = "a/b.rs"]\nfn f() {}\nmod c;\n'), [{ module: 'c', paths: ['src/c.rs', 'src/c/'] }])
 })
 
 test('the Windows cross-check follows changed Rust lines that name cfg, filesystem calls or paths', () => {
@@ -1214,13 +1235,12 @@ test('a script change runs its suites and duplication, and compiles nothing', ()
 test('the quick scope is the working tree against main, untracked files included', () => fixture(root => {
   git(root, 'update-ref', 'refs/remotes/origin/main', git(root, 'rev-parse', 'HEAD'))
   commitChanges(root, { 'README.md': '# Documentation\n' })
-  commitChanges(root, { '.gitignore': 'ignored.rs\n/target\n' })
+  commitChanges(root, { '.gitignore': 'ignored.rs\n/target\n', 'src/lib.rs': 'pub mod new;\n' })
   writeFileSync(join(root, 'README.md'), '# Edited, not staged\n')
-  mkdirSync(join(root, 'src'))
   writeFileSync(join(root, 'src', 'new.rs'), '#[cfg(windows)]\npub fn added() {}\n')
   writeFileSync(join(root, 'ignored.rs'), 'fn ignored() {}\n')
   const change = quickChange(root)
-  assert.deepEqual(change.paths.sort(), ['.gitignore', 'README.md', 'src/new.rs'])
+  assert.deepEqual(change.paths.sort(), ['.gitignore', 'README.md', 'src/lib.rs', 'src/new.rs'])
   assert.match(change.diff, /\+#\[cfg\(windows\)\]/)
   assert.match(change.diff, /\+# Edited, not staged/)
   assert.doesNotMatch(change.diff, /fn ignored/)
@@ -1235,4 +1255,14 @@ test('the quick scope is the working tree against main, untracked files included
   assert.equal(steps.some(step => step.includes('test:')), false, steps.join())
   git(root, 'update-ref', '-d', 'refs/remotes/origin/main')
   assert.equal(quickChange(root).paths, null)
+  // Untracked files alone still form a diff that starts at a file header.
+  git(root, 'update-ref', 'refs/remotes/origin/main', git(root, 'rev-parse', 'HEAD'))
+  git(root, 'checkout', '--quiet', '--', 'README.md')
+  const untracked = quickChange(root)
+  assert.deepEqual(untracked.paths, ['src/new.rs'])
+  assert.match(untracked.diff, /^diff --git /)
+  const docs = join(root, 'untracked.diff')
+  writeFileSync(docs, untracked.diff)
+  const checked = spawnSync(process.execPath, [resolve('scripts/check/check-docstrings.mjs'), '--diff-file', docs], { cwd: root, encoding: 'utf8' })
+  assert.doesNotMatch(checked.stderr, /Malformed/, checked.stderr)
 }))

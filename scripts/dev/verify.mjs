@@ -276,22 +276,24 @@ export function windowsSensitive(paths, diff) {
  * Select the Rust tests of what changed: the unit tests of each changed library module, the binary's
  * tests for its own modules, and the changed integration targets. Dependents are not selected.
  * @param {string[]|null} paths Changed paths, or null when the scope is unknown.
- * @param {{binModules: string[], testTargets: string[]}} layout Modules `src/main.rs` declares,
- *   and the `tests/*.rs` target names.
+ * @param {ReturnType<typeof crateLayout>} layout Which root owns each source file, and the
+ *   integration target names.
  * @returns {string[][]} `cargo-tests.mjs` invocations.
  */
-export function quickRustTests(paths, { binModules, testTargets }) {
+export function quickRustTests(paths, { bin, lib, testTargets }) {
   if (paths === null) return [[...CARGO_TESTS, 'lib']]
   const modules = new Set()
   const targets = new Set()
   let wholeLibrary = false
-  let bin = false
+  let binary = false
   for (const path of paths) {
-    const source = /^src\/([^/]+?)(?:\.rs|\/.+)$/.exec(path)?.[1]
     const test = /^tests\/([^/]+?)(?:\.rs|\/.+)$/.exec(path)?.[1]
-    if (/^Cargo\.(?:toml|lock)$/.test(path) || source === 'lib' || source === 'testing') wholeLibrary = true
-    else if (source === 'main' || binModules.includes(source)) bin = true
-    else if (source && path.endsWith('.rs')) modules.add(source)
+    const module = lib.find(entry => owns(entry.paths, path))?.module
+    if (/^Cargo\.(?:toml|lock)$/.test(path) || path === 'src/lib.rs' || module === 'testing') wholeLibrary = true
+    else if (owns(bin, path)) binary = true
+    else if (module) modules.add(module)
+    // A source file neither root declares is reached some other way; the library suite runs.
+    else if (path.startsWith('src/') && path.endsWith('.rs')) wholeLibrary = true
     else if (test && testTargets.includes(test)) targets.add(test)
     // `tests/support/` and `tests/fixtures/` are read by integration targets this cannot name.
     else if (test) for (const target of testTargets) targets.add(target)
@@ -299,7 +301,7 @@ export function quickRustTests(paths, { binModules, testTargets }) {
   const steps = []
   if (wholeLibrary) steps.push([...CARGO_TESTS, 'lib'])
   else if (modules.size) steps.push([...CARGO_TESTS, 'lib', ...[...modules].sort()])
-  if (bin) steps.push([...CARGO_TESTS, 'bin'])
+  if (binary) steps.push([...CARGO_TESTS, 'bin'])
   if (targets.size) steps.push([...CARGO_TESTS, 'test', ...[...targets].sort()])
   return steps
 }
@@ -312,10 +314,10 @@ export function quickRustTests(paths, { binModules, testTargets }) {
  * @param {string[]|null} paths Changed paths, or null when the scope is unknown.
  * @param {string} diff Unified diff of the change.
  * @param {string} [docDiff] File holding that diff, for the docstring check.
- * @param {{binModules: string[], testTargets: string[]}} [layout] Crate layout for test selection.
+ * @param {ReturnType<typeof crateLayout>} [layout] Crate layout for test selection.
  * @returns {string[][]} Commands in execution order.
  */
-export function quickCommands(paths, diff, docDiff, layout = { binModules: [], testTargets: [] }) {
+export function quickCommands(paths, diff, docDiff, layout = { bin: [], lib: [], testTargets: [] }) {
   const scopes = hookScope(paths)
   const full = scopes.includes('full')
   const rust = full || scopes.includes('rust')
@@ -344,26 +346,53 @@ export function quickChange(root, env = process.env) {
   }
   const untracked = run(['ls-files', '--others', '--exclude-standard', '-z']).split('\0').filter(Boolean)
   const added = untracked.map(path => run(['-c', 'core.quotePath=false', 'diff', '--no-index', '--no-ext-diff', '--no-color', '--unified=0', '--', '/dev/null', path])).join('')
+  // A nonempty diff must start at a file header, so an empty fragment adds no separator.
+  const diff = [scopeDiff(root, { env }), added].filter(Boolean).join('\n')
   let base
   try { base = git(root, ['merge-base', 'HEAD', 'origin/main'], env) }
-  catch { return { paths: null, diff: `${scopeDiff(root, { env })}\n${added}`, reason: 'no merge base with origin/main' } }
+  catch { return { paths: null, diff, reason: 'no merge base with origin/main' } }
   const tracked = execFileSync('git', ['diff', '--no-ext-diff', '--no-renames', '--name-only', '-z', base, '--'], { cwd: root, env, encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER }).split('\0').filter(Boolean)
-  return { paths: [...new Set([...tracked, ...untracked])], diff: `${scopeDiff(root, { env })}\n${added}`, reason: 'working tree against the merge base with origin/main' }
+  return { paths: [...new Set([...tracked, ...untracked])], diff, reason: 'working tree against the merge base with origin/main' }
+}
+
+/**
+ * Read the file modules a crate root declares, honouring `#[path]`: `mod x;` owns `src/x.rs` and
+ * everything under `src/x/`, and `#[path = "p"] mod x;` owns `src/p`.
+ * @param {string} source The crate root's text.
+ * @returns {{module: string, paths: string[]}[]} Owned paths; one ending in `/` is a directory.
+ */
+export function rootModules(source) {
+  const modules = []
+  let path = null
+  for (const line of source.split(/\r?\n/)) {
+    const attribute = /^\s*#\[path\s*=\s*"([^"]+)"\]\s*$/.exec(line)
+    const declaration = /^\s*(?:pub(?:\([^)]*\))?\s+)?mod\s+(\w+)\s*;/.exec(line)
+    if (attribute) path = attribute[1]
+    else if (declaration) {
+      const module = declaration[1]
+      modules.push({ module, paths: path ? [`src/${path}`] : [`src/${module}.rs`, `src/${module}/`] })
+      path = null
+    } else if (!/^\s*#\[/.test(line)) path = null
+  }
+  return modules
 }
 
 /**
  * Read the crate layout test selection needs from the checkout itself.
  * @param {string} root Checkout directory.
- * @returns {{binModules: string[], testTargets: string[]}} Modules `src/main.rs` declares as files,
- *   and the `tests/*.rs` target names.
+ * @returns {{bin: string[], lib: {module: string, paths: string[]}[], testTargets: string[]}} Paths
+ *   the binary owns, the library's file modules, and the `tests/*.rs` target names.
  */
 export function crateLayout(root) {
-  const main = join(root, 'src', 'main.rs')
-  const binModules = existsSync(main) ? [...readFileSync(main, 'utf8').matchAll(/^\s*(?:pub(?:\([^)]*\))?\s+)?mod\s+(\w+)\s*;/gm)].map(match => match[1]) : []
+  /** Read a crate root's declarations, or none when it is absent. */
+  const declared = name => existsSync(join(root, 'src', name)) ? rootModules(readFileSync(join(root, 'src', name), 'utf8')) : []
   const tests = join(root, 'tests')
   const testTargets = existsSync(tests) ? readdirSync(tests).flatMap(name => /^(.+)\.rs$/.exec(name)?.[1] ?? []) : []
-  return { binModules, testTargets }
+  return { bin: ['src/main.rs', ...declared('main.rs').flatMap(module => module.paths)], lib: declared('lib.rs'), testTargets }
 }
+
+/** Whether `path` is one of `owned`, or under an owned directory. */
+const owns = (owned, path) => owned.some(entry => entry.endsWith('/') ? path.startsWith(entry) : path === entry)
 
 /** Build the inexpensive checks shared by every local profile and scope. */
 function staticCommands(docDiff) {
