@@ -3,7 +3,7 @@
 import { execFileSync, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { existsSync, realpathSync, readdirSync, symlinkSync, unlinkSync, mkdirSync, mkdtempSync, openSync, closeSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { availableParallelism, tmpdir } from 'node:os'
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -14,9 +14,44 @@ const GIT_ENV = ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_COMMON_DIR',
 // Node's default 1 MiB output limit ends a run with ENOBUFS on a large pure-move diff, so raise it.
 const GIT_MAX_BUFFER = 256 * 1024 * 1024
 // How many verifications may run at once, each with its own export directory and Cargo cache.
-export const LANES = 2
+export const LANES = 4
 const POLL_MS = 5_000
 const QUEUE_MS = 30 * 60 * 1000
+
+// Run logs older than this are removed when the next run starts.
+const LOG_RETENTION_MS = 30 * 24 * 60 * 60 * 1000
+
+/**
+ * Build jobs and test threads for one lane: the host's parallelism split across the lanes.
+ * @param {number} [cpus] Host parallelism; defaults to what Node reports.
+ * @param {number} [lanes] Lanes that may run at once.
+ * @returns {number} At least 1.
+ */
+export function laneShare(cpus = availableParallelism(), lanes = LANES) {
+  return Math.max(1, Math.floor(cpus / lanes))
+}
+
+/**
+ * Remove run log directories older than the retention window.
+ * Only `<milliseconds>-<pid>` directories directly under `logRoot` are considered, so nothing a
+ * run did not create is touched; a missing `logRoot` is not an error.
+ * @param {string} logRoot The `delivery-check-logs` directory.
+ * @param {number} [nowMs] Current time, for tests.
+ * @returns {string[]} Names of the removed directories.
+ */
+export function pruneLogs(logRoot, nowMs = Date.now()) {
+  let entries
+  try { entries = readdirSync(logRoot, { withFileTypes: true }) }
+  catch (error) { if (error.code === 'ENOENT') return []; throw error }
+  const removed = []
+  for (const entry of entries) {
+    const match = /^(\d+)-\d+$/.exec(entry.name)
+    if (!entry.isDirectory() || !match || nowMs - Number(match[1]) <= LOG_RETENTION_MS) continue
+    rmSync(join(logRoot, entry.name), { recursive: true, force: true })
+    removed.push(entry.name)
+  }
+  return removed
+}
 
 /** Block this synchronous runner for `ms`. */
 export const pause = ms => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
@@ -86,26 +121,41 @@ function pushUpdates(input) {
 
 /**
  * Read staged paths or the union of each destination's outgoing delta, preserving filename bytes.
- * Unknown push baselines and non-branch refs return null, requiring the full profile.
+ * A destination whose remote head is not available locally is diffed from the proposed commit's
+ * merge base with `origin/main` instead: main is the last verified state, so that diff holds every
+ * path whose checks the push could affect. Non-branch refs, and a push with no readable baseline at
+ * all, return null paths, requiring the full profile.
  * @param {string} root Source repository.
  * @param {object} [options] Optional grouped push update and Git environment.
- * @returns {string[]|null} Changed repository-relative paths, or unknown scope.
+ * @returns {{paths: string[]|null, reason: string}} Changed repository-relative paths, or null for
+ *   unknown scope, and how the baseline was chosen.
  */
-function changedPaths(root, { update, env = process.env } = {}) {
+export function changedPaths(root, { update, env = process.env } = {}) {
   /** Read NUL-delimited names without trimming whitespace from a filename. */
   const names = args => execFileSync('git', ['diff', '--no-ext-diff', '--no-renames', '--name-only', '-z', ...args, '--'], { cwd: root, env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: GIT_MAX_BUFFER }).split('\0').filter(Boolean)
-  if (!update) return names(['--cached'])
-  if (!update.branches) return null
+  if (!update) return { paths: names(['--cached']), reason: 'staged index' }
+  if (!update.branches) return { paths: null, reason: 'non-branch destination' }
+  const reasons = new Set()
   try {
     const paths = new Set()
     for (const remote of update.remotes) {
-      const base = ZERO.test(remote)
-        ? git(root, ['merge-base', update.revision, 'origin/main'], env)
-        : git(root, ['rev-parse', '--verify', `${remote}^{commit}`], env)
+      let base
+      if (ZERO.test(remote)) {
+        base = git(root, ['merge-base', update.revision, 'origin/main'], env)
+        reasons.add('new branch: merge base with origin/main')
+      } else {
+        try {
+          base = git(root, ['rev-parse', '--verify', `${remote}^{commit}`], env)
+          reasons.add('remote head')
+        } catch {
+          base = git(root, ['merge-base', update.revision, 'origin/main'], env)
+          reasons.add('remote head unavailable: merge base with origin/main')
+        }
+      }
       for (const path of names([base, update.revision])) paths.add(path)
     }
-    return [...paths]
-  } catch { return null }
+    return { paths: [...paths], reason: [...reasons].join('; ') }
+  } catch { return { paths: null, reason: 'no readable baseline' } }
 }
 
 /** Classify each path by the surface it can affect; an unknown path keeps full verification. */
@@ -114,13 +164,16 @@ export function hookScope(paths) {
   const scopes = new Set()
   for (const path of paths) {
     if (/^(?:README|CONTRIBUTING|CHANGELOG|SECURITY)\.md$/.test(path) || path === 'LICENSE' || /^(?:docs|skills)\/.+\.md$/.test(path)) scopes.add('docs')
-    else if (path.startsWith('.github/actions/vitest-dedup/')) scopes.add('action')
-    else if (path.startsWith('.github/')) scopes.add('ci')
-    else if (path.startsWith('npm/')) scopes.add('npm')
+    else if (path.startsWith('.github/actions/vitest-dedup/') || path === 'action.yml') scopes.add('action')
+    else if (path.startsWith('.github/') || path === 'codecov.yml') scopes.add('ci')
+    else if (path.startsWith('npm/') || path.startsWith('scripts/release/')) scopes.add('npm')
     else if (path.startsWith('scripts/dev/') || /^\.githooks\/pre-(?:commit|push)$/.test(path)) scopes.add('tooling')
-    else if (path.startsWith('scripts/check/')) scopes.add('gates')
+    else if (path.startsWith('scripts/check/') || path.startsWith('scripts/vitest-harness/')) scopes.add('gates')
     else if (path.startsWith('fixtures/')) scopes.add('fixtures')
-    else if (/^(?:src|tests|examples|benches)\/.+\.rs$/.test(path) || /^Cargo\.(?:toml|lock)$/.test(path)) scopes.add('rust')
+    // The npm manifests define every npm gate and pin the Vitest the oracle runs; no Rust reads them.
+    else if (path === 'package.json' || path === 'package-lock.json') scopes.add('node')
+    // Rust integration tests read `tests/fixtures/`, and nothing else does.
+    else if (/^(?:src|tests|examples|benches)\/.+\.rs$/.test(path) || /^Cargo\.(?:toml|lock)$/.test(path) || path.startsWith('tests/fixtures/')) scopes.add('rust')
     else return ['full']
   }
   return [...scopes].sort()
@@ -132,25 +185,35 @@ const CORPUS_GATES = [
   ...['check:corpus', 'check:recall', 'verify:titles', 'check:title-properties', 'check:oracle', 'check:behavior-runtime', 'check:hooks-runtime', 'check:hooks-differential', 'check:parameterization-runtime'].map(gate => ['npm', 'run', gate]),
 ]
 
+const RUST_TESTS = ['cargo', 'test', '--all-targets', '--all-features', '--locked']
+const RUST_COVERAGE = ['npm', 'run', 'check:coverage:rust']
+
 /**
- * Select local hook checks by what the change can affect, keeping `verify:full` and CI whole.
+ * Select local hook checks by what the change can affect, keeping CI whole.
  * Pre-commit stays compilation-free. Pre-push adds the compiled checks of a surface: Rust gets
  * lints, tests, the corpus gates and its coverage, and skips what packages or wraps the binary.
  * Consumers decide this, not file types: Rust tests read most of `fixtures/`, so a fixture runs
- * them, and `npm/test` reads the workflows, so a workflow runs that.
+ * them, and `npm/test` reads the workflows, so a workflow runs that. The Rust suite runs once: the
+ * coverage gate runs every test target, so when it is selected it takes the suite's place.
+ * A manifest change runs the whole npm chain, which holds every npm gate, and no Rust compile.
  */
 export function hookCommands(mode, paths, docDiff) {
   const scopes = hookScope(paths)
   if (scopes.includes('full')) return commands(mode === 'pre-commit' ? 'fast' : 'full', mode === 'pre-push' || rustChanged(paths ?? []), docDiff)
   const has = scope => scopes.includes(scope)
   const push = mode === 'pre-push'
+  const chain = push && has('node')
   const steps = staticCommands(docDiff)
   if (has('rust')) steps.push(['cargo', 'fmt', '--all', '--check'])
-  if (has('action')) steps.push(['npm', 'run', 'test:action'])
-  if (has('npm') || has('ci')) steps.push(['npm', 'test'])
-  if (has('npm')) steps.push(['npm', 'run', 'pack:check'])
-  if (['ci', 'tooling', 'gates', 'fixtures'].some(has)) steps.push(['npm', 'run', 'test:dev-checks'])
-  if (['tooling', 'gates', 'fixtures'].some(has)) steps.push(['npm', 'run', 'test:check-lib'])
+  if (chain) steps.push(['npm', 'run', 'check'])
+  else {
+    if (has('action')) steps.push(['npm', 'run', 'test:action'])
+    if (has('npm') || has('ci') || has('node')) steps.push(['npm', 'test'])
+    if (has('npm')) steps.push(['npm', 'run', 'pack:check'])
+    if (['ci', 'tooling', 'gates', 'fixtures', 'node'].some(has)) steps.push(['npm', 'run', 'test:dev-checks'])
+    // `test:check-lib` also holds `scripts/release/release-comparison.test.mjs`, which nothing else runs.
+    if (['npm', 'tooling', 'gates', 'fixtures', 'node'].some(has)) steps.push(['npm', 'run', 'test:check-lib'])
+  }
   if (!push) return steps
   if (has('rust')) {
     steps.push(
@@ -158,11 +221,15 @@ export function hookCommands(mode, paths, docDiff) {
       ['cargo', 'doc', '--no-deps', '--document-private-items', '--locked'],
     )
   }
-  if (has('rust') || has('fixtures')) steps.push(['cargo', 'test', '--all-targets', '--all-features', '--locked'])
-  if (['rust', 'gates', 'fixtures'].some(has)) steps.push(...CORPUS_GATES)
-  if (['action', 'npm', 'tooling', 'gates', 'fixtures', 'rust'].some(has)) steps.push(['npm', 'run', 'check:duplication'])
-  if (['action', 'npm', 'tooling', 'gates', 'fixtures'].some(has)) steps.push(['npm', 'run', 'check:coverage:js'])
-  if (rustChanged(paths)) steps.push(['npm', 'run', 'check:coverage:rust'])
+  const coverage = rustChanged(paths)
+  const suite = has('rust') || has('fixtures')
+  if (suite) steps.push(coverage ? RUST_COVERAGE : RUST_TESTS)
+  if (!chain) {
+    if (['rust', 'gates', 'fixtures'].some(has)) steps.push(...CORPUS_GATES)
+    if (['action', 'npm', 'tooling', 'gates', 'fixtures', 'rust'].some(has)) steps.push(['npm', 'run', 'check:duplication'])
+    if (['action', 'npm', 'tooling', 'gates', 'fixtures'].some(has)) steps.push(['npm', 'run', 'check:coverage:js'])
+  }
+  if (coverage && !suite) steps.push(RUST_COVERAGE)
   return steps
 }
 
@@ -202,7 +269,8 @@ function staticCommands(docDiff) {
  * building, and Clippy, the Rust suite, the npm gate chain and the coverage ratchet run once, at
  * push, in the full profile. A commit that needs them finds that out in seconds instead of after
  * a cold dependency-tree build in the hook's own cargo cache.
- * Full checks always include Rust lints/tests; the rust flag selects coverage too.
+ * Full checks always run the Rust suite once: through the coverage gate when the rust flag selects
+ * coverage, which runs every test target, and as plain `cargo test` otherwise.
  * @param {'fast'|'full'} profile Verification depth.
  * @param {boolean} [rust=true] Include conditional Rust checks or coverage.
  * @param {string} [docDiff] Original Git diff for an exported hook snapshot.
@@ -220,23 +288,25 @@ export function commands(profile, rust = true, docDiff) {
   steps.push(
     ['cargo', 'clippy', '--all-targets', '--all-features', '--locked'],
     ['cargo', 'doc', '--no-deps', '--document-private-items', '--locked'],
-    ['cargo', 'test', '--all-targets', '--all-features', '--locked'],
+    rust ? RUST_COVERAGE : RUST_TESTS,
     ['npm', 'run', 'check'],
   )
-  if (rust) steps.push(['npm', 'run', 'check:coverage:rust'])
   return steps
 }
 
 /**
  * Run checks sequentially with isolated Git variables and warnings denied.
  * Save complete output per step; stop on the first failure with bounded diagnostics.
+ * `summary.json` beside the logs records each step's command, seconds and exit status, rewritten
+ * after every step so a failed or interrupted run keeps what it measured.
  * @param {string} root Directory where checks run.
  * @param {string[][]} steps Executables and arguments in execution order.
- * @param {object} options Environment, required logRoot, and optional spawn/print adapters.
+ * @param {object} options Environment, required logRoot, optional run metadata for the summary,
+ *   and optional spawn/print/clock adapters.
  * @returns {void}
  * @throws {Error} If a command fails to start, exits unsuccessfully, or is signalled.
  */
-export function runSteps(root, steps, { env = process.env, logRoot, spawn = spawnSync, print = console.log } = {}) {
+export function runSteps(root, steps, { env = process.env, logRoot, meta = {}, spawn = spawnSync, print = console.log, now = Date.now } = {}) {
   const runEnv = cleanEnvironment(env)
   // CI denies warnings for the compiler and for rustdoc, whose broken intra-doc links it rejects.
   for (const name of ['RUSTFLAGS', 'RUSTDOCFLAGS']) {
@@ -244,12 +314,18 @@ export function runSteps(root, steps, { env = process.env, logRoot, spawn = spaw
     runEnv[name] = /(?:^|\s)-D\s*warnings$/.test(flags) ? flags : `${flags} -D warnings`.trim()
   }
   mkdirSync(logRoot, { recursive: true })
+  const summary = { ...meta, steps: [] }
+  const save = () => writeFileSync(join(logRoot, 'summary.json'), `${JSON.stringify(summary, null, 2)}\n`)
+  save()
   for (const [i, [command, ...args]] of steps.entries()) {
     const log = join(logRoot, `${i + 1}-${command}.log`)
     const fd = openSync(log, 'w')
+    const started = now()
     let result
     try { result = spawn(command, args, { cwd: root, env: runEnv, stdio: ['ignore', fd, fd], shell: process.platform === 'win32' && command === 'npm' }) }
     finally { closeSync(fd) }
+    summary.steps.push({ command: [command, ...args].join(' '), seconds: (now() - started) / 1000, status: result.error ? `error: ${result.error.message}` : (result.status ?? result.signal) })
+    save()
     if (result.error || result.status !== 0) {
       print(readFileSync(log, 'utf8').split(/\r?\n/).slice(-100).join('\n'))
       throw new Error(`${command} ${args.join(' ')} failed${result.error ? `: ${result.error.message}` : ` (exit ${result.status ?? result.signal})`}. Log: ${log}`)
@@ -459,12 +535,16 @@ export function main(args = process.argv.slice(2), { env = process.env, input, c
   if (mode === 'pre-push' && !updates.length) { print('No commits to verify (deletion or up-to-date push).'); return }
   const common = resolve(root, git(root, ['rev-parse', '--git-common-dir'], env))
   const cache = env.CARGO_TARGET_DIR ? resolve(root, env.CARGO_TARGET_DIR) : join(dirname(common), 'target')
-  const logs = join(common, 'delivery-check-logs', `${Date.now()}-${process.pid}`)
-  const runEnv = { ...env, CARGO_TARGET_DIR: cache, CARGO_LLVM_COV_TARGET_DIR: env.CARGO_LLVM_COV_TARGET_DIR ? resolve(root, env.CARGO_LLVM_COV_TARGET_DIR) : join(cache, 'llvm-cov-target') }
+  const logRoot = join(common, 'delivery-check-logs')
+  pruneLogs(logRoot)
+  const logs = join(logRoot, `${Date.now()}-${process.pid}`)
+  // Each lane gets its share of the host, so lanes running at once do not oversubscribe it.
+  const share = String(laneShare())
+  const runEnv = { ...env, CARGO_BUILD_JOBS: env.CARGO_BUILD_JOBS || share, RUST_TEST_THREADS: env.RUST_TEST_THREADS || share, CARGO_TARGET_DIR: cache, CARGO_LLVM_COV_TARGET_DIR: env.CARGO_LLVM_COV_TARGET_DIR ? resolve(root, env.CARGO_LLVM_COV_TARGET_DIR) : join(cache, 'llvm-cov-target') }
   // A manual run builds in the checkout's own cache, which a second run must not share.
   withLock(common, lane => {
     if (mode === 'fast' || mode === 'full') {
-      withTargetCache(root, cache, () => check(root, commands(mode), { env: runEnv, logRoot: logs, print }))
+      withTargetCache(root, cache, () => check(root, commands(mode), { env: runEnv, logRoot: logs, meta: { mode, scope: ['manual'], reason: 'manual profile' }, print }))
       return
     }
     const revisions = mode === 'pre-commit' ? [{ revision: null }] : updates
@@ -500,10 +580,12 @@ export function main(args = process.argv.slice(2), { env = process.env, input, c
       mkdirSync(logs, { recursive: true })
       const docDiff = join(logs, `docstrings-${i}.diff`)
       writeFileSync(docDiff, scopeDiff(root, { revision: revision ?? undefined, staged: !revision, env }))
-      const paths = changedPaths(root, { update: revision ? update : undefined, env })
-      print(`Local check scope: ${hookScope(paths).join(', ') || 'no changed paths'} (${paths === null ? 'unknown baseline' : `${paths.length} changed paths`})`)
+      const { paths, reason } = changedPaths(root, { update: revision ? update : undefined, env })
+      const scope = hookScope(paths)
+      print(`Local check scope: ${scope.join(', ') || 'no changed paths'} (${paths === null ? reason : `${paths.length} changed paths; ${reason}`})`)
+      const meta = { mode, revision, scope, reason, changedPaths: paths?.length ?? null }
       withSnapshot(root, revision, snapshot => {
-        withNodeModules(snapshot, root, () => withTargetCache(snapshot, hookCache, () => check(snapshot, hookCommands(mode, paths, docDiff), { env: hookEnv, logRoot: join(logs, String(i)), print })))
+        withNodeModules(snapshot, root, () => withTargetCache(snapshot, hookCache, () => check(snapshot, hookCommands(mode, paths, docDiff), { env: hookEnv, logRoot: join(logs, String(i)), meta, print })))
       }, env, work)
     }
   }, { lanes: mode === 'fast' || mode === 'full' ? 1 : LANES, waitMs: QUEUE_MS, print })
