@@ -220,7 +220,7 @@ The website syncs these pages, so how they are named shows up there.
 
 ```sh
 npm run verify:fast          # cheap checks, format, gate helper tests -- no compilation
-npm run verify:full          # adds strict Clippy, Rust tests, npm gates and Rust coverage
+npm run verify:full          # adds strict Clippy, the Rust suite under coverage, and the npm gates
 npm run hooks:install        # opt in for this checkout/worktree
 ```
 
@@ -306,14 +306,18 @@ scope.
 | Changed surface | Pre-commit | Pre-push |
 | --- | --- | --- |
 | Root README/contributing/changelog/security Markdown, LICENSE, `docs/**/*.md`, `skills/**/*.md` | Static checks | Static checks |
-| `.github/` outside the Action, such as workflows | Static checks, npm tests and developer tests | Same |
-| `.github/actions/vitest-dedup/` | Static checks and Action tests | Same, plus duplication and JS coverage |
-| `npm/` | Static checks, npm tests and package validation | Same, plus duplication and JS coverage |
+| `.github/` outside the Action, such as workflows, and `codecov.yml` | Static checks, npm tests and developer tests | Same |
+| `.github/actions/vitest-dedup/` and `action.yml` | Static checks and Action tests | Same, plus duplication and JS coverage |
+| `npm/` and `scripts/release/` | Static checks, npm tests, package validation and the check-helper tests | Same, plus duplication and JS coverage |
 | `scripts/dev/`, `.githooks/pre-commit` and `.githooks/pre-push` | Static checks and developer/check-helper tests | Same, plus duplication and JS coverage |
-| `scripts/check/` | Static checks and developer/check-helper tests | Same, plus the release build, corpus gates, duplication and JS coverage |
+| `scripts/check/` and `scripts/vitest-harness/` | Static checks and developer/check-helper tests | Same, plus the release build, corpus gates, duplication and JS coverage |
 | `fixtures/` | Static checks and developer/check-helper tests | Same, plus Rust tests, which read fixtures, the release build, corpus gates, duplication and JS coverage |
-| Rust sources, `Cargo.toml`, `Cargo.lock` | Static checks and format | Same, plus Clippy, rustdoc, Rust tests, the corpus gates, duplication and Rust coverage |
-| Dependency manifests, other paths, or unknown push scope | Compilation-free fast checks | Full checks, including Rust coverage |
+| `package.json`, `package-lock.json` | Static checks, npm tests and developer/check-helper tests | Static checks and the whole `npm run check` chain, without Rust compilation |
+| Rust sources, `Cargo.toml`, `Cargo.lock`, `tests/fixtures/` | Static checks and format | Same, plus Clippy, rustdoc, the Rust suite, the corpus gates and duplication; a source change runs the suite under Rust coverage |
+| `.cargo/`, other paths, or unknown push scope | Compilation-free fast checks | Full checks, including Rust coverage |
+
+The Rust suite runs once per push. When Rust coverage is selected it runs every test target, and
+it fails when any `tests/*.rs` target did not run, so plain `cargo test` is not repeated beside it.
 
 Static checks include touched-function docstrings, Action pins, release workflow/version consistency,
 documentation accuracy, repository names and shipped skills. Pre-commit still scans the staged index
@@ -327,8 +331,10 @@ local checks; those runtime tests remain in CI and `verify:full`.
 - Pre-push checks each distinct proposed commit from Git's ref input. An existing branch uses the
   delta from the remote head supplied by Git; a new branch uses its merge base with local
   `origin/main`. Thus a docs-only update after already-pushed Rust work does not repeat that Rust
-  work locally. Missing baseline objects, unavailable merge bases and non-branch destinations
-  require full checks. Multiple destinations for one commit combine their changed paths.
+  work locally. When the remote head is not available locally, the delta from the merge base with
+  `origin/main` is used instead. A push with no readable baseline at all, and non-branch
+  destinations, require full checks. Multiple destinations for one commit combine their changed
+  paths.
 - Deletion-only pushes have no source to check. Both hooks reject snapshot whitespace errors, load
   the verifier from the staged index or proposed commit, and stop at the first selected failure.
   The touched-function documentation gate keeps its cumulative PR scope independently of check
@@ -354,12 +360,17 @@ are local safeguards; CI remains authoritative and Git can bypass them.
 ## Logs, locks and caches
 
 - Commands run sequentially with complete output saved under the common Git directory's
-  `delivery-check-logs/`; a failure prints at most the last 100 lines.
-- Two hook runs can verify at once, each in its own lane with its own export directory and Cargo
+  `delivery-check-logs/`; a failure prints at most the last 100 lines. Each run's `summary.json`
+  records the selected scope, why it was chosen, and each step's command, duration and exit status.
+  Run directories older than 30 days are removed when the next run starts.
+- Each run sets `CARGO_BUILD_JOBS` and `RUST_TEST_THREADS` to the host's parallelism divided by
+  the number of lanes, so lanes running at once do not oversubscribe the machine. Values already
+  set in the environment are kept.
+- Four hook runs can verify at once, each in its own lane with its own export directory and Cargo
   cache, so separate worktrees and sessions do not block each other. A further run queues for up to
   30 minutes. The manual `verify:fast` and `verify:full` profiles use lane 0 only, because they
   build in the checkout's own cache. Other Cargo invocations are not coordinated. A killed process
-  can leave `delivery-check.lock` or `delivery-check.lock.1` behind. Inspect its recorded PID and
+  can leave `delivery-check.lock` or `delivery-check.lock.<lane>` behind. Inspect its recorded PID and
   remove it only after confirming that process and the checks it spawned (Cargo, Node) have all
   exited: the next run in that lane clears its export directory, which a surviving check could
   still be reading.
@@ -368,8 +379,8 @@ are local safeguards; CI remains authoritative and Git can bypass them.
   target directory pointing elsewhere is rejected, and a cache nested inside the checkout's
   `target/` is refused before any directory is created; choose `target/` itself or an external
   cache.
-- Hook snapshots build in `hook-snapshot/<repository>/` beneath that cache, and the second lane in
-  `hook-snapshot/<repository>-1/`, never in the checkout's own cache and never in a configured
+- Hook snapshots build in `hook-snapshot/<repository>/` beneath that cache, and each further lane in
+  `hook-snapshot/<repository>-<lane>/`, never in the checkout's own cache and never in a configured
   coverage or separate build directory: a test binary bakes the path it was built in, and Cargo
   would otherwise hand a binary built in a deleted snapshot to the next checkout run, or to another
   clone sharing the cache. The first run in a new lane builds from cold. Every snapshot in a lane

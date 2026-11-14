@@ -4,7 +4,7 @@ import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, realpathSync,
 import { tmpdir } from 'node:os'
 import { basename, delimiter, dirname, join, resolve, sep } from 'node:path'
 import { test } from 'node:test'
-import { LANES, cleanEnvironment, pause, commands, hookCommands, hookScope, installHooks, main, pushCommits, repositoryKey, runSteps, rustChanged, withLock, withNodeModules, withSnapshot, withTargetCache } from './verify.mjs'
+import { LANES, changedPaths, cleanEnvironment, laneShare, pause, commands, hookCommands, hookScope, installHooks, main, pruneLogs, pushCommits, repositoryKey, runSteps, rustChanged, withLock, withNodeModules, withSnapshot, withTargetCache } from './verify.mjs'
 import { coverage } from '../check/check-docstrings.mjs'
 
 const oid = 'a'.repeat(40)
@@ -107,10 +107,14 @@ test('fast checks are compilation-free; full keeps every gate behind the static 
   assert.ok(full.includes('cargo fmt --all --check'))
   assert.ok(full.includes('cargo clippy --all-targets --all-features --locked'))
   assert.ok(full.includes('cargo doc --no-deps --document-private-items --locked'))
-  assert.ok(full.includes('cargo test --all-targets --all-features --locked'))
   assert.ok(full.includes('npm run check'))
+  // The Rust suite runs once: the coverage gate runs every test target, so it replaces
+  // `cargo test` when coverage is selected, and plain `cargo test` runs otherwise.
   assert.ok(full.includes('npm run check:coverage:rust'))
-  assert.equal(commands('full', false).some(step => step.join(' ') === 'npm run check:coverage:rust'), false)
+  assert.equal(full.includes('cargo test --all-targets --all-features --locked'), false)
+  const withoutRust = commands('full', false).map(step => step.join(' '))
+  assert.equal(withoutRust.includes('npm run check:coverage:rust'), false)
+  assert.ok(withoutRust.includes('cargo test --all-targets --all-features --locked'))
   assert.throws(() => commands('unknown'), /Unknown/)
 })
 
@@ -121,9 +125,12 @@ test('full checks front-load the static gates and never repeat a compile-class s
   // The static gates deliberately run twice: once as the fail-fast prefix, once inside
   // `npm run check` (seconds each, idempotent). Everything that compiles or analyzes a
   // corpus runs exactly once.
-  for (const step of ['cargo fmt --all --check', 'cargo clippy --all-targets --all-features --locked', 'cargo doc --no-deps --document-private-items --locked', 'cargo test --all-targets --all-features --locked', 'npm run check', 'npm run check:coverage:rust']) {
+  for (const step of ['cargo fmt --all --check', 'cargo clippy --all-targets --all-features --locked', 'cargo doc --no-deps --document-private-items --locked', 'npm run check', 'npm run check:coverage:rust']) {
     assert.equal(full.filter(other => other === step).length, 1, step + ' runs exactly once')
   }
+  // The suite runs before the npm chain: test failures are the most frequent, so they surface
+  // before the corpus gates spend their minutes.
+  assert.ok(full.indexOf('npm run check:coverage:rust') < full.indexOf('npm run check'))
   for (const gate of ['check:action-pins', 'check:release-workflow', 'check:versions', 'check:docs', 'check:names', 'skills:check']) {
     assert.ok(chain.includes('npm run ' + gate), gate + ' is part of the check chain')
     // Presence first: a missing gate has index -1, which would compare "before" Clippy and
@@ -285,20 +292,18 @@ test('failing snapshot check restores state and removes temporary source', () =>
   assert.throws(() => withSnapshot(root, 'does-not-exist', () => assert.fail()), /Command failed/)
 }))
 
-test('two lanes run at once, a third is refused, and lanes are removed on success and failure', () => fixture(root => {
+test('four lanes run at once, a fifth is refused, and lanes are removed on success and failure', () => fixture(root => {
   const common = join(root, '.git')
-  assert.equal(LANES, 2)
-  withLock(common, first => {
-    assert.equal(first, 0)
-    assert.match(readFileSync(join(common, 'delivery-check.lock/owner'), 'utf8'), /^pid=/)
-    withLock(common, second => {
-      assert.equal(second, 1)
-      assert.match(readFileSync(join(common, 'delivery-check.lock.1/owner'), 'utf8'), /^pid=/)
-      assert.throws(() => withLock(common, () => assert.fail()), /every lane.*delivery-check\.lock, .*delivery-check\.lock\.1\./)
-    })
-    assert.equal(existsSync(join(common, 'delivery-check.lock.1')), false)
+  assert.equal(LANES, 4)
+  const name = lane => lane === 0 ? 'delivery-check.lock' : `delivery-check.lock.${lane}`
+  const nest = lane => withLock(common, taken => {
+    assert.equal(taken, lane)
+    assert.match(readFileSync(join(common, name(lane), 'owner'), 'utf8'), /^pid=/)
+    if (lane + 1 < LANES) nest(lane + 1)
+    else assert.throws(() => withLock(common, () => assert.fail()), /every lane.*delivery-check\.lock, .*delivery-check\.lock\.3\./)
   })
-  assert.equal(existsSync(join(common, 'delivery-check.lock')), false)
+  nest(0)
+  for (let lane = 0; lane < LANES; lane++) assert.equal(existsSync(join(common, name(lane))), false, name(lane))
   assert.throws(() => withLock(common, () => { throw new Error('failed') }), /failed/)
   assert.equal(existsSync(join(common, 'delivery-check.lock')), false)
 }))
@@ -344,16 +349,18 @@ test('a run with one lane allowed takes only lane 0', () => fixture(root => {
 test('a busy repository queues instead of refusing, and gives up after its wait', () => fixture(root => {
   const common = join(root, '.git')
   const printed = []
+  // Two lanes keep the case small; the lane count itself is pinned by the test above.
+  const lanes = 2
   withLock(common, () => withLock(common, () => {
     let naps = 0
     const sleep = () => { if (++naps === 2) rmSync(join(common, 'delivery-check.lock.1'), { recursive: true }) }
-    assert.equal(withLock(common, lane => `lane ${lane}`, { waitMs: 60_000, sleep, print: line => printed.push(line) }), 'lane 1')
+    assert.equal(withLock(common, lane => `lane ${lane}`, { lanes, waitMs: 60_000, sleep, print: line => printed.push(line) }), 'lane 1')
     assert.equal(naps, 2)
     mkdirSync(join(common, 'delivery-check.lock.1'))
     let spent = 0
-    assert.throws(() => withLock(common, () => assert.fail(), { waitMs: 10_000, sleep: () => { spent++ } }), /every lane/)
+    assert.throws(() => withLock(common, () => assert.fail(), { lanes, waitMs: 10_000, sleep: () => { spent++ } }), /every lane/)
     assert.equal(spent, 2)
-  }))
+  }, { lanes }), { lanes })
   assert.deepEqual(printed, ['All 2 verification lanes are busy; waiting.'])
 }))
 
@@ -391,6 +398,56 @@ test('successful command uses CI warnings and preserves supplied flags without s
     },
   })
   assert.deepEqual(output, ['PASS cargo clippy'])
+}))
+
+test('the run summary records each step, survives a failure, and carries the run metadata', () => fixture(root => {
+  const logRoot = join(root, 'logs')
+  let clock = 1_000
+  const times = { a: 2_500, b: 250 }
+  assert.throws(() => runSteps(root, [['node', 'a'], ['node', 'b'], ['node', 'never']], {
+    logRoot, meta: { mode: 'pre-push', scope: ['rust'], reason: 'remote head' }, print() {},
+    now: () => clock,
+    spawn: (_cmd, [name]) => { clock += times[name]; return name === 'b' ? { status: 3 } : { status: 0 } },
+  }), /node b failed \(exit 3\)/)
+  const summary = JSON.parse(readFileSync(join(logRoot, 'summary.json'), 'utf8'))
+  assert.deepEqual(summary, {
+    mode: 'pre-push', scope: ['rust'], reason: 'remote head',
+    steps: [{ command: 'node a', seconds: 2.5, status: 0 }, { command: 'node b', seconds: 0.25, status: 3 }],
+  })
+  const startFailure = join(root, 'start-failure')
+  assert.throws(() => runSteps(root, [['node', 'x']], { logRoot: startFailure, print() {}, spawn: () => ({ error: new Error('boom') }) }), /boom/)
+  assert.deepEqual(JSON.parse(readFileSync(join(startFailure, 'summary.json'), 'utf8')).steps.map(step => step.status), ['error: boom'])
+}))
+
+test('a lane gets its share of the host, never less than one', () => {
+  assert.equal(laneShare(8, 2), 4)
+  assert.equal(laneShare(7, 2), 3)
+  assert.equal(laneShare(1, 2), 1)
+  assert.equal(laneShare(8, 4), 2)
+  assert.ok(laneShare() >= 1)
+})
+
+test('hooks size jobs and test threads per lane, and keep the caller\'s values', () => fixture(root => {
+  const seen = []
+  const check = (_snapshot, _steps, { env }) => seen.push([env.CARGO_BUILD_JOBS, env.RUST_TEST_THREADS])
+  writeFileSync(join(root, 'README.md'), '# docs\n')
+  git(root, 'add', 'README.md')
+  main(['pre-commit'], { root, check, print() {}, env: { ...process.env, CARGO_BUILD_JOBS: '', RUST_TEST_THREADS: '' } })
+  main(['pre-commit'], { root, check, print() {}, env: { ...process.env, CARGO_BUILD_JOBS: '7', RUST_TEST_THREADS: '5' } })
+  assert.deepEqual(seen, [[String(laneShare()), String(laneShare())], ['7', '5']])
+}))
+
+test('old run logs are pruned; recent runs and anything a run did not name are kept', () => fixture(root => {
+  const logRoot = join(root, 'delivery-check-logs')
+  const now = 100 * 24 * 60 * 60 * 1000
+  const day = 24 * 60 * 60 * 1000
+  const names = { old: `${now - 31 * day}-12`, edge: `${now - 30 * day}-13`, recent: `${now - day}-14`, other: 'notes', near: `${now - 40 * day}-x` }
+  for (const name of Object.values(names)) mkdirSync(join(logRoot, name), { recursive: true })
+  writeFileSync(join(logRoot, `${now - 50 * day}-15`), 'a file, not a run directory')
+  assert.deepEqual(pruneLogs(logRoot, now), [names.old])
+  for (const key of ['edge', 'recent', 'other', 'near']) assert.ok(existsSync(join(logRoot, names[key])), key)
+  assert.ok(existsSync(join(logRoot, `${now - 50 * day}-15`)))
+  assert.deepEqual(pruneLogs(join(root, 'missing'), now), [])
 }))
 
 test('installer respects existing hook managers and installs only for the current worktree', () => fixture(root => {
@@ -766,13 +823,14 @@ test('incremental docs push skips earlier Rust work, but a new branch includes i
   assert.equal(incremental.some(step => step.startsWith('cargo ')), false)
   const [initial] = plannedChecks(root, 'pre-push', `refs/heads/topic ${proposed} refs/heads/topic ${zero}`)
   assert.ok(initial.includes('npm run check:coverage:rust'))
-  assert.ok(initial.includes('cargo test --all-targets --all-features --locked'))
+  assert.equal(initial.includes('cargo test --all-targets --all-features --locked'), false, 'coverage runs the suite')
 }))
 
 for (const [paths, scopes, required] of [
   [['docs/development.md', 'skills/vitest-dedup/SKILL.md'], ['docs'], ['npm run check:docs', 'npm run skills:check']],
   [['.github/actions/vitest-dedup/index.js'], ['action'], ['npm run test:action']],
   [['npm/lib/launcher.mjs'], ['npm'], ['npm test', 'npm run pack:check']],
+  [['scripts/release/release-comparison.mjs'], ['npm'], ['npm test', 'npm run pack:check', 'npm run test:check-lib']],
   [['scripts/dev/verify.mjs', '.githooks/pre-push'], ['tooling'], ['npm run test:dev-checks', 'npm run test:check-lib']],
   [['README.md', 'npm/test/launcher.test.mjs', '.github/actions/vitest-dedup/action.yml'], ['action', 'docs', 'npm'], ['npm run test:action', 'npm test', 'npm run pack:check']],
 ]) test(`local scope ${scopes.join('+')} selects relevant checks and preserves JS ratchets`, () => {
@@ -843,8 +901,10 @@ test('Rust runs its lints, tests, corpus gates and coverage, not the packaging a
   for (const path of ['src/model.rs', 'tests/example.rs', 'examples/depth.rs', 'Cargo.toml', 'Cargo.lock']) {
     assert.deepEqual(hookScope([path]), ['rust'])
     const steps = prePush([path])
-    for (const step of ['cargo fmt --all --check', 'cargo clippy --all-targets --all-features --locked', 'cargo doc --no-deps --document-private-items --locked', 'cargo test --all-targets --all-features --locked', 'cargo build --release --locked', 'npm run check:corpus', 'npm run check:recall', 'npm run verify:titles', 'npm run check:oracle', 'npm run check:behavior-runtime', 'npm run check:hooks-differential', 'npm run check:duplication', 'npm run check:coverage:rust']) assert.ok(steps.includes(step), step)
-    for (const step of ['npm test', 'npm run test:action', 'npm run test:dev-checks', 'npm run test:check-lib', 'npm run pack:check', 'npm run check:coverage:js', 'npm run check']) assert.equal(steps.includes(step), false, step)
+    for (const step of ['cargo fmt --all --check', 'cargo clippy --all-targets --all-features --locked', 'cargo doc --no-deps --document-private-items --locked', 'cargo build --release --locked', 'npm run check:corpus', 'npm run check:recall', 'npm run verify:titles', 'npm run check:oracle', 'npm run check:behavior-runtime', 'npm run check:hooks-differential', 'npm run check:duplication', 'npm run check:coverage:rust']) assert.ok(steps.includes(step), step)
+    for (const step of ['cargo test --all-targets --all-features --locked', 'npm test', 'npm run test:action', 'npm run test:dev-checks', 'npm run test:check-lib', 'npm run pack:check', 'npm run check:coverage:js', 'npm run check']) assert.equal(steps.includes(step), false, step)
+    // The suite runs where `cargo test` did: before the corpus gates.
+    assert.ok(steps.indexOf('npm run check:coverage:rust') < steps.indexOf('cargo build --release --locked'))
     assert.equal(hookCommands('pre-commit', [path]).some(step => /^cargo (?:clippy|test|build)/.test(step.join(' '))), false)
   }
 })
@@ -866,7 +926,42 @@ test('a mixed change selects each surface once', () => {
   assert.ok(steps.includes('npm run check:coverage:rust') && steps.includes('npm run check:coverage:js'))
 })
 
-for (const path of ['package.json', 'package-lock.json', '.cargo/config.toml', 'new-script.sh', ' docs/guide.md', '\ndocs/guide.md', 'docs/README.md.rs', 'docs/data.json', 'src/data.json', 'build.rs']) {
+test('the npm manifests run the whole npm chain and no Rust compile', () => {
+  for (const path of ['package.json', 'package-lock.json']) {
+    assert.deepEqual(hookScope([path]), ['node'])
+    const steps = prePush([path])
+    assert.ok(steps.includes('npm run check'), steps.join())
+    assert.equal(steps.some(step => step.startsWith('cargo ')), false, steps.join())
+    // The chain holds every npm gate; none runs a second time beside it.
+    for (const step of ['npm test', 'npm run test:dev-checks', 'npm run check:corpus', 'npm run check:duplication', 'npm run check:coverage:js', 'npm run check:coverage:rust']) assert.equal(steps.includes(step), false, step)
+    const commit = hookCommands('pre-commit', [path]).map(step => step.join(' '))
+    assert.ok(commit.includes('npm test') && commit.includes('npm run test:dev-checks'), commit.join())
+    assert.equal(commit.includes('npm run check'), false)
+  }
+  // With a Rust change beside it, the Rust surface still runs its own checks.
+  const mixed = prePush(['package.json', 'src/model.rs'])
+  assert.ok(mixed.includes('npm run check') && mixed.includes('npm run check:coverage:rust') && mixed.includes('cargo clippy --all-targets --all-features --locked'), mixed.join())
+  assert.equal(new Set(mixed).size, mixed.length)
+})
+
+for (const [path, scope] of [
+  ['scripts/release/bump-version.mjs', 'npm'],
+  ['scripts/vitest-harness/imported-forms/case.test.ts', 'gates'],
+  ['action.yml', 'action'],
+  ['codecov.yml', 'ci'],
+  ['tests/fixtures/config-globs/vitest.config.ts', 'rust'],
+]) test(`${path} has a scope of its own consumers: ${scope}`, () => {
+  assert.deepEqual(hookScope([path]), [scope])
+  assert.notDeepEqual(hookCommands('pre-push', [path]), commands('full'))
+})
+
+test('a fixture read only by Rust tests runs the suite without coverage', () => {
+  const steps = prePush(['tests/fixtures/owned-exclusions.json'])
+  assert.ok(steps.includes('cargo test --all-targets --all-features --locked'), steps.join())
+  assert.equal(steps.includes('npm run check:coverage:rust'), false)
+})
+
+for (const path of ['.cargo/config.toml', 'new-script.sh', ' docs/guide.md', '\ndocs/guide.md', 'docs/README.md.rs', 'docs/data.json', 'src/data.json', 'build.rs', 'tests/data.json']) {
   test(`unknown or shared scope stays full: ${JSON.stringify(path)}`, () => {
     assert.deepEqual(hookScope(['README.md', path]), ['full'])
     assert.deepEqual(hookCommands('pre-push', [path]), commands('full'))
@@ -904,6 +999,20 @@ for (const remote of [zero, oid]) test(`unavailable push baseline ${remote.slice
   const proposed = commitChanges(root, { 'README.md': '# docs\n' })
   const [steps] = plannedChecks(root, 'pre-push', `refs/heads/topic ${proposed} refs/heads/topic ${remote}`)
   assert.ok(steps.includes('npm run check:coverage:rust'))
+}))
+
+test('an unavailable remote head is scoped from the merge base with origin/main', () => fixture(root => {
+  const base = git(root, 'rev-parse', 'HEAD')
+  git(root, 'update-ref', 'refs/remotes/origin/main', base)
+  const proposed = commitChanges(root, { 'README.md': '# docs\n' })
+  const [steps] = plannedChecks(root, 'pre-push', `refs/heads/topic ${proposed} refs/heads/topic ${oid}`)
+  assert.ok(steps.includes('npm run check:docs'))
+  assert.equal(steps.some(step => step.startsWith('cargo ')), false, steps.join())
+  assert.deepEqual(changedPaths(root, { update: { revision: proposed, remotes: new Set([oid]), branches: true } }), { paths: ['README.md'], reason: 'remote head unavailable: merge base with origin/main' })
+  // Rust work since main is still in that diff, so it still runs.
+  const rust = commitChanges(root, { 'src/lib.rs': 'pub fn later() {}\n' })
+  const [later] = plannedChecks(root, 'pre-push', `refs/heads/topic ${rust} refs/heads/topic ${oid}`)
+  assert.ok(later.includes('npm run check:coverage:rust'))
 }))
 
 test('non-branch destinations retain full checks even for docs-only changes', () => fixture(root => {
