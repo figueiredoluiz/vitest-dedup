@@ -252,7 +252,7 @@ const CARGO_TESTS = ['node', 'scripts/dev/cargo-tests.mjs']
 // The compilation-free JavaScript suites, all of which an unknown scope runs.
 const JS_TESTS = [['npm', 'run', 'test:action'], ['npm', 'test'], ['npm', 'run', 'pack:check'], ['npm', 'run', 'test:dev-checks'], ['npm', 'run', 'test:check-lib']]
 // What a changed Rust line names when its behaviour can differ on Windows.
-const WINDOWS_SENSITIVE = /\bcfg\b|\bfs::|\bPath(?:Buf)?\b|canonicali[sz]e|symlink|MAIN_SEPARATOR|\bjunction\b/
+const WINDOWS_SENSITIVE = /\bcfg(?:_attr)?\b|\bfs::|\bPath(?:Buf)?\b|canonicali[sz]e|symlink|MAIN_SEPARATOR|\bjunction\b/
 
 /**
  * Decide whether a change needs the Windows cross-check: a Cargo manifest, a changed Rust line that

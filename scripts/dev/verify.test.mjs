@@ -1234,7 +1234,7 @@ test('a crate root owns its declared files, honouring #[path] through other attr
 
 test('the Windows cross-check follows changed Rust lines that name cfg, filesystem calls or paths', () => {
   const rustDiff = line => `diff --git a/src/a.rs b/src/a.rs\n--- a/src/a.rs\n+++ b/src/a.rs\n@@ -1 +1 @@\n${line}\n`
-  for (const line of ['+#[cfg(windows)]', '-    std::fs::write(path, bytes)?;', '+fn read(path: &Path) {}', '+let p = PathBuf::new();', '+    path.canonicalize()', '+use std::os::unix::fs::symlink;', '+const S: char = std::path::MAIN_SEPARATOR;']) {
+  for (const line of ['+#[cfg(windows)]', '+#[cfg_attr(windows, path = "windows.rs")]', '-    std::fs::write(path, bytes)?;', '+fn read(path: &Path) {}', '+let p = PathBuf::new();', '+    path.canonicalize()', '+use std::os::unix::fs::symlink;', '+const S: char = std::path::MAIN_SEPARATOR;']) {
     assert.equal(windowsSensitive(['src/a.rs'], rustDiff(line)), true, line)
   }
   for (const line of ['+let total = count + 1;', ' #[cfg(windows)]']) assert.equal(windowsSensitive(['src/a.rs'], rustDiff(line)), false, line)

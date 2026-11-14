@@ -233,8 +233,8 @@ tests of each changed library module (the whole library suite for a module with 
 or a file neither crate root declares), the binary's tests for `src/main.rs` and the files it
 declares (a `#[path]` module's whole directory, running both suites where the library may also
 hold the file), and each changed integration target. It does not run the tests of a changed
-module's dependents. When a changed Rust line names `cfg`, filesystem calls or paths, or a Cargo
-manifest changes, it also runs `cargo check --target x86_64-pc-windows-gnu`
+module's dependents. When a changed Rust line names `cfg` or `cfg_attr`, filesystem calls or
+paths, or a Cargo manifest changes, it also runs `cargo check --target x86_64-pc-windows-gnu`
 (`rustup target add x86_64-pc-windows-gnu` once). A test step that ran no test fails. It never
 builds the release binary or runs the corpus gates, Rust coverage or the whole Rust suite; the push
 hook does.
