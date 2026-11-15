@@ -39,8 +39,12 @@ import { fileURLToPath } from 'node:url'
 import { isDeepStrictEqual } from 'node:util'
 import { collectAnalyzer, collectBenchmarks, collectWithVitest, compareDirectory, compareSites, matchKnown, oracleBinary } from './lib/collection-oracle.mjs'
 import { judgeCase, readCases } from './lib/oracle-cases.mjs'
+import { cachedCollector } from './lib/oracle-vitest-cache.mjs'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
+// What Vitest collected is reused while nothing it reads has changed; see `lib/oracle-vitest-cache.mjs`.
+const vitestCache = cachedCollector(ROOT, collectWithVitest)
+const collectVitest = vitestCache.collect
 const KNOWN = join(ROOT, 'scripts', 'check', 'collection-oracle-known.json')
 // The fixture directories the corpus gates analyze, plus `lookalikes` (Vitest must collect no
 // test from them either). Every recall case is added from its manifest.
@@ -105,7 +109,7 @@ function selfCheck() {
     ...Object.entries(SHARED_SELF_CHECK).map(([dir, want]) => [dir, want, (file) => ({ tests: file.tests, hooks: file.hooks, readsStub: file.stubReads.length > 0 })]),
   ]
   return checks.flatMap(([dir, want, view]) => {
-    const actual = Object.fromEntries([...collectWithVitest(ROOT, dir)].map(([path, file]) => [path, view(file)]))
+    const actual = Object.fromEntries([...collectVitest(ROOT, dir)].map(([path, file]) => [path, view(file)]))
     return isDeepStrictEqual(actual, want)
       ? []
       : [`probe self-check ${dir}: expected ${JSON.stringify(want)}\n    got ${JSON.stringify(actual)}`]
@@ -122,7 +126,7 @@ function runCases(binary) {
   const totals = { failures: [...problems], held: [], dirs: cases.length, files: 0 }
   for (const oracleCase of cases) {
     const { dir } = oracleCase
-    const vitest = collectWithVitest(ROOT, dir)
+    const vitest = collectVitest(ROOT, dir)
     const { titles, sites, exclusions } = collectAnalyzer(binary, ROOT, dir)
     const judged = judgeCase(oracleCase, {
       vitest,
@@ -157,7 +161,7 @@ function main() {
   const probeErrors = []
   const found = []
   for (const dir of dirs) {
-    const vitest = collectWithVitest(ROOT, dir)
+    const vitest = collectVitest(ROOT, dir)
     const analyzer = collectAnalyzer(binary, ROOT, dir)
     const located = compareSites(vitest, analyzer.sites)
     totals.siteFiles += located.compared.length
@@ -198,6 +202,8 @@ function main() {
   )
 
   console.log(`  oracle cases: ${cases.dirs} directories, ${cases.files} files compared, ${cases.held.length} held`)
+  const { hits, misses, enabled, offReason } = vitestCache.stats
+  console.log(`  Vitest collections: ${enabled ? `${hits} reused, ${misses} collected` : 'cache off, all collected'}${offReason ? ` (cache: ${offReason})` : ''}`)
   for (const line of cases.held) console.log(`    held: ${line}`)
 
   const failures = [...selfCheckFailures, ...cases.failures]

@@ -77,6 +77,19 @@ fails the gate the moment the target is met, so the expectation changes with the
 usable `expected.json`, a file it does not declare, and a declared file Vitest cannot compare all
 fail, and at least one case file must be compared.
 
+What Vitest collected is cached under `~/.cache/vitest-dedup/oracle-vitest/` (or
+`$XDG_CACHE_HOME`) and reused while nothing it could read has changed. The key covers every file
+git lists for the checkout and every file under `fixtures/`, `tests/fixtures/` and `scripts/`
+(ignored ones included), except Rust sources and the root `target/` and `node_modules/`; the
+installed packages as `node_modules/.package-lock.json` records them; the environment Vitest
+receives; and Node's version. A Rust-only change therefore reuses it, and any other change collects
+everything again. The analyzer side and every comparison always run, and the gate prints how many
+collections it reused. The cache is off under `CI`, with `VITEST_DEDUP_ORACLE_CACHE=0`, outside a
+git checkout, when any file the key covers is a symlink, and when `node_modules`, at any depth,
+holds a link other than the repository's own workspaces and `.bin` executables (`npm link` changes
+nothing npm records). A storage error loses only the cache, never the gate. Key
+directories unused for a week are removed.
+
 ### Generated title check
 
 `npm run check:title-properties` draws `.each` and `.for` cases from a fixed seed (`--seed` picks
