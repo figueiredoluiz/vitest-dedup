@@ -330,6 +330,7 @@ const JS_MODULES = {
   'scripts/dev/revert-proof.mjs': 97,
   'scripts/dev/proof-command.mjs': 95,
   'scripts/check/lib/coverage-platform.mjs': 100,
+  'scripts/check/lib/oracle-vitest-cache.mjs': 100,
   // Action pin gate measured 67/67 lines with owned YAML cases.
   'scripts/check/check-action-pins.mjs': 100,
   'scripts/check/check-docstrings.mjs': 100,
