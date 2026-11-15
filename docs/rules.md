@@ -34,7 +34,7 @@ Body comparisons track `repeats` on suite and test registrations. An explicit `r
 runs the body once even when its suite or project repeats tests. The project default stays
 symbolic, so an omitted count can compare with another use of the default. An option that
 might supply an unknown count leaves the test in the inventory and its body unresolved.
-A test inside a loop over an empty array literal is never registered and is never compared. A
+A test inside a loop counted to iterate nothing is never registered and is never compared. A
 loop whose iterations are not counted leaves its test unresolved
 ([configuration](configuration.md#quality-gate) lists the loops that are counted).
 

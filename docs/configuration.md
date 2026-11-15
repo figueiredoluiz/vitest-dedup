@@ -57,9 +57,14 @@ finding.
   default threshold. A todo a `duplicate-test-name` finding names is not counted either.
 - A test registered inside a loop is one case per iteration when the loop iterates an array
   literal or a `let` counter with integer literal bounds, directly or through `.forEach` or
-  `.map` on an array literal. A loop over an empty literal registers nothing: no case, suite or
-  benchmark. A loop whose iterations the run cannot count, such as one over a named array or one
-  that can `break`, leaves its test uncompared, counts it once, and marks the run incomplete.
+  `.map` on an array literal. A `const` bound to an array literal counts the same when the file
+  only iterates it, and each iteration runs after the declaration: later in the block or `case`
+  that declares it, and not inside a `function` declaration that could be called earlier. The name has no
+  other read, write or export, and the file has no `eval` and no code that may replace a built-in
+  method. A counted loop over an empty array registers nothing: no case, suite or benchmark. A
+  loop whose iterations the run cannot count, such as one over an array the file also changes or
+  passes on, or one that can `break`, leaves its test uncompared, counts it once, and marks the
+  run incomplete.
 - Every analyzed test is eligible except benchmarks, placeholders for the tests a wrapper call or
   module load registers, and `test.todo` with no callback. A `.todo` or `.skip` with a callback
   stays, and so does a test the run could not compare.

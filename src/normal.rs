@@ -482,6 +482,9 @@ pub struct Normalizer<'s> {
     truncated: bool,
     /// Each loop or iteration callback's proved count, computed once (see [`Population`]).
     loop_counts: HashMap<NodeId, Option<u64>>,
+    /// The array literal each `const` binding is proved to hold for iteration, or `None` when it
+    /// is refused, computed once per binding however many loops read it.
+    iterated_arrays: HashMap<SymbolId, Option<NodeId>>,
     /// Whether each enclosing function can return or throw before a site inside it.
     early_exits: HashMap<NodeId, bool>,
     /// Completed parameterization uncertainty results for this module's nodes.
@@ -511,6 +514,7 @@ impl<'s> Normalizer<'s> {
             hook_eval: None,
             hook_scheduling: None,
             loop_counts: HashMap::new(),
+            iterated_arrays: HashMap::new(),
             early_exits: HashMap::new(),
             parameterization_uncertainty: RefCell::new(HashMap::new()),
             discovering: None,
