@@ -7,6 +7,7 @@
 use super::{inventory, Inventory, Modules, Setting, SiteKind};
 use crate::framework::Registers;
 use crate::lang::{self, Declaration, Name, NodeId, Parsed, Sources, SymbolId};
+use crate::memory::HeapBytes;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
@@ -85,6 +86,32 @@ pub struct Template {
     pub resolution_depth: usize,
     /// Every source read by this proof, for the caller's shared unique-source budget.
     pub dependency_bytes: Vec<(PathBuf, usize)>,
+}
+
+impl Template {
+    /// Estimate the owned payload retained by a completed ordinary runner proof.
+    pub(crate) fn retained_bytes(&self) -> usize {
+        std::mem::size_of::<Self>()
+            + self.path.heap_bytes()
+            + self.source.capacity()
+            + self.parsed.proof_bytes()
+            + self.steps.capacity() * std::mem::size_of::<Step>()
+            + self.parameters.capacity() * std::mem::size_of::<Parameter>()
+            + self
+                .parameters
+                .iter()
+                .map(|parameter| {
+                    parameter.bindings.capacity() * std::mem::size_of::<ParameterBinding>()
+                        + parameter
+                            .bindings
+                            .iter()
+                            .map(|binding| binding.path.heap_bytes())
+                            .sum::<usize>()
+                })
+                .sum::<usize>()
+            + self.dependencies.heap_bytes()
+            + self.dependency_bytes.heap_bytes()
+    }
 }
 
 /// A first-party callable whose module and export path are proved, before its body is interpreted.
@@ -212,7 +239,18 @@ pub fn template(
     export: &str,
     setting: Setting<'_>,
 ) -> Result<Template, Refusal> {
-    let resolved = resolved_template(sources, path, export, setting)?;
+    template_with_read_budget(sources, path, export, setting, None)
+}
+
+/// Build an ordinary runner while charging each imported source parse to the caller.
+pub(crate) fn template_with_read_budget(
+    sources: &Sources,
+    path: &Path,
+    export: &str,
+    setting: Setting<'_>,
+    remaining: Option<&mut usize>,
+) -> Result<Template, Refusal> {
+    let resolved = resolved_template_with_read_budget(sources, path, export, setting, remaining)?;
     let parameters = parameters(
         &resolved.parsed,
         resolved.function,
@@ -302,6 +340,17 @@ fn resolved_template(
     export: &str,
     setting: Setting<'_>,
 ) -> Result<ResolvedTemplate, Refusal> {
+    resolved_template_with_read_budget(sources, path, export, setting, None)
+}
+
+/// Resolve source and linkage with an optional caller-owned parse allowance.
+fn resolved_template_with_read_budget(
+    sources: &Sources,
+    path: &Path,
+    export: &str,
+    setting: Setting<'_>,
+    remaining: Option<&mut usize>,
+) -> Result<ResolvedTemplate, Refusal> {
     let mut reader = Reader {
         sources,
         setting,
@@ -311,6 +360,7 @@ fn resolved_template(
         read_sizes: HashMap::new(),
         bytes: 0,
         visits: 0,
+        remaining,
     };
     let mut at = (path.to_path_buf(), export.to_owned());
     let mut hops = HashSet::new();
@@ -361,6 +411,7 @@ struct Reader<'a> {
     read_sizes: HashMap<PathBuf, usize>,
     bytes: usize,
     visits: usize,
+    remaining: Option<&'a mut usize>,
 }
 
 impl Reader<'_> {
@@ -373,6 +424,9 @@ impl Reader<'_> {
             if self.bytes > 8 * 1024 * 1024 {
                 return Err(Refusal::Limit);
             }
+        }
+        if let Some(remaining) = self.remaining.as_deref_mut() {
+            *remaining = remaining.checked_sub(source.len()).ok_or(Refusal::Limit)?;
         }
         let parsed = lang::parse(path, &source).map_err(|_| Refusal::Parse)?;
         if parsed.parse_errors != 0 {

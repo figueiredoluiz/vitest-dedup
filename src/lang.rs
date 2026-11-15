@@ -46,6 +46,23 @@ pub struct Parsed {
     pub parse_errors: usize,
 }
 
+impl Parsed {
+    /// Bound retained proof syntax/scopes, reserving all possible receiver-memo entries too.
+    pub(crate) fn proof_bytes(&self) -> usize {
+        self.tree
+            .proof_bytes()
+            .saturating_add(self.scopes.proof_bytes())
+            .saturating_add(
+                self.tree
+                    .nodes()
+                    .count()
+                    .saturating_mul(2)
+                    .saturating_add(3)
+                    .saturating_mul(std::mem::size_of::<(NodeId, bool)>()),
+            )
+    }
+}
+
 /// Why a module has no tree.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Refusal {

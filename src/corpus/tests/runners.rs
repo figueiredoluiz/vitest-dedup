@@ -3,6 +3,61 @@ use super::*;
 use crate::model::Rule;
 use std::path::PathBuf;
 
+/// Repeated proofs fit, while distinct exports exhaust the aggregate parse allowance.
+#[test]
+fn imported_runner_proofs_bound_repeated_source_reads() {
+    let results = corpora(
+        &[
+            (
+                "helper.ts",
+                include_str!("../../../fixtures/oracle/helper-proof-work/helper.ts"),
+            ),
+            (
+                "repeated.ts",
+                include_str!("../../../fixtures/oracle/helper-proof-work/repeated.ts"),
+            ),
+            (
+                "large.test.ts",
+                include_str!("../../../fixtures/oracle/helper-proof-work/large.test.ts"),
+            ),
+            (
+                "control.test.ts",
+                include_str!("../../../fixtures/oracle/helper-proof-work/control.test.ts"),
+            ),
+            (
+                "repeated.test.ts",
+                include_str!("../../../fixtures/oracle/helper-proof-work/repeated.test.ts"),
+            ),
+        ],
+        &["large.test.ts", "control.test.ts", "repeated.test.ts"],
+    );
+    assert_eq!(
+        results
+            .iter()
+            .map(|result| result.tests.len())
+            .collect::<Vec<_>>(),
+        [16, 2, 128]
+    );
+    assert_all_wrappers_refused(&results[..1]);
+    assert_rule_absent(
+        owned_findings("large.test.ts", results[0].clone()),
+        Rule::DuplicateTest,
+    );
+    assert!(results[1..]
+        .iter()
+        .flat_map(|result| &result.tests)
+        .all(|case| case.exclusion.is_none()));
+    assert_eq!(
+        owned_findings("control.test.ts", results[1].clone())
+            .findings
+            .iter()
+            .filter(|finding| finding.rule == Rule::DuplicateTest)
+            .count(),
+        1
+    );
+    assert_ne!(results[2].tests[0].key, results[2].tests[127].key);
+}
+
 /// Repeated calls retain distinct argument identities without billing the entire caller each time.
 #[test]
 fn repeated_cheap_calls_fit_the_caller_work_budget() {
@@ -783,6 +838,10 @@ fn nested_export_hops_share_one_depth_budget() {
             "run.test.ts".to_owned(),
             "import {run} from './outer0';run();".to_owned(),
         )];
+        files.push((
+            "warm.test.ts".to_owned(),
+            "import {run} from './outer0';import {leaf} from './leaf0';leaf();run();".to_owned(),
+        ));
         for i in 0..3 {
             files.push((
                 format!("outer{i}.ts"),
@@ -804,7 +863,14 @@ fn nested_export_hops_share_one_depth_budget() {
             .iter()
             .map(|(name, source)| (name.as_str(), source.as_str()))
             .collect();
-        let corpus = corpora(&refs, &["run.test.ts"]).remove(0);
+        let mut results = corpora(&refs, &["run.test.ts", "warm.test.ts"]);
+        let warm = results.pop().unwrap();
+        let corpus = results.pop().unwrap();
+        assert_eq!(warm.tests.len(), if leaf_hops == 4 { 5 } else { 2 });
+        assert!(warm
+            .tests
+            .iter()
+            .all(|case| case.exclusion.is_some() == (leaf_hops == 5)));
         assert_eq!(corpus.tests.len(), expected, "{leaf_hops}");
         if leaf_hops == 4 {
             assert!(corpus.tests.iter().all(|case| case.exclusion.is_none()));

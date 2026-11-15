@@ -1,0 +1,24 @@
+{
+  "files": {
+    "large.test.ts": {
+      "tasks": 16,
+      "wrapperSites": [
+        "wrapper@2", "wrapper@3", "wrapper@4", "wrapper@5",
+        "wrapper@6", "wrapper@7", "wrapper@8", "wrapper@9",
+        "wrapper@10", "wrapper@11", "wrapper@12", "wrapper@13",
+        "wrapper@14", "wrapper@15", "wrapper@16", "wrapper@17"
+      ],
+      "next": {"reasons": ["registered-elsewhere"], "testsExcluded": 16}
+    },
+    "control.test.ts": {
+      "tasks": 2,
+      "wrapperSites": ["wrapper@2", "wrapper@3"],
+      "next": {}
+    },
+    "repeated.test.ts": {
+      "tasks": 128,
+      "wrapperSites": ["wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2","wrapper@2"],
+      "next": {}
+    }
+  }
+}

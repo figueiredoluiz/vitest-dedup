@@ -8,6 +8,7 @@ use crate::normal::{self, Normalizer, Structure};
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 
 /// One already bound template; its node and symbol IDs belong only to its own parsed module.
 #[derive(Clone)]
@@ -222,7 +223,9 @@ fn closed_batch(
         source_bytes: 0,
         active: HashSet::new(),
         left: 2000,
-        work: 0,
+        remaining_work: MAX_WORK,
+        runner_templates: HashMap::new(),
+        runner_template_bytes: 0,
         caller: parsed,
         unwritten_caller_bindings: HashSet::new(),
         registrations: HashSet::new(),
@@ -451,8 +454,9 @@ fn closed_batch(
         // Collection evaluates the title, so it must run no code. A title too long to compare is
         // still inert: read without that limit, within the batch's work budget.
         if normal::titles::title(parsed, site.node).is_none() {
-            let (_, spent) = arguments[0]
-                .and_then(|title| normal::titles::title_within(parsed, title, planner.left()))?;
+            let (_, spent) = arguments[0].and_then(|title| {
+                normal::titles::title_within(parsed, title, planner.remaining_work())
+            })?;
             planner.charge(spent)?;
         }
     }
@@ -1039,7 +1043,9 @@ struct Planner<'a> {
     source_bytes: usize,
     active: HashSet<(PathBuf, u32, u32)>,
     left: usize,
-    work: usize,
+    remaining_work: usize,
+    runner_templates: HashMap<(PathBuf, String), Rc<inventory::runners::Template>>,
+    runner_template_bytes: usize,
     /// Calls in this exact parsed caller can share source-local write checks.
     caller: &'a Parsed,
     unwritten_caller_bindings: HashSet<SymbolId>,
@@ -1050,9 +1056,9 @@ struct Planner<'a> {
     invocation: Vec<u32>,
 }
 
-impl Planner<'_> {
+impl<'a> Planner<'a> {
     /// The parser-independent inventory policy shared by all template readers.
-    fn inventory_setting(&self) -> inventory::Setting<'_> {
+    fn inventory_setting(&self) -> inventory::Setting<'a> {
         inventory::Setting {
             dialect: self.setting.dialect,
             globals: self.setting.globals,
@@ -1076,7 +1082,7 @@ impl Planner<'_> {
     fn admit_dependencies(
         &mut self,
         bytes: &[(PathBuf, usize)],
-        dependencies: Vec<PathBuf>,
+        dependencies: &[PathBuf],
         run: &Run,
     ) -> Option<()> {
         for (path, bytes) in bytes {
@@ -1093,18 +1099,56 @@ impl Planner<'_> {
                 self.read_sizes.insert(path, *bytes);
             }
         }
-        self.checked.extend(dependencies);
+        for dependency in dependencies {
+            if !self.checked.contains(dependency) {
+                self.checked.insert(dependency.clone());
+            }
+        }
         Some(())
     }
     /// Refuse work before a duplicated argument or a rendered frame can amplify it further.
     fn charge(&mut self, cost: usize) -> Option<()> {
-        self.work = self.work.saturating_add(cost);
-        (self.work <= MAX_WORK).then_some(())
+        self.remaining_work = self.remaining_work.checked_sub(cost)?;
+        Some(())
     }
 
     /// The work the batch may still do.
-    fn left(&self) -> usize {
-        MAX_WORK.saturating_sub(self.work)
+    fn remaining_work(&self) -> usize {
+        self.remaining_work
+    }
+
+    /// Reuse completed structural proofs within this caller's fixed source authority.
+    fn runner_template(
+        &mut self,
+        path: PathBuf,
+        export: &str,
+        run: &Run,
+    ) -> Option<Rc<inventory::runners::Template>> {
+        self.charge(path.as_os_str().len().saturating_add(export.len()))?;
+        let key = (path, export.to_owned());
+        if let Some(template) = self.runner_templates.get(&key) {
+            return Some(Rc::clone(template));
+        }
+        let template = Rc::new(
+            inventory::runners::template_with_read_budget(
+                &run.sources,
+                &key.0,
+                &key.1,
+                self.inventory_setting(),
+                Some(&mut self.remaining_work),
+            )
+            .ok()?,
+        );
+        self.charge(template.parsed.tree.nodes().count())?;
+        let bytes = template.retained_bytes()
+            + key.0.capacity()
+            + key.1.capacity()
+            + std::mem::size_of::<((PathBuf, String), Rc<inventory::runners::Template>)>();
+        if bytes <= MAX_WORK.saturating_sub(self.runner_template_bytes) {
+            self.runner_template_bytes += bytes;
+            self.runner_templates.insert(key, Rc::clone(&template));
+        }
+        Some(template)
     }
 
     /// Prove an unchanged binding once in the caller, retaining the old charge elsewhere.
@@ -1326,7 +1370,7 @@ impl Planner<'_> {
                 &helper,
                 name,
                 self.inventory_setting(),
-                self.left(),
+                self.remaining_work(),
             )
             .ok()?;
             let depth = depth.checked_sub(template.resolution_depth)?;
@@ -1339,7 +1383,7 @@ impl Planner<'_> {
                 return None;
             }
             self.charge(template.parsed.tree.descendants(template.object).count() + 1)?;
-            self.admit_dependencies(&template.dependency_bytes, template.dependencies, run)?;
+            self.admit_dependencies(&template.dependency_bytes, &template.dependencies, run)?;
             let plan = inventory::runners::ReturnedPlan {
                 function: template.function,
                 parameters: template.parameters,
@@ -1362,7 +1406,8 @@ impl Planner<'_> {
         } else {
             let found = self.inventory(caller, run)?;
             let plan =
-                inventory::runners::returned_local(parsed, &found, callee, self.left()).ok()?;
+                inventory::runners::returned_local(parsed, &found, callee, self.remaining_work())
+                    .ok()?;
             if !tree.span(plan.function).contains(tree.span(plan.object)) {
                 return None;
             }
@@ -1393,8 +1438,12 @@ impl Planner<'_> {
         arguments
             .into_iter()
             .map(|argument| {
-                let (value, spent) =
-                    normal::titles::value_within(module.parsed, argument?, values, self.left())?;
+                let (value, spent) = normal::titles::value_within(
+                    module.parsed,
+                    argument?,
+                    values,
+                    self.remaining_work(),
+                )?;
                 self.charge(spent)?;
                 self.charge(serde_json::to_vec(&value).ok()?.len())?;
                 Some(value)
@@ -1488,7 +1537,14 @@ impl Planner<'_> {
             let mut parent = frame.clone();
             self.derived_copy_work(&all_derived)?;
             parent.derived.clone_from(&all_derived);
-            let invocation = self.execute(factory, leaf_plan, actual, Some(&parent), run, depth)?;
+            let invocation = self.execute(
+                factory,
+                (leaf_plan.function, &leaf_plan.parameters, &leaf_plan.steps),
+                actual,
+                Some(&parent),
+                run,
+                depth,
+            )?;
             invocations.push((call, invocation));
         }
         Some(invocations)
@@ -1635,7 +1691,7 @@ impl Planner<'_> {
         )
         .ok()?;
         depth.checked_sub(template.resolution_depth)?;
-        self.admit_dependencies(&template.dependency_bytes, template.dependencies, run)?;
+        self.admit_dependencies(&template.dependency_bytes, &template.dependencies, run)?;
         let helper = Module {
             path: &template.path,
             source: &template.source,
@@ -1726,7 +1782,7 @@ impl Planner<'_> {
                 return None;
             };
             let (value, spent) =
-                normal::titles::value_within(parsed, *condition, &values, self.left())?;
+                normal::titles::value_within(parsed, *condition, &values, self.remaining_work())?;
             self.charge(spent)?;
             let truthy = match value {
                 serde_json::Value::Null => false,
@@ -1765,9 +1821,12 @@ impl Planner<'_> {
                 let Some(init) = tree.child(declarator, "init") else {
                     continue;
                 };
-                if let Some((value, spent)) =
-                    normal::titles::value_within(module.parsed, init, &frame.values, self.left())
-                {
+                if let Some((value, spent)) = normal::titles::value_within(
+                    module.parsed,
+                    init,
+                    &frame.values,
+                    self.remaining_work(),
+                ) {
                     self.charge(spent)?;
                     if let Some(binding) = normal::InvocationValue::scalar(&value) {
                         self.charge(binding.form.len().saturating_add(binding.shape.len()))?;
@@ -1859,7 +1918,7 @@ impl Planner<'_> {
             // Reading an argument may copy more text than it keeps: a template of an object
             // copies each property. Both the reading and what the frame keeps are charged.
             let (value, spent) =
-                normal::titles::value_within(parsed, argument?, values, self.left())?;
+                normal::titles::value_within(parsed, argument?, values, self.remaining_work())?;
             self.charge(spent)?;
             self.charge(serde_json::to_vec(&value).ok()?.len())?;
             actual.push(value);
@@ -1876,23 +1935,16 @@ impl Planner<'_> {
                 Imported::Namespace => return None,
             };
             let helper = self.imported_source(module, import, run)?;
-            let template =
-                inventory::runners::template(&run.sources, &helper, name, self.inventory_setting())
-                    .ok()?;
+            let template = self.runner_template(helper, name, run)?;
             let depth = depth.checked_sub(template.resolution_depth)?;
-            self.admit_dependencies(&template.dependency_bytes, template.dependencies, run)?;
-            let plan = inventory::runners::Plan {
-                function: template.function,
-                parameters: template.parameters,
-                steps: template.steps,
-            };
+            self.admit_dependencies(&template.dependency_bytes, &template.dependencies, run)?;
             self.execute(
                 Module {
                     path: &template.path,
                     source: &template.source,
                     parsed: &template.parsed,
                 },
-                plan,
+                (template.function, &template.parameters, &template.steps),
                 actual,
                 None,
                 run,
@@ -1901,7 +1953,14 @@ impl Planner<'_> {
         } else {
             let found = self.invocation_inventory(module, parent, run)?;
             let plan = inventory::runners::local(parsed, &found, callee).ok()?;
-            self.execute(module, plan, actual, parent, run, depth - 1)
+            self.execute(
+                module,
+                (plan.function, &plan.parameters, &plan.steps),
+                actual,
+                parent,
+                run,
+                depth - 1,
+            )
         }
     }
 
@@ -1958,7 +2017,7 @@ impl Planner<'_> {
                         parsed,
                         selected.default?,
                         &frame.values,
-                        self.left(),
+                        self.remaining_work(),
                     )?;
                     self.charge(spent)?;
                     value
@@ -1985,7 +2044,11 @@ impl Planner<'_> {
     fn execute(
         &mut self,
         module: Module<'_>,
-        plan: inventory::runners::Plan,
+        (function, parameters, steps): (
+            NodeId,
+            &[inventory::runners::Parameter],
+            &[inventory::runners::Step],
+        ),
         actual: Vec<Value>,
         parent: Option<&Frame>,
         run: &mut Run,
@@ -1994,13 +2057,13 @@ impl Planner<'_> {
         let parsed = module.parsed;
         let tree = &parsed.tree;
         let relative = run.sources.relative(module.path, self.setting.root)?;
-        let span = tree.span(plan.function);
+        let span = tree.span(function);
         let active = (relative.clone(), span.start, span.end);
         if !self.active.insert(active.clone()) {
             return None;
         }
         let result = (|| {
-            self.left = self.left.checked_sub(plan.steps.len().max(1))?;
+            self.left = self.left.checked_sub(steps.len().max(1))?;
             let mut found = self.invocation_inventory(module, parent, run)?;
             if let Some(known) = self.sources.get(&relative) {
                 if known != module.source {
@@ -2010,7 +2073,7 @@ impl Planner<'_> {
                 self.sources
                     .insert(relative.clone(), module.source.to_owned());
             }
-            let mut frame = self.frame(module, plan.function, &plan.parameters, &actual, parent)?;
+            let mut frame = self.frame(module, function, parameters, &actual, parent)?;
             frame.promote_inventory(parsed, &mut found);
             self.inventory_copy_work(&found)?;
             frame.inventory = Some(Box::new(found.clone()));
@@ -2019,7 +2082,7 @@ impl Planner<'_> {
             } else {
                 HashSet::new()
             };
-            for step in &plan.steps {
+            for step in steps {
                 match step {
                     inventory::runners::Step::Registration(node, Registers::Test) => {
                         let callback = normal::callback(tree, &parsed.scopes, *node, true)?;
@@ -2044,8 +2107,7 @@ impl Planner<'_> {
             }
             let mut direct: HashMap<u32, Vec<TestCase>> = HashMap::new();
             let mut diagnostic_hooks = Vec::new();
-            let hook_sites: Vec<_> = plan
-                .steps
+            let hook_sites: Vec<_> = steps
                 .iter()
                 .filter_map(|step| match step {
                     inventory::runners::Step::Registration(node, Registers::Hook(_)) => Some(*node),
@@ -2106,7 +2168,7 @@ impl Planner<'_> {
             )
             .for_registration(frame.function, frame.bindings.clone());
             let mut normalized_hooks = HashMap::new();
-            for step in &plan.steps {
+            for step in steps {
                 if let inventory::runners::Step::Registration(node, Registers::Hook(timing)) = step
                 {
                     normalized_hooks.insert(
@@ -2118,7 +2180,7 @@ impl Planner<'_> {
             let scheduled: Vec<_> = frame.sites.iter().chain(&hook_sites).copied().collect();
             let mut scheduling_safe = hook_normalizer.runner_scheduling_safe(&scheduled);
             drop(hook_normalizer);
-            for step in plan.steps {
+            for &step in steps {
                 match step {
                     inventory::runners::Step::Registration(node, Registers::Test) => {
                         tests.extend(direct.remove(&tree.span(node).start)?)
