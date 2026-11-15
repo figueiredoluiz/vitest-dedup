@@ -1,7 +1,7 @@
 //! How many times a collection-scope registration runs, as enclosing loops and iteration
 //! callbacks decide it.
 use super::Normalizer;
-use crate::lang::{Field, NodeId, Tree};
+use crate::lang::{Declaration, Field, NodeId, SymbolId, Tree};
 use serde_json::Value;
 
 #[cfg(test)]
@@ -77,7 +77,8 @@ impl Normalizer<'_> {
             .then(|| match tree.kind(statement) {
                 "ForOfStatement" if !tree.flag(statement, "await") => tree
                     .child(statement, "right")
-                    .and_then(|right| literal_length(tree, right, true)),
+                    .and_then(|right| self.iterated_array(right))
+                    .and_then(|array| literal_length(tree, array, true)),
                 "ForStatement" => self.counted(statement),
                 _ => None,
             })
@@ -86,7 +87,8 @@ impl Normalizer<'_> {
         count
     }
 
-    /// A `.forEach`/`.map` callback's call count: the receiver literal's present elements.
+    /// A `.forEach`/`.map` callback's call count: the receiver literal's present elements. Not a
+    /// generator, whose call only creates an iterator and never runs the body.
     fn callback_count(&mut self, function: NodeId, site: NodeId) -> Option<u64> {
         let tree = self.tree;
         let body = tree.child(function, "body")?;
@@ -98,7 +100,8 @@ impl Normalizer<'_> {
         }
         let call = tree.outer_parent(function)?;
         let callee = tree.inner(tree.child(call, "callee")?);
-        let count = (!tree.flag(call, "optional")
+        let count = (!tree.flag(function, "generator")
+            && !tree.flag(call, "optional")
             && !tree.flag(callee, "optional")
             && tree
                 .list(call, "arguments")
@@ -110,11 +113,63 @@ impl Normalizer<'_> {
             && !jumps(tree, body))
         .then(|| {
             tree.child(callee, "object")
-                .and_then(|receiver| literal_length(tree, receiver, false))
+                .and_then(|receiver| self.iterated_array(receiver))
+                .and_then(|array| literal_length(tree, array, false))
         })
         .flatten();
         self.loop_counts.insert(function, count);
         count
+    }
+
+    /// The array a counted position iterates: the node itself, or the array literal a `const`
+    /// binding holds when every use of that binding is a counted position too, so nothing reads
+    /// the array in a way that could change its length. Not an exported binding, which another
+    /// module may hold, nor in a module that may replace a built-in, so another iteration of the
+    /// binding may change it. That signal also covers a read of the global `eval`, which may write
+    /// any binding in scope, and a member with a computed name, which may name an iteration method.
+    fn iterated_array(&mut self, node: NodeId) -> Option<NodeId> {
+        let tree = self.tree;
+        let node = tree.inner(node);
+        if tree.kind(node) != "Identifier" {
+            return Some(node);
+        }
+        if self.scopes.may_replace_builtins() {
+            return None;
+        }
+        let id = self.scopes.symbol_at(tree.span(node).start)?;
+        if let Some(&array) = self.iterated_arrays.get(&id) {
+            return array;
+        }
+        let array = self.const_array(id);
+        self.iterated_arrays.insert(id, array);
+        array
+    }
+
+    /// The array literal `id` is declared with, when every use of it is a counted position that
+    /// runs after the declaration initializes the binding (see [`initialized_at`]).
+    fn const_array(&self, id: SymbolId) -> Option<NodeId> {
+        let tree = self.tree;
+        let symbol = self.scopes.symbol(id);
+        let Declaration::Variable(declarator) = symbol.declaration else {
+            return None;
+        };
+        let declaration = tree.parent(declarator)?;
+        let enclosing = tree.parent(declaration)?;
+        let init = tree.inner(tree.child(declarator, "init")?);
+        (tree.text(declaration, "kind") == Some("const")
+            && tree.kind(enclosing) != "ExportNamedDeclaration"
+            && tree
+                .child(declarator, "id")
+                .is_some_and(|id| tree.kind(id) == "Identifier")
+            && tree.kind(init) == "ArrayExpression"
+            && symbol.references.iter().all(|reference| {
+                !reference.write
+                    && reference.node.is_some_and(|identifier| {
+                        initialized_at(tree, declarator, enclosing, identifier)
+                            && counted_position(tree, identifier)
+                    })
+            }))
+        .then_some(init)
     }
 
     /// `for (let i = A; i < B; i++)` with integer literal bounds and a counter only the update
@@ -231,6 +286,75 @@ fn literal_length(tree: &Tree, node: NodeId, holes: bool) -> Option<u64> {
         elements.iter().flatten().count()
     };
     u64::try_from(count).ok()
+}
+
+/// Whether a read of the binding `declarator` declares, at `identifier`, can only run once the
+/// declaration has initialized it, so no read lands in the temporal dead zone (where a caught
+/// throw would leave the file collecting without the loop): the read starts after the declarator,
+/// lies inside `enclosing` (so not in a later `switch` case, which can be entered past the
+/// declaration), and no hoisted `function` declaration, callable earlier, lies between them.
+fn initialized_at(tree: &Tree, declarator: NodeId, enclosing: NodeId, identifier: NodeId) -> bool {
+    if tree.span(identifier).start < tree.span(declarator).end {
+        return false;
+    }
+    let mut node = identifier;
+    while let Some(parent) = tree.parent(node) {
+        if parent == enclosing {
+            return true;
+        }
+        if tree.kind(parent) == "FunctionDeclaration" {
+            return false;
+        }
+        node = parent;
+    }
+    false
+}
+
+/// Whether `identifier` is iterated where only its length is read: the iterable of a `for...of`
+/// without `await`, or the receiver of a `.forEach`/`.map` call whose callback is written inline
+/// and cannot reach the array ([`blind_to_receiver`]).
+fn counted_position(tree: &Tree, identifier: NodeId) -> bool {
+    let Some(parent) = tree.outer_parent(identifier) else {
+        return false;
+    };
+    match tree.kind(parent) {
+        "ForOfStatement" => {
+            !tree.flag(parent, "await")
+                && tree
+                    .child(parent, "right")
+                    .is_some_and(|right| tree.inner(right) == identifier)
+        }
+        "MemberExpression" => {
+            tree.child(parent, "object")
+                .is_some_and(|object| tree.inner(object) == identifier)
+                && !tree.flag(parent, "optional")
+                && matches!(
+                    tree.child(parent, "property")
+                        .and_then(|property| tree.text(property, "name")),
+                    Some("forEach" | "map")
+                )
+                && tree.outer_parent(parent).is_some_and(|call| {
+                    tree.kind(call) == "CallExpression"
+                        && !tree.flag(call, "optional")
+                        && tree
+                            .child(call, "callee")
+                            .is_some_and(|callee| tree.inner(callee) == parent)
+                        && tree
+                            .list(call, "arguments")
+                            .first()
+                            .copied()
+                            .flatten()
+                            .map(|first| tree.inner(first))
+                            .is_some_and(|callback| {
+                                matches!(
+                                    tree.kind(callback),
+                                    "ArrowFunctionExpression" | "FunctionExpression"
+                                ) && blind_to_receiver(tree, callback)
+                            })
+                })
+        }
+        _ => false,
+    }
 }
 
 /// An integer numeric literal, negated at most once.
