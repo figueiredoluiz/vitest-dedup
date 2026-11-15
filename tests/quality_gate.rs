@@ -765,6 +765,30 @@ fn loops_count_one_case_per_proved_iteration() {
             true,
         ),
         (
+            "const { prototype: p } = Array\nconst original = p.forEach\np.forEach = function (this: unknown[]) { this.length = 0 }\nconst rows = [1, 2]\nrows.forEach(() => {})\np.forEach = original\nfor (const n of rows) { test('loop', BODY) }",
+            0,
+            2,
+            true,
+        ),
+        (
+            "const key = 'proto' + 'type'\nconst { [key]: p } = Array as any\nconst original = p.forEach\np.forEach = function (this: unknown[]) { this.length = 0 }\nconst rows = [1, 2]\nrows.forEach(() => {})\np.forEach = original\nfor (const n of rows) { test('loop', BODY) }",
+            0,
+            2,
+            true,
+        ),
+        (
+            "const p = Object.getOwnPropertyDescriptor(Array, 'prototype')!.value\nconst original = p.forEach\np.forEach = function (this: unknown[]) { this.length = 0 }\nconst rows = [1, 2]\nrows.forEach(() => {})\np.forEach = original\nfor (const n of rows) { test('loop', BODY) }",
+            0,
+            2,
+            true,
+        ),
+        (
+            "const p = Reflect.get(Array, 'proto' + 'type')\nconst original = p.forEach\np.forEach = function (this: unknown[]) { this.length = 0 }\nconst rows = [1, 2]\nrows.forEach(() => {})\np.forEach = original\nfor (const n of rows) { test('loop', BODY) }",
+            0,
+            2,
+            true,
+        ),
+        (
             "const rows = [1, 2]\ndescribe('s', () => { for (const n of rows) { if (rows.length < 4) rows.push(9); test('loop', BODY) } })",
             0,
             2,

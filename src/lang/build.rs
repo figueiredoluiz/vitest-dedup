@@ -138,17 +138,43 @@ const PROTOTYPE_ROUTES: [&str; 6] = [
     "Function",
 ];
 
-/// Whether the module may replace a built-in method: it names a prototype route, computes a member
-/// name, uses the global `String` as a value, or reaches code built from text or the global object.
-/// It reads member syntax only: destructured keys, `with`, reflection with built strings and code
-/// another module runs (an import, `node:vm`, a setup file) can still replace one unseen.
+/// Whether the module may replace a built-in method: it names a prototype route as a member or a
+/// destructured key, computes a member name or a destructured key, passes `'prototype'` or
+/// `'__proto__'` as an argument, uses the global `String` as a value, or reaches `Reflect`, code
+/// built from text, or the global object. `Object` reflection with a built string, `with` (outside
+/// a module), and code another module runs (an import, `node:vm`, a setup file) can still replace
+/// one unseen.
 fn may_replace_builtins(tree: &Tree, names: &HashMap<u32, Name>) -> bool {
     let global = |node: NodeId, name: &str| {
         tree.kind(node) == "Identifier"
             && tree.text(node, "name") == Some(name)
             && names.get(&tree.span(node).start) == Some(&Name::Reference(None))
     };
+    let string = |node: NodeId| match tree.field_of(node, "value") {
+        super::Field::Value(serde_json::Value::String(text)) if tree.kind(node) == "Literal" => {
+            Some(text.as_str())
+        }
+        _ => None,
+    };
     tree.nodes().any(|node| match tree.kind(node) {
+        "ObjectPattern" => tree
+            .list(node, "properties")
+            .into_iter()
+            .flatten()
+            .any(|property| {
+                tree.kind(property) == "Property"
+                    && (tree.flag(property, "computed")
+                        || tree.child(property, "key").is_some_and(|key| {
+                            tree.text(key, "name")
+                                .or_else(|| string(key))
+                                .is_some_and(|name| PROTOTYPE_ROUTES.contains(&name))
+                        }))
+            }),
+        "CallExpression" | "NewExpression" => tree
+            .list(node, "arguments")
+            .into_iter()
+            .flatten()
+            .any(|argument| matches!(string(argument), Some("prototype" | "__proto__"))),
         "MemberExpression" => {
             let Some(property) = tree.child(node, "property") else {
                 return true;
@@ -176,9 +202,17 @@ fn may_replace_builtins(tree: &Tree, names: &HashMap<u32, Name>) -> bool {
                 callee || object
             })
         }
-        "Identifier" => ["Function", "globalThis", "global", "window", "self", "eval"]
-            .iter()
-            .any(|name| global(node, name)),
+        "Identifier" => [
+            "Function",
+            "globalThis",
+            "global",
+            "window",
+            "self",
+            "eval",
+            "Reflect",
+        ]
+        .iter()
+        .any(|name| global(node, name)),
         "ImportExpression" => true,
         _ => false,
     })
