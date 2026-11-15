@@ -1519,13 +1519,7 @@ impl<'s> Module<'s> {
     fn reassigned(&self, symbol: SymbolId) -> bool {
         self.evaluates
             || self.redeclared.contains(&symbol)
-            || self
-                .parsed
-                .scopes
-                .symbol(symbol)
-                .references
-                .iter()
-                .any(|reference| reference.write)
+            || crate::lang::proof::unwritten(&self.parsed.scopes, symbol).is_none()
     }
 
     /// The bindings more than one declaration binds: patterns, parameters and catch bindings

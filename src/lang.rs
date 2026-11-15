@@ -11,6 +11,7 @@ pub(crate) mod js_text;
 pub(crate) mod limits;
 pub(crate) mod manifest_fs;
 pub(crate) mod packages;
+pub(crate) mod proof;
 mod resolve;
 mod scalar;
 mod scopes;

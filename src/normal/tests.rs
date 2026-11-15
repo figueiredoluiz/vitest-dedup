@@ -716,6 +716,25 @@ fn written_row_parameters_are_never_substituted() {
     })
 }
 
+/// A body function declaration redeclares the parameter without writing it: every read sees the
+/// function, so the row's cell does not describe the parameter.
+#[test]
+fn redeclared_row_parameters_are_never_substituted() {
+    let main =
+        "test.each([[6]])('redeclared', function (x) { function x() {} expect(x).toBe(6) })\n\
+                test.each([[6]])('other name', function (x) { function y() {} expect(x).toBe(6) })";
+    with_normalizer(main, &[], true, |normalizer, tree, found| {
+        let keyed: Vec<_> = found
+            .sites
+            .iter()
+            .map(|site| site_forms(normalizer, tree, site.node))
+            .collect();
+        assert_eq!(keyed.len(), 2, "{keyed:#?}");
+        assert_eq!(keyed[0], [None], "{keyed:#?}");
+        assert!(keyed[1][0].is_some(), "{keyed:#?}");
+    })
+}
+
 /// `for` passes each row whole; outer elisions are skipped while spreads remain unreadable.
 #[test]
 fn whole_rows_are_never_spread_and_outer_holes_are_skipped() {

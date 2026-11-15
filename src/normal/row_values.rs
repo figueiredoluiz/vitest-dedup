@@ -329,16 +329,7 @@ impl Normalizer<'_> {
                 if properties.is_some() {
                     return None;
                 }
-                let symbol = self.scopes.symbol_at(tree.span(parameter).start)?;
-                if self
-                    .scopes
-                    .symbol(symbol)
-                    .references
-                    .iter()
-                    .any(|r| r.write)
-                {
-                    return None;
-                }
+                let symbol = self.immutable_parameter(parameter)?;
                 match values.get(i) {
                     Some(Some(value)) => {
                         bound.insert(symbol, value.clone());
@@ -367,16 +358,7 @@ impl Normalizer<'_> {
                     if tree.kind(binding) != "Identifier" {
                         return None;
                     }
-                    let symbol = self.scopes.symbol_at(tree.span(binding).start)?;
-                    if self
-                        .scopes
-                        .symbol(symbol)
-                        .references
-                        .iter()
-                        .any(|r| r.write)
-                    {
-                        return None;
-                    }
+                    let symbol = self.immutable_parameter(binding)?;
                     let value = match fields.iter().rev().find(|(name, _)| name == key) {
                         Some((_, node)) => match self.row_scalar(*node) {
                             Some(value) => value,
@@ -803,10 +785,8 @@ impl Reader<'_, '_> {
         bound: &HashMap<SymbolId, Scalar>,
     ) -> Option<Scalar> {
         let tree = parsed.tree;
+        crate::lang::proof::unwritten(parsed.scopes, symbol)?;
         let symbol = parsed.scopes.symbol(symbol);
-        if symbol.references.iter().any(|r| r.write) {
-            return None;
-        }
         match &symbol.declaration {
             Declaration::Variable(declaration) => {
                 let parent = tree.parent(*declaration)?;

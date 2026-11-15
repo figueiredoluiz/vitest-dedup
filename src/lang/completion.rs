@@ -1,7 +1,7 @@
 //! Statement completions: whether a statement runs no code and ends where it started, so it sets
 //! nothing up for the code around it.
 
-use super::{Declaration, Field, NodeId, Scopes, Tree};
+use super::{proof, Declaration, Field, NodeId, Scopes, Tree};
 use std::collections::BTreeSet;
 
 /// Nesting the evaluator follows before it gives up; deeper statements are not inert.
@@ -295,7 +295,7 @@ impl Evaluator<'_> {
                 tree.parent(declarator).is_some_and(|declaration| {
                     tree.text(declaration, "kind") == Some("const")
                         && !tree.erased_declaration(declaration)
-                        && self.initialized_before(declaration, node)
+                        && self.initialized_before(declarator, node)
                 }) && tree
                     .child(declarator, "id")
                     .is_some_and(|id| tree.kind(id) == "Identifier")
@@ -307,18 +307,21 @@ impl Evaluator<'_> {
         }
     }
 
-    /// Whether `declaration` has run whenever `read` does: `read` sits in a later statement of the
-    /// list holding `declaration`, and never in a function declaration, which hoisting can call
-    /// first. Each `switch` case is a list of its own, so a later case, which control can enter
-    /// directly, never counts.
-    fn initialized_before(&self, declaration: NodeId, read: NodeId) -> bool {
+    /// Whether `declarator` has run whenever `read` does ([`proof::initialized`]), with `read` in a
+    /// later statement of the list and in no function declaration at all: stricter than the
+    /// proof, which admits a read in a function that also holds the declaration.
+    fn initialized_before(&self, declarator: NodeId, read: NodeId) -> bool {
         let tree = self.tree;
+        let Some(declaration) = tree.parent(declarator) else {
+            return false;
+        };
         let Some(body) = tree.parent(declaration) else {
             return false;
         };
-        !tree
-            .ancestors(read)
-            .any(|ancestor| tree.kind(ancestor) == "FunctionDeclaration")
+        proof::initialized(tree, declarator, read).is_some()
+            && !tree
+                .ancestors(read)
+                .any(|ancestor| tree.kind(ancestor) == "FunctionDeclaration")
             && tree.ancestors(read).any(|statement| {
                 tree.parent(statement) == Some(body)
                     && tree.span(statement).start >= tree.span(declaration).end

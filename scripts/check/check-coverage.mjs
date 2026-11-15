@@ -258,6 +258,7 @@ const RUST_MODULES = {
   'src/normal/completion.rs': 100,
   // The completion evaluator: measured at 96.73% (237/245 lines).
   'src/lang/completion.rs': 96.7,
+  'src/lang/proof.rs': 100,
   'src/corpus.rs': 99,
   // Bounded suite invocations: first measured 160/173 lines (92.49%).
   'src/corpus/table_frames.rs': 92.4,
