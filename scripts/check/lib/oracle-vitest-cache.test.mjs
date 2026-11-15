@@ -125,31 +125,30 @@ test('unusable storage turns the cache off and keeps every collection', () => fi
   assert.deepEqual(readdirSync(cache), ['k'], 'no temporary file left behind')
 }))
 
-test('a symlink is keyed by its target text', { skip: process.platform === 'win32' && 'symlinks need privileges on Windows' }, () => fixture(({ root }) => {
-  // Two targets with the same bytes: the link's path and resolved bytes stay equal, its text does not.
-  writeFileSync(join(root, 'fixtures', 'a', 'other.test.ts'), "test('a', () => {})")
-  symlinkSync('a.test.ts', join(root, 'fixtures', 'a', 'link.test.ts'))
-  const before = cacheKey(root)
-  rmSync(join(root, 'fixtures', 'a', 'link.test.ts'))
-  symlinkSync('other.test.ts', join(root, 'fixtures', 'a', 'link.test.ts'))
-  assert.notEqual(cacheKey(root), before)
-}))
-
-test('a link is keyed only when its target lies where everything it imports is keyed', { skip: process.platform === 'win32' && 'symlinks need privileges on Windows' }, () => fixture(({ root }) => {
-  // A helper outside the checkout may import siblings the key never sees, so it is refused.
-  writeFileSync(join(root, '..', 'shared.ts'), "import { title } from './sibling'")
-  symlinkSync(join(root, '..', 'shared.ts'), join(root, 'fixtures', 'a', 'helper.ts'))
-  assert.throws(() => cacheKey(root), /links outside the trees the key covers/)
-  // So is one into a checkout file outside the walked trees, whose ignored neighbours are not keyed.
-  rmSync(join(root, 'fixtures', 'a', 'helper.ts'))
-  symlinkSync(join(root, 'package.json'), join(root, 'fixtures', 'a', 'helper.ts'))
-  assert.throws(() => cacheKey(root), /links outside the trees the key covers/)
-  // A link into a walked tree is fine: its target and neighbours are keyed for themselves.
-  rmSync(join(root, 'fixtures', 'a', 'helper.ts'))
-  symlinkSync(join(root, 'scripts', 'check', 'lib', 'collection-probe-runner.mjs'), join(root, 'fixtures', 'a', 'helper.ts'))
-  const before = cacheKey(root)
-  writeFileSync(join(root, 'scripts', 'check', 'lib', 'collection-probe-runner.mjs'), 'export default 3')
-  assert.notEqual(cacheKey(root), before)
+test('any symlink in the checkout turns the cache off, and collections still run', { skip: process.platform === 'win32' && 'symlinks need privileges on Windows' }, () => fixture(({ root, cache }) => {
+  const outside = join(root, '..', 'hop.ts')
+  const link = join(root, 'fixtures', 'a', 'helper.ts')
+  for (const [target, setup] of [
+    ['a.test.ts', () => {}], // inside the fixture tree
+    [join(root, '..', 'shared.ts'), () => writeFileSync(join(root, '..', 'shared.ts'), '')], // outside the checkout
+    // A chain through an outside link back into the fixture tree: retargeting the hop changes nothing the key could see.
+    [outside, () => symlinkSync(join(root, 'fixtures', 'a', 'a.test.ts'), outside)],
+    [join(root, 'missing.ts'), () => {}], // dangling
+  ]) {
+    rmSync(link, { force: true })
+    rmSync(outside, { force: true })
+    setup()
+    symlinkSync(target, link)
+    assert.throws(() => cacheKey(root), /fixtures\/a\/helper\.ts is a symlink/, target)
+    const off = counting(root, cache)
+    assert.equal(off.cached.collect(root, 'fixtures/a').size, 1)
+    assert.equal(off.cached.stats.enabled, false)
+    assert.match(off.cached.stats.offReason, /is a symlink/)
+  }
+  // A git-listed link elsewhere in the checkout counts too.
+  rmSync(link)
+  symlinkSync('package.json', join(root, 'docs-link.json'))
+  assert.throws(() => cacheKey(root), /docs-link\.json is a symlink/)
 }))
 
 test('a package linked into node_modules turns the cache off unless it is a workspace of the install', { skip: process.platform === 'win32' && 'symlinks need privileges on Windows' }, () => fixture(({ root, cache }) => {
@@ -182,24 +181,6 @@ test('a hook snapshot links node_modules to its checkout, whose workspaces are t
   rmSync(join(root, 'node_modules'), { recursive: true })
   symlinkSync(join(install, 'node_modules'), join(root, 'node_modules'))
   // The snapshot's own manifest names no workspaces; the install's does.
-  assert.match(cacheKey(root), /^[0-9a-f]{64}$/)
-}))
-
-test('a link the key cannot cover turns the cache off, and collections still run', { skip: process.platform === 'win32' && 'symlinks need privileges on Windows' }, () => fixture(({ root, cache }) => {
-  for (const [target, reason] of [[join(root, '..'), /links outside/], [join(root, 'missing.ts'), /does not resolve/], [join(root, 'target'), /links outside/]]) {
-    mkdirSync(join(root, 'target'), { recursive: true })
-    const link = join(root, 'fixtures', 'a', 'linked')
-    rmSync(link, { force: true })
-    symlinkSync(target, link)
-    assert.throws(() => cacheKey(root), reason, target)
-    const off = counting(root, cache)
-    assert.equal(off.cached.collect(root, 'fixtures/a').size, 1)
-    assert.equal(off.cached.stats.enabled, false)
-    assert.match(off.cached.stats.offReason, reason)
-  }
-  // A link to a directory the walk covers is keyed by its text alone.
-  rmSync(join(root, 'fixtures', 'a', 'linked'))
-  symlinkSync(join(root, 'scripts'), join(root, 'fixtures', 'a', 'linked'))
   assert.match(cacheKey(root), /^[0-9a-f]{64}$/)
 }))
 

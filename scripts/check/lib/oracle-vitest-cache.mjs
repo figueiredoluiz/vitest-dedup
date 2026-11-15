@@ -8,16 +8,16 @@
 // version. One key per run, not per directory: a case can collect a project outside its own
 // directory. The analyzer side and every comparison always run.
 //
-// A symlink that leads outside what the key covers, a package linked into `node_modules` other than
-// the repository's own workspaces, or storage that cannot be read or written, turns the cache off
-// rather than failing the gate.
+// A symlink in the checkout, a package linked into `node_modules` other than the repository's own
+// workspaces, or storage that cannot be read or written, turns the cache off rather than failing
+// the gate.
 //
 // Off under `CI` or `VITEST_DEDUP_ORACLE_CACHE=0`, so CI stays the uncached authority.
 import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, realpathSync, renameSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs'
+import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { dirname, join, sep } from 'node:path'
+import { dirname, join } from 'node:path'
 import { oracleEnvironment } from './collection-oracle.mjs'
 
 // Bump when the stored shape or what `collectWithVitest` returns changes.
@@ -46,9 +46,6 @@ export function cacheRoot(env = process.env) {
   return join(env.XDG_CACHE_HOME || join(homedir(), '.cache'), 'vitest-dedup', 'oracle-vitest')
 }
 
-/** Whether `path` is `root` itself or lies under it. */
-const within = (root, path) => path === root || path.startsWith(`${root}${sep}`)
-
 /** Every path under `dir`, relative to `root` with `/` separators, without following links. */
 function walk(root, dir) {
   const absolute = join(root, dir)
@@ -75,24 +72,18 @@ function keyedPaths(root) {
 }
 
 /**
- * Feed every keyed file into `hash` in a fixed order: path, size and bytes. A symlink is keyed by its
- * target text; its target must lie in a walked tree, where the target and everything beside it it
- * may import are keyed.
- * @throws {Error} When a link does not resolve, or resolves outside the walked trees.
+ * Feed every keyed file into `hash` in a fixed order: path, size and bytes.
+ * @throws {Error} At a symlink: a link, or a chain of them, can reach files no key follows, and the
+ *   checkout has none, so a run with one goes uncached.
  */
 function hashFiles(hash, root) {
-  const real = realpathSync(root)
   for (const path of keyedPaths(root)) {
     const absolute = join(root, path)
     // A tracked file deleted from the checkout drops out of the hash, which changes the key.
     const stat = lstatSync(absolute, { throwIfNoEntry: false })
     if (!stat) continue
-    if (stat.isSymbolicLink()) {
-      hash.update(`link\0${path}\0${readlinkSync(absolute)}\0`)
-      let target
-      try { target = realpathSync(absolute) } catch { throw new Error(`${path} does not resolve`) }
-      if (!WALKED_TREES.some(tree => within(join(real, tree), target))) throw new Error(`${path} links outside the trees the key covers`)
-    } else if (stat.isFile()) hash.update(`file\0${path}\0${stat.size}\0`).update(readFileSync(absolute))
+    if (stat.isSymbolicLink()) throw new Error(`${path} is a symlink, which the cache does not follow`)
+    if (stat.isFile()) hash.update(`file\0${path}\0${stat.size}\0`).update(readFileSync(absolute))
   }
 }
 
