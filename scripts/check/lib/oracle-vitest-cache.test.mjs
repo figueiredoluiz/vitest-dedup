@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, symlinkSync, u
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
+import { execFileSync } from 'node:child_process'
 import { cacheEnabled, cacheKey, cacheRoot, cachedCollector, pruneCache } from './oracle-vitest-cache.mjs'
 
 /** Run `body` with a fresh checkout-shaped directory and cache directory, always removed. */
@@ -20,10 +21,12 @@ function fixture(body) {
       'node_modules/vitest/package.json': '{"version":"5.1.0"}',
       'node_modules/vitest4/package.json': '{"version":"4.0.0"}',
       'src/lib.rs': 'pub fn f() {}',
+      '.gitignore': 'notes.local/\nfixtures/a/node_modules/\n',
     })) {
       mkdirSync(join(root, path, '..'), { recursive: true })
       writeFileSync(join(root, path), text)
     }
+    execFileSync('git', ['init', '--quiet'], { cwd: root })
     return body({ root, cache })
   } finally { rmSync(base, { recursive: true, force: true }) }
 }
@@ -44,7 +47,7 @@ test('a second collection under the same key is read back, equal to the first', 
   assert.deepEqual(reused, collected)
   assert.ok(reused instanceof Map)
   assert.equal(second.calls(), 0)
-  assert.deepEqual(second.cached.stats, { hits: 1, misses: 0, enabled: true, storageError: null })
+  assert.deepEqual(second.cached.stats, { hits: 1, misses: 0, enabled: true, offReason: null })
   // Another directory under the same key is collected.
   second.cached.collect(root, 'fixtures/b')
   assert.equal(second.calls(), 1)
@@ -62,6 +65,11 @@ test('anything Vitest could read changes the key; the analyzer source does not',
     ['tsconfig.json', '{}'],
     ['node_modules/vitest/package.json', '{"version":"5.2.0"}'],
     ['node_modules/vitest4/package.json', '{"version":"4.1.0"}'],
+    // Anything outside the old fixture and gate trees counts too.
+    ['docs/guide.md', '# guide'],
+    ['tests/fixtures/config/vitest.config.ts', 'export default {}'],
+    // npm's record of the installed tree changes on any install, `--no-save` included.
+    ['node_modules/.package-lock.json', '{"packages":{"node_modules/@test-kit/runtime":{}}}'],
   ]
   let previous = before
   for (const [path, text] of changes) {
@@ -71,8 +79,11 @@ test('anything Vitest could read changes the key; the analyzer source does not',
     assert.notEqual(next, previous, path)
     previous = next
   }
-  writeFileSync(join(root, 'src', 'lib.rs'), 'pub fn g() {}')
-  assert.equal(cacheKey(root), previous, 'Rust source is not something Vitest reads')
+  for (const [path, text] of [['notes.local/big.json', '{}'], ['src/lib.rs', 'pub fn g() {}'], ['tests/cli.rs', 'fn t() {}'], ['target/release/vitest-dedup', 'binary'], ['.git/description', 'edited'], ['node_modules/pkg/index.js', 'x']]) {
+    mkdirSync(join(root, path, '..'), { recursive: true })
+    writeFileSync(join(root, path), text)
+    assert.equal(cacheKey(root), previous, `${path} is not collection input`)
+  }
   assert.notEqual(cacheKey(root, 'v99.0.0'), previous, 'Node version')
 }))
 
@@ -99,7 +110,7 @@ test('unusable storage turns the cache off and keeps every collection', () => fi
   const blocked = counting(root, cache)
   assert.equal(blocked.cached.collect(root, 'fixtures/a').size, 1)
   assert.equal(blocked.cached.stats.enabled, false)
-  assert.match(blocked.cached.stats.storageError, /ENOTDIR|EEXIST/)
+  assert.match(blocked.cached.stats.offReason, /ENOTDIR|EEXIST/)
   rmSync(cache)
   // The key directory cannot be created: the first write fails, the result stands, later ones skip.
   mkdirSync(cache)
@@ -107,7 +118,7 @@ test('unusable storage turns the cache off and keeps every collection', () => fi
   let calls = 0
   const writing = cachedCollector(root, (_root, dir) => { calls++; return new Map([[dir, {}]]) }, { env: {}, base: cache, key: 'k' })
   assert.deepEqual([...writing.collect(root, 'fixtures/a')], [['fixtures/a', {}]])
-  assert.ok(writing.stats.storageError)
+  assert.ok(writing.stats.offReason)
   assert.deepEqual([...writing.collect(root, 'fixtures/b')], [['fixtures/b', {}]])
   assert.equal(calls, 2)
   assert.equal(writing.stats.misses, 2)
@@ -115,10 +126,54 @@ test('unusable storage turns the cache off and keeps every collection', () => fi
 }))
 
 test('a symlink is keyed by its target text', { skip: process.platform === 'win32' && 'symlinks need privileges on Windows' }, () => fixture(({ root }) => {
+  // Two targets with the same bytes: the link's path and resolved bytes stay equal, its text does not.
+  writeFileSync(join(root, 'fixtures', 'a', 'other.test.ts'), "test('a', () => {})")
   symlinkSync('a.test.ts', join(root, 'fixtures', 'a', 'link.test.ts'))
   const before = cacheKey(root)
   rmSync(join(root, 'fixtures', 'a', 'link.test.ts'))
   symlinkSync('other.test.ts', join(root, 'fixtures', 'a', 'link.test.ts'))
+  assert.notEqual(cacheKey(root), before)
+}))
+
+test('a linked file is keyed by its content, wherever it lives', { skip: process.platform === 'win32' && 'symlinks need privileges on Windows' }, () => fixture(({ root }) => {
+  const outside = join(root, '..', 'shared.ts')
+  writeFileSync(outside, "export const title = 'a'")
+  symlinkSync(outside, join(root, 'fixtures', 'a', 'helper.ts'))
+  const before = cacheKey(root)
+  writeFileSync(outside, "export const title = 'b'")
+  assert.notEqual(cacheKey(root), before)
+}))
+
+test('a link the key cannot cover turns the cache off, and collections still run', { skip: process.platform === 'win32' && 'symlinks need privileges on Windows' }, () => fixture(({ root, cache }) => {
+  for (const [target, reason] of [[join(root, '..'), /does not cover/], [join(root, 'missing.ts'), /does not resolve/], [join(root, 'target'), /does not cover/]]) {
+    mkdirSync(join(root, 'target'), { recursive: true })
+    const link = join(root, 'fixtures', 'a', 'linked')
+    rmSync(link, { force: true })
+    symlinkSync(target, link)
+    assert.throws(() => cacheKey(root), reason, target)
+    const off = counting(root, cache)
+    assert.equal(off.cached.collect(root, 'fixtures/a').size, 1)
+    assert.equal(off.cached.stats.enabled, false)
+    assert.match(off.cached.stats.offReason, reason)
+  }
+  // A link to a directory the walk covers is keyed by its text alone.
+  rmSync(join(root, 'fixtures', 'a', 'linked'))
+  symlinkSync(join(root, 'scripts'), join(root, 'fixtures', 'a', 'linked'))
+  assert.match(cacheKey(root), /^[0-9a-f]{64}$/)
+}))
+
+test('a checkout git cannot list turns the cache off', () => fixture(({ root, cache }) => {
+  rmSync(join(root, '.git'), { recursive: true, force: true })
+  assert.throws(() => cacheKey(root), /git cannot list/)
+  const off = counting(root, cache)
+  assert.equal(off.cached.collect(root, 'fixtures/a').size, 1)
+  assert.match(off.cached.stats.offReason, /git cannot list/)
+}))
+
+test('a tracked file deleted from the checkout changes the key', () => fixture(({ root }) => {
+  execFileSync('git', ['add', 'package.json'], { cwd: root })
+  const before = cacheKey(root)
+  rmSync(join(root, 'package.json'))
   assert.notEqual(cacheKey(root), before)
 }))
 
@@ -129,7 +184,7 @@ test('CI and the opt-out neither read nor write', () => fixture(({ root, cache }
     const off = counting(root, join(cache, 'off'), env)
     off.cached.collect(root, 'fixtures/a')
     assert.equal(off.calls(), 1, JSON.stringify(env))
-    assert.deepEqual(off.cached.stats, { hits: 0, misses: 0, enabled: false, storageError: null })
+    assert.deepEqual(off.cached.stats, { hits: 0, misses: 0, enabled: false, offReason: null })
   }
   assert.equal(existsSync(join(cache, 'off')), false, 'nothing written while off')
   assert.equal(cacheEnabled({}), true)
