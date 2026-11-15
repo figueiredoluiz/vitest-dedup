@@ -167,6 +167,11 @@ test('a package linked into node_modules turns the cache off unless it is a work
   assert.equal(off.cached.collect(root, 'fixtures/a').size, 1)
   assert.match(off.cached.stats.offReason, /linked package/)
   rmSync(join(root, 'node_modules', '@test-kit', 'runtime'))
+  // Linked by hand into a dependency's own dependency tree.
+  mkdirSync(join(root, 'node_modules', 'vitest', 'node_modules'))
+  symlinkSync(join(root, '..', 'runtime'), join(root, 'node_modules', 'vitest', 'node_modules', 'tinyexec'))
+  assert.throws(() => cacheKey(root), /node_modules\/vitest\/node_modules\/tinyexec is a linked package/)
+  rmSync(join(root, 'node_modules', 'vitest', 'node_modules', 'tinyexec'))
   symlinkSync(join(root, 'missing'), join(root, 'node_modules', 'dangling'))
   assert.throws(() => cacheKey(root), /node_modules\/dangling does not resolve/)
 }))

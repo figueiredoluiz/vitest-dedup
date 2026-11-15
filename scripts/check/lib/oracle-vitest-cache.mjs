@@ -88,11 +88,12 @@ function hashFiles(hash, root) {
 }
 
 /**
- * Refuse an installed package that is a link the key cannot follow, such as one `npm link` made:
- * npm records no change when its sources change. A link to one of the install's own workspace
- * packages is allowed, since those are this repository's sources.
+ * Refuse a link anywhere in the installed tree that the key cannot follow, such as a package `npm
+ * link` made or one linked by hand into a dependency's own `node_modules`: npm records no change
+ * when its sources change. A link to one of the install's own workspace packages is allowed, since
+ * those are this repository's sources, and so are the executables under `.bin`.
  * @param {string} root Checkout root.
- * @throws {Error} Naming the first linked package that is not a workspace of the install.
+ * @throws {Error} Naming the first link that is not a workspace of the install.
  */
 function refuseLinkedPackages(root) {
   const modules = join(root, 'node_modules')
@@ -105,15 +106,21 @@ function refuseLinkedPackages(root) {
     const parent = /^(.+)\/\*$/.exec(pattern)?.[1]
     return parent && existsSync(join(install, parent)) ? readdirSync(join(install, parent)).map(name => realpathSync(join(install, parent, name))) : []
   }))
-  const entries = readdirSync(modules).flatMap(name => name.startsWith('@') && lstatSync(join(modules, name)).isDirectory()
-    ? readdirSync(join(modules, name)).map(scoped => `${name}/${scoped}`)
-    : [name])
-  for (const name of entries) {
-    const path = join(modules, name)
-    if (!lstatSync(path).isSymbolicLink()) continue
-    let target
-    try { target = realpathSync(path) } catch { throw new Error(`node_modules/${name} does not resolve`) }
-    if (!workspaces.has(target)) throw new Error(`node_modules/${name} is a linked package the key cannot follow`)
+  // Every link in the installed tree, nested dependency trees included; links are not followed.
+  const pending = ['']
+  while (pending.length) {
+    const dir = pending.pop()
+    for (const name of readdirSync(join(modules, dir))) {
+      const relative = dir ? `${dir}/${name}` : name
+      const path = join(modules, relative)
+      const stat = lstatSync(path)
+      if (stat.isDirectory()) { if (name !== '.bin') pending.push(relative) }
+      else if (stat.isSymbolicLink()) {
+        let target
+        try { target = realpathSync(path) } catch { throw new Error(`node_modules/${relative} does not resolve`) }
+        if (!workspaces.has(target)) throw new Error(`node_modules/${relative} is a linked package the key cannot follow`)
+      }
+    }
   }
 }
 
