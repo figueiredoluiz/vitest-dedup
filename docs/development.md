@@ -79,11 +79,12 @@ fail, and at least one case file must be compared.
 
 What Vitest collected is cached under `~/.cache/vitest-dedup/oracle-vitest/` (or
 `$XDG_CACHE_HOME`) and reused while nothing it reads has changed: the key covers every file under
-`fixtures/` and `scripts/check/`, the files at the repository root, Node's version and the installed
-Vitest versions, so a Rust-only change reuses it and any fixture change collects everything again.
-The analyzer side and every comparison always run. The gate prints how many collections it reused.
-The cache is off under `CI` and with `VITEST_DEDUP_ORACLE_CACHE=0`; key directories unused for a
-week are removed.
+`fixtures/` and `scripts/check/`, the files at the repository root, the environment Vitest
+receives, Node's version and the installed Vitest versions, so a Rust-only change reuses it and
+any fixture change collects everything again. The analyzer side and every comparison always run,
+and the gate prints how many collections it reused. The cache is off under `CI` and with
+`VITEST_DEDUP_ORACLE_CACHE=0`; a storage error loses only the cache, never the gate. Key
+directories unused for a week are removed.
 
 ### Generated title check
 

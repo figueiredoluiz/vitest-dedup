@@ -6,14 +6,18 @@
 // directory: a case can collect a project outside its own directory, which a per-directory key
 // would not see. The analyzer side and every comparison always run.
 //
+// The environment Vitest receives is keyed too: a fixture may read a variable while it collects.
+// Storage that cannot be read or written turns the cache off rather than failing the gate.
+//
 // Off under `CI` or `VITEST_DEDUP_ORACLE_CACHE=0`, so CI stays the uncached authority.
 import { createHash } from 'node:crypto'
 import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, renameSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { oracleEnvironment } from './collection-oracle.mjs'
 
 // Bump when the stored shape or what `collectWithVitest` returns changes.
-const SCHEMA = 1
+const SCHEMA = 2
 const KEYED_TREES = ['fixtures', join('scripts', 'check')]
 const RETENTION_MS = 7 * 24 * 60 * 60 * 1000
 
@@ -58,10 +62,14 @@ function installed(root, name) {
  * The key for every collection in one run over `root`.
  * @param {string} root Checkout root.
  * @param {string} [node] Node version.
+ * @param {NodeJS.ProcessEnv} [env] The gate's environment; the part Vitest receives is keyed.
  * @returns {string} Hex SHA-256.
  */
-export function cacheKey(root, node = process.version) {
+export function cacheKey(root, node = process.version, env = process.env) {
   const hash = createHash('sha256').update(`schema ${SCHEMA}\0root ${root}\0node ${node}\0`)
+  // Exactly what the Vitest child inherits, without the per-call output path.
+  const { VITEST_DEDUP_ORACLE_OUT: _out, ...inherited } = oracleEnvironment(env, '')
+  for (const name of Object.keys(inherited).sort()) hash.update(`env\0${name}\0${inherited[name]}\0`)
   hash.update(`vitest ${installed(root, 'vitest')}\0vitest4 ${installed(root, 'vitest4')}\0`)
   for (const name of readdirSync(root).sort()) {
     const path = join(root, name)
@@ -93,15 +101,22 @@ export function pruneCache(base, now = Date.now()) {
  * @param {string} root Checkout root.
  * @param {(root: string, dir: string) => Map<string, object>} collect The real collection.
  * @param {object} [options] Environment, cache root and key, for tests.
- * @returns {{collect: (root: string, dir: string) => Map<string, object>, stats: {hits: number, misses: number, enabled: boolean}}}
+ * @returns {{collect: (root: string, dir: string) => Map<string, object>, stats: {hits: number, misses: number, enabled: boolean, storageError: string|null}}}
  */
 export function cachedCollector(root, collect, { env = process.env, base = cacheRoot(env), key } = {}) {
-  const stats = { hits: 0, misses: 0, enabled: cacheEnabled(env) }
+  const stats = { hits: 0, misses: 0, enabled: cacheEnabled(env), storageError: null }
   if (!stats.enabled) return { collect, stats }
-  pruneCache(base)
-  const keyDir = join(base, key ?? cacheKey(root))
-  // A run that only reads a key still counts as using it, so pruning goes by last use.
-  if (existsSync(keyDir)) { const now = new Date(); utimesSync(keyDir, now, now) }
+  let keyDir
+  try {
+    pruneCache(base)
+    keyDir = join(base, key ?? cacheKey(root, process.version, env))
+    // A run that only reads a key still counts as using it, so pruning goes by last use.
+    if (existsSync(keyDir)) { const now = new Date(); utimesSync(keyDir, now, now) }
+  } catch (error) {
+    stats.enabled = false
+    stats.storageError = error.message
+    return { collect, stats }
+  }
   return {
     stats,
     collect(collectRoot, dir) {
@@ -115,10 +130,16 @@ export function cachedCollector(root, collect, { env = process.env, base = cache
       } catch { /* absent or unreadable: collect again */ }
       stats.misses++
       const files = collect(collectRoot, dir)
-      mkdirSync(keyDir, { recursive: true })
       const temporary = `${entry}.${process.pid}.tmp`
-      writeFileSync(temporary, JSON.stringify({ dir, files: [...files] }))
-      renameSync(temporary, entry)
+      try {
+        mkdirSync(keyDir, { recursive: true })
+        writeFileSync(temporary, JSON.stringify({ dir, files: [...files] }))
+        renameSync(temporary, entry)
+      } catch (error) {
+        // The collection stands; only the cache is lost.
+        stats.storageError = error.message
+        try { rmSync(temporary, { force: true }) } catch { /* its directory is what failed */ }
+      }
       return files
     },
   }

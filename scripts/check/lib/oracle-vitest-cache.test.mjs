@@ -44,7 +44,7 @@ test('a second collection under the same key is read back, equal to the first', 
   assert.deepEqual(reused, collected)
   assert.ok(reused instanceof Map)
   assert.equal(second.calls(), 0)
-  assert.deepEqual(second.cached.stats, { hits: 1, misses: 0, enabled: true })
+  assert.deepEqual(second.cached.stats, { hits: 1, misses: 0, enabled: true, storageError: null })
   // Another directory under the same key is collected.
   second.cached.collect(root, 'fixtures/b')
   assert.equal(second.calls(), 1)
@@ -76,6 +76,44 @@ test('anything Vitest could read changes the key; the analyzer source does not',
   assert.notEqual(cacheKey(root, 'v99.0.0'), previous, 'Node version')
 }))
 
+test('the environment Vitest receives is keyed; what the gate strips or sets per call is not', () => fixture(({ root, cache }) => {
+  const base = { PATH: '/bin' }
+  const key = env => cacheKey(root, 'v24', env)
+  assert.notEqual(key({ ...base, SKIP_REST: '1' }), key(base), 'a variable a fixture may read')
+  assert.notEqual(key({ ...base, SKIP_REST: '1' }), key({ ...base, SKIP_REST: '2' }))
+  assert.equal(key({ ...base, NODE_V8_COVERAGE: '/tmp/cov' }), key(base), 'the oracle strips coverage from the child')
+  assert.equal(key({ ...base, VITEST_DEDUP_ORACLE_OUT: '/tmp/out' }), key(base), 'set per call')
+  // Through the collector: the same files under another environment are collected again.
+  counting(root, cache, base).cached.collect(root, 'fixtures/a')
+  const changed = counting(root, cache, { ...base, SKIP_REST: '1' })
+  changed.cached.collect(root, 'fixtures/a')
+  assert.equal(changed.calls(), 1)
+  const same = counting(root, cache, base)
+  same.cached.collect(root, 'fixtures/a')
+  assert.equal(same.calls(), 0)
+}))
+
+test('unusable storage turns the cache off and keeps every collection', () => fixture(({ root, cache }) => {
+  // The cache root is a file: nothing can be listed or created under it.
+  writeFileSync(cache, 'not a directory')
+  const blocked = counting(root, cache)
+  assert.equal(blocked.cached.collect(root, 'fixtures/a').size, 1)
+  assert.equal(blocked.cached.stats.enabled, false)
+  assert.match(blocked.cached.stats.storageError, /ENOTDIR|EEXIST/)
+  rmSync(cache)
+  // The key directory cannot be created: the first write fails, the result stands, later ones skip.
+  mkdirSync(cache)
+  writeFileSync(join(cache, 'k'), 'not a directory')
+  let calls = 0
+  const writing = cachedCollector(root, (_root, dir) => { calls++; return new Map([[dir, {}]]) }, { env: {}, base: cache, key: 'k' })
+  assert.deepEqual([...writing.collect(root, 'fixtures/a')], [['fixtures/a', {}]])
+  assert.ok(writing.stats.storageError)
+  assert.deepEqual([...writing.collect(root, 'fixtures/b')], [['fixtures/b', {}]])
+  assert.equal(calls, 2)
+  assert.equal(writing.stats.misses, 2)
+  assert.deepEqual(readdirSync(cache), ['k'], 'no temporary file left behind')
+}))
+
 test('a symlink is keyed by its target text', { skip: process.platform === 'win32' && 'symlinks need privileges on Windows' }, () => fixture(({ root }) => {
   symlinkSync('a.test.ts', join(root, 'fixtures', 'a', 'link.test.ts'))
   const before = cacheKey(root)
@@ -91,7 +129,7 @@ test('CI and the opt-out neither read nor write', () => fixture(({ root, cache }
     const off = counting(root, join(cache, 'off'), env)
     off.cached.collect(root, 'fixtures/a')
     assert.equal(off.calls(), 1, JSON.stringify(env))
-    assert.deepEqual(off.cached.stats, { hits: 0, misses: 0, enabled: false })
+    assert.deepEqual(off.cached.stats, { hits: 0, misses: 0, enabled: false, storageError: null })
   }
   assert.equal(existsSync(join(cache, 'off')), false, 'nothing written while off')
   assert.equal(cacheEnabled({}), true)

@@ -202,8 +202,8 @@ function main() {
   )
 
   console.log(`  oracle cases: ${cases.dirs} directories, ${cases.files} files compared, ${cases.held.length} held`)
-  const { hits, misses, enabled } = vitestCache.stats
-  console.log(`  Vitest collections: ${enabled ? `${hits} reused, ${misses} collected` : 'cache off, all collected'}`)
+  const { hits, misses, enabled, storageError } = vitestCache.stats
+  console.log(`  Vitest collections: ${enabled ? `${hits} reused, ${misses} collected` : 'cache off, all collected'}${storageError ? ` (cache storage unavailable: ${storageError})` : ''}`)
   for (const line of cases.held) console.log(`    held: ${line}`)
 
   const failures = [...selfCheckFailures, ...cases.failures]
