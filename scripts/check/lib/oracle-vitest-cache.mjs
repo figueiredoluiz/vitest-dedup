@@ -8,7 +8,8 @@
 // version. One key per run, not per directory: a case can collect a project outside its own
 // directory. The analyzer side and every comparison always run.
 //
-// A symlink that cannot be covered, or storage that cannot be read or written, turns the cache off
+// A symlink that leads outside what the key covers, a package linked into `node_modules` other than
+// the repository's own workspaces, or storage that cannot be read or written, turns the cache off
 // rather than failing the gate.
 //
 // Off under `CI` or `VITEST_DEDUP_ORACLE_CACHE=0`, so CI stays the uncached authority.
@@ -16,7 +17,7 @@ import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, realpathSync, renameSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { join, sep } from 'node:path'
+import { dirname, join, sep } from 'node:path'
 import { oracleEnvironment } from './collection-oracle.mjs'
 
 // Bump when the stored shape or what `collectWithVitest` returns changes.
@@ -75,8 +76,9 @@ function keyedPaths(root) {
 
 /**
  * Feed every keyed file into `hash` in a fixed order: path, size and bytes. A symlink is keyed by its
- * target text and, for a file, the bytes it resolves to.
- * @throws {Error} When a link does not resolve, or resolves to a directory outside the walked trees.
+ * target text; its target must lie in a walked tree, where the target and everything beside it it
+ * may import are keyed.
+ * @throws {Error} When a link does not resolve, or resolves outside the walked trees.
  */
 function hashFiles(hash, root) {
   const real = realpathSync(root)
@@ -89,9 +91,38 @@ function hashFiles(hash, root) {
       hash.update(`link\0${path}\0${readlinkSync(absolute)}\0`)
       let target
       try { target = realpathSync(absolute) } catch { throw new Error(`${path} does not resolve`) }
-      if (statSync(target).isFile()) hash.update(readFileSync(target))
-      else if (!WALKED_TREES.some(tree => within(join(real, tree), target))) throw new Error(`${path} links to a directory the key does not cover`)
+      if (!WALKED_TREES.some(tree => within(join(real, tree), target))) throw new Error(`${path} links outside the trees the key covers`)
     } else if (stat.isFile()) hash.update(`file\0${path}\0${stat.size}\0`).update(readFileSync(absolute))
+  }
+}
+
+/**
+ * Refuse an installed package that is a link the key cannot follow, such as one `npm link` made:
+ * npm records no change when its sources change. A link to one of the install's own workspace
+ * packages is allowed, since those are this repository's sources.
+ * @param {string} root Checkout root.
+ * @throws {Error} Naming the first linked package that is not a workspace of the install.
+ */
+function refuseLinkedPackages(root) {
+  const modules = join(root, 'node_modules')
+  if (!existsSync(modules)) return
+  const install = dirname(realpathSync(modules))
+  const manifest = join(install, 'package.json')
+  const patterns = existsSync(manifest) ? JSON.parse(readFileSync(manifest, 'utf8')).workspaces ?? [] : []
+  const workspaces = new Set(patterns.flatMap(pattern => {
+    // `dir/*` is the only form this repository uses; anything else matches nothing and is refused.
+    const parent = /^(.+)\/\*$/.exec(pattern)?.[1]
+    return parent && existsSync(join(install, parent)) ? readdirSync(join(install, parent)).map(name => realpathSync(join(install, parent, name))) : []
+  }))
+  const entries = readdirSync(modules).flatMap(name => name.startsWith('@') && lstatSync(join(modules, name)).isDirectory()
+    ? readdirSync(join(modules, name)).map(scoped => `${name}/${scoped}`)
+    : [name])
+  for (const name of entries) {
+    const path = join(modules, name)
+    if (!lstatSync(path).isSymbolicLink()) continue
+    let target
+    try { target = realpathSync(path) } catch { throw new Error(`node_modules/${name} does not resolve`) }
+    if (!workspaces.has(target)) throw new Error(`node_modules/${name} is a linked package the key cannot follow`)
   }
 }
 
@@ -117,6 +148,7 @@ export function cacheKey(root, node = process.version, env = process.env) {
   // npm rewrites its record of the installed tree on every install, `--no-save` included.
   const record = join(root, 'node_modules', '.package-lock.json')
   hash.update('installed\0').update(existsSync(record) ? readFileSync(record) : 'absent')
+  refuseLinkedPackages(root)
   hashFiles(hash, root)
   return hash.digest('hex')
 }

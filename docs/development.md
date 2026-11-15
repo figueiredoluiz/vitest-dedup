@@ -85,8 +85,10 @@ installed packages as `node_modules/.package-lock.json` records them; the enviro
 receives; and Node's version. A Rust-only change therefore reuses it, and any other change collects
 everything again. The analyzer side and every comparison always run, and the gate prints how many
 collections it reused. The cache is off under `CI`, with `VITEST_DEDUP_ORACLE_CACHE=0`, outside a
-git checkout, and when a symlink resolves nowhere or to a directory outside those trees; a storage
-error loses only the cache, never the gate. Key directories unused for a week are removed.
+git checkout, when a symlink in the checkout resolves nowhere or outside those three trees, and when
+`node_modules` holds a linked package other than the repository's own workspaces (`npm link`
+changes nothing npm records). A storage error loses only the cache, never the gate. Key
+directories unused for a week are removed.
 
 ### Generated title check
 

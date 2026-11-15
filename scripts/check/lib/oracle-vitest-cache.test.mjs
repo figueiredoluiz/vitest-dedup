@@ -135,17 +135,58 @@ test('a symlink is keyed by its target text', { skip: process.platform === 'win3
   assert.notEqual(cacheKey(root), before)
 }))
 
-test('a linked file is keyed by its content, wherever it lives', { skip: process.platform === 'win32' && 'symlinks need privileges on Windows' }, () => fixture(({ root }) => {
-  const outside = join(root, '..', 'shared.ts')
-  writeFileSync(outside, "export const title = 'a'")
-  symlinkSync(outside, join(root, 'fixtures', 'a', 'helper.ts'))
+test('a link is keyed only when its target lies where everything it imports is keyed', { skip: process.platform === 'win32' && 'symlinks need privileges on Windows' }, () => fixture(({ root }) => {
+  // A helper outside the checkout may import siblings the key never sees, so it is refused.
+  writeFileSync(join(root, '..', 'shared.ts'), "import { title } from './sibling'")
+  symlinkSync(join(root, '..', 'shared.ts'), join(root, 'fixtures', 'a', 'helper.ts'))
+  assert.throws(() => cacheKey(root), /links outside the trees the key covers/)
+  // So is one into a checkout file outside the walked trees, whose ignored neighbours are not keyed.
+  rmSync(join(root, 'fixtures', 'a', 'helper.ts'))
+  symlinkSync(join(root, 'package.json'), join(root, 'fixtures', 'a', 'helper.ts'))
+  assert.throws(() => cacheKey(root), /links outside the trees the key covers/)
+  // A link into a walked tree is fine: its target and neighbours are keyed for themselves.
+  rmSync(join(root, 'fixtures', 'a', 'helper.ts'))
+  symlinkSync(join(root, 'scripts', 'check', 'lib', 'collection-probe-runner.mjs'), join(root, 'fixtures', 'a', 'helper.ts'))
   const before = cacheKey(root)
-  writeFileSync(outside, "export const title = 'b'")
+  writeFileSync(join(root, 'scripts', 'check', 'lib', 'collection-probe-runner.mjs'), 'export default 3')
   assert.notEqual(cacheKey(root), before)
 }))
 
+test('a package linked into node_modules turns the cache off unless it is a workspace of the install', { skip: process.platform === 'win32' && 'symlinks need privileges on Windows' }, () => fixture(({ root, cache }) => {
+  writeFileSync(join(root, 'package.json'), '{"name":"x","workspaces":["npm/platforms/*"]}')
+  mkdirSync(join(root, 'npm', 'platforms', 'darwin-arm64'), { recursive: true })
+  symlinkSync('../npm/platforms/darwin-arm64', join(root, 'node_modules', 'vitest-dedup-darwin-arm64'))
+  mkdirSync(join(root, 'node_modules', '.bin'))
+  symlinkSync('../vitest/vitest.mjs', join(root, 'node_modules', '.bin', 'vitest'))
+  assert.match(cacheKey(root), /^[0-9a-f]{64}$/, 'workspace and .bin links are allowed')
+  // `npm link` of a package outside the install: edits to it would not change npm's record.
+  mkdirSync(join(root, '..', 'runtime'))
+  mkdirSync(join(root, 'node_modules', '@test-kit'))
+  symlinkSync(join(root, '..', 'runtime'), join(root, 'node_modules', '@test-kit', 'runtime'))
+  assert.throws(() => cacheKey(root), /node_modules\/@test-kit\/runtime is a linked package/)
+  const off = counting(root, cache)
+  assert.equal(off.cached.collect(root, 'fixtures/a').size, 1)
+  assert.match(off.cached.stats.offReason, /linked package/)
+  rmSync(join(root, 'node_modules', '@test-kit', 'runtime'))
+  symlinkSync(join(root, 'missing'), join(root, 'node_modules', 'dangling'))
+  assert.throws(() => cacheKey(root), /node_modules\/dangling does not resolve/)
+}))
+
+test('a hook snapshot links node_modules to its checkout, whose workspaces are the ones allowed', { skip: process.platform === 'win32' && 'symlinks need privileges on Windows' }, () => fixture(({ root }) => {
+  // The checkout that installed the packages, as the hook's snapshot sees it through a link.
+  const install = join(root, '..', 'install')
+  mkdirSync(join(install, 'npm', 'platforms', 'darwin-arm64'), { recursive: true })
+  writeFileSync(join(install, 'package.json'), '{"workspaces":["npm/platforms/*"]}')
+  mkdirSync(join(install, 'node_modules'))
+  symlinkSync('../npm/platforms/darwin-arm64', join(install, 'node_modules', 'vitest-dedup-darwin-arm64'))
+  rmSync(join(root, 'node_modules'), { recursive: true })
+  symlinkSync(join(install, 'node_modules'), join(root, 'node_modules'))
+  // The snapshot's own manifest names no workspaces; the install's does.
+  assert.match(cacheKey(root), /^[0-9a-f]{64}$/)
+}))
+
 test('a link the key cannot cover turns the cache off, and collections still run', { skip: process.platform === 'win32' && 'symlinks need privileges on Windows' }, () => fixture(({ root, cache }) => {
-  for (const [target, reason] of [[join(root, '..'), /does not cover/], [join(root, 'missing.ts'), /does not resolve/], [join(root, 'target'), /does not cover/]]) {
+  for (const [target, reason] of [[join(root, '..'), /links outside/], [join(root, 'missing.ts'), /does not resolve/], [join(root, 'target'), /links outside/]]) {
     mkdirSync(join(root, 'target'), { recursive: true })
     const link = join(root, 'fixtures', 'a', 'linked')
     rmSync(link, { force: true })
