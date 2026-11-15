@@ -329,8 +329,10 @@ export function quickCommands(paths, diff, docDiff, layout = { bin: [], lib: [],
   const rust = full || scopes.includes('rust')
   const steps = full ? [...staticCommands(docDiff), FORMAT, ...JS_TESTS] : hookCommands('pre-commit', paths, docDiff)
   if (full || scopes.some(scope => scope !== 'docs')) steps.push(['npm', 'run', 'check:duplication'])
-  // JavaScript coverage runs where the push hook runs it; Rust coverage never does here.
-  if (full || ['action', 'npm', 'tooling', 'gates', 'fixtures'].some(scope => scopes.includes(scope))) steps.push(['npm', 'run', 'check:coverage:js'])
+  // JavaScript coverage runs wherever the push hook runs it, on its own or inside `npm run check`;
+  // Rust coverage never runs here.
+  const push = hookCommands('pre-push', paths, docDiff).map(step => step.join(' '))
+  if (push.includes('npm run check:coverage:js') || push.includes('npm run check')) steps.push(['npm', 'run', 'check:coverage:js'])
   if (!rust) return steps
   steps.push(CLIPPY, RUSTDOC)
   if (windowsSensitive(full ? null : paths, diff)) steps.push(WINDOWS_CHECK)

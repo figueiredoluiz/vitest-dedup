@@ -1166,8 +1166,14 @@ test('a library module runs format, lints, rustdoc, duplication and its own unit
     'node scripts/dev/cargo-tests.mjs lib lang rules',
   ])
   assert.equal(steps.some(step => step.includes('x86_64-pc-windows-gnu') || step.endsWith(' bin') || step.includes('cargo-tests.mjs test') || step.includes('coverage')), false, steps.join())
-  // The push hook runs no JavaScript coverage for a workflow or manifest change, and neither does this.
-  for (const path of ['.github/workflows/ci.yml', 'package.json']) assert.equal(quick([path]).includes('npm run check:coverage:js'), false, path)
+  // JavaScript coverage follows the push hook: none for a workflow, and the manifests' `npm run check` holds it.
+  assert.equal(quick(['.github/workflows/ci.yml']).includes('npm run check:coverage:js'), false)
+  for (const path of ['package.json', 'package-lock.json']) assert.ok(quick([path]).includes('npm run check:coverage:js'), path)
+  assert.ok(npmChain('check').includes('npm run check:coverage:js'), 'the manifests run coverage through the check chain')
+  for (const paths of [['README.md'], ['src/model.rs'], ['scripts/dev/a.mjs'], ['action.yml'], ['npm/a.mjs'], ['fixtures/a.test.ts'], ['package.json'], ['.github/workflows/ci.yml'], null]) {
+    const push = prePush(paths)
+    assert.equal(quick(paths).includes('npm run check:coverage:js'), push.includes('npm run check:coverage:js') || push.includes('npm run check'), JSON.stringify(paths))
+  }
 })
 
 test('the binary, the shared roots and integration targets select their own tests', () => {
