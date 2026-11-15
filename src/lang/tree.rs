@@ -56,6 +56,21 @@ pub struct Tree {
 const NULL: Field = Field::Value(Value::Null);
 
 impl Tree {
+    /// Owned syntax/index storage, measured by allocation capacity for a transient proof cache.
+    pub(crate) fn proof_bytes(&self) -> usize {
+        self.nodes.capacity() * std::mem::size_of::<Node>()
+            + self
+                .nodes
+                .iter()
+                .map(|node| node.kind.len() + fields_bytes(&node.fields))
+                .sum::<usize>()
+            + self.at.capacity() * std::mem::size_of::<(Span, Vec<NodeId>)>()
+            + self
+                .at
+                .values()
+                .map(|nodes| nodes.capacity() * std::mem::size_of::<NodeId>())
+                .sum::<usize>()
+    }
     /// Declaration syntax erased by TypeScript, with no runtime evaluation or module load.
     pub fn erased_declaration(&self, node: NodeId) -> bool {
         match self.kind(node) {
@@ -296,6 +311,29 @@ impl Tree {
             self.kind(id),
             "FunctionDeclaration" | "FunctionExpression" | "ArrowFunctionExpression"
         )
+    }
+}
+
+/// A node or metadata object's fields own their keys, container spines and scalar strings.
+fn fields_bytes(fields: &Vec<(Box<str>, Field)>) -> usize {
+    fields.capacity() * std::mem::size_of::<(Box<str>, Field)>()
+        + fields
+            .iter()
+            .map(|(key, value)| key.len() + field_bytes(value))
+            .sum::<usize>()
+}
+
+/// Arrays and objects are owned Field containers; JSON values here are scalars only.
+fn field_bytes(field: &Field) -> usize {
+    match field {
+        Field::Node(_) => 0,
+        Field::List(values) => {
+            values.capacity() * std::mem::size_of::<Field>()
+                + values.iter().map(field_bytes).sum::<usize>()
+        }
+        Field::Object(fields) => fields_bytes(fields),
+        Field::Value(Value::String(text)) => text.capacity(),
+        Field::Value(_) => 0,
     }
 }
 

@@ -114,7 +114,10 @@ other call that registers nothing.
 - Expansion follows runner calls to a depth of 8 and at most 2,000 calls per file, each with at most
   2,000 arguments.
 - The helper sources one file's expansion reads share 8 MiB, and its proof work is bounded at
-  8 MiB.
+  8 MiB. When building an ordinary imported runner template, each source read spends work
+  before parsing. Completed templates can be reused in the same caller, with a separate 8 MiB
+  estimate for retained template data. Templates that exceed the remaining retention budget
+  can still serve the current invocation. Every invocation checks dependency and export depth limits.
 - Helper files share the source limits: 8 MiB, 36,864 raw syntax units and lexical nesting depth
   256.
 - Each module inventory also bounds uncached import analysis at depth 32, 64 module-analysis

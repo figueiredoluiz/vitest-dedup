@@ -182,6 +182,7 @@ const DELIBERATE_BLIND_FILES = new Set([
   'oracle/factory-parameter-work/split.test.ts',
   'oracle/factory-proof-handoff/local.test.ts',
   'oracle/factory-resource-work/copies.test.ts',
+  'oracle/helper-proof-work/large.test.ts',
   'recall/runner-unproved-scope-retention/unsafe.test.ts',
   'recall/suite-user-wrapper-withheld/a.test.ts',
   // Registrations a wrapper call, star re-export or namespace export makes where the file does

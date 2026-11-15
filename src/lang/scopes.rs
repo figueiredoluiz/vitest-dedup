@@ -91,6 +91,29 @@ pub struct Scopes {
 }
 
 impl Scopes {
+    /// Owned binding/reference storage, including capacity reserved by its lookup indexes.
+    pub(super) fn proof_bytes(&self) -> usize {
+        self.symbols.capacity() * std::mem::size_of::<Symbol>()
+            + self
+                .symbols
+                .iter()
+                .map(|symbol| {
+                    let imported = match &symbol.declaration {
+                        Declaration::Import {
+                            imported: Imported::Named(name),
+                            ..
+                        } => name.capacity(),
+                        _ => 0,
+                    };
+                    symbol.name.capacity()
+                        + symbol.references.capacity() * std::mem::size_of::<Reference>()
+                        + imported
+                })
+                .sum::<usize>()
+            + self.names.capacity() * std::mem::size_of::<(u32, Name)>()
+            + self.top_level.capacity() * std::mem::size_of::<(String, SymbolId)>()
+            + self.top_level.keys().map(String::capacity).sum::<usize>()
+    }
     /// Whether the module reads the global `eval`, through which code it does not spell may assign
     /// any binding in scope at the call.
     pub fn reads_global_eval(&self) -> bool {

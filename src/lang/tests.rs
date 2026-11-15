@@ -546,3 +546,16 @@ fn concurrent_lookups_keep_their_own_manifest_refusals() {
         }
     });
 }
+/// Proof-cache storage includes owned strings and nodes and reserves receiver-cache growth.
+#[test]
+fn proof_storage_accounts_for_owned_data_before_receiver_memoization() {
+    let short = parse(Path::new("helper.ts"), "import {named as alias} from './other';const x=['a',/a/g,`x${alias}`];export function run(){return this.x}").unwrap();
+    let source = format!("import {{named as alias}} from './other';const x=['{}',/a/g,`x${{alias}}`];export function run(){{return this.x}}", "0".repeat(8192));
+    let long = parse(Path::new("helper.ts"), &source).unwrap();
+    assert!(long.proof_bytes() >= short.proof_bytes() + 8191);
+    let before = long.proof_bytes();
+    for node in long.tree.nodes() {
+        super::uses_receiver(&long.tree, &long.scopes, node);
+    }
+    assert_eq!(long.proof_bytes(), before);
+}
