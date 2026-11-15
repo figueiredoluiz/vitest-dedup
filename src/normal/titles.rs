@@ -2,7 +2,7 @@
 
 use super::{form, Row};
 use crate::lang::limits::{cooked, MAX_TEXT_BYTES};
-use crate::lang::{property_name, Declaration, Field, NodeId, Parsed, SymbolId, Tree};
+use crate::lang::{proof, property_name, Declaration, Field, NodeId, Parsed, SymbolId, Tree};
 use serde_json::{Map, Value};
 use std::collections::HashMap;
 
@@ -367,7 +367,7 @@ fn read(
             }
             if tree.text(parent, "kind") != Some("const")
                 || tree.span(declaration).end > tree.span(node).start
-                || symbol.references.iter().any(|reference| reference.write)
+                || proof::unwritten(&parsed.scopes, id).is_none()
                 || tree.kind(tree.child(declaration, "id")?) != "Identifier"
             {
                 return None;

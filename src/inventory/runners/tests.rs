@@ -372,7 +372,7 @@ fn returned_parameter_paths_stop_before_allocation_limit() {
         pattern,
         &mut Vec::new(),
         &mut bindings,
-        &binding_declarations(&parsed),
+        &crate::lang::proof::Declarations::of(&parsed.tree, &parsed.scopes),
         tree.nodes().count(),
         &mut left,
     );

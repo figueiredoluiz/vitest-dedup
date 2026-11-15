@@ -2,7 +2,7 @@
 use super::{Hook, Origin, Run, Setting, TestCase};
 use crate::framework::Registers;
 use crate::inventory::{self, Inventory, SiteKind};
-use crate::lang::{Declaration, Imported, Lines, NodeId, Parsed, SymbolId};
+use crate::lang::{self, Declaration, Imported, Lines, NodeId, Parsed, SymbolId};
 use crate::model::{Position, Span};
 use crate::normal::{self, Normalizer, Structure};
 use serde_json::Value;
@@ -873,10 +873,8 @@ fn imported_callable(
     }
     let tree = &parsed.tree;
     let symbol = parsed.scopes.symbol_at(tree.span(identifier).start)?;
+    lang::proof::unwritten(&parsed.scopes, symbol)?;
     let binding = parsed.scopes.symbol(symbol);
-    if binding.references.iter().any(|reference| reference.write) {
-        return None;
-    }
     if matches!(binding.declaration, Declaration::Variable(_)) {
         inventory::runners::immutable(parsed, symbol).ok()?;
     }
@@ -1164,9 +1162,7 @@ impl<'a> Planner<'a> {
             parsed.tree.nodes().count()
         };
         self.charge(cost)?;
-        if references.iter().any(|reference| reference.write) {
-            return None;
-        }
+        lang::proof::unwritten(&parsed.scopes, symbol)?;
         if in_caller {
             self.unwritten_caller_bindings.insert(symbol);
         }

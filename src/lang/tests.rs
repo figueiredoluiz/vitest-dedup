@@ -559,3 +559,88 @@ fn proof_storage_accounts_for_owned_data_before_receiver_memoization() {
     }
     assert_eq!(long.proof_bytes(), before);
 }
+
+/// Reads of `Reference::write` in `source`'s code: `.write` not called, outside `//` comments.
+fn write_reads(source: &str) -> usize {
+    source
+        .lines()
+        .map(|line| {
+            let code = line.split("//").next().unwrap_or_default();
+            code.match_indices(".write")
+                .filter(|&(at, _)| {
+                    let rest = &code[at + ".write".len()..];
+                    !rest.starts_with(|c: char| c.is_alphanumeric() || c == '_')
+                        && !rest.trim_start().starts_with('(')
+                })
+                .count()
+        })
+        .sum()
+}
+
+/// Whether a binding is ever written is proved once, in `lang::proof`. The files below still read
+/// `Reference::write` for other questions (a write inside a span, while registering, outside an
+/// update); each count may fall, and a new reader routes through the proof module instead.
+#[test]
+fn binding_writes_are_read_through_the_proof_module() {
+    const READERS: [(&str, usize); 10] = [
+        ("behavior/dataflow.rs", 1),
+        ("corpus/runners.rs", 2),
+        ("lang/proof.rs", 1),
+        ("normal.rs", 5),
+        ("normal/form.rs", 1),
+        ("normal/hooks.rs", 1),
+        ("normal/identity.rs", 1),
+        ("normal/population.rs", 1),
+        ("normal/row_values.rs", 1),
+        ("normal/titles.rs", 2),
+    ];
+    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut files = Vec::new();
+    rust_files(&src, &mut files);
+    assert!(
+        files.len() >= 100,
+        "only {} files were scanned",
+        files.len()
+    );
+    let mut total = 0;
+    for file in files {
+        let relative = file.strip_prefix(&src).unwrap();
+        let name = relative.file_name().unwrap().to_string_lossy();
+        if name == "tests.rs"
+            || name.ends_with("_tests.rs")
+            || relative
+                .components()
+                .any(|part| part.as_os_str() == "tests")
+        {
+            continue;
+        }
+        let key = relative.to_string_lossy().replace('\\', "/");
+        let found = write_reads(&fs::read_to_string(&file).unwrap());
+        let allowed = READERS
+            .iter()
+            .find(|(path, _)| *path == key)
+            .map_or(0, |&(_, count)| count);
+        assert!(
+            found <= allowed,
+            "{key} reads `Reference::write` {found} times, {allowed} allowed: prove the binding \
+             with `lang::proof` (or lower this table when a reader goes)"
+        );
+        total += found;
+    }
+    let allowed: usize = READERS.iter().map(|(_, count)| count).sum();
+    assert_eq!(
+        total, allowed,
+        "a reader went: lower its count in this table"
+    );
+}
+
+#[test]
+fn the_write_ratchet_sees_reads_and_ignores_calls_and_prose() {
+    assert_eq!(write_reads("if reference.write {"), 1);
+    assert_eq!(write_reads("    .any(|r| r.write)"), 1);
+    assert_eq!(write_reads("                reference.write"), 1);
+    assert_eq!(write_reads("file.write(bytes); out.write_all(b)"), 0);
+    assert_eq!(write_reads("x.write (bytes)"), 0);
+    assert_eq!(write_reads("// a reference.write in prose"), 0);
+    assert_eq!(write_reads("let w = reference.writes;"), 0);
+}

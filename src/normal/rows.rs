@@ -3,7 +3,7 @@
 
 use super::{form, Normalizer};
 use crate::framework::{Chain, TableRows};
-use crate::lang::{property_name, NodeId, Scalar, SymbolId};
+use crate::lang::{proof, property_name, NodeId, Scalar, SymbolId};
 use serde_json::Value;
 use std::collections::HashMap;
 
@@ -594,7 +594,7 @@ impl Normalizer<'_> {
                         return None;
                     }
                     let key = property_name(tree, property)?;
-                    let symbol = self.unwritten_parameter(binding)?;
+                    let symbol = self.immutable_parameter(binding)?;
                     let value = match properties.iter().find(|(name, _)| name == key) {
                         Some((_, node)) => self.cell(symbol, *node, structural)?,
                         None if OBJECT_PROTOTYPE.contains(&key) => return None,
@@ -608,7 +608,7 @@ impl Normalizer<'_> {
                     if tree.kind(parameter) != "Identifier" {
                         return None;
                     }
-                    let symbol = self.unwritten_parameter(parameter)?;
+                    let symbol = self.immutable_parameter(parameter)?;
                     let value = match cells.get(index) {
                         Some(&cell) => self.cell(symbol, cell, structural)?,
                         None => undefined(),
@@ -619,7 +619,7 @@ impl Normalizer<'_> {
             Row::Whole(value, properties) => match parameters.first().copied() {
                 None => {}
                 Some(parameter) if tree.kind(parameter) == "Identifier" => {
-                    let symbol = self.unwritten_parameter(parameter)?;
+                    let symbol = self.immutable_parameter(parameter)?;
                     let cell = self.cell(symbol, *value, structural)?;
                     bound.insert(symbol, cell);
                 }
@@ -635,7 +635,7 @@ impl Normalizer<'_> {
                             return None;
                         }
                         let key = property_name(tree, property)?.to_owned();
-                        let symbol = self.unwritten_parameter(binding)?;
+                        let symbol = self.immutable_parameter(binding)?;
                         let value = match properties.iter().rev().find(|(name, _)| *name == key) {
                             Some((_, cell)) => self.cell(symbol, *cell, structural)?,
                             // A key the object lacks is read from `Object.prototype`.
@@ -652,15 +652,14 @@ impl Normalizer<'_> {
         Some((bound, every))
     }
 
-    /// The parameter's symbol when its invocation value remains stable for every read.
-    fn unwritten_parameter(&self, parameter: NodeId) -> Option<SymbolId> {
+    /// The parameter's symbol when it is [`proof::Immutable`], so every read sees the row's value.
+    pub(super) fn immutable_parameter(&self, parameter: NodeId) -> Option<SymbolId> {
         let symbol = self.scopes.symbol_at(self.tree.span(parameter).start)?;
-        self.scopes
-            .symbol(symbol)
-            .references
-            .iter()
-            .all(|reference| !reference.write)
-            .then_some(symbol)
+        let declarations = self
+            .declarations
+            .get_or_init(|| proof::Declarations::of(self.tree, self.scopes));
+        proof::immutable(self.scopes, symbol, declarations.get(symbol))?;
+        Some(symbol)
     }
 
     /// A cell's normal form to write in for `symbol`: a cell that creates or allocates an object
@@ -680,13 +679,7 @@ impl Normalizer<'_> {
             .chain(tree.descendants(cell))
             .filter(|&node| tree.kind(node) == "Identifier")
             .filter_map(|node| self.scopes.symbol_at(tree.span(node).start))
-            .any(|read| {
-                self.scopes
-                    .symbol(read)
-                    .references
-                    .iter()
-                    .any(|reference| reference.write)
-            });
+            .any(|read| proof::unwritten(self.scopes, read).is_none());
         if reassigned {
             return None;
         }

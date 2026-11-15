@@ -489,6 +489,8 @@ pub struct Normalizer<'s> {
     early_exits: HashMap<NodeId, bool>,
     /// Completed parameterization uncertainty results for this module's nodes.
     parameterization_uncertainty: RefCell<HashMap<NodeId, bool>>,
+    /// How each symbol is declared, indexed the first time a row parameter is proved.
+    declarations: std::cell::OnceCell<crate::lang::proof::Declarations>,
 }
 
 impl<'s> Normalizer<'s> {
@@ -517,6 +519,7 @@ impl<'s> Normalizer<'s> {
             iterated_arrays: HashMap::new(),
             early_exits: HashMap::new(),
             parameterization_uncertainty: RefCell::new(HashMap::new()),
+            declarations: std::cell::OnceCell::new(),
             discovering: None,
             resolving: false,
             shallow_imports: false,

@@ -6,7 +6,7 @@
 
 use super::{inventory, Inventory, Modules, Setting, SiteKind};
 use crate::framework::Registers;
-use crate::lang::{self, Declaration, Name, NodeId, Parsed, Sources, SymbolId};
+use crate::lang::{self, proof, Declaration, Name, NodeId, Parsed, Sources, SymbolId};
 use crate::memory::HeapBytes;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -743,79 +743,28 @@ fn symbol_callable(
     }
 }
 
-/// A binding has one runtime declaration and no recorded writes after it is initialized.
+/// A binding is [`proof::Immutable`], and no binding identifier repeats its span: a shorthand
+/// pattern does, which this refuses although the kernel need not.
 pub(crate) fn immutable(parsed: &Parsed, symbol: SymbolId) -> Result<(), Refusal> {
-    let binding = parsed.scopes.symbol(symbol);
-    if binding.references.iter().any(|reference| reference.write) {
+    proof::unwritten(&parsed.scopes, symbol).ok_or(Refusal::Callable)?;
+    let declared = proof::declared(&parsed.tree, &parsed.scopes, symbol);
+    if declared.occurrences != 1 {
         return Err(Refusal::Callable);
     }
-    let declarations = runtime_bindings(parsed)
-        .filter(|&binding| binding == symbol)
-        .count();
-    if declarations != 1 {
-        return Err(Refusal::Callable);
-    }
-    Ok(())
+    proof::immutable(&parsed.scopes, symbol, declared)
+        .map(drop)
+        .ok_or(Refusal::Callable)
 }
 
-/// Runtime declaration identities, excluding erased overload signatures.
-fn runtime_bindings(parsed: &Parsed) -> impl Iterator<Item = SymbolId> + '_ {
-    parsed.tree.nodes().filter_map(|node| {
-        if parsed.tree.kind(node) != "Identifier"
-            || parsed
-                .tree
-                .parent(node)
-                .is_some_and(|parent| parsed.tree.kind(parent) == "TSDeclareFunction")
-        {
-            return None;
-        }
-        match parsed.scopes.name_at(parsed.tree.span(node).start) {
-            Some(Name::Binding(Some(symbol))) => Some(symbol),
-            _ => None,
-        }
-    })
-}
-
-/// A parameter has one runtime binding span and no later writes. Destructuring wrappers may expose
-/// the same binding node more than once, while a hoisted redeclaration has a distinct span.
+/// A parameter is [`proof::Immutable`]; destructuring may repeat its one binding span.
 fn immutable_parameter(
     parsed: &Parsed,
     symbol: SymbolId,
-    declarations: &HashMap<SymbolId, (u32, u32, bool)>,
+    declarations: &proof::Declarations,
 ) -> Result<(), Refusal> {
-    let binding = parsed.scopes.symbol(symbol);
-    if binding.references.iter().any(|reference| reference.write) {
-        return Err(Refusal::Parameters);
-    }
-    declarations
-        .get(&symbol)
-        .is_some_and(|(_, _, multiple)| !multiple)
-        .then_some(())
+    proof::immutable(&parsed.scopes, symbol, declarations.get(symbol))
+        .map(drop)
         .ok_or(Refusal::Parameters)
-}
-
-/// Unique runtime binding spans for every symbol, computed once for all flattened parameters.
-fn binding_declarations(parsed: &Parsed) -> HashMap<SymbolId, (u32, u32, bool)> {
-    let tree = &parsed.tree;
-    let mut declarations = HashMap::new();
-    for node in tree.nodes().filter(|&node| {
-        tree.kind(node) == "Identifier"
-            && tree
-                .parent(node)
-                .is_none_or(|parent| tree.kind(parent) != "TSDeclareFunction")
-    }) {
-        let Some(Name::Binding(Some(symbol))) = parsed.scopes.name_at(tree.span(node).start) else {
-            continue;
-        };
-        let span = tree.span(node);
-        declarations
-            .entry(symbol)
-            .and_modify(|(start, end, multiple)| {
-                *multiple |= *start != span.start || *end != span.end;
-            })
-            .or_insert((span.start, span.end, false));
-    }
-    declarations
 }
 
 /// Only synchronous functions with plain, immutable positional parameters have binding templates.
@@ -869,7 +818,7 @@ pub(crate) fn returned_parameters(
     if params.len().saturating_mul(nodes) > MAX_PARAMETER_WORK {
         return Err(Refusal::Limit);
     }
-    let declarations = binding_declarations(parsed);
+    let declarations = proof::Declarations::of(&parsed.tree, &parsed.scopes);
     let mut left = MAX_PARAMETER_WORK;
     let parameters: Vec<_> = params
         .into_iter()
@@ -907,7 +856,7 @@ fn parameter_bindings(
     pattern: NodeId,
     path: &mut Vec<String>,
     bindings: &mut Vec<ParameterBinding>,
-    declarations: &HashMap<SymbolId, (u32, u32, bool)>,
+    declarations: &proof::Declarations,
     nodes: usize,
     left_work: &mut usize,
 ) -> Result<(), Refusal> {
@@ -1024,7 +973,7 @@ struct InertProof<'a> {
     limited: bool,
     symbols: HashMap<SymbolId, bool>,
     unwritten: HashMap<SymbolId, bool>,
-    declarations: Option<HashMap<SymbolId, usize>>,
+    declarations: Option<proof::Declarations>,
 }
 
 impl<'a> InertProof<'a> {
@@ -1075,17 +1024,18 @@ impl<'a> InertProof<'a> {
             if !self.spend(self.parsed.tree.nodes().count().saturating_mul(2)) {
                 return false;
             }
-            let mut declarations = HashMap::new();
-            for binding in runtime_bindings(self.parsed) {
-                *declarations.entry(binding).or_insert(0) += 1;
-            }
-            self.declarations = Some(declarations);
+            self.declarations = Some(proof::Declarations::of(
+                &self.parsed.tree,
+                &self.parsed.scopes,
+            ));
         }
-        let stable = self
+        let declared = self
             .declarations
             .as_ref()
-            .and_then(|counts| counts.get(&symbol))
-            == Some(&1);
+            .map(|declarations| declarations.get(symbol))
+            .unwrap_or_default();
+        let stable = declared.occurrences == 1
+            && proof::immutable(&self.parsed.scopes, symbol, declared).is_some();
         self.symbols.insert(symbol, stable);
         stable
     }
@@ -1098,11 +1048,10 @@ impl<'a> InertProof<'a> {
         if let Some(&stable) = self.unwritten.get(&symbol) {
             return stable;
         }
-        let binding = self.parsed.scopes.symbol(symbol);
-        if !self.spend(binding.references.len()) {
+        if !self.spend(self.parsed.scopes.symbol(symbol).references.len()) {
             return false;
         }
-        let stable = !binding.references.iter().any(|reference| reference.write);
+        let stable = proof::unwritten(&self.parsed.scopes, symbol).is_some();
         self.unwritten.insert(symbol, stable);
         stable
     }

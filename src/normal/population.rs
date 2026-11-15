@@ -1,7 +1,7 @@
 //! How many times a collection-scope registration runs, as enclosing loops and iteration
 //! callbacks decide it.
 use super::Normalizer;
-use crate::lang::{Declaration, Field, NodeId, SymbolId, Tree};
+use crate::lang::{proof, Declaration, Field, NodeId, SymbolId, Tree};
 use serde_json::Value;
 
 #[cfg(test)]
@@ -146,7 +146,9 @@ impl Normalizer<'_> {
     }
 
     /// The array literal `id` is declared with, when every use of it is a counted position that
-    /// runs after the declaration initializes the binding (see [`initialized_at`]).
+    /// runs after the declaration initializes the binding (see [`proof::initialized`]): a read
+    /// in the temporal dead zone throws, and a caught throw leaves the file collecting without the
+    /// loop.
     fn const_array(&self, id: SymbolId) -> Option<NodeId> {
         let tree = self.tree;
         let symbol = self.scopes.symbol(id);
@@ -162,12 +164,12 @@ impl Normalizer<'_> {
                 .child(declarator, "id")
                 .is_some_and(|id| tree.kind(id) == "Identifier")
             && tree.kind(init) == "ArrayExpression"
+            && proof::unwritten(self.scopes, id).is_some()
             && symbol.references.iter().all(|reference| {
-                !reference.write
-                    && reference.node.is_some_and(|identifier| {
-                        initialized_at(tree, declarator, enclosing, identifier)
-                            && counted_position(tree, identifier)
-                    })
+                reference.node.is_some_and(|identifier| {
+                    proof::initialized(tree, declarator, identifier).is_some()
+                        && counted_position(tree, identifier)
+                })
             }))
         .then_some(init)
     }
@@ -286,28 +288,6 @@ fn literal_length(tree: &Tree, node: NodeId, holes: bool) -> Option<u64> {
         elements.iter().flatten().count()
     };
     u64::try_from(count).ok()
-}
-
-/// Whether a read of the binding `declarator` declares, at `identifier`, can only run once the
-/// declaration has initialized it, so no read lands in the temporal dead zone (where a caught
-/// throw would leave the file collecting without the loop): the read starts after the declarator,
-/// lies inside `enclosing` (so not in a later `switch` case, which can be entered past the
-/// declaration), and no hoisted `function` declaration, callable earlier, lies between them.
-fn initialized_at(tree: &Tree, declarator: NodeId, enclosing: NodeId, identifier: NodeId) -> bool {
-    if tree.span(identifier).start < tree.span(declarator).end {
-        return false;
-    }
-    let mut node = identifier;
-    while let Some(parent) = tree.parent(node) {
-        if parent == enclosing {
-            return true;
-        }
-        if tree.kind(parent) == "FunctionDeclaration" {
-            return false;
-        }
-        node = parent;
-    }
-    false
 }
 
 /// Whether `identifier` is iterated where only its length is read: the iterable of a `for...of`

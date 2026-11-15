@@ -83,10 +83,10 @@ fn assertion_input(normalizer: &Normalizer, call: NodeId, callee: NodeId, subjec
     let imported = match normalizer.scopes.symbol_at(tree.span(callee).start) {
         None => false,
         Some(symbol) => {
-            let symbol = normalizer.scopes.symbol(symbol);
-            if symbol.references.iter().any(|r| r.write) {
+            if crate::lang::proof::unwritten(normalizer.scopes, symbol).is_none() {
                 return false;
             }
+            let symbol = normalizer.scopes.symbol(symbol);
             let crate::lang::Declaration::Import {
                 import,
                 specifier,
