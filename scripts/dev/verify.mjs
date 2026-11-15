@@ -4,7 +4,7 @@ import { execFileSync, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { existsSync, realpathSync, readdirSync, symlinkSync, unlinkSync, mkdirSync, mkdtempSync, openSync, closeSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { availableParallelism, tmpdir } from 'node:os'
-import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
+import { dirname, isAbsolute, join, posix, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const SELF = fileURLToPath(import.meta.url)
@@ -243,6 +243,168 @@ export function hookCommands(mode, paths, docDiff) {
 export function rustChanged(paths) {
   return paths.some(path => path.endsWith('.rs') || /(^|\/)Cargo\.(toml|lock)$/.test(path) || path === 'scripts/check/check-coverage.mjs')
 }
+
+const FORMAT = ['cargo', 'fmt', '--all', '--check']
+const CLIPPY = ['cargo', 'clippy', '--all-targets', '--all-features', '--locked']
+const RUSTDOC = ['cargo', 'doc', '--no-deps', '--document-private-items', '--locked']
+const WINDOWS_CHECK = ['cargo', 'check', '--all-targets', '--all-features', '--locked', '--target', 'x86_64-pc-windows-gnu']
+const CARGO_TESTS = ['node', 'scripts/dev/cargo-tests.mjs']
+// The compilation-free JavaScript suites, all of which an unknown scope runs.
+const JS_TESTS = [['npm', 'run', 'test:action'], ['npm', 'test'], ['npm', 'run', 'pack:check'], ['npm', 'run', 'test:dev-checks'], ['npm', 'run', 'test:check-lib']]
+// What a changed Rust line names when its behaviour can differ on Windows.
+const WINDOWS_SENSITIVE = /\bcfg(?:_attr)?\b|\bfs::|\bPath(?:Buf)?\b|canonicali[sz]e|symlink|MAIN_SEPARATOR|\bjunction\b/
+
+/**
+ * Decide whether a change needs the Windows cross-check: a Cargo manifest, a changed Rust line that
+ * names `cfg`, filesystem calls or paths, or a scope that is not known.
+ * @param {string[]|null} paths Changed paths, or null when the scope is unknown.
+ * @param {string} diff Unified diff of the change.
+ * @returns {boolean} Whether to run the cross-check.
+ */
+export function windowsSensitive(paths, diff) {
+  if (paths === null || paths.some(path => /^Cargo\.(?:toml|lock)$/.test(path))) return true
+  let rust = false
+  for (const line of diff.split('\n')) {
+    const file = /^diff --git a\/.* b\/(.*)$/.exec(line)
+    if (file) rust = file[1].endsWith('.rs')
+    else if (rust && /^[+-](?![+-]{2} )/.test(line) && WINDOWS_SENSITIVE.test(line)) return true
+  }
+  return false
+}
+
+/**
+ * Select the Rust tests of what changed: the unit tests of each changed library module, the binary's
+ * tests for its own modules, and the changed integration targets. Dependents are not selected.
+ * @param {string[]|null} paths Changed paths, or null when the scope is unknown.
+ * @param {ReturnType<typeof crateLayout>} layout Which root owns each source file, and the
+ *   integration target names.
+ * @param {boolean} [wholeLibrary] Run the whole library suite beside the other selections, as an
+ *   unknown path does.
+ * @returns {string[][]} `cargo-tests.mjs` invocations.
+ */
+export function quickRustTests(paths, { bin, lib, testTargets }, wholeLibrary = false) {
+  if (paths === null) return [[...CARGO_TESTS, 'lib']]
+  const modules = new Set()
+  const targets = new Set()
+  let binary = false
+  for (const path of paths) {
+    const test = /^tests\/([^/]+?)(?:\.rs|\/.+)$/.exec(path)?.[1]
+    // Ownership over-approximates, so every module and root that may hold a file runs its tests.
+    const owners = lib.filter(entry => owns(entry.paths, path)).map(entry => entry.module)
+    const inBinary = owns(bin, path)
+    if (/^Cargo\.(?:toml|lock)$/.test(path) || path === 'src/lib.rs' || owners.includes('testing')) wholeLibrary = true
+    else if (inBinary || owners.length) {
+      binary ||= inBinary
+      for (const owner of owners) modules.add(owner)
+    }
+    // A source file neither root declares is reached some other way; the library suite runs.
+    else if (path.startsWith('src/') && path.endsWith('.rs')) wholeLibrary = true
+    else if (test && testTargets.includes(test)) targets.add(test)
+    // `tests/support/` and `tests/fixtures/` are read by integration targets this cannot name.
+    else if (test) for (const target of testTargets) targets.add(target)
+  }
+  const steps = []
+  if (wholeLibrary) steps.push([...CARGO_TESTS, 'lib'])
+  else if (modules.size) steps.push([...CARGO_TESTS, 'lib', ...[...modules].sort()])
+  if (binary) steps.push([...CARGO_TESTS, 'bin'])
+  if (targets.size) steps.push([...CARGO_TESTS, 'test', ...[...targets].sort()])
+  return steps
+}
+
+/**
+ * Build the pre-review lane: what a review or the push hook would otherwise find first, in minutes.
+ * Static checks, format, the compilation-free JavaScript suites, duplication, JavaScript coverage,
+ * Clippy, rustdoc, the Windows cross-check when the change can differ there, and the Rust tests of
+ * what changed. Never a release build, corpus gate, Rust coverage or the whole Rust suite: the push
+ * hook runs those.
+ * @param {string[]|null} paths Changed paths, or null when the scope is unknown.
+ * @param {string} diff Unified diff of the change.
+ * @param {string} [docDiff] File holding that diff, for the docstring check.
+ * @param {ReturnType<typeof crateLayout>} [layout] Crate layout for test selection.
+ * @returns {string[][]} Commands in execution order.
+ */
+export function quickCommands(paths, diff, docDiff, layout = { bin: [], lib: [], testTargets: [] }) {
+  const scopes = hookScope(paths)
+  const full = scopes.includes('full')
+  const rust = full || scopes.includes('rust')
+  const steps = full ? [...staticCommands(docDiff), FORMAT, ...JS_TESTS] : hookCommands('pre-commit', paths, docDiff)
+  if (full || scopes.some(scope => scope !== 'docs')) steps.push(['npm', 'run', 'check:duplication'])
+  // JavaScript coverage runs wherever the push hook runs it, on its own or inside `npm run check`;
+  // Rust coverage never runs here.
+  const push = hookCommands('pre-push', paths, docDiff).map(step => step.join(' '))
+  if (push.includes('npm run check:coverage:js') || push.includes('npm run check')) steps.push(['npm', 'run', 'check:coverage:js'])
+  if (!rust) return steps
+  steps.push(CLIPPY, RUSTDOC)
+  if (windowsSensitive(full ? null : paths, diff)) steps.push(WINDOWS_CHECK)
+  // An unknown path adds the whole library suite and keeps what the known paths select.
+  steps.push(...quickRustTests(paths, layout, full))
+  return steps
+}
+
+/**
+ * Read the working checkout's change against its merge base with `origin/main`: tracked edits,
+ * committed or not, plus untracked files that are not ignored.
+ * @param {string} root Checkout directory.
+ * @param {NodeJS.ProcessEnv} [env] Git environment.
+ * @returns {{paths: string[]|null, diff: string, reason: string}} Null paths when no base is readable.
+ */
+export function quickChange(root, env = process.env) {
+  /** Run Git, returning stdout even when it exits 1, as `diff --no-index` does on a difference. */
+  const run = args => {
+    const result = spawnSync('git', args, { cwd: root, env, encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER })
+    if (result.error || (result.status !== 0 && result.status !== 1)) throw new Error(`git ${args.join(' ')} failed`)
+    return result.stdout
+  }
+  const untracked = run(['ls-files', '--others', '--exclude-standard', '-z']).split('\0').filter(Boolean)
+  const added = untracked.map(path => run(['-c', 'core.quotePath=false', 'diff', '--no-index', '--no-ext-diff', '--no-color', '--unified=0', '--', '/dev/null', path])).join('')
+  // A nonempty diff must start at a file header, so an empty fragment adds no separator.
+  const diff = [scopeDiff(root, { env }), added].filter(Boolean).join('\n')
+  let base
+  try { base = git(root, ['merge-base', 'HEAD', 'origin/main'], env) }
+  catch { return { paths: null, diff, reason: 'no merge base with origin/main' } }
+  const tracked = execFileSync('git', ['diff', '--no-ext-diff', '--no-renames', '--name-only', '-z', base, '--'], { cwd: root, env, encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER }).split('\0').filter(Boolean)
+  return { paths: [...new Set([...tracked, ...untracked])], diff, reason: 'working tree against the merge base with origin/main' }
+}
+
+/**
+ * Read the file modules a crate root declares, honouring `#[path]`: `mod x;` owns `src/x.rs` and
+ * everything under `src/x/`, and `#[path = "d/p.rs"] mod x;` owns `src/d/p.rs` and everything under
+ * `src/d/`, where Rust resolves that file's own child modules.
+ * @param {string} source The crate root's text.
+ * @returns {{module: string, paths: string[]}[]} Owned paths; one ending in `/` is a directory.
+ */
+export function rootModules(source) {
+  // Comments are whitespace to Rust, so an attribute applies across them; strip them first.
+  const code = source.replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, ' ')
+  // The attributes directly before a declaration, on its line or earlier ones, are its own.
+  return [...code.matchAll(/((?:#\[[^\]]*\]\s*)*)(?:pub(?:\([^)]*\))?\s+)?mod\s+(\w+)\s*;/g)].map(([, attributes, module]) => {
+    const path = /#\[\s*path\s*=\s*"([^"]+)"\s*\]/.exec(attributes)?.[1]
+    // Git reports normalized forward-slash paths, so `./a.rs` and `a\\b.rs` must match them.
+    if (!path) return { module, paths: [`src/${module}.rs`, `src/${module}/`] }
+    const file = posix.normalize(`src/${path.replaceAll('\\', '/')}`)
+    return { module, paths: [file, `${posix.dirname(file)}/`] }
+  })
+}
+
+/**
+ * Read the crate layout test selection needs from the checkout itself.
+ * @param {string} root Checkout directory.
+ * @returns {{bin: string[], lib: {module: string, paths: string[]}[], testTargets: string[]}} Paths
+ *   the binary owns, the library's file modules, and the integration target names.
+ */
+export function crateLayout(root) {
+  /** Read a crate root's declarations, or none when it is absent. */
+  const declared = name => existsSync(join(root, 'src', name)) ? rootModules(readFileSync(join(root, 'src', name), 'utf8')) : []
+  const tests = join(root, 'tests')
+  // Cargo discovers `tests/<name>.rs` and `tests/<name>/main.rs`; a directory without `main.rs` is a helper.
+  const testTargets = existsSync(tests) ? readdirSync(tests, { withFileTypes: true }).flatMap(entry => entry.isDirectory()
+    ? (existsSync(join(tests, entry.name, 'main.rs')) ? [entry.name] : [])
+    : (/^(.+)\.rs$/.exec(entry.name)?.[1] ?? [])) : []
+  return { bin: ['src/main.rs', ...declared('main.rs').flatMap(module => module.paths)], lib: declared('lib.rs'), testTargets }
+}
+
+/** Whether `path` is one of `owned`, or under an owned directory. */
+const owns = (owned, path) => owned.some(entry => entry.endsWith('/') ? path.startsWith(entry) : path === entry)
 
 /** Build the inexpensive checks shared by every local profile and scope. */
 function staticCommands(docDiff) {
@@ -529,7 +691,7 @@ export function installHooks(root) {
  */
 export function main(args = process.argv.slice(2), { env = process.env, input, check = runSteps, print = console.log, root = process.cwd() } = {}) {
   const [mode, ...rest] = args
-  if (!['fast', 'full', 'pre-commit', 'pre-push', 'install'].includes(mode) || (mode !== 'pre-push' && rest.length)) throw new Error('Usage: verify.mjs fast|full|pre-commit|pre-push|install')
+  if (!['quick', 'fast', 'full', 'pre-commit', 'pre-push', 'install'].includes(mode) || (mode !== 'pre-push' && rest.length)) throw new Error('Usage: verify.mjs quick|fast|full|pre-commit|pre-push|install')
   root = resolve(git(root, ['rev-parse', '--show-toplevel'], env))
   if (mode === 'install') { print(`Hooks installed for this worktree: ${installHooks(root)}`); return }
   const updates = mode === 'pre-push' ? pushUpdates(input ?? readFileSync(0, 'utf8')) : []
@@ -543,7 +705,19 @@ export function main(args = process.argv.slice(2), { env = process.env, input, c
   const share = String(laneShare())
   const runEnv = { ...env, CARGO_BUILD_JOBS: env.CARGO_BUILD_JOBS || share, RUST_TEST_THREADS: env.RUST_TEST_THREADS || share, CARGO_TARGET_DIR: cache, CARGO_LLVM_COV_TARGET_DIR: env.CARGO_LLVM_COV_TARGET_DIR ? resolve(root, env.CARGO_LLVM_COV_TARGET_DIR) : join(cache, 'llvm-cov-target') }
   // A manual run builds in the checkout's own cache, which a second run must not share.
+  const manual = ['quick', 'fast', 'full'].includes(mode)
   withLock(common, lane => {
+    if (mode === 'quick') {
+      const { paths, diff, reason } = quickChange(root, env)
+      const scope = hookScope(paths)
+      print(`Quick check scope: ${scope.join(', ') || 'no changed paths'} (${paths === null ? reason : `${paths.length} changed paths; ${reason}`})`)
+      mkdirSync(logs, { recursive: true })
+      const docDiff = join(logs, 'docstrings.diff')
+      writeFileSync(docDiff, diff)
+      const meta = { mode, scope, reason, changedPaths: paths?.length ?? null }
+      withTargetCache(root, cache, () => check(root, quickCommands(paths, diff, docDiff, crateLayout(root)), { env: runEnv, logRoot: logs, meta, print }))
+      return
+    }
     if (mode === 'fast' || mode === 'full') {
       withTargetCache(root, cache, () => check(root, commands(mode), { env: runEnv, logRoot: logs, meta: { mode, scope: ['manual'], reason: 'manual profile' }, print }))
       return
@@ -589,7 +763,7 @@ export function main(args = process.argv.slice(2), { env = process.env, input, c
         withNodeModules(snapshot, root, () => withTargetCache(snapshot, hookCache, () => check(snapshot, hookCommands(mode, paths, docDiff), { env: hookEnv, logRoot: join(logs, String(i)), meta, print })))
       }, env, work)
     }
-  }, { lanes: mode === 'fast' || mode === 'full' ? 1 : LANES, waitMs: QUEUE_MS, print })
+  }, { lanes: manual ? 1 : LANES, waitMs: QUEUE_MS, print })
   print(`Verification complete. Logs: ${logs}`)
 }
 
