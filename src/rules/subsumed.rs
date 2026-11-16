@@ -13,6 +13,7 @@ pub(super) fn run(
     files: &Files,
     config: &Config,
     budget: &mut PairBudget,
+    trace_work: &mut PairBudget,
     findings: &mut Vec<Finding>,
 ) -> bool {
     let severity = config.severity(Rule::SubsumedTest);
@@ -45,13 +46,9 @@ pub(super) fn run(
                 if a.declaration() == b.declaration() || a.case.body == b.case.body {
                     continue;
                 }
-                let members = if a.case.ordinary_events < b.case.ordinary_events
-                    && strict_subsequence(&a.case.trace, &b.case.trace)
-                {
+                let members = if a.case.ordinary_events < b.case.ordinary_events {
                     [a, b]
-                } else if b.case.ordinary_events < a.case.ordinary_events
-                    && strict_subsequence(&b.case.trace, &a.case.trace)
-                {
+                } else if b.case.ordinary_events < a.case.ordinary_events {
                     [b, a]
                 } else {
                     continue;
@@ -59,6 +56,17 @@ pub(super) fn run(
                 // A larger test that does not run, or may not (`.skip`, `{ todo: flag }`, an
                 // enclosing skipped suite), covers nothing proved.
                 if members[1].case.may_skip {
+                    continue;
+                }
+                let [small, large] = members.map(|entry| entry.case.trace.as_slice());
+                if small.is_empty() || small.len() >= large.len() {
+                    continue;
+                }
+                if !trace_work.charge(large.len() as u64) {
+                    settle(findings, claimed);
+                    return false;
+                }
+                if !strict_subsequence(small, large) {
                     continue;
                 }
                 let claim = (
@@ -96,9 +104,6 @@ pub(super) fn run(
 
 /// Matches in order with multiplicity, requiring a nonempty and strictly smaller trace.
 fn strict_subsequence(small: &[u128], large: &[u128]) -> bool {
-    if small.is_empty() || small.len() >= large.len() {
-        return false;
-    }
     let mut cursor = 0;
     for event in large {
         if cursor < small.len() && small[cursor] == *event {

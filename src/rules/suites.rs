@@ -3,11 +3,29 @@
 use super::{emit, keyed, per_declaration, whole, Entry, Files};
 use crate::config::Config;
 use crate::model::{Covers, Finding, GateCase, Location, Rule, Severity};
-use crate::modes::{apply_inline_suppressions, InlineSuppression};
+use crate::modes::InlineSuppressionIndex;
 use crate::pairs::PairBudget;
 use std::cell::OnceCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
+
+mod scopes;
+use scopes::Scopes;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// An empty set of copies has no enclosing suite findings.
+    #[test]
+    fn absent_suite_copies_have_no_enclosing_findings() {
+        assert!(
+            enclosing_findings(&[], &[], &Scopes::new([]), &mut PairBudget::new(0))
+                .unwrap()
+                .is_empty()
+        );
+    }
+}
 
 #[cfg(test)]
 thread_local! {
@@ -19,169 +37,234 @@ thread_local! {
 #[derive(Default)]
 pub(super) struct Twins(Vec<Vec<Location>>);
 
+struct SuppressionPlan {
+    removed: BTreeSet<usize>,
+    covers: Vec<(usize, Covers)>,
+}
+
 impl Twins {
-    /// Finds the smallest reported suite that strictly encloses a participant.
-    fn scope(&self, location: &Location) -> Option<(usize, usize)> {
-        self.0
-            .iter()
-            .enumerate()
-            .flat_map(|(group, members)| {
-                members
-                    .iter()
-                    .enumerate()
-                    .filter_map(move |(index, suite)| {
-                        (suite.path == location.path
-                            && suite.span.start_byte < location.span.start_byte
-                            && location.span.end_byte <= suite.span.end_byte)
-                            .then_some((suite.span.end_byte - suite.span.start_byte, group, index))
-                    })
-            })
-            .min()
-            .map(|(_, group, index)| (group, index))
-    }
-
-    /// A pure cross-copy finding has one participant in each of several copies of one group.
-    /// Mixed clusters stay visible: discarding them would also discard outsiders or local copies.
-    fn covered(&self, locations: &[Location]) -> bool {
-        let scopes: Option<Vec<_>> = locations
-            .iter()
-            .map(|location| self.scope(location))
-            .collect();
-        let Some(scopes) = scopes.filter(|scopes| scopes.len() >= 2) else {
-            return false;
-        };
-        scopes.iter().all(|scope| scope.0 == scopes[0].0)
-            && scopes
-                .iter()
-                .map(|scope| scope.1)
-                .collect::<BTreeSet<_>>()
-                .len()
-                == scopes.len()
-    }
-
-    /// The copies `locations` sit in, when every one sits in a reported copy.
-    fn copies(&self, locations: &[Location]) -> Option<Vec<&Location>> {
-        locations
-            .iter()
-            .map(|location| {
-                let (group, index) = self.scope(location)?;
-                Some(&self.0[group][index])
-            })
-            .collect()
-    }
-
     /// Removes a child test/name claim only when one reported suite finding names every copy it
     /// spans: that finding stands for the relationship and carries it to the gate, so baselining
-    /// or suppressing either one acts on both. A child no single suite finding stands for stays
-    /// visible. A child the user suppressed inline would not have counted, so nothing carries it.
-    pub(super) fn suppress(&self, findings: &mut Vec<Finding>, suppressions: &[InlineSuppression]) {
-        // Suite findings by the copies they name, so a child's representatives are found from its
-        // first copy instead of by scanning every suite finding.
-        let mut by_copy: BTreeMap<&Location, Vec<usize>> = BTreeMap::new();
-        for (index, finding) in findings.iter().enumerate() {
-            if finding.rule == Rule::DuplicateSuite {
-                for copy in &finding.locations {
-                    by_copy.entry(copy).or_default().push(index);
-                }
-            }
+    /// or suppressing either one acts on both. An unfinished plan leaves the claims intact.
+    pub(super) fn suppress(
+        &self,
+        findings: &mut Vec<Finding>,
+        suppressions: &InlineSuppressionIndex<'_>,
+        work: &mut PairBudget,
+    ) -> bool {
+        if self.0.is_empty() {
+            return true;
         }
-        // Each child's copies are computed once.
-        let represented: Vec<(usize, Vec<usize>)> = findings
-            .iter()
-            .enumerate()
-            .filter(|(_, finding)| {
-                matches!(finding.rule, Rule::DuplicateTest | Rule::DuplicateTestName)
-                    && self.covered(&finding.locations)
-            })
-            .filter_map(|(index, child)| {
-                let copies = self.copies(&child.locations)?;
-                let suites: Vec<usize> = by_copy
-                    .get(copies.first()?)?
-                    .iter()
-                    .copied()
-                    .filter(|&suite| {
-                        copies
-                            .iter()
-                            .all(|copy| findings[suite].locations.contains(copy))
-                    })
-                    .collect();
-                (!suites.is_empty()).then_some((index, suites))
-            })
-            .collect();
-        for (child, suites) in &represented {
-            let child = findings[*child].clone();
-            if apply_inline_suppressions(&mut vec![child.clone()], suppressions) > 0 {
-                continue;
-            }
-            for &suite in suites {
-                carry(&mut findings[suite], child.severity, child.cases.clone());
-            }
+        let Ok(SuppressionPlan { removed, covers }) = self.plan(findings, suppressions, work)
+        else {
+            return false;
+        };
+        for (index, coverage) in covers {
+            findings[index].covers = Some(coverage);
         }
-        // An outer copy also stands for the tests a suite finding nested in its copies carries, so
-        // nested copies count each test once rather than adding the outer blocks as tests.
-        let mut by_file: BTreeMap<&std::path::Path, Vec<usize>> = BTreeMap::new();
-        for (index, finding) in findings.iter().enumerate() {
-            if finding.rule == Rule::DuplicateSuite {
-                if let Some(first) = finding.locations.first() {
-                    by_file.entry(&first.path).or_default().push(index);
-                }
-            }
-        }
-        let mut nested = Vec::new();
-        for suites in by_file.values() {
-            for &outer in suites {
-                for &inner in suites {
-                    let Some(covers) = &findings[inner].covers else {
-                        continue;
-                    };
-                    let inside = findings[inner].locations.iter().all(|location| {
-                        findings[outer].locations.iter().any(|copy| {
-                            copy.path == location.path
-                                && copy.span.start_byte < location.span.start_byte
-                                && location.span.end_byte <= copy.span.end_byte
-                        })
-                    });
-                    if inside {
-                        nested.push((outer, covers.clone()));
-                    }
-                }
-            }
-        }
-        for (outer, covers) in nested {
-            carry(&mut findings[outer], covers.severity, covers.cases);
-        }
-        let removed: BTreeSet<usize> = represented.iter().map(|(child, _)| *child).collect();
         let mut index = 0;
         findings.retain(|_| {
             index += 1;
             !removed.contains(&(index - 1))
         });
+        true
+    }
+
+    /// Plans child replacement and propagation before changing any finding or gate coverage.
+    fn plan(
+        &self,
+        findings: &[Finding],
+        suppressions: &InlineSuppressionIndex<'_>,
+        work: &mut PairBudget,
+    ) -> Result<SuppressionPlan, ()> {
+        let twins = Scopes::new(self.0.iter().enumerate().flat_map(|(group, locations)| {
+            locations.iter().enumerate().map(move |(copy, location)| {
+                let span = location.span;
+                (location, (span.end_byte - span.start_byte, group, copy))
+            })
+        }));
+        let suite_locations = || {
+            findings
+                .iter()
+                .enumerate()
+                .filter(|(_, finding)| finding.rule == Rule::DuplicateSuite)
+                .flat_map(|(index, finding)| {
+                    finding.locations.iter().map(move |copy| (copy, index))
+                })
+        };
+        let mut by_copy = BTreeMap::<_, Vec<usize>>::new();
+        for (copy, index) in suite_locations() {
+            by_copy.entry(copy).or_default().push(index);
+        }
+        let mut removed = BTreeSet::new();
+        let mut direct = BTreeMap::<_, Coverage<'_>>::new();
+        for (index, child) in findings.iter().enumerate().filter(|(_, child)| {
+            matches!(child.rule, Rule::DuplicateTest | Rule::DuplicateTestName)
+        }) {
+            let copies = self.copies(child, &twins, &by_copy, work)?;
+            let Some(first) = copies.iter().min_by_key(|ids| ids.len()) else {
+                continue;
+            };
+            let suppressed = child
+                .locations
+                .iter()
+                .any(|site| suppressions.contains(site));
+            for &suite in *first {
+                work.charge(copies.len() as u64).then_some(()).ok_or(())?;
+                if copies.iter().all(|ids| ids.binary_search(&suite).is_ok()) {
+                    removed.insert(index);
+                    if !suppressed {
+                        direct
+                            .entry(suite)
+                            .or_default()
+                            .add(child.severity, &child.cases, work)?;
+                    }
+                }
+            }
+        }
+        let scopes = Scopes::new(suite_locations());
+        let mut inherited = BTreeMap::<_, Coverage<'_>>::new();
+        for (&inner, coverage) in &direct {
+            for outer in enclosing_findings(findings, &findings[inner].locations, &scopes, work)? {
+                inherited.entry(outer).or_default().add(
+                    coverage.severity,
+                    coverage.cases.iter().copied(),
+                    work,
+                )?;
+            }
+        }
+        for (outer, coverage) in inherited {
+            direct
+                .entry(outer)
+                .or_default()
+                .add(coverage.severity, coverage.cases, work)?;
+        }
+        Ok(SuppressionPlan {
+            removed,
+            covers: direct
+                .into_iter()
+                .map(|(suite, coverage)| (suite, coverage.finish()))
+                .collect(),
+        })
+    }
+
+    /// Finds one smallest scope per participant, requiring distinct copies of a single group.
+    fn copies<'a>(
+        &self,
+        child: &Finding,
+        scopes: &Scopes<'_, (u32, usize, usize)>,
+        by_copy: &'a BTreeMap<&Location, Vec<usize>>,
+        work: &mut PairBudget,
+    ) -> Result<Vec<&'a [usize]>, ()> {
+        if child.locations.len() < 2 {
+            return Ok(Vec::new());
+        }
+        let mut selected = BTreeSet::new();
+        let mut group_id = None;
+        let mut copies = Vec::new();
+        for site in &child.locations {
+            work.charge(1).then_some(()).ok_or(())?;
+            let mut smallest = None;
+            scopes.enclosing(site, work, |scope| {
+                smallest = Some(smallest.map_or(scope, |prior| scope.min(prior)));
+            })?;
+            let Some((_, group, copy)) = smallest else {
+                return Ok(Vec::new());
+            };
+            if *group_id.get_or_insert(group) != group || !selected.insert(copy) {
+                return Ok(Vec::new());
+            }
+            let Some(ids) = by_copy.get(&self.0[group][copy]) else {
+                return Ok(Vec::new());
+            };
+            copies.push(ids.as_slice());
+        }
+        Ok(copies)
     }
 }
 
-/// Folds `cases` at `severity` into `suite`'s covers, keeping only the highest severity's. The
-/// reported locations stay one per declaration; the cases keep each row.
-pub(super) fn carry(suite: &mut Finding, severity: Severity, cases: Vec<GateCase>) {
-    let covers = suite.covers.get_or_insert_with(|| Covers {
-        severity,
-        locations: Vec::new(),
-        cases: Vec::new(),
-    });
-    if severity > covers.severity {
-        covers.severity = severity;
-        covers.locations.clear();
-        covers.cases.clear();
+/// Intersects the enclosing suite findings of every copy, retaining the original file scope.
+fn enclosing_findings(
+    findings: &[Finding],
+    copies: &[Location],
+    scopes: &Scopes<'_, usize>,
+    work: &mut PairBudget,
+) -> Result<BTreeSet<usize>, ()> {
+    let Some((first, rest)) = copies.split_first() else {
+        return Ok(BTreeSet::new());
+    };
+    let mut outer = BTreeSet::new();
+    scopes.enclosing(first, work, |id| {
+        if findings[id].locations[0].path == first.path {
+            outer.insert(id);
+        }
+    })?;
+    for site in rest {
+        if outer.is_empty() {
+            break;
+        }
+        let mut matching = BTreeSet::new();
+        scopes.enclosing(site, work, |id| {
+            if outer.contains(&id) {
+                matching.insert(id);
+            }
+        })?;
+        outer = matching;
     }
-    if severity == covers.severity {
-        covers.cases.extend(cases);
-        covers.cases.sort();
-        covers.cases.dedup();
-        covers.locations = covers
+    Ok(outer)
+}
+
+/// Collects distinct gate cases at the highest severity, borrowing them until the plan succeeds.
+pub(super) struct Coverage<'a> {
+    severity: Severity,
+    cases: BTreeSet<&'a GateCase>,
+}
+
+impl Default for Coverage<'_> {
+    /// Starts without any covered case or gate severity.
+    fn default() -> Self {
+        Self {
+            severity: Severity::Off,
+            cases: BTreeSet::new(),
+        }
+    }
+}
+
+impl<'a> Coverage<'a> {
+    /// Adds a completed source of coverage, charging its case visits before retaining references.
+    pub(super) fn add(
+        &mut self,
+        severity: Severity,
+        cases: impl IntoIterator<Item = &'a GateCase, IntoIter: ExactSizeIterator>,
+        work: &mut PairBudget,
+    ) -> Result<(), ()> {
+        if severity >= self.severity {
+            let cases = cases.into_iter();
+            work.charge(cases.len() as u64 + 1)
+                .then_some(())
+                .ok_or(())?;
+            if severity > self.severity {
+                self.severity = severity;
+                self.cases.clear();
+            }
+            self.cases.extend(cases);
+        }
+        Ok(())
+    }
+
+    /// Materializes each distinct case once and derives the matching declaration locations.
+    pub(super) fn finish(self) -> Covers {
+        let mut locations: Vec<_> = self
             .cases
             .iter()
             .map(|(location, ..)| location.clone())
             .collect();
-        covers.locations.dedup();
+        locations.dedup();
+        Covers {
+            severity: self.severity,
+            locations,
+            cases: self.cases.into_iter().cloned().collect(),
+        }
     }
 }
 
@@ -190,7 +273,7 @@ pub(super) fn run(
     files: &Files,
     tests: &Files,
     config: &Config,
-    suppressions: &[InlineSuppression],
+    suppressions: &InlineSuppressionIndex<'_>,
     budget: &mut PairBudget,
     findings: &mut Vec<Finding>,
 ) -> (Twins, bool) {
@@ -219,7 +302,7 @@ pub(super) fn run(
             })
             .collect();
         let mut emitted = Vec::new();
-        if !emit(
+        if emit(
             Rule::DuplicateSuite,
             severity,
             &entries,
@@ -227,7 +310,9 @@ pub(super) fn run(
             message,
             budget,
             &mut emitted,
-        ) {
+        )
+        .is_err()
+        {
             return (twins, true);
         }
         // A copy stands for the tests declared inside it, whether or not a child rule reports them.
@@ -241,10 +326,15 @@ pub(super) fn run(
             });
             finding.cases = descendants(finding, tests, by_path);
         }
-        let mut visible = emitted.clone();
-        let removed = apply_inline_suppressions(&mut visible, suppressions);
         // A partially suppressed spanning group cannot stand for every relation in the group.
-        if removed == 0 && !visible.is_empty() {
+        if !emitted.is_empty()
+            && emitted.iter().all(|finding| {
+                !finding
+                    .locations
+                    .iter()
+                    .any(|site| suppressions.contains(site))
+            })
+        {
             twins.0.push(locations);
         }
         findings.extend(emitted);

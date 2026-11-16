@@ -26,8 +26,8 @@ for different responses.
 - `=reads` counts only causes meaning the project could not be fully read: unreadable, oversized or
   partially read files, undetermined config, tests whose context could not be resolved,
   and [missing prerequisites](#missing-prerequisites).
-- `=limits` counts only the analyzer's own bounded work being capped: the pair budget, the hook-scan
-  budget, the memory budget, and truncated findings.
+- `=limits` counts only the analyzer's own bounded work being capped: rule comparison and coverage
+  budgets, the hook-scan budget, the memory budget, and truncated findings.
 
 The value needs the `=`; with a space, `reads` would be read as the path.
 

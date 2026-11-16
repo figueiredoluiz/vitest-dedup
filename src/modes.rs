@@ -895,11 +895,8 @@ pub fn apply_inline_suppressions(
     if suppressions.is_empty() {
         return 0;
     }
-    let suppressed = |location: &Location| {
-        suppressions.iter().any(|suppression| {
-            suppression.path == location.path && suppression.line + 1 == location.span.start.line
-        })
-    };
+    let index = InlineSuppressionIndex::new(suppressions);
+    let suppressed = |location: &Location| index.contains(location);
     let before = findings.len();
     findings.retain(|finding| !finding.locations.iter().any(suppressed));
     // A kept finding can still stand for a suppressed test it does not list, such as a
@@ -911,6 +908,27 @@ pub fn apply_inline_suppressions(
         }
     }
     before - findings.len()
+}
+
+/// Indexes suppressed source lines shared by suite coverage and final report modes.
+pub(crate) struct InlineSuppressionIndex<'a>(BTreeSet<(&'a Path, u32)>);
+
+impl<'a> InlineSuppressionIndex<'a> {
+    /// Records the declaration line immediately following each directive.
+    pub(crate) fn new(suppressions: &'a [InlineSuppression]) -> Self {
+        Self(
+            suppressions
+                .iter()
+                .filter_map(|item| Some((item.path.as_path(), item.line.checked_add(1)?)))
+                .collect(),
+        )
+    }
+
+    /// Whether a declaration location has an inline directive.
+    pub(crate) fn contains(&self, location: &Location) -> bool {
+        self.0
+            .contains(&(location.path.as_path(), location.span.start.line))
+    }
 }
 
 // -------------------------------------------------------------------------------------------

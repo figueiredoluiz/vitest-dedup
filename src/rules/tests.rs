@@ -9,6 +9,18 @@ use std::path::PathBuf;
 
 mod origins;
 
+/// Reads a fixture through the same corpus layer as the CLI.
+fn owned_corpus(path: &str, source: &str) -> crate::corpus::FileCorpus {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    crate::corpus::file(
+        &root.join(path),
+        source,
+        crate::corpus::Setting::vitest5(root),
+        &mut crate::corpus::Run::default(),
+    )
+    .unwrap()
+}
+
 /// A case at `line` with the keys and flags given; rows of one table share `site`.
 fn case(line: u32, site: u32, key: u64, module_key: u64) -> TestCase {
     TestCase {

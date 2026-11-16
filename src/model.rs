@@ -2034,13 +2034,13 @@ pub struct IncompleteCauses {
     ///
     /// The largest cause by far on real corpora, and the one the old banner never named.
     pub unresolved_contexts: usize,
-    /// The pair-comparison budget ran out before every pair had been compared.
+    /// A rule's comparison or coverage work budget ran out before its analysis finished.
     pub pair_budget_exhausted: bool,
     /// `redundant-hook`'s candidate scan ran out of budget before every hook chain was inspected.
     ///
     /// Separate from [`IncompleteCauses::pair_budget_exhausted`] because they are separate
     /// budgets with separate limits, and folding them together is precisely the misattribution
-    /// this struct exists to remove -- a reader told "the pair-comparison budget ran out" would
+    /// this struct exists to avoid. A reader told "a rule work budget ran out" would
     /// go looking at `MAX_PAIR_COMPARISONS`, which was never reached.
     pub hook_scan_exhausted: bool,
     /// Files left unanalyzed because the retained-memory budget (`--max-memory`) was reached.
@@ -2206,8 +2206,7 @@ impl IncompleteCauses {
         );
         if self.pair_budget_exhausted {
             reasons.push(
-                "the pair-comparison budget ran out before every pair had been compared"
-                    .to_string(),
+                "a rule work budget ran out before comparison or coverage finished".to_string(),
             );
         }
         if self.hook_scan_exhausted {
@@ -3193,7 +3192,7 @@ mod tests {
             ),
             (
                 |causes| causes.pair_budget_exhausted = true,
-                "the pair-comparison budget ran out before every pair had been compared",
+                "a rule work budget ran out before comparison or coverage finished",
             ),
             (
                 |causes| causes.hook_scan_exhausted = true,
@@ -3327,7 +3326,7 @@ mod tests {
         assert!(reasons[1].starts_with("directory traversal failed"));
         assert!(reasons[2].starts_with("a Vitest project's configuration"));
         assert!(reasons[3].starts_with("`node_modules` is missing or empty"));
-        assert!(reasons[4].starts_with("the pair-comparison budget ran out"));
+        assert!(reasons[4].starts_with("a rule work budget ran out"));
         assert!(reasons[5].starts_with("the `redundant-hook` scan budget"));
         assert!(leads[6].starts_with("file(s) were not analyzed because the memory budget"));
         assert!(leads[7].starts_with("finding(s) were dropped by the display cap"));

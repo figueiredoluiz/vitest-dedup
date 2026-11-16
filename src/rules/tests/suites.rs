@@ -37,15 +37,10 @@ fn suite_only() -> Config {
 /// The permanent corpus input retains suite findings without a corpus scan per copy.
 #[test]
 fn suite_case_corpus_visits_only_matching_files() {
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let path = root.join("fixtures/recall/suite-case-file-index/run.test.ts");
-    let corpus = crate::corpus::file(
-        &path,
+    let corpus = owned_corpus(
+        "fixtures/recall/suite-case-file-index/run.test.ts",
         include_str!("../../../fixtures/recall/suite-case-file-index/run.test.ts"),
-        crate::corpus::Setting::vitest5(&root),
-        &mut crate::corpus::Run::default(),
-    )
-    .unwrap();
+    );
     assert_eq!(corpus.tests.len(), 3);
     assert_eq!(corpus.suites.len(), 2);
     assert!(corpus
@@ -76,6 +71,62 @@ fn suite_case_corpus_visits_only_matching_files() {
             "{count} files must not cause a full-corpus scan per suite copy"
         );
     }
+}
+
+/// Applying a finished coverage plan keeps the gate; refusing one leaves all claims available.
+#[test]
+fn suite_coverage_finishes_within_the_indexed_work_budget() {
+    let parsed = owned_corpus(
+        "fixtures/recall/rule-evaluation/suites.test.ts",
+        include_str!("../../../fixtures/recall/rule-evaluation/suites.test.ts"),
+    );
+    assert_eq!((parsed.tests.len(), parsed.suites.len()), (6, 4));
+    assert!(parsed.tests.iter().all(|case| case.exclusion.is_none()));
+    let files: OwnedFiles = (0..64)
+        .map(|i| file(&format!("{i}/suites.test.ts"), parsed.tests.clone()))
+        .collect();
+    let suites: OwnedFiles = files
+        .iter()
+        .map(|(path, _)| (path.clone(), parsed.suites.clone()))
+        .collect();
+    let mut config = suite_only();
+    config.rules.insert(Rule::DuplicateTest, Severity::Error);
+    config.rules.insert(Rule::DuplicateSuite, Severity::Warning);
+    let suppressions = crate::modes::InlineSuppressionIndex::new(&[]);
+    let mut findings = run(&files, &config).findings;
+    assert_eq!(findings.len(), 64 * 3);
+    let (twins, exhausted) = crate::rules::suites::run(
+        &suites,
+        &files,
+        &config,
+        &suppressions,
+        &mut PairBudget::new(256),
+        &mut findings,
+    );
+    assert!(!exhausted);
+    let original = findings.clone();
+    assert!(!twins.suppress(&mut findings, &suppressions, &mut PairBudget::new(20)));
+    assert_eq!(findings, original);
+    assert!(twins.suppress(&mut findings, &suppressions, &mut PairBudget::new(8_000)));
+    assert_eq!(findings.len(), 64 * 3);
+    assert_eq!(
+        findings
+            .iter()
+            .filter(|finding| finding.rule == Rule::DuplicateTest)
+            .count(),
+        64
+    );
+    assert_eq!(
+        findings
+            .iter()
+            .filter(|finding| finding
+                .covers
+                .as_ref()
+                .is_some_and(|covers| covers.cases.len() == 4))
+            .count(),
+        64
+    );
+    assert_eq!(gate(findings, false), (true, 64 * 6));
 }
 
 /// Equal paths retain every entry and row, but unrelated paths and ineligible cases stay out.
@@ -233,19 +284,21 @@ fn a_copied_block_gates_as_its_children() {
 #[test]
 fn carried_children_keep_the_highest_severity() {
     let (files, suites) = population();
-    let mut suite = run_with_suites(&files, &suites, &config_with(&[]), &[]).findings[0].clone();
-    suite.covers = None;
+    let result = run_with_suites(&files, &suites, &config_with(&[]), &[]);
+    let suite = &result.findings[0];
     let at = |line| {
         let mut location = suite.locations[0].clone();
         location.span.start.line = line;
         vec![(location, None, None, 1)]
     };
     let (one, two, three) = (at(1), at(2), at(3));
-    crate::rules::suites::carry(&mut suite, Severity::Warning, one);
-    crate::rules::suites::carry(&mut suite, Severity::Error, two.clone());
-    crate::rules::suites::carry(&mut suite, Severity::Warning, three);
-    crate::rules::suites::carry(&mut suite, Severity::Error, two);
-    let covers = suite.covers.unwrap();
+    let mut coverage = crate::rules::suites::Coverage::default();
+    let mut work = PairBudget::new(16);
+    coverage.add(Severity::Warning, &one, &mut work).unwrap();
+    coverage.add(Severity::Error, &two, &mut work).unwrap();
+    coverage.add(Severity::Warning, &three, &mut work).unwrap();
+    coverage.add(Severity::Error, &two, &mut work).unwrap();
+    let covers = coverage.finish();
     assert_eq!(covers.severity, Severity::Error);
     assert_eq!(
         covers
@@ -291,7 +344,31 @@ fn nested_copies_count_each_test_once() {
         ],
     )];
     let error = config_with(&[(Rule::DuplicateSuite, Severity::Error)]);
+    let suppressions = crate::modes::InlineSuppressionIndex::new(&[]);
+    let mut findings = run(&files, &error).findings;
+    let (twins, exhausted) = crate::rules::suites::run(
+        &suites,
+        &files,
+        &error,
+        &suppressions,
+        &mut PairBudget::new(64),
+        &mut findings,
+    );
+    assert!(!exhausted);
+    assert_eq!(findings.len(), 3);
+    let mut finished = None;
+    // Refuse atomically at every budget boundary, including while carrying the inner coverage.
+    for limit in 0..64 {
+        let mut candidate = findings.clone();
+        if twins.suppress(&mut candidate, &suppressions, &mut PairBudget::new(limit)) {
+            crate::analysis::sort_findings(&mut candidate);
+            finished = Some(candidate);
+            break;
+        }
+        assert_eq!(candidate, findings, "limit {limit} exposed a partial plan");
+    }
     let result = run_with_suites(&files, &suites, &error, &[]);
+    assert_eq!(finished.unwrap(), result.findings);
     assert_eq!(result.findings.len(), 2, "{:?}", result.findings);
     for finding in &result.findings {
         let carried: Vec<u32> = finding
@@ -305,6 +382,36 @@ fn nested_copies_count_each_test_once() {
         assert_eq!(carried, [4, 10], "{finding:?}");
     }
     assert_eq!(gate(result.findings, false), (true, 2));
+}
+
+/// A child needs multiple locations and an emitted suite representative for each copy.
+#[test]
+fn suite_replacement_requires_child_locations_and_a_representative() {
+    let (files, suites) = population();
+    let config = config_with(&[]);
+    let suppressions = crate::modes::InlineSuppressionIndex::new(&[]);
+    let mut findings = run(&files, &config).findings;
+    let (twins, exhausted) = crate::rules::suites::run(
+        &suites,
+        &files,
+        &config,
+        &suppressions,
+        &mut PairBudget::new(16),
+        &mut findings,
+    );
+    assert!(!exhausted);
+    assert_eq!(findings.len(), 2);
+    for missing_suite in [false, true] {
+        let mut remaining = findings.clone();
+        if missing_suite {
+            remaining.retain(|finding| finding.rule == Rule::DuplicateTest);
+        } else {
+            remaining[0].locations.truncate(1);
+        }
+        let original = remaining.clone();
+        assert!(twins.suppress(&mut remaining, &suppressions, &mut PairBudget::new(64)));
+        assert_eq!(remaining, original);
+    }
 }
 
 /// Each suite finding carries only the child tests inside the copies it names.
@@ -476,6 +583,10 @@ fn suite_budget_clusters_and_severity_are_shared() {
 /// A matching key in another file is not a same-file suite copy.
 #[test]
 fn suite_keys_cannot_cross_files_or_exclusions() {
+    let same = vec![file("a.test.ts", vec![suite(2, 10, 100); 2])];
+    assert!(run_with_suites(&[], &same, &suite_only(), &[])
+        .findings
+        .is_empty());
     let suites = vec![
         file("a.test.ts", vec![suite(1, 0, 100)]),
         file("b.test.ts", vec![suite(1, 0, 100)]),

@@ -10,8 +10,8 @@ use std::path::Path;
 /// One declaration of a group, under the shape that grouped it.
 pub(super) type Declaration<'a> = (&'a Path, (&'a Path, u32, &'a Path, &'a [u32]), u64);
 
-/// The declarations of each group this rule reported.
-pub(super) type Reported<'a> = Vec<BTreeSet<Declaration<'a>>>;
+/// The reported group of each declaration. The structural key makes membership unique.
+pub(super) type Reported<'a> = BTreeMap<Declaration<'a>, usize>;
 
 /// The declaration `entry` stands for, when it has a shape.
 pub(super) fn declaration<'a>(entry: &Entry<'a>) -> Option<Declaration<'a>> {
@@ -29,7 +29,7 @@ pub(super) fn run<'a>(
 ) -> (bool, Reported<'a>) {
     let severity = config.severity(Rule::ParameterizationCandidate);
     if severity == Severity::Off {
-        return (true, Vec::new());
+        return (true, Reported::new());
     }
     let (entries, groups) = keyed(files, |entry| {
         let case = entry.case;
@@ -48,13 +48,14 @@ pub(super) fn run<'a>(
         })
         .filter(|group| group.len() >= 2)
         .collect();
-    let reported = groups
+    let members = &entries;
+    let mut reported: Reported<'_> = groups
         .iter()
-        .map(|group| {
+        .enumerate()
+        .flat_map(|(id, group)| {
             group
                 .iter()
-                .filter_map(|(index, _)| declaration(&entries[*index]))
-                .collect()
+                .filter_map(move |&(index, _)| declaration(&members[index]).map(|key| (key, id)))
         })
         .collect();
     let finished = emit(
@@ -66,7 +67,10 @@ pub(super) fn run<'a>(
         budget,
         findings,
     );
-    (finished, reported)
+    if let Err(first_unpaid) = finished {
+        reported.retain(|_, group| *group < first_unpaid);
+    }
+    (finished.is_ok(), reported)
 }
 
 /// Covers bodies in stable content order, then reports representatives in source order.

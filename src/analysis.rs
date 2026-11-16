@@ -58,6 +58,10 @@ pub struct RunModes<'a> {
 /// hanging.
 pub const MAX_PAIR_COMPARISONS: u64 = 2_000_000;
 
+/// Work allowed independently for subsumption trace scans and suite coverage planning.
+/// These limits count scanned events or coverage traversal and case work, before performing it.
+pub(crate) const MAX_RULE_WORK: u64 = 8_000_000;
+
 /// Maximum hook-pair candidates inspected by `redundant-hook`.
 ///
 /// This is separate from [`MAX_PAIR_COMPARISONS`]: the latter is charged for relationships a
