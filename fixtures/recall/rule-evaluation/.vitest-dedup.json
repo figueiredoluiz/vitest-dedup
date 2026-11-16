@@ -1,0 +1,13 @@
+{
+  "rules": {
+    "duplicate-test": "error",
+    "duplicate-test-name": "off",
+    "cross-file-duplicate": "off",
+    "duplicate-suite": "warning",
+    "duplicate-each-row": "off",
+    "parameterization-candidate": "warning",
+    "near-duplicate-test": "warning",
+    "redundant-hook": "off",
+    "subsumed-test": "warning"
+  }
+}

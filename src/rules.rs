@@ -32,7 +32,7 @@ pub struct Outcome {
     pub hook_scan_exhausted: bool,
     /// Findings in report order.
     pub findings: Vec<Finding>,
-    /// The pair budget ran out before every group was processed.
+    /// A rule comparison or coverage budget ran out before all work was processed.
     pub budget_exhausted: bool,
 }
 
@@ -184,11 +184,12 @@ fn run_all(
 ) -> Outcome {
     let mut findings = Vec::new();
     let mut budget = PairBudget::new(max_pair_comparisons);
+    let suppressions = crate::modes::InlineSuppressionIndex::new(suppressions);
     let (twins, mut budget_exhausted) = suites::run(
         suites,
         files,
         config,
-        suppressions,
+        &suppressions,
         &mut budget,
         &mut findings,
     );
@@ -209,7 +210,7 @@ fn run_all(
             .map(|group| per_declaration(whole(&group), &entries))
             .filter(|group| group.len() >= 2)
             .collect();
-        budget_exhausted |= !emit(
+        budget_exhausted |= emit(
             Rule::DuplicateTest,
             duplicate_severity,
             &entries,
@@ -217,7 +218,8 @@ fn run_all(
             duplicate_test_message,
             &mut budget,
             &mut findings,
-        );
+        )
+        .is_err();
     }
 
     budget_exhausted |= !names::run(files, config, &mut budget, &mut findings);
@@ -242,7 +244,7 @@ fn run_all(
             .map(|group| per_file(whole(&group), &entries))
             .filter(|group| group.len() >= 2)
             .collect();
-        budget_exhausted |= !emit(
+        budget_exhausted |= emit(
             Rule::CrossFileDuplicate,
             cross_file_severity,
             &entries,
@@ -250,12 +252,15 @@ fn run_all(
             cross_file_duplicate_message,
             &mut budget,
             &mut findings,
-        );
+        )
+        .is_err();
     }
 
-    budget_exhausted |= !subsumed::run(files, config, &mut budget, &mut findings);
+    let mut trace_work = PairBudget::new(crate::analysis::MAX_RULE_WORK);
+    budget_exhausted |= !subsumed::run(files, config, &mut budget, &mut trace_work, &mut findings);
 
-    twins.suppress(&mut findings, suppressions);
+    let mut suite_work = PairBudget::new(crate::analysis::MAX_RULE_WORK);
+    budget_exhausted |= !twins.suppress(&mut findings, &suppressions, &mut suite_work);
     let (hook_scan_exhausted, hook_pairs_exhausted) =
         hooks::run(hooks, config, max_hook_scans, &mut budget, &mut findings);
     budget_exhausted |= hook_pairs_exhausted;
@@ -436,8 +441,7 @@ fn declarations<'a>(rule: Rule, members: &[Entry<'a>]) -> Vec<DeclarationClaim<'
 
 /// Emits `rule`'s findings: a spanning set of pair findings per group of up to
 /// [`crate::pairs::SPANNING_GROUP_MAX`] members, one cluster finding per larger group, each
-/// charged to `budget`
-/// before it is written. Returns `false` once the budget is exhausted; the caller stops there.
+/// charged to `budget` before it is written. Returns the first unaffordable group on refusal.
 fn emit(
     rule: Rule,
     severity: Severity,
@@ -446,7 +450,7 @@ fn emit(
     message: fn(&[Entry<'_>]) -> String,
     budget: &mut PairBudget,
     findings: &mut Vec<Finding>,
-) -> bool {
+) -> Result<(), usize> {
     emit_where(
         rule,
         severity,
@@ -471,7 +475,7 @@ fn emit_where<'a>(
     keep: &dyn Fn(&[Entry<'_>]) -> bool,
     budget: &mut PairBudget,
     findings: &mut Vec<Finding>,
-) -> bool {
+) -> Result<(), usize> {
     // The index borrows paths; payloads are cloned only once when a finding is finalized.
     let has_origins = entries.iter().any(|entry| entry.case.origin.is_some());
     let mut callers: BTreeMap<_, BTreeSet<&Path>> = BTreeMap::new();
@@ -508,8 +512,8 @@ fn emit_where<'a>(
             .collect()
     };
     let mut claimed: BTreeMap<_, (usize, Vec<BTreeSet<&Path>>)> = BTreeMap::new();
-    let mut finished = true;
-    'groups: for group in groups {
+    let mut finished = Ok(());
+    for (group_index, group) in groups.into_iter().enumerate() {
         // One per declaration, row by row for the row rule; what a dropped entry stood for stays
         // with the entry kept in its place.
         let key = |index: usize| {
@@ -581,8 +585,8 @@ fn emit_where<'a>(
             pending.len() as u64
         };
         if !budget.charge(cost) {
-            finished = false;
-            break 'groups;
+            finished = Err(group_index);
+            break;
         }
         for (key, members, owners, cases) in pending {
             let mut text = message(&members);

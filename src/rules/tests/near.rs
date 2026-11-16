@@ -147,6 +147,44 @@ fn a_pair_parameterization_reported_is_not_claimed_twice() {
     );
 }
 
+/// A group the parameterization emitter could not afford leaves its near claim available.
+#[test]
+fn only_delivered_parameterization_groups_cover_near_matches() {
+    let cases = [1, 2].map(|line| TestCase {
+        parameterization_key: Some(5),
+        ..near(line, u64::from(line), &[10, 20])
+    });
+    let files = [file("a.test.ts", cases.to_vec())];
+    let config = config_with(&[]);
+    for allowance in [0, 1] {
+        let mut findings = Vec::new();
+        let (completed, reported) = crate::rules::parameters::run(
+            &files,
+            &config,
+            &mut PairBudget::new(allowance),
+            &mut findings,
+        );
+        assert_eq!(completed, allowance == 1);
+        assert!(crate::rules::near::run(
+            &files,
+            &config,
+            &reported,
+            &mut PairBudget::new(1),
+            &mut findings,
+        ));
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].titles, ["t1", "t2"]);
+        assert_eq!(
+            findings[0].rule,
+            if completed {
+                Rule::ParameterizationCandidate
+            } else {
+                Rule::NearDuplicateTest
+            }
+        );
+    }
+}
+
 /// The rule obeys its severity and spends the shared budget.
 #[test]
 fn severity_and_budget_reach_the_rule() {

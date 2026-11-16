@@ -46,6 +46,7 @@ pub(super) fn run(
         budget,
         findings,
     )
+    .is_ok()
 }
 
 /// A suite-row claim charges its actual child cases, never its non-executable suite declaration.

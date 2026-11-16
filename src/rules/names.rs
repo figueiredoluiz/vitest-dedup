@@ -46,6 +46,7 @@ pub(super) fn run(
         budget,
         findings,
     )
+    .is_ok()
 }
 
 /// Describes the name collision independently of callback equivalence.

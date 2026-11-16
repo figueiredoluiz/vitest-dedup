@@ -6,7 +6,6 @@ use crate::analysis::{near_duplicate_text, MIN_BEHAVIOR_EVENTS_FOR_NEAR_DUPLICAT
 use crate::config::Config;
 use crate::model::{Finding, Rule, Severity};
 use crate::pairs::PairBudget;
-use std::collections::BTreeSet;
 
 /// Groups cases of one file on the exact multiset of their events, keeping one declaration per
 /// exact body. An unfinished trace is no evidence, and a pair inside a group `reported` by
@@ -48,13 +47,16 @@ pub(super) fn run(
         budget,
         findings,
     )
+    .is_ok()
 }
 
 /// Whether one parameterization group reports every one of `members`.
 fn covered(members: &[Entry<'_>], reported: &Reported<'_>) -> bool {
-    let declarations: Option<BTreeSet<_>> = members.iter().map(declaration).collect();
-    declarations
-        .is_some_and(|declarations| reported.iter().any(|group| declarations.is_subset(group)))
+    let group =
+        |member: &Entry<'_>| declaration(member).and_then(|key| reported.get(&key).copied());
+    members.split_first().is_some_and(|(first, rest)| {
+        group(first).is_some_and(|id| rest.iter().all(|member| group(member) == Some(id)))
+    })
 }
 
 /// Says which of the two claims this is: the events run in another order, or a normalization

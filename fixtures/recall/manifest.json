@@ -153,6 +153,38 @@
       ]
     },
     {
+      "name": "rule-evaluation",
+      "path": "rule-evaluation",
+      "rule": "duplicate-suite",
+      "role": "variant",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-16",
+      "expectedTests": 14,
+      "expectedIncomplete": false,
+      "expectedUnresolved": 0,
+      "expectedFindings": [
+        { "rule": "duplicate-suite", "severity": "warning", "titles": ["inventory", "inventory"] },
+        { "rule": "duplicate-suite", "severity": "warning", "titles": ["inventory > available", "inventory > available"] },
+        { "rule": "duplicate-test", "severity": "error", "titles": ["checks delivery", "also checks delivery"] },
+        { "rule": "parameterization-candidate", "severity": "warning", "titles": ["count then entry", "another count then entry"] },
+        { "rule": "parameterization-candidate", "severity": "warning", "titles": ["entry then count", "another entry then count"] },
+        { "rule": "parameterization-candidate", "severity": "warning", "titles": ["inventory > available > counts items", "inventory > counts orders"] },
+        { "rule": "parameterization-candidate", "severity": "warning", "titles": ["inventory > counts orders", "checks delivery"] },
+        { "rule": "parameterization-candidate", "severity": "warning", "titles": ["confirms stock and location", "scheduled inventory count"] },
+        { "rule": "near-duplicate-test", "severity": "warning", "titles": ["count then entry", "entry then count"] },
+        { "rule": "near-duplicate-test", "severity": "warning", "titles": ["another count then entry", "another entry then count"] },
+        { "rule": "near-duplicate-test", "severity": "warning", "titles": ["confirms stock and location", "confirms location in a different order"] },
+        { "rule": "subsumed-test", "severity": "warning", "titles": ["confirms stock", "confirms stock and location"] }
+      ],
+      "expectedAbsent": [
+        { "rule": "duplicate-test", "titles": ["inventory > available > counts items", "inventory > available > counts items"] },
+        { "rule": "near-duplicate-test", "titles": ["count then entry", "another count then entry"] },
+        { "rule": "subsumed-test", "titles": ["confirms stock", "confirms location in a different order"] },
+        { "rule": "subsumed-test", "titles": ["confirms stock", "scheduled inventory count"] }
+      ]
+    },
+    {
       "name": "suite-case-file-index",
       "path": "suite-case-file-index",
       "rule": "duplicate-suite",

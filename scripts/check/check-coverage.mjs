@@ -284,6 +284,7 @@ const RUST_MODULES = {
   'src/rules/subsumed.rs': 100,
   // Suite reporting and child suppression: measured at 99.00% (99/100 lines).
   'src/rules/suites.rs': 99,
+  'src/rules/suites/scopes.rs': 99.1,
   // Hook pair reporting: measured at 98.84% (85/86 lines).
   'src/rules/hooks.rs': 98.8,
   // The behavior trace: raised from its first floor (84.78%) after a pass driven by llvm-cov's

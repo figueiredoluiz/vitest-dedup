@@ -148,6 +148,39 @@ fn disabled_and_budget() {
     assert_eq!(one.findings[0].severity, Severity::Error);
 }
 
+/// Trace work is reserved before examining the pair and partial runs preserve completed claims.
+#[test]
+fn trace_budget_keeps_completed_corpus_claims() {
+    let parsed = owned_corpus(
+        "fixtures/recall/rule-evaluation/traces.test.ts",
+        include_str!("../../../fixtures/recall/rule-evaluation/traces.test.ts"),
+    );
+    assert_eq!(parsed.tests.len(), 4);
+    assert!(parsed.tests.iter().all(|case| case.exclusion.is_none()));
+    let first_match_cost = parsed.tests[1].trace.len() as u64;
+    assert!(first_match_cost > 1);
+    let files = [file("traces.test.ts", parsed.tests)];
+    let config = config_with(&[(Rule::SubsumedTest, Severity::Warning)]);
+    for (limit, expected) in [(first_match_cost - 1, 0), (first_match_cost, 1)] {
+        let mut findings = Vec::new();
+        assert!(!crate::rules::subsumed::run(
+            &files,
+            &config,
+            &mut PairBudget::new(16),
+            &mut PairBudget::new(limit),
+            &mut findings,
+        ));
+        assert_eq!(findings.len(), expected);
+        if let Some(finding) = findings.first() {
+            assert_eq!(
+                finding.titles,
+                ["confirms stock", "confirms stock and location"]
+            );
+            assert_eq!(finding.cases.len(), 2);
+        }
+    }
+}
+
 /// Subsumption must not consume the budget before the stronger cross-file rule.
 #[test]
 fn cross_file_claim_precedes_subsumption_work() {

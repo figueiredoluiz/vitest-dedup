@@ -198,9 +198,8 @@ struct RawOptions {
     /// corpus. With no value (or `=any`) every cause counts; `=reads` counts only causes that
     /// mean the analyzed project could not be fully read (unreadable/oversized/partial files,
     /// undetermined config, tests whose context could not be resolved); `=limits` counts only
-    /// this tool's own bounded work being capped (pair budget, hook-scan budget, memory budget,
-    /// truncated findings). The split exists because the two classes ask for different CI responses: fix
-    /// the repository, or raise the limits.
+    /// this tool's own bounded work being capped (rule comparison and coverage budgets, hook-scan
+    /// budget, memory budget, truncated findings). The two classes ask for different CI responses.
     ///
     /// The value requires `=`: an optional value with a space would greedily consume the next
     /// token, so the documented bare form before a path (`--fail-on-incomplete .`) parsed the

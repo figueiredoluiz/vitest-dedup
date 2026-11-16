@@ -2034,7 +2034,7 @@ pub struct IncompleteCauses {
     ///
     /// The largest cause by far on real corpora, and the one the old banner never named.
     pub unresolved_contexts: usize,
-    /// The pair-comparison budget ran out before every pair had been compared.
+    /// A rule's comparison or coverage work budget ran out before its analysis finished.
     pub pair_budget_exhausted: bool,
     /// `redundant-hook`'s candidate scan ran out of budget before every hook chain was inspected.
     ///
@@ -2206,7 +2206,7 @@ impl IncompleteCauses {
         );
         if self.pair_budget_exhausted {
             reasons.push(
-                "the pair-comparison budget ran out before every pair had been compared"
+                "the pair-comparison budget ran out before rule comparison and coverage work finished"
                     .to_string(),
             );
         }
@@ -3193,7 +3193,7 @@ mod tests {
             ),
             (
                 |causes| causes.pair_budget_exhausted = true,
-                "the pair-comparison budget ran out before every pair had been compared",
+                "the pair-comparison budget ran out before rule comparison and coverage work finished",
             ),
             (
                 |causes| causes.hook_scan_exhausted = true,
