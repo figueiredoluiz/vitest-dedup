@@ -6,6 +6,7 @@ use crate::corpus::{
     records::{DiagnosticHook, Views},
     Exclusion, TestCase,
 };
+use crate::framework::Formatting;
 use crate::normal::digest;
 use anyhow::Result;
 use serde_json::{json, Value};
@@ -88,6 +89,16 @@ fn test(path: &Path, case: &TestCase) -> TestRecord {
             .expect("nontrivial exclusion has a reason")
             .0
             .code(),
+    }));
+    record["unsupported"] = json!(case.unsupported.map(|formatting| {
+        let vitest = match formatting {
+            Formatting::Vitest3 => "3",
+            Formatting::Vitest4 => "4",
+            Formatting::Vitest5 => "5",
+            Formatting::Unknown => "unknown",
+            Formatting::Unmeasured => "unmeasured",
+        };
+        json!({"feature":"title-rendering","vitest":vitest})
     }));
     record["traceComplete"] = json!(case.trace_complete);
     record["ordinaryEvents"] = json!(case.ordinary_events);
@@ -181,12 +192,7 @@ mod tests {
         let corpus = crate::corpus::file(
             path,
             source,
-            crate::corpus::Setting {
-                dialect: &crate::framework::vitest::DIALECT,
-                globals: false,
-                root: Path::new("."),
-                benchmarks: false,
-            },
+            crate::corpus::Setting::vitest5(Path::new(".")),
             &mut crate::corpus::Run::default(),
         )
         .unwrap();

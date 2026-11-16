@@ -14,7 +14,7 @@ import { mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'n
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { analyzerRecordsOf, collectWithVitest, normalizePath, oracleBinary } from './lib/collection-oracle.mjs'
+import { analyzerRecordsOf, collectWithVitest, installedMajor, normalizePath, oracleBinary } from './lib/collection-oracle.mjs'
 import { generate, holdsLongValue, random, shrinkCandidates, spellCase, verdict } from './lib/title-cases.mjs'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
@@ -84,7 +84,7 @@ function judge(cases, binary, truncate) {
     cases.forEach((testCase, i) => writeFileSync(join(work, names[i]), spellCase(testCase)))
     const collected = collectWithVitest(ROOT, work)
     const records = new Map()
-    for (const record of analyzerRecordsOf(binary, [work, '--emit-test-fingerprints'])) {
+    for (const record of analyzerRecordsOf(binary, [work, '--emit-test-fingerprints', '--vitest-major', String(installedMajor(ROOT))])) {
       if (record.type !== 'test') continue
       const path = normalizePath(record.path)
       if (!records.has(path)) records.set(path, [])

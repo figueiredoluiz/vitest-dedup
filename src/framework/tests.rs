@@ -446,7 +446,14 @@ fn a_pattern_past_the_title_limit_renders_nothing() {
         assert_eq!(render(&"%#".repeat(2_049), &[], None, 0), None);
     }
     let row = |pattern: &str| {
-        (DIALECT.render_values)(pattern, &[], None, 0, crate::framework::TitleMode::Row)
+        (DIALECT.render_values)(
+            pattern,
+            &[],
+            None,
+            0,
+            crate::framework::TitleMode::Row,
+            crate::framework::Formatting::Vitest5,
+        )
     };
     assert_eq!(row(&"%#".repeat(2_048)), Some("0".repeat(2_048)));
     assert_eq!(row(&"%#".repeat(2_049)), None);
@@ -490,4 +497,163 @@ fn hostile_titles() -> (impl Fn() -> Option<String>, impl Fn() -> Option<String>
         display("0".repeat(16 << 20), "$n ".repeat(90)),
         display("0".repeat(40), "$n ".repeat(1_365)),
     )
+}
+
+/// `$` and `%o` titles as each major collected them (Vitest 3.2.7, 4.1.12, 5.1.0): 4 and 3 quote and
+/// escape strings through `inspect` and spell `0` as `+0`; an unknown major proves only titles
+/// every major renders alike, and an unmeasured one none with a substitution.
+#[test]
+fn titles_render_as_each_major_collects_them() {
+    use super::{Formatting, TitleMode, TitleValue};
+    use serde_json::json;
+    let render = |pattern: &str, value: serde_json::Value, mode, formatting| {
+        let fields =
+            std::collections::HashMap::from([("v".to_owned(), TitleValue::Json(value.clone()))]);
+        (DIALECT.render_values)(
+            pattern,
+            &[Some(TitleValue::Json(value))],
+            Some(&fields),
+            0,
+            mode,
+            formatting,
+        )
+    };
+    let comparison =
+        |pattern, value, formatting| render(pattern, value, TitleMode::Comparison, formatting);
+    let a = |n: usize| "a".repeat(n);
+    for (pattern, value, five, four) in [
+        (
+            "n $v",
+            json!("abc"),
+            Some("n abc".to_owned()),
+            Some("n 'abc'".to_owned()),
+        ),
+        (
+            "$v",
+            json!("it's"),
+            Some("it's".to_owned()),
+            Some(r"'it\'s'".to_owned()),
+        ),
+        (
+            "$v",
+            json!("a\nb\u{8}\u{1}"),
+            Some("a\nb\u{8}\u{1}".to_owned()),
+            Some("'a\\nb\\b\\u0001'".to_owned()),
+        ),
+        (
+            "$v",
+            json!("\u{7f}\u{ad}\u{2028}"),
+            Some("\u{7f}\u{ad}\u{2028}".to_owned()),
+            Some("'\\u007f\\u00ad\\u2028'".to_owned()),
+        ),
+        (
+            "$v",
+            json!("\u{feff}\u{fffd}fffd\u{fffd}d800"),
+            Some("\u{feff}\u{fffd}fffd\u{fffd}d800".to_owned()),
+            Some("'\\ufeff\\ufffd\u{fffd}d800'".to_owned()),
+        ),
+        (
+            "$v",
+            json!("a\\b\u{a0}\u{ac}\u{200b}\u{2030}😀"),
+            Some("a\\b\u{a0}\u{ac}\u{200b}\u{2030}😀".to_owned()),
+            Some("'a\\b\u{a0}\u{ac}\u{200b}\u{2030}😀'".to_owned()),
+        ),
+        (
+            "$0",
+            json!("x"),
+            Some("x".to_owned()),
+            Some("'x'".to_owned()),
+        ),
+        ("$v", json!(0), Some("0".to_owned()), Some("+0".to_owned())),
+        ("%o", json!(0), Some("0".to_owned()), Some("+0".to_owned())),
+        (
+            "$v",
+            json!(true),
+            Some("true".to_owned()),
+            Some("true".to_owned()),
+        ),
+        (
+            "$v",
+            json!(42),
+            Some("42".to_owned()),
+            Some("42".to_owned()),
+        ),
+        (
+            "%s",
+            json!("abc"),
+            Some("abc".to_owned()),
+            Some("abc".to_owned()),
+        ),
+        (
+            "%d",
+            json!(null),
+            Some("0".to_owned()),
+            Some("0".to_owned()),
+        ),
+        // Quoted, 38 units fill the limit; 39 pass it, so no name is proved on 4.
+        (
+            "$v",
+            json!(a(38)),
+            Some(a(38)),
+            Some(format!("'{}'", a(38))),
+        ),
+        ("$v", json!(a(39)), Some(a(39)), None),
+        ("$v", json!(a(41)), None, None),
+    ] {
+        assert_eq!(
+            comparison(pattern, value.clone(), Formatting::Vitest5),
+            five,
+            "{pattern} {value} on 5"
+        );
+        assert_eq!(
+            comparison(pattern, value.clone(), Formatting::Vitest4),
+            four,
+            "{pattern} {value} on 4"
+        );
+        assert_eq!(
+            comparison(pattern, value.clone(), Formatting::Vitest3),
+            four,
+            "{pattern} {value} on 3"
+        );
+        let agreed = if five == four { five.clone() } else { None };
+        assert_eq!(
+            comparison(pattern, value.clone(), Formatting::Unknown),
+            agreed,
+            "{pattern} {value} unknown"
+        );
+        assert_eq!(
+            comparison(pattern, value.clone(), Formatting::Unmeasured),
+            None,
+            "{pattern} {value} unmeasured"
+        );
+    }
+    assert_eq!(
+        comparison("plain", json!(1), Formatting::Unmeasured),
+        Some("plain".to_owned())
+    );
+    // The measured cut: `'`, 37 units, `…'`; refused when the cut would have to cross an escape.
+    for n in [39, 41] {
+        assert_eq!(
+            render("$v", json!(a(n)), TitleMode::Display, Formatting::Vitest4),
+            Some(format!("'{}…'", a(37)))
+        );
+    }
+    assert_eq!(
+        render(
+            "$v",
+            json!(format!("{}'", a(40))),
+            TitleMode::Display,
+            Formatting::Vitest4
+        ),
+        None
+    );
+    assert_eq!(
+        render(
+            "$v",
+            json!(format!("{}é", a(40))),
+            TitleMode::Display,
+            Formatting::Vitest4
+        ),
+        None
+    );
 }

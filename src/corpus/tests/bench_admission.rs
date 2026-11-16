@@ -14,6 +14,7 @@ fn read(source: &str, benchmarks: bool) -> (HashMap<String, TestCase>, FileCorpu
         globals: false,
         root: dir.path(),
         benchmarks,
+        formatting: crate::framework::Formatting::Vitest5,
     };
     let corpus = file(&path, &source, setting, &mut Run::default()).unwrap();
     let cases = corpus

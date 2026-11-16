@@ -144,6 +144,7 @@ fn xc27_normal_forms_repeat_in_any_query_order() {
                         dialect: &DIALECT,
                         root: path,
                         exports: &exports,
+                        formatting: crate::framework::Formatting::Vitest5,
                     },
                     &structure,
                 );

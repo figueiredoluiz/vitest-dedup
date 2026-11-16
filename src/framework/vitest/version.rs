@@ -2,7 +2,8 @@
 //!
 //! An installed `node_modules/vitest` above the file decides, as Node's resolution would; only
 //! when none is installed does the nearest `package.json` declaring `vitest` with a one-major
-//! range answer. Nothing outside the analysis root is read, and anything unreadable is unknown.
+//! range answer. Nothing outside the analysis root is read, and anything unreadable is unknown;
+//! a major the user supplies (`--vitest-major`) answers only for files whose metadata names none.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -16,23 +17,36 @@ pub struct Majors {
     root: PathBuf,
     installed: HashMap<PathBuf, Option<Answer>>,
     declared: HashMap<PathBuf, Option<Answer>>,
+    fallback: Option<u64>,
 }
 
 /// What one directory's metadata says: a major, or present but unreadable.
 type Answer = Option<u64>;
 
 impl Majors {
-    /// Answers for files under `root`.
-    pub fn new(root: &Path) -> Self {
+    /// Answers for files under `root`; `fallback` answers where metadata proves no major.
+    pub fn new(root: &Path, fallback: Option<u64>) -> Self {
         Self {
             root: root.to_path_buf(),
             installed: HashMap::new(),
             declared: HashMap::new(),
+            fallback,
         }
     }
 
-    /// The major of the `vitest` that `file` imports, when its metadata proves one.
+    /// The major of the `vitest` that `file` imports, when its metadata proves one, else the
+    /// fallback.
     pub fn of(&mut self, file: &Path) -> Option<u64> {
+        self.metadata(file).or(self.fallback)
+    }
+
+    /// How the `vitest` that `file` imports formats row titles.
+    pub fn formatting(&mut self, file: &Path) -> crate::framework::Formatting {
+        crate::framework::Formatting::of(self.of(file))
+    }
+
+    /// The major `file`'s metadata proves, ignoring the fallback.
+    fn metadata(&mut self, file: &Path) -> Option<u64> {
         let directory = file.parent()?;
         match self.nearest(directory, Source::Installed) {
             Some(answer) => answer,
@@ -181,16 +195,19 @@ mod tests {
         }
     }
 
+    /// Writes `text` at `relative` under `root`, creating its directories.
+    fn put(root: &std::path::Path, relative: &str, text: &str) {
+        let path = root.join(relative);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, text).unwrap();
+    }
+
     /// An installed package decides over any declaration; without one, the nearest declaration
     /// does; outside the root, or unreadable, nothing is known.
     #[test]
     fn installed_wins_then_the_nearest_declaration() {
         let root = tempfile::tempdir().unwrap();
-        let write = |relative: &str, text: &str| {
-            let path = root.path().join(relative);
-            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-            std::fs::write(path, text).unwrap();
-        };
+        let write = |relative: &str, text: &str| put(root.path(), relative, text);
         write("package.json", r#"{"devDependencies":{"vitest":"^5.0.0"}}"#);
         write(
             "a/package.json",
@@ -198,20 +215,47 @@ mod tests {
         );
         write("a/x.bench.ts", "");
         write("b/x.bench.ts", "");
-        let mut majors = Majors::new(root.path());
+        let mut majors = Majors::new(root.path(), None);
         assert_eq!(majors.of(&root.path().join("a/x.bench.ts")), Some(4));
         assert_eq!(majors.of(&root.path().join("b/x.bench.ts")), Some(5));
         assert!(majors.exports_bench(&root.path().join("a/x.bench.ts")));
         assert!(!majors.exports_bench(&root.path().join("b/x.bench.ts")));
 
         write("node_modules/vitest/package.json", r#"{"version":"5.0.5"}"#);
-        let mut majors = Majors::new(root.path());
+        let mut majors = Majors::new(root.path(), None);
         assert_eq!(majors.of(&root.path().join("a/x.bench.ts")), Some(5));
         write("node_modules/vitest/package.json", "not json");
-        let mut majors = Majors::new(root.path());
+        let mut majors = Majors::new(root.path(), None);
         assert_eq!(majors.of(&root.path().join("a/x.bench.ts")), None);
 
-        let mut outside = Majors::new(&root.path().join("a"));
+        let mut outside = Majors::new(&root.path().join("a"), None);
         assert_eq!(outside.of(&root.path().join("b/x.bench.ts")), None);
+    }
+
+    /// A supplied major answers only where metadata proves none: unreadable, absent or outside.
+    #[test]
+    fn the_fallback_answers_only_without_metadata() {
+        let root = tempfile::tempdir().unwrap();
+        let write = |relative: &str, text: &str| put(root.path(), relative, text);
+        write(
+            "a/package.json",
+            r#"{"devDependencies":{"vitest":"^4.1.0"}}"#,
+        );
+        write(
+            "b/package.json",
+            r#"{"devDependencies":{"vitest":"catalog:"}}"#,
+        );
+        let mut majors = Majors::new(root.path(), Some(3));
+        assert_eq!(majors.of(&root.path().join("a/x.test.ts")), Some(4));
+        assert_eq!(majors.of(&root.path().join("b/x.test.ts")), Some(3));
+        assert_eq!(majors.of(&root.path().join("c/x.test.ts")), Some(3));
+        assert_eq!(
+            majors.formatting(&root.path().join("a/x.test.ts")),
+            crate::framework::Formatting::Vitest4
+        );
+        assert_eq!(
+            Majors::new(root.path(), None).formatting(&root.path().join("c/x.test.ts")),
+            crate::framework::Formatting::Unknown
+        );
     }
 }

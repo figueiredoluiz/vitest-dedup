@@ -14,12 +14,7 @@ fn engine() -> Engine {
         &path,
         Path::new("a.test.ts"),
         source,
-        Setting {
-            dialect: &DIALECT,
-            globals: false,
-            root: dir.path(),
-            benchmarks: false,
-        },
+        Setting::vitest5(dir.path()),
         true,
         Vec::new(),
     );
@@ -147,12 +142,7 @@ fn imported_identities_are_part_of_the_engine_roof() {
         &path,
         Path::new("a.test.ts"),
         source,
-        Setting {
-            dialect: &DIALECT,
-            globals: false,
-            root: dir.path(),
-            benchmarks: false,
-        },
+        Setting::vitest5(dir.path()),
         false,
         Vec::new(),
     );

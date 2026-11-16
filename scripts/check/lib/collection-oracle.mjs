@@ -233,14 +233,38 @@ export function collectWithVitest(root, dir) {
  * @returns {boolean} Whether it does.
  */
 export function declaresVitest4(absoluteDir) {
+  return declaredMajor(absoluteDir) === 4
+}
+
+/**
+ * The one Vitest major `absoluteDir`'s own manifest declares, or `null` when it declares none or a
+ * range admitting several (`^4.0.0-beta.1 || ^5.0.0`).
+ * @param {string} absoluteDir The directory.
+ * @returns {number | null} The major.
+ */
+export function declaredMajor(absoluteDir) {
   const path = join(absoluteDir, 'package.json')
-  if (!existsSync(path)) return false
+  if (!existsSync(path)) return null
   const manifest = JSON.parse(readFileSync(path, 'utf8'))
   const range = ['dependencies', 'devDependencies', 'peerDependencies']
     .map((field) => manifest[field]?.vitest)
     .find((value) => typeof value === 'string')
-  // The whole range must admit one major: `^4.0.0-beta.1 || ^5.0.0` also admits Vitest 5.
-  return range !== undefined && /^[\^~=]?v?4(?:\.(?:\d+|x|\*)){0,2}(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(range.trim())
+  const match = range?.trim().match(/^[\^~=]?v?(\d+)(?:\.(?:\d+|x|\*)){0,2}(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/)
+  return match ? Number(match[1]) : null
+}
+
+/**
+ * The major of the Vitest installed at `root`, which the oracle collects with. Analyzer runs pass it
+ * as `--vitest-major`, so titles in fixtures that declare no major are rendered as it renders them.
+ * @param {string} root - checkout root.
+ * @returns {number} The major.
+ * @throws {Error} when the installed version has no numeric major.
+ */
+export function installedMajor(root) {
+  const { version } = JSON.parse(readFileSync(join(root, 'node_modules', 'vitest', 'package.json'), 'utf8'))
+  const major = Number.parseInt(String(version), 10)
+  if (!Number.isInteger(major) || major < 1) throw new Error(`installed Vitest version ${version} has no major`)
+  return major
 }
 
 /**
@@ -328,7 +352,7 @@ export function collectAnalyzer(binary, root, dir) {
 
 /** The analyzer's JSONL records for `dir` with `--emit-test-fingerprints`; a directory of lookalikes yields none. */
 function analyzerRecords(binary, root, dir, env = {}) {
-  return analyzerRecordsOf(binary, [resolve(root, dir), '--emit-test-fingerprints'], env)
+  return analyzerRecordsOf(binary, [resolve(root, dir), '--emit-test-fingerprints', '--vitest-major', String(installedMajor(root))], env)
 }
 
 /**
@@ -458,7 +482,7 @@ export function minus(a, b) {
 }
 
 /** Why a file Vitest collected is not compared, or `null` when it is. */
-function skipReason(path, vitest, analyzerExcluded) {
+function skipReason(path, vitest, analyzerExcluded, otherMajor = false) {
   // The analyzer does not read outside its root and reports the run incomplete instead.
   if (path.startsWith('../')) return 'outside-root'
   // Collected by more than one project: one record per file cannot hold both collections.
@@ -468,7 +492,8 @@ function skipReason(path, vitest, analyzerExcluded) {
   if (vitest.stubReads.length > 0) return 'stubbed'
   if (analyzerExcluded) return 'excluded'
   if (vitest.unprobed || vitest.registrationCount !== vitest.suiteHookCount || vitest.unlocatedRegistrations > 0) return 'probe-error'
-  return null
+  // A trusted collection, but the analyzer renders titles as the declared major, not the oracle's.
+  return otherMajor ? 'other-major' : null
 }
 
 /**
@@ -478,14 +503,16 @@ function skipReason(path, vitest, analyzerExcluded) {
  * registrations than the collected suites hold is a `probe-error`, which the gate fails on.
  *
  * Benchmark files are compared with `benchmarks`, Vitest 4's collection, when it has them.
+ * With `otherMajor`, the directory declares a Vitest major other than the oracle's: its test
+ * titles are rendered for that major, so none is compared; benchmarks still are.
  *
  * @returns {{compared: string[], testsCompared: number, hooksCompared: number,
  *   benchmarksCompared: number, skipped: Map<string, object[]>,
  *   disagreements: {path: string, kind: string, item: string}[]}}
  */
-export function compareDirectory(vitestFiles, analyzer, benchmarks = new Map()) {
+export function compareDirectory(vitestFiles, analyzer, benchmarks = new Map(), { otherMajor = false } = {}) {
   const skipped = new Map(
-    ['uncollectable', 'stubbed', 'excluded', 'outside-root', 'overlapping-projects', 'type-test', 'bench', 'undetermined-hook', 'probe-error']
+    ['uncollectable', 'stubbed', 'excluded', 'outside-root', 'other-major', 'overlapping-projects', 'type-test', 'bench', 'undetermined-hook', 'probe-error']
       .map((k) => [k, []]),
   )
   const compared = []
@@ -493,7 +520,7 @@ export function compareDirectory(vitestFiles, analyzer, benchmarks = new Map()) 
   // error, or the probe could not account for it. A file the analyzer excluded was collected cleanly.
   let untrusted = 0
   for (const [path, vitest] of [...vitestFiles].sort(([a], [b]) => a.localeCompare(b))) {
-    const reason = skipReason(path, vitest, analyzer.excluded.has(path))
+    const reason = skipReason(path, vitest, analyzer.excluded.has(path), otherMajor)
     if (reason === null) compared.push(path)
     else skipped.get(reason).push({ path, detail: vitest.collectErrors[0]?.split('\n')[0] ?? vitest.stubReads[0] })
     if (['uncollectable', 'stubbed', 'overlapping-projects', 'probe-error'].includes(reason)) untrusted += 1

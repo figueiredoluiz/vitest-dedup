@@ -8,7 +8,7 @@ import { cpSync, existsSync, mkdtempSync, realpathSync, rmSync, statSync, symlin
 import { tmpdir } from 'node:os'
 import { basename, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { collectInventory, collectWithVitest } from '../check/lib/collection-oracle.mjs'
+import { collectInventory, collectWithVitest, installedMajor } from '../check/lib/collection-oracle.mjs'
 import { parseJsonl } from '../check/lib/run-analyzer.mjs'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
@@ -89,15 +89,19 @@ export function project(source, work) {
 }
 
 /**
- * The analyzer's run over `directory`. A run that cannot start, times out or prints something that
- * is not JSONL is that row's failure, so it never costs the other inputs their rows.
+ * The analyzer's run over `directory`. A run that cannot start, times out, prints something that
+ * is not JSONL, or has no installed Vitest major to render titles for is that row's failure, so it
+ * never costs the other inputs their rows.
  * @param {string} binary The analyzer.
  * @param {string} directory The project.
+ * @param {string} [root] The checkout whose installed Vitest the titles are rendered for.
  * @returns {object} The run's summary.
  */
-export function analyze(binary, directory) {
-  const run = spawnSync(binary, [directory, '--reporters', 'jsonl'], { encoding: 'utf8', maxBuffer: 256 << 20, timeout: 120_000 })
+export function analyze(binary, directory, root = ROOT) {
   try {
+    // Titles are rendered as the Vitest beside them renders them.
+    const major = String(installedMajor(root))
+    const run = spawnSync(binary, [directory, '--vitest-major', major, '--reporters', 'jsonl'], { encoding: 'utf8', maxBuffer: 256 << 20, timeout: 120_000 })
     if (run.error) throw run.error
     return summarize(parseJsonl(run.stdout), run.status, run.stderr)
   } catch (error) {

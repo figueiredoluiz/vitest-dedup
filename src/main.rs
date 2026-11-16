@@ -224,7 +224,10 @@ fn run_with_engine(
     // least one project. Falls back to the single-project detector when no projects are declared.
     let projects = vitest_projects::resolve_projects(&config.root);
     // Which Vitest each file imports, read once per directory; it decides whether `bench` exists.
-    let mut vitest_majors = vitest_dedup::framework::vitest::version::Majors::new(&config.root);
+    let mut vitest_majors = vitest_dedup::framework::vitest::version::Majors::new(
+        &config.root,
+        args.vitest_major.or(config.vitest_major),
+    );
     // `resolve_projects` deliberately records why a project map is partial. Discarding that let a
     // malformed or truncated `test.projects` setup produce a map that looks complete: files fell
     // back to default matching, `incomplete` stayed false, and nothing said a project's globals or
@@ -372,6 +375,7 @@ fn run_with_engine(
                                 // against the base revision.
                                 benchmarks: projects.collects_benchmarks(&path)
                                     && vitest_majors.exports_bench(&path),
+                                formatting: vitest_majors.formatting(&path),
                             },
                             false,
                             Vec::new(),
@@ -732,6 +736,7 @@ fn run_with_engine(
             benchmarks: file.project_globals.is_none()
                 && projects.collects_benchmarks(&file.path)
                 && vitest_majors.exports_bench(&file.path),
+            formatting: vitest_majors.formatting(&file.path),
         };
         let relative = relativize_test_path(&file.path, &config.root);
         let read = engine.read_with_sources(
@@ -3742,6 +3747,73 @@ mod tests {
             .iter()
             .filter(|line| line["type"] == kind)
             .collect::<Vec<_>>()
+    }
+
+    /// A row title refused only because its file's Vitest major is not supported yet is marked
+    /// on the owned test record; a Vitest 4 file and a title every major renders alike are not.
+    #[test]
+    fn owned_records_mark_titles_unsupported_on_the_files_major() {
+        let unsupported = |fixture: &str| {
+            let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("fixtures/recall")
+                .join(fixture);
+            let lines = run_jsonl(&root, &["--reporters", "jsonl", "--emit-test-fingerprints"]);
+            let tests = records_of(&lines, "test");
+            assert_eq!(
+                tests.len(),
+                21,
+                "{fixture}: every collected test has a record"
+            );
+            tests
+                .into_iter()
+                .filter(|record| !record["unsupported"].is_null())
+                .map(|record| {
+                    assert_eq!(record["unsupported"]["feature"], "title-rendering");
+                    (
+                        record["line"].as_u64().unwrap(),
+                        record["unsupported"]["vitest"].as_str().unwrap().to_owned(),
+                    )
+                })
+                .collect::<std::collections::BTreeSet<_>>()
+        };
+        let on = |vitest: &str, lines: &[u64]| {
+            lines
+                .iter()
+                .map(|&line| (line, vitest.to_owned()))
+                .collect::<std::collections::BTreeSet<_>>()
+        };
+        assert_eq!(unsupported("titles-vitest3"), on("3", &[16, 24, 38]));
+        assert_eq!(unsupported("titles-vitest4"), on("4", &[]));
+        assert_eq!(
+            unsupported("titles-major-unknown"),
+            on("unknown", &[6, 11, 16, 24, 28, 38])
+        );
+        // An enclosing table suite's refused title marks the tests inside it.
+        let root = single_file_project(
+            "s.test.ts",
+            "import { describe, expect, test } from 'vitest'\n\
+             describe.each([['abc']])('over %s %s', (v) => {\n\
+               test('inner', () => { expect(v).toHaveLength(3) })\n\
+             })\n\
+             describe.each([['abc']])('fine %s', (v) => {\n\
+               test('inner', () => { expect(v).toHaveLength(3) })\n\
+             })\n",
+        );
+        std::fs::write(
+            root.path().join("package.json"),
+            r#"{"devDependencies":{"vitest":"3.2.7"}}"#,
+        )
+        .unwrap();
+        let lines = run_jsonl(
+            root.path(),
+            &["--reporters", "jsonl", "--emit-test-fingerprints"],
+        );
+        let tests = records_of(&lines, "test");
+        assert_eq!(tests.len(), 2);
+        assert_eq!(tests[0]["line"], 3);
+        assert_eq!(tests[0]["unsupported"]["vitest"], "3");
+        assert_eq!(tests[1]["line"], 6);
+        assert!(tests[1]["unsupported"].is_null());
     }
 
     /// The record for the test whose full title is `title`, which must be unique in the run.

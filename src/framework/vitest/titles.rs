@@ -1,6 +1,6 @@
 //! Rendering the supported literal table-title arguments; an unknown rendering stays unknown.
 
-use crate::framework::{TitleMode, TitleValue};
+use crate::framework::{Formatting, TitleMode, TitleValue};
 use crate::lang::limits::MAX_TEXT_BYTES;
 use crate::lang::Scalar;
 use serde_json::{Map, Value};
@@ -56,16 +56,47 @@ fn render_with(
         } else {
             TitleMode::Comparison
         },
+        Formatting::Vitest5,
     )
 }
 
-/// Renders typed row inputs without conflating unknown, undefined, number or bigint values.
+/// Renders typed row inputs without conflating unknown, undefined, number or bigint values, as
+/// `formatting` renders them. Vitest 3 and 4 render alike, except that 3 interpolates `$` again in
+/// what a `%` directive inserted and leaves a directive past the last argument literal, both
+/// refused, and a nullish `test.for` item, which the caller refuses.
 pub(super) fn render_values(
     pattern: &str,
     arguments: &[Option<TitleValue>],
     fields: Option<&HashMap<String, TitleValue>>,
     index: usize,
     mode: TitleMode,
+    formatting: Formatting,
+) -> Option<String> {
+    let render =
+        |inspect, vitest3| render_form(pattern, arguments, fields, index, mode, inspect, vitest3);
+    match formatting {
+        Formatting::Vitest5 => render(false, false),
+        Formatting::Vitest4 => render(true, false),
+        Formatting::Vitest3 => render(true, true),
+        Formatting::Unknown => {
+            let bare = render(false, true)?;
+            (render(true, true)? == bare).then_some(bare)
+        }
+        Formatting::Unmeasured => (!pattern.contains(['%', '$'])).then(|| render(false, false))?,
+    }
+}
+
+/// [`render_values`] in one form: `inspect` is how Vitest 3 and 4 interpolate `$` and `%o`;
+/// `vitest3` refuses what Vitest 3 renders apart from 4: a `%` directive that inserts a `$`, which
+/// 3 interpolates again, and one past the last argument, which 3 leaves literal.
+fn render_form(
+    pattern: &str,
+    arguments: &[Option<TitleValue>],
+    fields: Option<&HashMap<String, TitleValue>>,
+    index: usize,
+    mode: TitleMode,
+    inspect: bool,
+    vitest3: bool,
 ) -> Option<String> {
     let truncate = mode == TitleMode::Display;
     if mode == TitleMode::Row
@@ -104,10 +135,14 @@ pub(super) fn render_values(
                 's' | 'd' | 'i' | 'f' | 'j' | 'o' => {
                     let argument = match arguments.get(cursor) {
                         Some(value) => Some(value.as_ref()?),
+                        None if vitest3 => return None,
                         None => None,
                     };
                     cursor += 1;
                     let mut rendered = format_typed(argument, directive)?;
+                    if inspect && directive == 'o' && is_positive_zero(argument) {
+                        rendered = "+0".to_owned();
+                    }
                     if directive == 'f' {
                         // Vitest's prefix pass indexes float occurrences, not printf arguments.
                         let prefix = match arguments.get(float_cursor) {
@@ -133,6 +168,9 @@ pub(super) fn render_values(
                 _ => None,
             };
             if let Some(rendered) = rendered {
+                if vitest3 && rendered.contains('$') {
+                    return None;
+                }
                 text.push_str(&rendered);
                 position += 2;
                 continue;
@@ -165,6 +203,11 @@ pub(super) fn render_values(
                     fields?.get(&field)?
                 };
                 let rendered = scalar_typed(value)?;
+                if inspect {
+                    text.push_str(&inspected(value, &rendered, truncate)?);
+                    position += 1 + length;
+                    continue;
+                }
                 if !truncate && crate::lang::text::units(&rendered).nth(40).is_some() {
                     return None;
                 }
@@ -177,6 +220,85 @@ pub(super) fn render_values(
         position += 1;
     }
     (text.len() <= MAX_TEXT_BYTES).then(|| crate::lang::text::canonical(text))
+}
+
+/// Whether a `%o` argument is a positive zero, which `inspect` spells `+0`.
+fn is_positive_zero(value: Option<&TitleValue>) -> bool {
+    match value {
+        Some(TitleValue::Scalar(Scalar::Number(number))) => {
+            *number == 0.0 && number.is_sign_positive()
+        }
+        Some(TitleValue::Json(Value::Number(number))) => number
+            .as_f64()
+            .is_some_and(|number| number == 0.0 && number.is_sign_positive()),
+        _ => false,
+    }
+}
+
+/// A `$` value as Vitest 3 and 4 interpolate it, through `inspect` at its default 40-unit limit:
+/// a string quoted with [`quoted`], a positive zero as `+0`, anything else as Vitest 5 spells it.
+/// A value past the limit is refused unless `truncate` holds and it is one of the measured cuts:
+/// a plain ASCII string with nothing escaped (`'`, its first 37 units, `…'`) or a bigint (its
+/// first 38 units, `…n`).
+fn inspected(value: &TitleValue, rendered: &str, truncate: bool) -> Option<String> {
+    let text = match value {
+        TitleValue::Json(Value::String(text)) | TitleValue::Scalar(Scalar::String(text)) => text,
+        _ if is_positive_zero(Some(value)) => return Some("+0".to_owned()),
+        _ if crate::lang::text::units(rendered).nth(40).is_none() => {
+            return Some(rendered.to_owned());
+        }
+        // A bigint's source spelling is ASCII digits, an optional sign and `n`.
+        TitleValue::Scalar(Scalar::BigInt(_)) if truncate && rendered.is_ascii() => {
+            return Some(format!("{}…n", &rendered[..38]));
+        }
+        _ => return None,
+    };
+    let quoted = quoted(text);
+    if crate::lang::text::units(&quoted).nth(40).is_none() {
+        return Some(quoted);
+    }
+    let plain = text
+        .bytes()
+        .all(|byte| (0x20..0x7f).contains(&byte) && byte != b'\'');
+    (truncate && plain).then(|| format!("'{}…'", &text[..37]))
+}
+
+/// A string as `inspect` quotes it: in single quotes, with `'` and the characters it treats as
+/// invisible escaped, and everything else, backslashes and lone surrogates included, kept.
+fn quoted(text: &str) -> String {
+    let mut out: Vec<u16> = vec![u16::from(b'\'')];
+    for unit in crate::lang::text::units(text) {
+        let named = match unit {
+            0x27 => Some('\''),
+            0x08 => Some('b'),
+            0x09 => Some('t'),
+            0x0a => Some('n'),
+            0x0c => Some('f'),
+            0x0d => Some('r'),
+            _ => None,
+        };
+        let escaped = matches!(
+            unit,
+            0x00..=0x1f
+                | 0x7f..=0x9f
+                | 0xad
+                | 0x600..=0x604
+                | 0x70f
+                | 0x17b4..=0x17b5
+                | 0x200c..=0x200f
+                | 0x2028..=0x202f
+                | 0x2060..=0x206f
+                | 0xfeff
+                | 0xfff0..=0xffff
+        );
+        match named {
+            Some(letter) => out.extend([u16::from(b'\\'), letter as u16]),
+            None if escaped => out.extend(format!("\\u{unit:04x}").encode_utf16()),
+            None => out.push(unit),
+        }
+    }
+    out.push(u16::from(b'\''));
+    crate::lang::text::from_utf16(out)
 }
 
 /// The scalar display shared by positional and named typed values, borrowing a string.
