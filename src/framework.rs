@@ -159,7 +159,7 @@ pub enum TitleMode {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Formatting {
     /// Vitest 3: as 4, except that a nullish `test.for` item leaves every directive literal, a
-    /// directive past the last argument stays literal, and `$` is read again in `%`-inserted text.
+    /// directive past the last argument stays literal, and `$` is read after `%` substitution.
     Vitest3,
     /// Vitest 4: `$` values and `%o` pass through `inspect`, so strings are quoted and `0` is `+0`.
     Vitest4,

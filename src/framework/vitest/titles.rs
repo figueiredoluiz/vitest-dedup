@@ -61,8 +61,8 @@ fn render_with(
 }
 
 /// Renders typed row inputs without conflating unknown, undefined, number or bigint values, as
-/// `formatting` renders them. Vitest 3 and 4 render alike, except that 3 interpolates `$` again in
-/// what a `%` directive inserted, leaves a directive past the last argument literal and appends
+/// `formatting` renders them. Vitest 3 and 4 render alike, except that 3 reads `$` after `%`
+/// substitution, leaves a directive past the last argument literal and appends
 /// items a literal or unknown `%` counts, all refused, and a nullish `test.for` item, which the
 /// caller refuses.
 pub(super) fn render_values(
@@ -88,9 +88,9 @@ pub(super) fn render_values(
 }
 
 /// [`render_values`] in one form: `inspect` is how Vitest 3 and 4 interpolate `$` and `%o`;
-/// `vitest3` refuses what Vitest 3 renders apart from 4: a `%` directive that inserts a `$`, which
-/// 3 interpolates again, one past the last argument, which 3 leaves literal, and a row item that
-/// a literal or unknown `%` makes 3 append.
+/// `vitest3` refuses what Vitest 3 renders apart from 4: a `%` substitution in a title with a `$`,
+/// which 3 reads after substituting, one past the last argument, which 3 leaves literal, and a row
+/// item that a literal or unknown `%` makes 3 append.
 fn render_form(
     pattern: &str,
     arguments: &[Option<TitleValue>],
@@ -170,9 +170,6 @@ fn render_form(
                 _ => None,
             };
             if let Some(rendered) = rendered {
-                if vitest3 && rendered.contains('$') {
-                    return None;
-                }
                 text.push_str(&rendered);
                 position += 2;
                 continue;
@@ -224,6 +221,11 @@ fn render_form(
     // Vitest 3 passes one item per `%` left after `%#` and `%$`, literal or not, and appends each
     // of those no directive consumed: `100% $v` collects as `100% 'abc' { v: 'abc' }` there.
     if vitest3 && arguments.len().min(pattern.matches('%').count()) > cursor {
+        return None;
+    }
+    // Vitest 3 reads `$` tokens after `%` substitution, so inserted text can form or extend one:
+    // `$0%s` collects as `$0x` there. A substituted title with any `$` is refused on 3.
+    if vitest3 && cursor > 0 && (pattern.contains('$') || text.contains('$')) {
         return None;
     }
     (text.len() <= MAX_TEXT_BYTES).then(|| crate::lang::text::canonical(text))

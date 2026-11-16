@@ -40,3 +40,7 @@ test.each([['abc']])('over %s %s', (v) => { expect(v).toHaveLength(3) })
 // Vitest 3 appends a row item a literal `%` counts; 4 and 5 do not.
 test("pct 100% 'abc'", () => { expect(14).toBe(14) })
 test.each([{ v: 'abc' }])('pct 100% $v', ({ v }) => { expect(v.length).toBe(3) })
+
+// Vitest 3 reads `$` after `%` substitution: `$0%s` of `x` collects as `$0x` there.
+test("'x'x", () => { expect(15).toBe(15) })
+test.each([['x']])('$0%s', (v) => { expect(v).toHaveLength(1) })

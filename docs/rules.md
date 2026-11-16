@@ -84,15 +84,15 @@ equal the corresponding Unicode character. This identity also applies to static 
 Titles are rendered as the file's Vitest major collects them. On Vitest 3 and 4 a `$name` string is
 quoted and escaped (`'it\'s'`), where Vitest 5 inserts it bare, and any `$name` value is refused
 past 40 characters once rendered (the default `chaiConfig.truncateThreshold`; a configured
-threshold is not read); `$name` and `%o` of `0` render `+0`. Vitest 3 also interpolates `$` again
-in text a `%` directive inserted, leaves a directive past the last argument literal where 4 and 5
-insert `undefined`, appends a row item that a literal or unknown `%` counts but no directive reads
-(`100% $v` collects as `100% 'abc' { v: 'abc' }`), and leaves every directive literal for a
-`test.for` row of `null` or `undefined`; these titles are refused there. A file whose major is unknown (see [Vitest
-major](configuration.md#vitest-major)) keeps a rendered title only where these forms agree; a major
-outside 3–5 keeps only titles without `$` or `%`. With `--emit-test-fingerprints`, a test whose
-title was refused only for its major is marked `unsupported` (see [Diagnostic
-records](reports/diagnostic-records.md)).
+threshold is not read); `$name` and `%o` of `0` render `+0`. Vitest 3 also reads `$` after `%`
+substitution, so a title with both is refused there; it leaves a directive past the last argument
+literal where 4 and 5 insert `undefined`, appends a row item that a literal or unknown `%` counts
+but no directive reads (`100% $v` collects as `100% 'abc' { v: 'abc' }`), and leaves every
+directive literal for a `test.for` row of `null` or `undefined`; these titles are refused there. A
+file whose major is unknown (see [Vitest major](configuration.md#vitest-major)) keeps a rendered
+title only where these forms agree; a major outside 3–5 keeps only titles without `$` or `%`. With
+`--emit-test-fingerprints`, a test whose title was refused only for its major is marked
+`unsupported` (see [Diagnostic records](reports/diagnostic-records.md)).
 
 Repeated-row claims require proven input values, equal rendered titles and equivalent callback
 and setup context within one declaration. Primitive proofs preserve JavaScript types, negative
