@@ -1673,6 +1673,106 @@
       "reason": "registered-elsewhere",
       "otherReasons": [],
       "testsExcluded": 3
+    },
+    "oracle/loop-routes/foreach--async-generator-callback.test.ts": {
+      "reason": "unresolved-context",
+      "otherReasons": [],
+      "testsExcluded": 1
+    },
+    "oracle/loop-routes/foreach--builtin-assigned.test.ts": {
+      "reason": "unresolved-context",
+      "otherReasons": [],
+      "testsExcluded": 1
+    },
+    "oracle/loop-routes/foreach--builtin-defined.test.ts": {
+      "reason": "unresolved-context",
+      "otherReasons": [],
+      "testsExcluded": 1
+    },
+    "oracle/loop-routes/foreach--builtin-destructured.test.ts": {
+      "reason": "unresolved-context",
+      "otherReasons": [],
+      "testsExcluded": 1
+    },
+    "oracle/loop-routes/foreach--generator-callback.test.ts": {
+      "reason": "unresolved-context",
+      "otherReasons": [],
+      "testsExcluded": 1
+    },
+    "oracle/loop-routes/foreach--push.test.ts": {
+      "reason": "unresolved-context",
+      "otherReasons": [],
+      "testsExcluded": 1
+    },
+    "oracle/loop-routes/foreach--tdz-try.test.ts": {
+      "reason": "unresolved-context",
+      "otherReasons": [],
+      "testsExcluded": 1
+    },
+    "oracle/loop-routes/forof--alias-mutates.test.ts": {
+      "reason": "unresolved-context",
+      "otherReasons": [],
+      "testsExcluded": 1
+    },
+    "oracle/loop-routes/forof--builtin-assigned.test.ts": {
+      "reason": "unresolved-context",
+      "otherReasons": [],
+      "testsExcluded": 1
+    },
+    "oracle/loop-routes/forof--builtin-defined.test.ts": {
+      "reason": "unresolved-context",
+      "otherReasons": [],
+      "testsExcluded": 1
+    },
+    "oracle/loop-routes/forof--builtin-destructured.test.ts": {
+      "reason": "unresolved-context",
+      "otherReasons": [],
+      "testsExcluded": 1
+    },
+    "oracle/loop-routes/forof--index-write.test.ts": {
+      "reason": "unresolved-context",
+      "otherReasons": [],
+      "testsExcluded": 1
+    },
+    "oracle/loop-routes/forof--let-reassigned.test.ts": {
+      "reason": "unresolved-context",
+      "otherReasons": [],
+      "testsExcluded": 1
+    },
+    "oracle/loop-routes/forof--push.test.ts": {
+      "reason": "unresolved-context",
+      "otherReasons": [],
+      "testsExcluded": 1
+    },
+    "oracle/loop-routes/forof--tdz-class-static.test.ts": {
+      "reason": "unresolved-context",
+      "otherReasons": [],
+      "testsExcluded": 1
+    },
+    "oracle/loop-routes/forof--tdz-switch.test.ts": {
+      "reason": "unresolved-context",
+      "otherReasons": [],
+      "testsExcluded": 1
+    },
+    "oracle/loop-routes/forof--tdz-try.test.ts": {
+      "reason": "unresolved-context",
+      "otherReasons": [],
+      "testsExcluded": 1
+    },
+    "oracle/loop-routes/forof--var-redeclared.test.ts": {
+      "reason": "unresolved-context",
+      "otherReasons": [],
+      "testsExcluded": 1
+    },
+    "oracle/loop-routes/map--builtin-assigned.test.ts": {
+      "reason": "unresolved-context",
+      "otherReasons": [],
+      "testsExcluded": 1
+    },
+    "oracle/loop-routes/map--generator-callback.test.ts": {
+      "reason": "unresolved-context",
+      "otherReasons": [],
+      "testsExcluded": 1
     }
   }
 }

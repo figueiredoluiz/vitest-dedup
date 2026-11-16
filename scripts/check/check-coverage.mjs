@@ -331,6 +331,7 @@ const JS_MODULES = {
   'scripts/dev/probe.mjs': 77,
   'scripts/dev/revert-proof.mjs': 97,
   'scripts/dev/proof-command.mjs': 95,
+  'scripts/dev/route-variants.mjs': 95,
   'scripts/check/lib/coverage-platform.mjs': 100,
   'scripts/check/lib/oracle-vitest-cache.mjs': 100,
   // Action pin gate measured 67/67 lines with owned YAML cases.
@@ -470,6 +471,7 @@ const JS_TEST_FILES = [
   'scripts/dev/cargo-tests.test.mjs',
   'scripts/dev/dev-tools.test.mjs',
   'scripts/dev/proof-command.test.mjs',
+  'scripts/dev/route-variants.test.mjs',
   'scripts/check/check-docstrings.test.mjs',
   ...globSync('npm/test/*.test.mjs', { cwd: ROOT }).sort(),
   ...globSync('scripts/check/lib/*.test.mjs', { cwd: ROOT }).sort(),
