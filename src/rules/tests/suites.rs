@@ -42,12 +42,7 @@ fn suite_case_corpus_visits_only_matching_files() {
     let corpus = crate::corpus::file(
         &path,
         include_str!("../../../fixtures/recall/suite-case-file-index/run.test.ts"),
-        crate::corpus::Setting {
-            dialect: &crate::framework::vitest::DIALECT,
-            globals: false,
-            root: &root,
-            benchmarks: false,
-        },
+        crate::corpus::Setting::vitest5(&root),
         &mut crate::corpus::Run::default(),
     )
     .unwrap();

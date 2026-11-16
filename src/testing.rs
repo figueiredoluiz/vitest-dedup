@@ -47,6 +47,7 @@ pub(crate) fn project<T>(
         dialect: &DIALECT,
         root: dir.path(),
         exports: &exports,
+        formatting: crate::framework::Formatting::Vitest5,
     };
     let mut normalizer = Normalizer::new(&path, &parsed, setting, &structure);
     with(dir.path(), &parsed, &found, &mut normalizer)

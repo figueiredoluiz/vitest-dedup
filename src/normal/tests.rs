@@ -1474,6 +1474,7 @@ fn run_forms(files: &[(&str, &str)], orders: &[&[&str]]) -> Vec<HashMap<(String,
                 dialect: &DIALECT,
                 root: dir.path(),
                 exports: &exports,
+                formatting: crate::framework::Formatting::Vitest5,
             };
             let mut normalizer = Normalizer::new(&path, &parsed, setting, &structure);
             for (title, callback) in test_callbacks(&parsed.tree, &found) {

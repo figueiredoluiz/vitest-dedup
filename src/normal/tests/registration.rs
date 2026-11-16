@@ -21,6 +21,7 @@ fn invocation_boundaries_preserve_normal_and_trace_dimensions() {
             dialect: &DIALECT,
             root: path,
             exports: &exports,
+            formatting: crate::framework::Formatting::Vitest5,
         };
         let Declaration::Function(function) = parsed
             .scopes

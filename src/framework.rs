@@ -155,6 +155,37 @@ pub enum TitleMode {
     Row,
 }
 
+/// Which Vitest formats a file's row titles, as far as its package metadata proves.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Formatting {
+    /// Vitest 3: as 4, except that a nullish `test.for` item leaves every directive literal, a
+    /// directive past the last argument stays literal, `$` is read after `%` substitution, and
+    /// `%$` and a positional `$0` are not proved, since 3.0 leaves them literal and 3.1
+    /// substitutes them.
+    Vitest3,
+    /// Vitest 4: `$` values and `%o` pass through `inspect`, so strings are quoted and `0` is `+0`.
+    Vitest4,
+    /// Vitest 5: `$` values print bare.
+    Vitest5,
+    /// No metadata names a major: a title is proved only where every measured major agrees.
+    Unknown,
+    /// A major outside the measured ones: a title with a substitution is not proved.
+    Unmeasured,
+}
+
+impl Formatting {
+    /// The formatting of a Vitest major, or of none.
+    pub fn of(major: Option<u64>) -> Self {
+        match major {
+            Some(3) => Self::Vitest3,
+            Some(4) => Self::Vitest4,
+            Some(5) => Self::Vitest5,
+            Some(_) => Self::Unmeasured,
+            None => Self::Unknown,
+        }
+    }
+}
+
 /// Typed row-title rendering, with unknown cells retained independently of undefined.
 pub type RenderValues = fn(
     &str,
@@ -162,6 +193,7 @@ pub type RenderValues = fn(
     Option<&std::collections::HashMap<String, TitleValue>>,
     usize,
     TitleMode,
+    Formatting,
 ) -> Option<String>;
 
 /// An assertion entry point: the base the framework's assertions hang off, and the chain members

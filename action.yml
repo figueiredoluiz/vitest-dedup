@@ -38,6 +38,13 @@ inputs:
       discovered file's only declarations are statically empty `.each`/`.for` tables, a shape
       Vitest itself also runs zero times, in which case a distinct message names that instead).
     default: "false"
+  vitest-major:
+    description: >-
+      The Vitest major (3, 4 or 5) of test files whose installed node_modules/vitest and nearest
+      package.json name none, for example a pnpm catalog: or workspace: range. Each major formats
+      parameterized titles differently; without a known major, a title is proved only where every
+      major renders it alike.
+    default: ""
   no-metrics:
     description: Omit the terminal detection-time footer for reproducible logs
     default: "false"

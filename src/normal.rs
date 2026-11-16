@@ -65,6 +65,8 @@ pub struct Setting<'a> {
     pub root: &'a Path,
     /// Export identities shared across the run.
     pub exports: &'a Exports,
+    /// How the file's Vitest formats row titles.
+    pub formatting: crate::framework::Formatting,
 }
 
 /// A hook's callback, with when it runs and where it applies.
@@ -480,6 +482,9 @@ pub struct Normalizer<'s> {
     nesting: usize,
     /// Whether a form written since [`Normalizer::take_truncated`] reached the depth bound.
     truncated: bool,
+    /// The file's formatting, when a row title since [`Normalizer::take_unsupported_title`] was
+    /// refused on it but renders under the Vitest 5 rules.
+    unsupported_title: Option<crate::framework::Formatting>,
     /// Each loop or iteration callback's proved count, computed once (see [`Population`]).
     loop_counts: HashMap<NodeId, Option<u64>>,
     /// The array literal each `const` binding is proved to hold for iteration, or `None` when it
@@ -525,6 +530,7 @@ impl<'s> Normalizer<'s> {
             shallow_imports: false,
             nesting: 0,
             truncated: false,
+            unsupported_title: None,
         }
     }
 
@@ -549,6 +555,12 @@ impl<'s> Normalizer<'s> {
     /// position, so it can match nothing: its test is not compared, and must not read as if it were.
     pub fn take_truncated(&mut self) -> bool {
         std::mem::take(&mut self.truncated)
+    }
+
+    /// The file's formatting, when a row title rendered since the last call was refused on it
+    /// only because that major's rendering is not supported yet.
+    pub fn take_unsupported_title(&mut self) -> Option<crate::framework::Formatting> {
+        self.unsupported_title.take()
     }
 
     /// [`Self::of`] with some bindings replaced by the normal form of what they are bound to, and,

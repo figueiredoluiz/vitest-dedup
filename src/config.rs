@@ -93,6 +93,8 @@ struct RawConfig {
     threshold: Option<i64>,
     #[serde(default)]
     rules: Option<BTreeMap<String, String>>,
+    #[serde(default, rename = "vitestMajor")]
+    vitest_major: Option<i64>,
 }
 
 /// Command-line (or embedder-supplied) overrides applied after file configuration.
@@ -134,6 +136,9 @@ pub struct Config {
     /// Quality-gate threshold percentage (0-100). Findings and thresholds are combined by the
     /// analysis layer; this module only stores and range-validates the number.
     pub threshold: u8,
+    /// The Vitest major of files whose metadata names none (`vitestMajor`); `--vitest-major`
+    /// takes precedence.
+    pub vitest_major: Option<u64>,
     /// Human-readable origin of the effective configuration (`"built-in defaults"`, a path, ...),
     /// surfaced in diagnostics so a confusing effective config is easy to trace back.
     pub source: String,
@@ -206,6 +211,7 @@ impl Config {
                 .collect(),
             include_is_explicit: false,
             threshold: 0,
+            vitest_major: None,
             source: "built-in defaults".to_owned(),
         }
     }
@@ -222,6 +228,14 @@ impl Config {
         }
         if let Some(threshold) = raw.threshold {
             self.threshold = validate_threshold_range(threshold)?;
+        }
+        if let Some(major) = raw.vitest_major {
+            self.vitest_major = Some(
+                u64::try_from(major)
+                    .ok()
+                    .filter(|major| (3..=5).contains(major))
+                    .ok_or_else(|| anyhow::anyhow!("vitestMajor must be 3, 4 or 5, got {major}"))?,
+            );
         }
         if let Some(rules) = raw.rules {
             for (id, severity) in rules {
@@ -424,6 +438,30 @@ mod tests {
         .unwrap();
         let error = Config::load(directory.path(), ConfigOverrides::default()).unwrap_err();
         assert!(error.to_string().contains("invalid severity `critical`"));
+    }
+
+    /// A `vitestMajor` of 3 to 5 is read; any other number is rejected.
+    #[test]
+    fn vitest_major_is_read_only_from_three_to_five() {
+        for (json, expected) in [(r#"{"vitestMajor":3}"#, 3), (r#"{"vitestMajor":5}"#, 5)] {
+            let dir = tempfile::tempdir().unwrap();
+            fs::write(dir.path().join(".vitest-dedup.json"), json).unwrap();
+            let config = Config::load(dir.path(), ConfigOverrides::default()).unwrap();
+            assert_eq!(config.vitest_major, Some(expected));
+        }
+        for json in [
+            r#"{"vitestMajor":2}"#,
+            r#"{"vitestMajor":6}"#,
+            r#"{"vitestMajor":-4}"#,
+            r#"{"vitestMajor":"4"}"#,
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            fs::write(dir.path().join(".vitest-dedup.json"), json).unwrap();
+            assert!(
+                Config::load(dir.path(), ConfigOverrides::default()).is_err(),
+                "{json}"
+            );
+        }
     }
 
     /// Check configuration: threshold out of range is rejected at 101 and negative.

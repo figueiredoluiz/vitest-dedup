@@ -37,6 +37,9 @@ changing test behavior or hiding coverage gaps.
   (or `--globals`) and build-time transforms such as auto-imports; those are possibilities, not a
   proved cause. Read the diagnostic before deciding what to change, because known cases such as
   statically empty `.each`/`.for` tables receive different guidance.
+- Pass `--vitest-major <3|4|5>` when the repository's Vitest version is not installed and its
+  `package.json` range names no single major (for example pnpm `catalog:`). Without it,
+  parameterized titles that Vitest majors render differently are not compared.
 - Treat exit code `0` as a passing gate, `1` as a completed analysis whose error-severity
   duplication rate exceeded the configured threshold, and `2` as an operational failure (bad
   configuration, an unreadable path, zero executable tests without a quality-gate failure, an

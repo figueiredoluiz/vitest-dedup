@@ -299,6 +299,9 @@ pub struct TestCase {
     pub iterations: u32,
     /// Why it is not compared, if it is not.
     pub exclusion: Option<Exclusion>,
+    /// The file's formatting, when a row title of this registration or an enclosing table suite
+    /// was refused only because that major's rendering is not supported yet.
+    pub unsupported: Option<crate::framework::Formatting>,
 }
 
 impl TestCase {
@@ -409,6 +412,22 @@ pub struct Setting<'a> {
     /// Whether a top-level `bench` registers here: the file is collected by the benchmark channel
     /// and imports a Vitest that exports `bench`. Otherwise a benchmark stays excluded.
     pub benchmarks: bool,
+    /// How the file's Vitest formats row titles.
+    pub formatting: crate::framework::Formatting,
+}
+
+#[cfg(test)]
+impl<'a> Setting<'a> {
+    /// Vitest 5 under `root`, without globals or benchmarks.
+    pub(crate) fn vitest5(root: &'a Path) -> Self {
+        Self {
+            dialect: &crate::framework::vitest::DIALECT,
+            globals: false,
+            root,
+            benchmarks: false,
+            formatting: crate::framework::Formatting::Vitest5,
+        }
+    }
 }
 
 /// Whether a benchmark's option argument is plain data: a literal, or an object literal whose
@@ -505,6 +524,7 @@ fn unkeyed_case(span: Span, title: Option<String>, exclusion: Option<Exclusion>)
         benchmark: false,
         iterations: 1,
         exclusion,
+        unsupported: None,
     }
 }
 
@@ -606,6 +626,7 @@ fn read_parsed(
                 dialect: setting.dialect,
                 root: setting.root,
                 exports: &run.exports,
+                formatting: setting.formatting,
             },
             &structure,
         );
@@ -844,6 +865,7 @@ fn read_parsed(
                 dialect: setting.dialect,
                 root: setting.root,
                 exports: &run.exports,
+                formatting: setting.formatting,
             },
             site.node,
             &found,
@@ -936,6 +958,7 @@ fn read_parsed(
                 .as_ref()
                 .and_then(|frame| frame.derived.get(&site.node).cloned())
                 .or_else(|| callee.map(|callee| normalizer.modifiers(callee, site.member)));
+            normalizer.take_unsupported_title();
             let row_titles = modifiers
                 .as_ref()
                 .and_then(|m| {
@@ -966,6 +989,9 @@ fn read_parsed(
                     })
                 })
                 .unwrap_or_default();
+            record.unsupported = suite_frame
+                .unsupported
+                .or(normalizer.take_unsupported_title());
             let display_test_row =
                 |_: &str, row: &normal::TableRow, _| row_titles.get(&row.index)?.1.clone();
             let arguments: Vec<NodeId> = tree
@@ -1522,6 +1548,7 @@ fn read_parsed(
             dialect: setting.dialect,
             root: setting.root,
             exports: &run.exports,
+            formatting: setting.formatting,
         },
         source,
     ));

@@ -7,7 +7,7 @@ import test from 'node:test'
 import { fileURLToPath } from 'node:url'
 
 import { missingModuleStubs, wholeModuleImports } from './collection-oracle-stubs.mjs'
-import { analyzerRecordsOf, analyzerView, collectWithVitest, compareDirectory, declaresVitest4, compareSites, configSource, exclusionView, oracleEnvironment, hookSite, matchKnown, minus, oracleBinary, oracleSetupError, ownConfig, siteView, vitestInstallError, vitestView } from './collection-oracle.mjs'
+import { analyzerRecordsOf, analyzerView, collectWithVitest, compareDirectory, declaredMajor, declaresVitest4, compareSites, installedMajor, configSource, exclusionView, oracleEnvironment, hookSite, matchKnown, minus, oracleBinary, oracleSetupError, ownConfig, siteView, vitestInstallError, vitestView } from './collection-oracle.mjs'
 
 /** A file the probe collected cleanly, with `over` replacing any field. */
 const collected = (over = {}) => ({
@@ -113,6 +113,73 @@ test('only a manifest pinning Vitest 4 is read with Vitest 4', () => {
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
+})
+
+test('a manifest declares a major only through a one-major range', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'vitest-dedup-major-'))
+  try {
+    const declare = (manifest) => {
+      writeFileSync(join(dir, 'package.json'), JSON.stringify(manifest))
+      return declaredMajor(dir)
+    }
+    assert.equal(declaredMajor(dir), null)
+    assert.equal(declare({ devDependencies: { vitest: '3.2.7' } }), 3)
+    assert.equal(declare({ devDependencies: { vitest: '^5.0.0' } }), 5)
+    assert.equal(declare({ devDependencies: { vitest: '~4.1' } }), 4)
+    assert.equal(declare({ devDependencies: { vitest: 'catalog:' } }), null)
+    assert.equal(declare({ devDependencies: { vitest: '>=4' } }), null)
+    assert.equal(declare({ devDependencies: { vitest: '^4.0.0-beta.1 || ^5.0.0' } }), null)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('the installed major is read from the installed Vitest, and a version without one fails', () => {
+  const root = mkdtempSync(join(tmpdir(), 'vitest-dedup-installed-'))
+  try {
+    const install = (version) => {
+      mkdirSync(join(root, 'node_modules', 'vitest'), { recursive: true })
+      writeFileSync(join(root, 'node_modules', 'vitest', 'package.json'), JSON.stringify({ version }))
+      return installedMajor(root)
+    }
+    assert.equal(install('5.1.0'), 5)
+    assert.equal(install('4.1.12'), 4)
+    for (const version of ['', 'x.1.0', '0.34.6', undefined]) assert.throws(() => install(version), /has no major/)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('a directory declaring another major compares benchmarks and no test title', () => {
+  const vitest = new Map([['a.test.ts', collected({ tests: ['named abc'] })]])
+  const analyzer = analyzed({ tests: { 'a.test.ts': ["named 'abc'"], 'b.bench.ts': ['x'] } })
+  const benchmarks = new Map([['b.bench.ts', { titles: ['y'], errors: [] }]])
+  const same = compareDirectory(vitest, analyzer, benchmarks)
+  assert.deepEqual(kinds(same), [
+    "missing-test a.test.ts named abc",
+    "extra-test a.test.ts named 'abc'",
+    'missing-benchmark b.bench.ts y',
+    'extra-benchmark b.bench.ts x',
+  ])
+  const other = compareDirectory(vitest, analyzer, benchmarks, { otherMajor: true })
+  assert.deepEqual(kinds(other), ['missing-benchmark b.bench.ts y', 'extra-benchmark b.bench.ts x'])
+  assert.equal(other.testsCompared, 0)
+  assert.deepEqual(other.skipped.get('other-major').map((e) => e.path), ['a.test.ts'])
+})
+
+test('another major does not hide a collection that is not trusted', () => {
+  const vitest = new Map([
+    ['stubbed.test.ts', collected({ stubReads: ['./flags#enabled'] })],
+    ['short.test.ts', collected({ hooks: ['beforeEach@short.test.ts:2'], suiteHookCount: 2 })],
+    ['a.test.ts', collected()],
+  ])
+  const analyzer = analyzed({ hooks: { 'helper.ts': ['beforeEach@helper.ts:3'] } })
+  const result = compareDirectory(vitest, analyzer, new Map(), { otherMajor: true })
+  assert.deepEqual(result.skipped.get('stubbed').map((e) => e.path), ['stubbed.test.ts'])
+  assert.deepEqual(result.skipped.get('probe-error').map((e) => e.path), ['short.test.ts'])
+  assert.deepEqual(result.skipped.get('other-major').map((e) => e.path), ['a.test.ts'])
+  assert.deepEqual(result.skipped.get('undetermined-hook'), [{ path: 'helper.ts', detail: 'beforeEach@helper.ts:3' }])
+  assert.deepEqual(kinds(result), [])
 })
 
 test('an unproven record in a file Vitest never collected is an extra test', () => {

@@ -296,12 +296,7 @@ impl ProofProject {
             &self.source,
             &self.parsed,
             &self.found,
-            Setting {
-                dialect: &DIALECT,
-                globals: false,
-                root: self.root.path(),
-                benchmarks: false,
-            },
+            Setting::vitest5(self.root.path()),
             &mut self.run,
         )
     }
@@ -383,12 +378,7 @@ fn derived_handoff_reaches_caller_mutation_analysis() {
     let corpus = crate::corpus::read_parsed(
         &project.path,
         &project.source,
-        Setting {
-            dialect: &DIALECT,
-            globals: false,
-            root: project.root.path(),
-            benchmarks: false,
-        },
+        Setting::vitest5(project.root.path()),
         &mut project.run,
         &project.parsed,
         Some(frame),
@@ -552,12 +542,7 @@ fn imported_setup_chains_cover_registration_shapes() {
                     &path,
                     std::path::Path::new(name),
                     &caller,
-                    Setting {
-                        dialect: &DIALECT,
-                        globals: false,
-                        root: dir.path(),
-                        benchmarks: false,
-                    },
+                    Setting::vitest5(dir.path()),
                     true,
                     Vec::new(),
                 );
@@ -601,12 +586,7 @@ fn direct_eval_without_a_static_test_site_is_not_a_complete_empty_read() {
         &path,
         std::path::Path::new("eval-only.test.ts"),
         source,
-        Setting {
-            dialect: &DIALECT,
-            globals: false,
-            root: dir.path(),
-            benchmarks: false,
-        },
+        Setting::vitest5(dir.path()),
         false,
         Vec::new(),
     );
@@ -903,6 +883,7 @@ fn findings_in(corpus: FileCorpus, path: &str) -> Vec<crate::model::Finding> {
         exclude: Vec::new(),
         rules: Default::default(),
         threshold: 0,
+        vitest_major: None,
         source: "test".to_owned(),
     };
     crate::rules::run(&[(PathBuf::from(path), corpus.tests)], &config).findings

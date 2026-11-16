@@ -78,12 +78,7 @@ fn runs(files: &[(&str, &str)], orders: &[&[&str]]) -> Vec<Vec<FileCorpus>> {
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(path, content).unwrap();
     }
-    let setting = Setting {
-        dialect: &DIALECT,
-        globals: false,
-        root: dir.path(),
-        benchmarks: false,
-    };
+    let setting = Setting::vitest5(dir.path());
     orders
         .iter()
         .map(|order| {
@@ -740,12 +735,7 @@ fn cross_file_keys_carry_what_each_file_does_while_loading() {
 fn refusals_reach_the_caller() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("a.test.ts");
-    let setting = Setting {
-        dialect: &DIALECT,
-        globals: false,
-        root: dir.path(),
-        benchmarks: false,
-    };
+    let setting = Setting::vitest5(dir.path());
     assert_eq!(
         file(&path, "(((", setting, &mut Run::default()).err(),
         Some(crate::lang::Refusal::Fatal)
@@ -1011,12 +1001,7 @@ fn a_named_suite_body_writes_at_registration_time() {
 #[test]
 fn the_engine_reports_each_file_once() {
     let dir = tempfile::tempdir().unwrap();
-    let setting = Setting {
-        dialect: &DIALECT,
-        globals: false,
-        root: dir.path(),
-        benchmarks: false,
-    };
+    let setting = Setting::vitest5(dir.path());
     let mut engine = Engine::default();
     let mut read = |name: &str, source: &str, keep_sites| {
         let path = dir.path().join(name);
@@ -1089,12 +1074,7 @@ test('kept', () => { expect(1).toBe(1); });
 #[test]
 fn the_engine_lists_blind_files_most_tests_first() {
     let dir = tempfile::tempdir().unwrap();
-    let setting = Setting {
-        dialect: &DIALECT,
-        globals: false,
-        root: dir.path(),
-        benchmarks: false,
-    };
+    let setting = Setting::vitest5(dir.path());
     let mut engine = Engine::default();
     for (name, count) in [("a.test.ts", 1), ("b.test.ts", 2)] {
         let source = format!(
@@ -1119,12 +1099,7 @@ fn the_engine_lists_blind_files_most_tests_first() {
 #[test]
 fn an_incomplete_trace_is_listed_last_and_excludes_nothing() {
     let dir = tempfile::tempdir().unwrap();
-    let setting = Setting {
-        dialect: &DIALECT,
-        globals: false,
-        root: dir.path(),
-        benchmarks: false,
-    };
+    let setting = Setting::vitest5(dir.path());
     let source = "import { test, expect } from 'vitest';\n\
                   test('t', () => { if (x()) { expect(1).toBe(1); } });\n";
     let path = dir.path().join("a.test.ts");
@@ -1150,12 +1125,7 @@ fn an_incomplete_trace_is_listed_last_and_excludes_nothing() {
 #[test]
 fn a_recovered_panic_drops_the_run_caches() {
     let dir = tempfile::tempdir().unwrap();
-    let setting = Setting {
-        dialect: &DIALECT,
-        globals: false,
-        root: dir.path(),
-        benchmarks: false,
-    };
+    let setting = Setting::vitest5(dir.path());
     let fresh = format!("{:?}", Run::default());
     let mut engine = Engine::default();
     fs::write(dir.path().join("b.ts"), "export const b = 1;\n").unwrap();
@@ -2466,6 +2436,7 @@ fn owned_outcome(corpora: Vec<(&str, FileCorpus)>) -> crate::rules::Outcome {
         exclude: Vec::new(),
         rules: Default::default(),
         threshold: 100,
+        vitest_major: None,
         source: "test".to_owned(),
     };
     let (mut tests, mut suites, mut hooks) = (Vec::new(), Vec::new(), Vec::new());
@@ -2782,6 +2753,7 @@ fn subsumption_config() -> crate::config::Config {
         include_is_explicit: false,
         exclude: Vec::new(),
         threshold: 100,
+        vitest_major: None,
         source: "test".into(),
     }
 }
@@ -2799,12 +2771,7 @@ fn historical_source_authority_survives_cache_recovery() {
     let view = std::sync::Arc::new(crate::modes::RevisionFiles::load(&root, "HEAD", None).unwrap());
     let mut engine = Engine::with_sources(Sources::committed(view.clone()));
     assert_eq!(engine.memory_fields().modules, view.retained_bytes());
-    let setting = Setting {
-        dialect: &DIALECT,
-        globals: false,
-        root: &root,
-        benchmarks: false,
-    };
+    let setting = Setting::vitest5(&root);
     let source="import {test,expect} from 'vitest'; import {run} from './helper'; test('a',()=>expect(run()).toBe(1));";
     let path = root.join("run.test.ts");
     engine.read(
@@ -3010,12 +2977,7 @@ fn a_confined_module_is_re_analyzed_per_file_so_every_importer_records_the_refus
             &project.path().join(name),
             std::path::Path::new(name),
             &source,
-            Setting {
-                dialect: &DIALECT,
-                globals: false,
-                root: project.path(),
-                benchmarks: false,
-            },
+            Setting::vitest5(project.path()),
             false,
             Vec::new(),
         );
@@ -3032,6 +2994,17 @@ fn a_confined_module_is_re_analyzed_per_file_so_every_importer_records_the_refus
     }
 }
 
+/// The current dialect on Vitest 5, without globals or benchmarks, for the record tests.
+fn record_setting(root: &Path) -> Setting<'_> {
+    Setting {
+        dialect: crate::framework::current().dialect(),
+        globals: false,
+        root,
+        benchmarks: false,
+        formatting: crate::framework::Formatting::Vitest5,
+    }
+}
+
 /// Diagnostic row views reflect actual owned bodies and leave findings and populations intact.
 #[test]
 fn optional_record_views_preserve_rows_and_charge_their_owned_storage() {
@@ -3039,12 +3012,7 @@ fn optional_record_views_preserve_rows_and_charge_their_owned_storage() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("rows.test.ts");
     let source = "import { test, expect } from 'vitest'; test.each([1, 1, 2])('row', value => expect(value).toBeGreaterThan(0));";
-    let setting = Setting {
-        dialect: crate::framework::current().dialect(),
-        globals: false,
-        root: dir.path(),
-        benchmarks: false,
-    };
+    let setting = record_setting(dir.path());
     let mut ordinary = Engine::default();
     let mut instrumented = Engine::default();
     ordinary.read(
@@ -3104,12 +3072,7 @@ fn optional_record_views_preserve_rows_and_charge_their_owned_storage() {
 fn optional_hook_records_read_proved_chains_and_withhold_unread_callbacks() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("hooks.test.ts");
-    let setting = Setting {
-        dialect: crate::framework::current().dialect(),
-        globals: false,
-        root: dir.path(),
-        benchmarks: false,
-    };
+    let setting = record_setting(dir.path());
     let mut engine = Engine::default();
     let source = "import { beforeEach, describe, test, expect } from 'vitest'; let cell = 1; beforeEach(() => { cell = 0; }); describe('nested', () => { beforeEach(() => { cell = 0; }); test('reads', () => expect(cell).toBe(0)); });";
     engine.read(

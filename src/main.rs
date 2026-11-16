@@ -224,7 +224,10 @@ fn run_with_engine(
     // least one project. Falls back to the single-project detector when no projects are declared.
     let projects = vitest_projects::resolve_projects(&config.root);
     // Which Vitest each file imports, read once per directory; it decides whether `bench` exists.
-    let mut vitest_majors = vitest_dedup::framework::vitest::version::Majors::new(&config.root);
+    let mut vitest_majors = vitest_dedup::framework::vitest::version::Majors::new(
+        &config.root,
+        args.vitest_major.or(config.vitest_major),
+    );
     // `resolve_projects` deliberately records why a project map is partial. Discarding that let a
     // malformed or truncated `test.projects` setup produce a map that looks complete: files fell
     // back to default matching, `incomplete` stayed false, and nothing said a project's globals or
@@ -343,6 +346,12 @@ fn run_with_engine(
             );
             let mut base_suppressions = Vec::new();
             let mut base_helper_sources = BTreeSet::new();
+            // Titles render as the base revision's own committed Vitest major.
+            let mut base_majors = vitest_dedup::framework::vitest::version::Majors::committed(
+                &config.root,
+                args.vitest_major.or(config.vitest_major),
+                revision_files.clone(),
+            );
             // One base file is held at a time; the roof stops the read, not only the extraction.
             let unread = modes::revision_sources(
                 &config.root,
@@ -372,6 +381,7 @@ fn run_with_engine(
                                 // against the base revision.
                                 benchmarks: projects.collects_benchmarks(&path)
                                     && vitest_majors.exports_bench(&path),
+                                formatting: base_majors.formatting(&path),
                             },
                             false,
                             Vec::new(),
@@ -732,6 +742,7 @@ fn run_with_engine(
             benchmarks: file.project_globals.is_none()
                 && projects.collects_benchmarks(&file.path)
                 && vitest_majors.exports_bench(&file.path),
+            formatting: vitest_majors.formatting(&file.path),
         };
         let relative = relativize_test_path(&file.path, &config.root);
         let read = engine.read_with_sources(
@@ -2866,6 +2877,63 @@ mod tests {
         assert_eq!(report["modes"]["newFindings"], 0);
     }
 
+    /// The base revision's titles render as its own committed Vitest major: an upgrade that
+    /// makes two titles collide is new, and the same declaration on both sides keeps the
+    /// collision baselined. A base without metadata takes `--vitest-major`, else proves only
+    /// what every major agrees on, and never reads the working tree's declaration.
+    #[test]
+    fn baseline_from_ref_renders_base_titles_with_its_committed_major() {
+        let source = "import { expect, test } from 'vitest'\n\
+                      test('named abc', () => { expect(1).toBe(1) })\n\
+                      test.each([{ v: 'abc' }])('named $v', ({ v }) => { expect(v).toBe('abc') })\n";
+        let manifest = |major: u64| format!(r#"{{"devDependencies":{{"vitest":"^{major}.0.0"}}}}"#);
+        let new_findings = |root: &std::path::Path, extra: &[&str]| {
+            let prefix = root.join("report");
+            let mut arguments = vec![
+                "--baseline-from-ref",
+                "HEAD",
+                "--rule",
+                "parameterization-candidate=off",
+                "--reporters",
+                "json",
+                "--output",
+                prefix.to_str().unwrap(),
+            ];
+            arguments.extend_from_slice(extra);
+            let (_, _, stderr) = run_cli(root, &arguments);
+            let report = read_json_report(&prefix);
+            assert_eq!(report["findings"].as_array().unwrap().len(), 1, "{stderr}");
+            report["modes"]["newFindings"].clone()
+        };
+        let declared = single_file_project("named.test.ts", source);
+        let root = declared.path();
+        std::fs::write(root.join("package.json"), manifest(4)).unwrap();
+        init_repository(root);
+        std::fs::write(root.join("package.json"), manifest(5)).unwrap();
+        assert_eq!(
+            new_findings(root, &[]),
+            1,
+            "the upgrade introduced the collision"
+        );
+        git(root, &["commit", "-qam", "upgrade"]);
+        assert_eq!(
+            new_findings(root, &[]),
+            0,
+            "the base already declared Vitest 5"
+        );
+
+        let undeclared = single_file_project("named.test.ts", source);
+        let root = undeclared.path();
+        init_repository(root);
+        assert_eq!(new_findings(root, &["--vitest-major", "5"]), 0);
+        std::fs::write(root.join("package.json"), manifest(5)).unwrap();
+        assert_eq!(
+            new_findings(root, &[]),
+            1,
+            "the uncommitted declaration does not answer for the base"
+        );
+    }
+
     /// A base revision that predates the duplication accepts nothing, so the pair is new and
     /// the gate fails -- the flag can only accept what the base actually had, never paper over
     /// the working tree.
@@ -3742,6 +3810,76 @@ mod tests {
             .iter()
             .filter(|line| line["type"] == kind)
             .collect::<Vec<_>>()
+    }
+
+    /// A row title refused only because its file's Vitest major is not supported yet is marked
+    /// on the owned test record; a Vitest 4 file and a title every major renders alike are not.
+    #[test]
+    fn owned_records_mark_titles_unsupported_on_the_files_major() {
+        let unsupported = |fixture: &str| {
+            let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("fixtures/recall")
+                .join(fixture);
+            let lines = run_jsonl(&root, &["--reporters", "jsonl", "--emit-test-fingerprints"]);
+            let tests = records_of(&lines, "test");
+            assert_eq!(
+                tests.len(),
+                29,
+                "{fixture}: every collected test has a record"
+            );
+            tests
+                .into_iter()
+                .filter(|record| !record["unsupported"].is_null())
+                .map(|record| {
+                    assert_eq!(record["unsupported"]["feature"], "title-rendering");
+                    (
+                        record["line"].as_u64().unwrap(),
+                        record["unsupported"]["vitest"].as_str().unwrap().to_owned(),
+                    )
+                })
+                .collect::<std::collections::BTreeSet<_>>()
+        };
+        let on = |vitest: &str, lines: &[u64]| {
+            lines
+                .iter()
+                .map(|&line| (line, vitest.to_owned()))
+                .collect::<std::collections::BTreeSet<_>>()
+        };
+        assert_eq!(
+            unsupported("titles-vitest3"),
+            on("3", &[16, 24, 38, 42, 46, 50, 54])
+        );
+        assert_eq!(unsupported("titles-vitest4"), on("4", &[]));
+        assert_eq!(
+            unsupported("titles-major-unknown"),
+            on("unknown", &[6, 11, 16, 24, 28, 38, 42, 46, 50, 54])
+        );
+        // An enclosing table suite's refused title marks the tests inside it.
+        let root = single_file_project(
+            "s.test.ts",
+            "import { describe, expect, test } from 'vitest'\n\
+             describe.each([['abc']])('over %s %s', (v) => {\n\
+               test('inner', () => { expect(v).toHaveLength(3) })\n\
+             })\n\
+             describe.each([['abc']])('fine %s', (v) => {\n\
+               test('inner', () => { expect(v).toHaveLength(3) })\n\
+             })\n",
+        );
+        std::fs::write(
+            root.path().join("package.json"),
+            r#"{"devDependencies":{"vitest":"3.2.7"}}"#,
+        )
+        .unwrap();
+        let lines = run_jsonl(
+            root.path(),
+            &["--reporters", "jsonl", "--emit-test-fingerprints"],
+        );
+        let tests = records_of(&lines, "test");
+        assert_eq!(tests.len(), 2);
+        assert_eq!(tests[0]["line"], 3);
+        assert_eq!(tests[0]["unsupported"]["vitest"], "3");
+        assert_eq!(tests[1]["line"], 6);
+        assert!(tests[1]["unsupported"].is_null());
     }
 
     /// The record for the test whose full title is `title`, which must be unique in the run.

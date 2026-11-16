@@ -158,6 +158,7 @@ pub(super) fn expand(
             dialect: setting.dialect,
             root: setting.root,
             exports: &run.exports,
+            formatting: setting.formatting,
         },
         &structure,
     );
@@ -1744,6 +1745,7 @@ impl<'a> Planner<'a> {
                 dialect: self.setting.dialect,
                 root: self.setting.root,
                 exports: &exports,
+                formatting: self.setting.formatting,
             },
             &structure,
         )
@@ -2159,6 +2161,7 @@ impl<'a> Planner<'a> {
                     dialect: self.setting.dialect,
                     root: self.setting.root,
                     exports: &run.exports,
+                    formatting: self.setting.formatting,
                 },
                 &structure,
             )

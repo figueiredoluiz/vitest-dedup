@@ -30,6 +30,7 @@ fn owned_destructuring_keeps_effects_and_positive_controls() {
         exclude: Vec::new(),
         rules: [(Rule::SubsumedTest, Severity::Warning)].into(),
         threshold: 100,
+        vitest_major: None,
         source: "test".into(),
     };
     let findings = crate::rules::run_with_hooks(

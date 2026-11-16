@@ -99,6 +99,9 @@ test('a run that cannot start or prints no JSONL fails its own row, and does not
     const clean = join(work, 'clean')
     writeFileSync(clean, '#!/bin/sh\necho \'{"type":"summary","testsAnalyzed":1}\'\n', { mode: 0o755 })
     assert.equal(analyze(clean, work).failure, null)
+    const uninstalled = analyze(clean, work, work)
+    assert.equal(uninstalled.exit, null)
+    assert.match(uninstalled.failure, /ENOENT/)
   } finally {
     rmSync(work, { recursive: true, force: true })
   }
