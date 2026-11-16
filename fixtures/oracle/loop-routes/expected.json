@@ -1,0 +1,219 @@
+{
+  "files": {
+    "foreach--async-generator-callback.test.ts": {
+      "tasks": 1,
+      "wrapperSites": [],
+      "next": {
+        "reasons": [
+          "unresolved-context"
+        ],
+        "testsExcluded": 1
+      }
+    },
+    "foreach--builtin-assigned.test.ts": {
+      "tasks": 2,
+      "wrapperSites": [],
+      "next": {
+        "reasons": [
+          "unresolved-context"
+        ],
+        "testsExcluded": 1
+      }
+    },
+    "foreach--builtin-defined.test.ts": {
+      "tasks": 2,
+      "wrapperSites": [],
+      "next": {
+        "reasons": [
+          "unresolved-context"
+        ],
+        "testsExcluded": 1
+      }
+    },
+    "foreach--builtin-destructured.test.ts": {
+      "tasks": 2,
+      "wrapperSites": [],
+      "next": {
+        "reasons": [
+          "unresolved-context"
+        ],
+        "testsExcluded": 1
+      }
+    },
+    "foreach--control.test.ts": {
+      "tasks": 3,
+      "wrapperSites": [],
+      "next": {}
+    },
+    "foreach--generator-callback.test.ts": {
+      "tasks": 1,
+      "wrapperSites": [],
+      "next": {
+        "reasons": [
+          "unresolved-context"
+        ],
+        "testsExcluded": 1
+      }
+    },
+    "foreach--push.test.ts": {
+      "tasks": 4,
+      "wrapperSites": [],
+      "next": {
+        "reasons": [
+          "unresolved-context"
+        ],
+        "testsExcluded": 1
+      }
+    },
+    "foreach--tdz-try.test.ts": {
+      "tasks": 1,
+      "wrapperSites": [],
+      "next": {
+        "reasons": [
+          "unresolved-context"
+        ],
+        "testsExcluded": 1
+      }
+    },
+    "forof--alias-mutates.test.ts": {
+      "tasks": 2,
+      "wrapperSites": [],
+      "next": {
+        "reasons": [
+          "unresolved-context"
+        ],
+        "testsExcluded": 1
+      }
+    },
+    "forof--builtin-assigned.test.ts": {
+      "tasks": 2,
+      "wrapperSites": [],
+      "next": {
+        "reasons": [
+          "unresolved-context"
+        ],
+        "testsExcluded": 1
+      }
+    },
+    "forof--builtin-defined.test.ts": {
+      "tasks": 2,
+      "wrapperSites": [],
+      "next": {
+        "reasons": [
+          "unresolved-context"
+        ],
+        "testsExcluded": 1
+      }
+    },
+    "forof--builtin-destructured.test.ts": {
+      "tasks": 2,
+      "wrapperSites": [],
+      "next": {
+        "reasons": [
+          "unresolved-context"
+        ],
+        "testsExcluded": 1
+      }
+    },
+    "forof--control.test.ts": {
+      "tasks": 3,
+      "wrapperSites": [],
+      "next": {}
+    },
+    "forof--index-write.test.ts": {
+      "tasks": 4,
+      "wrapperSites": [],
+      "next": {
+        "reasons": [
+          "unresolved-context"
+        ],
+        "testsExcluded": 1
+      }
+    },
+    "forof--let-reassigned.test.ts": {
+      "tasks": 2,
+      "wrapperSites": [],
+      "next": {
+        "reasons": [
+          "unresolved-context"
+        ],
+        "testsExcluded": 1
+      }
+    },
+    "forof--push.test.ts": {
+      "tasks": 4,
+      "wrapperSites": [],
+      "next": {
+        "reasons": [
+          "unresolved-context"
+        ],
+        "testsExcluded": 1
+      }
+    },
+    "forof--tdz-class-static.test.ts": {
+      "tasks": 1,
+      "wrapperSites": [],
+      "next": {
+        "reasons": [
+          "unresolved-context"
+        ],
+        "testsExcluded": 1
+      }
+    },
+    "forof--tdz-switch.test.ts": {
+      "tasks": 1,
+      "wrapperSites": [],
+      "next": {
+        "reasons": [
+          "unresolved-context"
+        ],
+        "testsExcluded": 1
+      }
+    },
+    "forof--tdz-try.test.ts": {
+      "tasks": 1,
+      "wrapperSites": [],
+      "next": {
+        "reasons": [
+          "unresolved-context"
+        ],
+        "testsExcluded": 1
+      }
+    },
+    "forof--var-redeclared.test.ts": {
+      "tasks": 2,
+      "wrapperSites": [],
+      "next": {
+        "reasons": [
+          "unresolved-context"
+        ],
+        "testsExcluded": 1
+      }
+    },
+    "map--builtin-assigned.test.ts": {
+      "tasks": 2,
+      "wrapperSites": [],
+      "next": {
+        "reasons": [
+          "unresolved-context"
+        ],
+        "testsExcluded": 1
+      }
+    },
+    "map--control.test.ts": {
+      "tasks": 3,
+      "wrapperSites": [],
+      "next": {}
+    },
+    "map--generator-callback.test.ts": {
+      "tasks": 1,
+      "wrapperSites": [],
+      "next": {
+        "reasons": [
+          "unresolved-context"
+        ],
+        "testsExcluded": 1
+      }
+    }
+  }
+}
