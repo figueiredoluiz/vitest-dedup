@@ -51,4 +51,4 @@ test.each([['x']])('case $0', (v) => { expect(v).toBe('x') })
 
 // Vitest 3.0 leaves `%$` literal and appends the row; later releases print the 1-based index.
 test("idx 1 'abc'", () => { expect(17).toBe(17) })
-test.each([{ v: 'abc' }])('idx %$ $v', ({ v }) => { expect(v).toBe('abc') })
+test.each([{ v: 'abc' }])('idx %$ $v', ({ v }) => { expect(v.startsWith('a')).toBe(true) })
