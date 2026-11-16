@@ -499,6 +499,22 @@ fn hostile_titles() -> (impl Fn() -> Option<String>, impl Fn() -> Option<String>
     )
 }
 
+/// Each measured major has its own formatting; any other major is unmeasured, and none is unknown.
+#[test]
+fn a_major_selects_its_formatting() {
+    use super::Formatting;
+    for (major, formatting) in [
+        (Some(3), Formatting::Vitest3),
+        (Some(4), Formatting::Vitest4),
+        (Some(5), Formatting::Vitest5),
+        (Some(2), Formatting::Unmeasured),
+        (Some(6), Formatting::Unmeasured),
+        (None, Formatting::Unknown),
+    ] {
+        assert_eq!(Formatting::of(major), formatting, "{major:?}");
+    }
+}
+
 /// `$` and `%o` titles as each major collected them (Vitest 3.2.7, 4.1.12, 5.1.0): 4 and 3 quote and
 /// escape strings through `inspect` and spell `0` as `+0`, except a positional `$0`, which 3.0
 /// leaves literal; an unknown major proves only titles every major renders alike, and an
