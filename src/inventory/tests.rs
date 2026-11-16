@@ -2007,6 +2007,67 @@ fn a_helper_reading_a_registration_function_may_register_tests() {
     );
 }
 
+/// An exported value that may be a registration function nothing reads, held in a branch, a
+/// container, a pattern or a default export, may register tests where it is called; a value no
+/// branch of which is one, or that only reads one where it cannot be the value, registers nothing.
+#[test]
+fn an_exported_value_that_may_be_a_registration_function_may_register_tests() {
+    let files = [
+        (
+            "values.ts",
+            "import { test, describe } from 'vitest'\n\
+             import * as v from 'vitest'\n\
+             const noop = () => {}\n\
+             const on = process.env.X !== 'true'\n\
+             export const ternary = on ? test : noop\n\
+             export const first = on ? noop : describe\n\
+             export const either = on && test\n\
+             export const nullish = undefined ?? test\n\
+             export const extended = on ? test.extend({}) : noop\n\
+             export const nested = on ? noop : (on ? test.extend({}) : noop)\n\
+             export const listed = [test][0]\n\
+             export const { member } = { member: on ? test : noop }\n\
+             export const plain = on ? 1 : noop\n\
+             export const none = on && noop\n\
+             export const condition = test ? noop : noop\n\
+             export const left = test && noop\n\
+             export const sequence = (test, noop)\n\
+             export const check = on ? v.expect : v.expect\n\
+             export const space = on ? v : v\n\
+             export const label = on ? test.name : 'x'\n\
+             export const arity = [test.length][0]",
+        ),
+        (
+            "default.ts",
+            "import { test } from 'vitest'\nexport default (process.env.X ? test.skip : () => {})",
+        ),
+    ];
+    assert_eq!(
+        wrapper_calls(
+            "import { ternary, first, either, nullish, extended, nested, listed, member, plain, \
+             none, condition, left, sequence, check, space, label, arity } from './values'\n\
+             import byDefault from './default'\n\
+             ternary('a', () => {})\nfirst('b', () => {})\neither('c', () => {})\n\
+             nullish('d', () => {})\nextended('e', () => {})\nnested('f', () => {})\n\
+             listed('g', () => {})\nmember('h', () => {})\nbyDefault('i', () => {})\n\
+             plain('j', () => {})\nnone('k', () => {})\ncondition('l', () => {})\n\
+             left('m', () => {})\nsequence('n', () => {})\ncheck(1)\nspace.expect(1)\nlabel.toUpperCase()\narity.toFixed()",
+            &files
+        ),
+        [
+            "wrapper@3",
+            "wrapper@4",
+            "wrapper@5",
+            "wrapper@6",
+            "wrapper@7",
+            "wrapper@8",
+            "wrapper@9",
+            "wrapper@10",
+            "wrapper@11"
+        ]
+    );
+}
+
 /// A cycle's members read its head before it is known, so a call of what they could not see is
 /// not hooks-only, in the head, in a module reading it, or in the test file.
 #[test]

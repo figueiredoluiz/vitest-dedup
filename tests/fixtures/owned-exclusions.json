@@ -1,5 +1,12 @@
 {
   "files": {
+    "oracle/conditional-api-values/case.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 10
+    },
     "oracle/helper-proof-work/large.test.ts": {
       "reason": "registered-elsewhere",
       "otherReasons": [],

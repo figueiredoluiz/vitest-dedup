@@ -813,6 +813,8 @@ impl<'s> Module<'s> {
         let mut steps = Vec::new();
         loop {
             node = tree.inner(node);
+            #[cfg(test)]
+            WALK_STEPS.with(|steps| steps.set(steps.get() + 1));
             if self.dead_chains.borrow().contains(&node) {
                 return None;
             }
@@ -1177,6 +1179,8 @@ impl<'s> Module<'s> {
         let tree = self.tree;
         loop {
             let before = self.origins.clone();
+            // An alias found in a pass adds reads, so each pass reads the escapes again.
+            let escaping = self.escaping_reads();
             for node in tree.nodes() {
                 if tree.kind(node) != "VariableDeclarator" {
                     continue;
@@ -1185,7 +1189,12 @@ impl<'s> Module<'s> {
                 else {
                     continue;
                 };
-                let origin = self.value_origin(init);
+                // A registration function read as a value in the initializer may be its value
+                // (`cond ? test : noop`, `[test][0]`, `{ it: test }`): it may register tests.
+                let origin = self.value_origin(init).or_else(|| {
+                    self.holds_escape(init, &escaping)
+                        .then_some(Origin::Wrapper(Reach::Tasks))
+                });
                 if matches!(origin, Some(Origin::Api(_))) {
                     self.values.insert(tree.inner(init));
                 }
@@ -2104,6 +2113,133 @@ impl<'s> Module<'s> {
     /// Registration functions read as values rather than called.
     fn escapes(&self) -> Vec<Escape> {
         let tree = self.tree;
+        self.escaping_reads()
+            .into_iter()
+            .map(|current| {
+                let span = tree.span(current);
+                Escape {
+                    offset: span.start,
+                    text: self.source[span.start as usize..span.end as usize]
+                        .chars()
+                        .take(80)
+                        .collect(),
+                }
+            })
+            .collect()
+    }
+
+    /// Whether the value of `expression`, which has no origin, may be a registration function
+    /// nothing here reads: a registration read escapes in it outside a nested function, or a
+    /// branch it may evaluate to has an origin (`cond ? test.extend({}) : noop`).
+    /// `escaping` is [`Self::escaping_reads`].
+    fn holds_escape(&self, expression: NodeId, escaping: &[NodeId]) -> bool {
+        self.branch_registers(expression) || self.escape_within(expression, escaping)
+    }
+
+    /// Whether a conditional or logical branch `expression` may evaluate to is a registration
+    /// function ([`Self::is_registration_value`]). Each
+    /// leaf branch is asked once; a nested conditional or logical branch is descended instead.
+    fn branch_registers(&self, expression: NodeId) -> bool {
+        let tree = self.tree;
+        let mut pending = vec![tree.inner(expression)];
+        while let Some(node) = pending.pop() {
+            for key in ["consequent", "alternate", "left", "right"] {
+                let Some(branch) = tree.child(node, key) else {
+                    continue;
+                };
+                if !self.may_evaluate_to(node, branch) {
+                    continue;
+                }
+                let branch = tree.inner(branch);
+                if matches!(
+                    tree.kind(branch),
+                    "ConditionalExpression" | "LogicalExpression"
+                ) {
+                    pending.push(branch);
+                } else if self.is_registration_value(branch) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    /// Whether `expression`'s origin is a registration function. A namespace is not: `v` and
+    /// `v.expect` are values, and only its members register. Nor is a function's own `name` or
+    /// `length`, a string and a number.
+    fn is_registration_value(&self, expression: NodeId) -> bool {
+        let tree = self.tree;
+        let node = tree.inner(expression);
+        if tree.kind(node) == "MemberExpression"
+            && member_name(tree, node).is_some_and(|name| matches!(name, "name" | "length"))
+        {
+            return false;
+        }
+        matches!(
+            self.value_origin(expression),
+            Some(Origin::Api(_) | Origin::Wrapper(_) | Origin::Derived(_))
+        )
+    }
+
+    /// Every symbol a variable declaration's declarators bind, patterns included.
+    fn declared_bindings(&self, declaration: NodeId) -> Vec<SymbolId> {
+        let tree = self.tree;
+        tree.list(declaration, "declarations")
+            .into_iter()
+            .flatten()
+            .filter_map(|declarator| tree.child(declarator, "id"))
+            .flat_map(|id| bound_symbols(tree, &self.parsed.scopes, id))
+            .collect()
+    }
+
+    /// Whether a read in `escaping` lies in `expression` outside a nested function, on a path whose
+    /// every step may carry its value: [`Self::may_evaluate_to`], a member of what holds it
+    /// (`[test][0]`), or a call handed it, whose result may be it.
+    fn escape_within(&self, expression: NodeId, escaping: &[NodeId]) -> bool {
+        let tree = self.tree;
+        let span = tree.span(expression);
+        let first = escaping.partition_point(|&read| tree.span(read).start < span.start);
+        // A climb that fails at an edge fails for every read below it: each node is passed once.
+        let mut climbed = HashSet::new();
+        escaping[first..]
+            .iter()
+            .take_while(|&&read| tree.span(read).start < span.end)
+            .filter(|&&read| self.is_registration_value(read))
+            .any(|&read| {
+                let mut node = read;
+                loop {
+                    #[cfg(test)]
+                    WALK_STEPS.with(|steps| steps.set(steps.get() + 1));
+                    if node == expression {
+                        return true;
+                    }
+                    if tree.is_function(node) || !climbed.insert(node) {
+                        return false;
+                    }
+                    let Some(parent) = tree.parent(node) else {
+                        return false;
+                    };
+                    let carries = self.may_evaluate_to(parent, node)
+                        || match tree.kind(parent) {
+                            "MemberExpression" => tree.child(parent, "object") == Some(node),
+                            // Any child of a call but its callee is an argument.
+                            "CallExpression" | "NewExpression" => {
+                                tree.child(parent, "callee") != Some(node)
+                            }
+                            _ => false,
+                        };
+                    if !carries {
+                        return false;
+                    }
+                    node = parent;
+                }
+            })
+    }
+
+    /// The outermost node of each registration read that is not called, declared, exported or
+    /// consumed by an operator, sorted by start.
+    fn escaping_reads(&self) -> Vec<NodeId> {
+        let tree = self.tree;
         let mut escapes = Vec::new();
         for read in self.registration_reads() {
             let mut current = read;
@@ -2128,17 +2264,10 @@ impl<'s> Module<'s> {
                 }
             };
             if escaped {
-                let span = tree.span(current);
-                escapes.push(Escape {
-                    offset: span.start,
-                    text: self.source[span.start as usize..span.end as usize]
-                        .chars()
-                        .take(80)
-                        .collect(),
-                });
+                escapes.push(current);
             }
         }
-        escapes.sort_by_key(|escape| escape.offset);
+        escapes.sort_by_key(|&node| tree.span(node).start);
         escapes
     }
 
@@ -2164,14 +2293,10 @@ impl<'s> Module<'s> {
                     let Some(declaration) = tree.child(statement, "declaration") else {
                         continue;
                     };
-                    let bindings = tree
-                        .list(declaration, "declarations")
-                        .into_iter()
-                        .flatten()
-                        .filter_map(|declarator| tree.child(declarator, "id"))
-                        .flat_map(|id| bound_symbols(tree, &self.parsed.scopes, id));
                     names.extend(
-                        bindings.map(|symbol| self.parsed.scopes.symbol(symbol).name.clone()),
+                        self.declared_bindings(declaration)
+                            .into_iter()
+                            .map(|symbol| self.parsed.scopes.symbol(symbol).name.clone()),
                     );
                     names.extend(
                         tree.child(declaration, "id")
@@ -2280,24 +2405,19 @@ impl<'s> Module<'s> {
                         continue;
                     }
                     if let Some(declaration) = tree.child(statement, "declaration") {
-                        let ids: Vec<NodeId> = match tree.kind(declaration) {
-                            "FunctionDeclaration" => {
-                                tree.child(declaration, "id").into_iter().collect()
-                            }
-                            "VariableDeclaration" => tree
-                                .list(declaration, "declarations")
+                        // `export const { t } = ...` binds `t` through a pattern.
+                        let symbols: Vec<SymbolId> = match tree.kind(declaration) {
+                            "FunctionDeclaration" => tree
+                                .child(declaration, "id")
+                                .and_then(|id| self.declares(id))
                                 .into_iter()
-                                .flatten()
-                                .filter_map(|declarator| tree.child(declarator, "id"))
-                                .filter(|id| tree.kind(*id) == "Identifier")
                                 .collect(),
+                            "VariableDeclaration" => self.declared_bindings(declaration),
                             _ => Vec::new(),
                         };
-                        for id in ids {
-                            if let (Some(export), Some(name)) =
-                                (registers(self.declares(id)), tree.text(id, "name"))
-                            {
-                                add(name.to_owned(), export);
+                        for symbol in symbols {
+                            if let Some(export) = registers(Some(symbol)) {
+                                add(self.parsed.scopes.symbol(symbol).name.clone(), export);
                             }
                         }
                     }
@@ -2329,7 +2449,24 @@ impl<'s> Module<'s> {
                         })
                     })
                     .flatten();
-                    if let Some(export) = registers(symbol).or(anonymous.map(Export::Wrapper)) {
+                    // An expression binds no name: it is what its value is, and a registration
+                    // function read as a value in it may be that value (`cond ? test : noop`).
+                    let expression = (symbol.is_none() && !tree.is_function(declaration))
+                        .then(|| match self.value_origin(declaration) {
+                            Some(Origin::Api(registers) | Origin::Derived(registers)) => {
+                                Some(Export::Derived(registers))
+                            }
+                            Some(Origin::Wrapper(reach)) => Some(Export::Wrapper(reach)),
+                            Some(Origin::Namespace) => Some(Export::Namespace),
+                            None => self
+                                .holds_escape(declaration, &self.escaping_reads())
+                                .then_some(Export::Wrapper(Reach::Tasks)),
+                        })
+                        .flatten();
+                    if let Some(export) = registers(symbol)
+                        .or(anonymous.map(Export::Wrapper))
+                        .or(expression)
+                    {
                         add("default".to_owned(), export);
                     }
                 }
@@ -2448,4 +2585,16 @@ fn specifiers(tree: &Tree, statement: NodeId) -> Vec<(NodeId, NodeId)> {
             ))
         })
         .collect()
+}
+
+#[cfg(test)]
+thread_local! {
+    static WALK_STEPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Reset and return this thread's callee-chain walk and escape climb steps, for deterministic
+/// scaling regressions.
+#[cfg(test)]
+pub(super) fn take_walk_steps() -> usize {
+    WALK_STEPS.with(|steps| steps.replace(0))
 }

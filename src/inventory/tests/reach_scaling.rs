@@ -47,3 +47,75 @@ fn owned_wrapper_chain_keeps_reach_with_bounded_query_work() {
         "{checks} query comparisons exceed {bound}"
     );
 }
+
+/// Walk steps reading an exported conditional chain of `arms` arms, none a registration function.
+fn chain_walk_steps(arms: usize) -> usize {
+    let chain: Vec<String> = (0..arms).map(|arm| format!("on{} ? f", arm % 2)).collect();
+    let helper = format!(
+        "const noop = () => {{}}\nconst f = noop, on0 = 1, on1 = 0\n\
+         export const run: any = {} : noop",
+        chain.join(" : ")
+    );
+    super::super::module::take_walk_steps();
+    let (found, _) = inventory_of(
+        "import { run } from './helper'\nrun('a', () => {})",
+        &[("helper.ts", helper.as_str())],
+        false,
+    );
+    assert!(found.sites.is_empty(), "{:?}", found.sites);
+    super::super::module::take_walk_steps()
+}
+
+/// Asking whether a conditional chain may hold a registration function reads each arm a bounded
+/// number of times: doubling the arms at most doubles the work, plus slack for constant terms.
+#[test]
+fn a_conditional_chain_is_read_in_linear_work() {
+    let small = chain_walk_steps(400);
+    let large = chain_walk_steps(800);
+    assert!(small > 0, "nothing was walked");
+    assert!(
+        large <= 2 * small + 64,
+        "{small} steps for 400 arms, {large} for 800"
+    );
+}
+
+/// Walk and climb steps reading an exported value built from `parts` parts by `shape`.
+fn value_steps(parts: usize, shape: fn(usize) -> String) -> usize {
+    let helper = format!(
+        "import {{ test }} from 'vitest'\nconst noop = (..._: unknown[]) => {{}}\n\
+         const on0 = 1, on1 = 0\nexport const run: any = {}",
+        shape(parts)
+    );
+    super::super::module::take_walk_steps();
+    inventory_of(
+        "import { run } from './helper'\nrun('a', () => {})",
+        &[("helper.ts", helper.as_str())],
+        false,
+    );
+    super::super::module::take_walk_steps()
+}
+
+/// Escaped reads are climbed in linear work, where each fails only at the top: many arguments of
+/// one call, and a chain reading the API in every arm, both in a condition.
+#[test]
+fn escaped_reads_are_climbed_in_linear_work() {
+    type Shape = (&'static str, fn(usize) -> String);
+    let shapes: [Shape; 2] = [
+        ("arguments", |n| {
+            format!("noop({}) ? noop : noop", vec!["test"; n].join(", "))
+        }),
+        ("chain", |n| {
+            let arms: Vec<String> = (0..n).map(|arm| format!("on{} ? test", arm % 2)).collect();
+            format!("noop({} : noop) ? noop : noop", arms.join(" : "))
+        }),
+    ];
+    for (name, shape) in shapes {
+        let small = value_steps(400, shape);
+        let large = value_steps(800, shape);
+        assert!(small > 0, "{name}: nothing was climbed");
+        assert!(
+            large <= 2 * small + 64,
+            "{name}: {small} steps for 400, {large} for 800"
+        );
+    }
+}
