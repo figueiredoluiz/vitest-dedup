@@ -24,6 +24,7 @@ Every key is optional, and an unknown key is an error.
 | `include`, `exclude` | Globs relative to the analyzed directory. |
 | `threshold` | A percentage from 0 to 100 of eligible cases in error-severity duplication; see [the quality gate](#quality-gate). |
 | `rules` | Maps a rule id to `off`, `warning` or `error`. |
+| `vitestMajor` | 3, 4 or 5: the Vitest major of files whose metadata names none; see [Vitest major](#vitest-major). |
 
 Files matched by `.gitignore` or by a `.vitest-dedupignore` file in the same syntax are skipped as
 well. Ignore rules follow git. Inside a repository (the nearest directory at or above the analyzed
@@ -165,6 +166,23 @@ vitest-dedup . --globals
 
 The flag is opt-in because ambient `describe` and `it` cannot be told apart from Cypress, Mocha, or
 Jasmine without project configuration, and guessing would invent findings in those files.
+
+## Vitest major
+
+Vitest 3, 4 and 5 format parameterized titles differently (see
+[Parameterized rows](rules.md#parameterized-rows)). Each test file's major comes from the
+installed `node_modules/vitest`, else from the nearest `package.json` whose `vitest` range names
+one major, never from outside the analysis root. When neither names one, for example a pnpm
+`catalog:` or `workspace:` range, the `vitestMajor` key or `--vitest-major` supplies it (the flag
+wins):
+
+```sh
+vitest-dedup . --vitest-major 4
+```
+
+It accepts 3, 4 or 5 and applies only to files whose metadata names no major. Without it, such a
+title is proved only where every major renders it alike. `--baseline-from-ref` reads the base
+revision's major from its committed metadata in the same order, never from the working tree.
 
 ## Runs that analyze no tests
 

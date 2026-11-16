@@ -43,7 +43,9 @@ file.
 - Project imports and resolver tsconfig/package metadata are read from the same pinned commit, with no working-tree fallback. Ancestor configuration is
   available within the repository; project-source imports remain confined to the analysis root.
   Current include/exclude globs and resolved globals configure both passes. Historical Vitest
-  configuration is not executed.
+  configuration is not executed. Row titles render as the base revision's committed
+  [Vitest major](configuration.md#vitest-major), so an upgrade that makes titles collide reports
+  the collision as new.
 - Historical workspace symlinks are not reconstructed. An unresolved import matching a committed
   project package name marks the historical pass incomplete and withholds its allowance. Names
   come from bounded committed metadata inside the analysis root; unreadable or exhausted identity

@@ -63,6 +63,8 @@ impl HeapBytes for TestCase {
             benchmark,
             iterations,
             exclusion,
+            // An inline `Copy` enum: no heap bytes.
+            unsupported: _,
         } = self;
         [
             runtime_row.heap_bytes(),

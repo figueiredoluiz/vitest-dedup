@@ -7582,6 +7582,10 @@
     {
       "name": "duplicate-each-row-imported-constants",
       "path": "duplicate-each-row-imported-constants",
+      "arguments": [
+        "--vitest-major",
+        "5"
+      ],
       "rule": "duplicate-each-row",
       "role": "positive",
       "origin": "synthetic",
@@ -10814,6 +10818,10 @@
     {
       "name": "duplicate-test-long-row-names",
       "path": "duplicate-test-long-row-names",
+      "arguments": [
+        "--vitest-major",
+        "5"
+      ],
       "rule": "duplicate-test",
       "role": "positive",
       "origin": "synthetic",
@@ -12189,6 +12197,862 @@
           "titles": [
             "outer > a",
             "outer > b"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "titles-vitest3",
+      "path": "titles-vitest3",
+      "arguments": [
+        "--rule",
+        "parameterization-candidate=off"
+      ],
+      "rule": "duplicate-test-name",
+      "role": "variant",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-16",
+      "expectedTests": 29,
+      "expectedIncomplete": false,
+      "expectedUnresolved": 0,
+      "expectedFindings": [
+        {
+          "rule": "duplicate-test-name",
+          "severity": "warning",
+          "titles": [
+            "named 'abc'",
+            "named 'abc'"
+          ],
+          "locations": [
+            "titles.test.ts:5",
+            "titles.test.ts:6"
+          ]
+        },
+        {
+          "rule": "duplicate-test-name",
+          "severity": "warning",
+          "titles": [
+            "zero +0",
+            "zero +0"
+          ],
+          "locations": [
+            "titles.test.ts:9",
+            "titles.test.ts:11"
+          ]
+        },
+        {
+          "rule": "duplicate-test-name",
+          "severity": "warning",
+          "titles": [
+            "flag true",
+            "flag true"
+          ],
+          "locations": [
+            "titles.test.ts:19",
+            "titles.test.ts:20"
+          ]
+        },
+        {
+          "rule": "duplicate-test-name",
+          "severity": "warning",
+          "titles": [
+            "edge 100000000000000000000000000000000000000n",
+            "edge 100000000000000000000000000000000000000n"
+          ],
+          "locations": [
+            "titles.test.ts:29",
+            "titles.test.ts:30"
+          ]
+        },
+        {
+          "rule": "duplicate-test-name",
+          "severity": "warning",
+          "titles": [
+            "plain",
+            "plain"
+          ],
+          "locations": [
+            "titles.test.ts:33",
+            "titles.test.ts:34"
+          ]
+        }
+      ],
+      "expectedAbsent": [
+        {
+          "rule": "duplicate-test-name",
+          "titles": [
+            "idx 1 'abc'",
+            "idx 1 'abc'"
+          ]
+        },
+        {
+          "rule": "duplicate-test-name",
+          "titles": [
+            "case 'x'",
+            "case 'x'"
+          ]
+        },
+        {
+          "rule": "duplicate-test-name",
+          "titles": [
+            "'x'x",
+            "'x'x"
+          ]
+        },
+        {
+          "rule": "duplicate-test-name",
+          "titles": [
+            "pct 100% 'abc'",
+            "pct 100% 'abc'"
+          ]
+        },
+        {
+          "rule": "duplicate-test-name",
+          "titles": [
+            "over abc undefined",
+            "over abc undefined"
+          ]
+        },
+        {
+          "rule": "duplicate-test-name",
+          "titles": [
+            "named abc",
+            "named abc"
+          ]
+        },
+        {
+          "rule": "duplicate-test-name",
+          "titles": [
+            "zero 0",
+            "zero 0"
+          ]
+        },
+        {
+          "rule": "duplicate-test-name",
+          "titles": [
+            "none undefined",
+            "none undefined"
+          ]
+        },
+        {
+          "rule": "duplicate-test-name",
+          "titles": [
+            "none %s",
+            "none %s"
+          ]
+        },
+        {
+          "rule": "duplicate-test-name",
+          "titles": [
+            "again '$1'",
+            "again '$1'"
+          ]
+        },
+        {
+          "rule": "duplicate-test-name",
+          "titles": [
+            "big 10000000000000000000000000000000000000000000000000n",
+            "big 10000000000000000000000000000000000000000000000000n"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "titles-vitest4",
+      "path": "titles-vitest4",
+      "arguments": [
+        "--rule",
+        "parameterization-candidate=off"
+      ],
+      "rule": "duplicate-test-name",
+      "role": "positive",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-16",
+      "expectedTests": 29,
+      "expectedIncomplete": false,
+      "expectedUnresolved": 0,
+      "expectedFindings": [
+        {
+          "rule": "duplicate-test-name",
+          "severity": "warning",
+          "titles": [
+            "idx 1 'abc'",
+            "idx 1 'abc'"
+          ],
+          "locations": [
+            "titles.test.ts:53",
+            "titles.test.ts:54"
+          ]
+        },
+        {
+          "rule": "duplicate-test-name",
+          "severity": "warning",
+          "titles": [
+            "case 'x'",
+            "case 'x'"
+          ],
+          "locations": [
+            "titles.test.ts:49",
+            "titles.test.ts:50"
+          ]
+        },
+        {
+          "rule": "duplicate-test-name",
+          "severity": "warning",
+          "titles": [
+            "'x'x",
+            "'x'x"
+          ],
+          "locations": [
+            "titles.test.ts:45",
+            "titles.test.ts:46"
+          ]
+        },
+        {
+          "rule": "duplicate-test-name",
+          "severity": "warning",
+          "titles": [
+            "pct 100% 'abc'",
+            "pct 100% 'abc'"
+          ],
+          "locations": [
+            "titles.test.ts:41",
+            "titles.test.ts:42"
+          ]
+        },
+        {
+          "rule": "duplicate-test-name",
+          "severity": "warning",
+          "titles": [
+            "named 'abc'",
+            "named 'abc'"
+          ],
+          "locations": [
+            "titles.test.ts:5",
+            "titles.test.ts:6"
+          ]
+        },
+        {
+          "rule": "duplicate-test-name",
+          "severity": "warning",
+          "titles": [
+            "zero +0",
+            "zero +0"
+          ],
+          "locations": [
+            "titles.test.ts:9",
+            "titles.test.ts:11"
+          ]
+        },
+        {
+          "rule": "duplicate-test-name",
+          "severity": "warning",
+          "titles": [
+            "none undefined",
+            "none undefined"
+          ],
+          "locations": [
+            "titles.test.ts:15",
+            "titles.test.ts:16"
+          ]
+        },
+        {
+          "rule": "duplicate-test-name",
+          "severity": "warning",
+          "titles": [
+            "flag true",
+            "flag true"
+          ],
+          "locations": [
+            "titles.test.ts:19",
+            "titles.test.ts:20"
+          ]
+        },
+        {
+          "rule": "duplicate-test-name",
+          "severity": "warning",
+          "titles": [
+            "again '$1'",
+            "again '$1'"
+          ],
+          "locations": [
+            "titles.test.ts:23",
+            "titles.test.ts:24"
+          ]
+        },
+        {
+          "rule": "duplicate-test-name",
+          "severity": "warning",
+          "titles": [
+            "edge 100000000000000000000000000000000000000n",
+            "edge 100000000000000000000000000000000000000n"
+          ],
+          "locations": [
+            "titles.test.ts:29",
+            "titles.test.ts:30"
+          ]
+        },
+        {
+          "rule": "duplicate-test-name",
+          "severity": "warning",
+          "titles": [
+            "plain",
+            "plain"
+          ],
+          "locations": [
+            "titles.test.ts:33",
+            "titles.test.ts:34"
+          ]
+        },
+        {
+          "rule": "duplicate-test-name",
+          "severity": "warning",
+          "titles": [
+            "over abc undefined",
+            "over abc undefined"
+          ],
+          "locations": [
+            "titles.test.ts:37",
+            "titles.test.ts:38"
+          ]
+        }
+      ],
+      "expectedAbsent": [
+        {
+          "rule": "duplicate-test-name",
+          "titles": [
+            "named abc",
+            "named abc"
+          ]
+        },
+        {
+          "rule": "duplicate-test-name",
+          "titles": [
+            "zero 0",
+            "zero 0"
+          ]
+        },
+        {
+          "rule": "duplicate-test-name",
+          "titles": [
+            "none %s",
+            "none %s"
+          ]
+        },
+        {
+          "rule": "duplicate-test-name",
+          "titles": [
+            "big 10000000000000000000000000000000000000000000000000n",
+            "big 10000000000000000000000000000000000000000000000000n"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "titles-vitest5",
+      "path": "titles-vitest5",
+      "arguments": [
+        "--rule",
+        "parameterization-candidate=off"
+      ],
+      "rule": "duplicate-test-name",
+      "role": "positive",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-16",
+      "expectedTests": 11,
+      "expectedIncomplete": false,
+      "expectedUnresolved": 0,
+      "expectedFindings": [
+        {
+          "rule": "duplicate-test-name",
+          "severity": "warning",
+          "titles": [
+            "named abc",
+            "named abc"
+          ],
+          "locations": [
+            "titles.test.ts:4",
+            "titles.test.ts:6"
+          ]
+        },
+        {
+          "rule": "duplicate-test-name",
+          "severity": "warning",
+          "titles": [
+            "zero 0",
+            "zero 0"
+          ],
+          "locations": [
+            "titles.test.ts:10",
+            "titles.test.ts:11"
+          ]
+        },
+        {
+          "rule": "duplicate-test-name",
+          "severity": "warning",
+          "titles": [
+            "none undefined",
+            "none undefined"
+          ],
+          "locations": [
+            "titles.test.ts:15",
+            "titles.test.ts:16"
+          ]
+        },
+        {
+          "rule": "duplicate-test-name",
+          "severity": "warning",
+          "titles": [
+            "flag true",
+            "flag true"
+          ],
+          "locations": [
+            "titles.test.ts:19",
+            "titles.test.ts:20"
+          ]
+        }
+      ],
+      "expectedAbsent": [
+        {
+          "rule": "duplicate-test-name",
+          "titles": [
+            "named 'abc'",
+            "named 'abc'"
+          ]
+        },
+        {
+          "rule": "duplicate-test-name",
+          "titles": [
+            "zero +0",
+            "zero +0"
+          ]
+        },
+        {
+          "rule": "duplicate-test-name",
+          "titles": [
+            "none %s",
+            "none %s"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "titles-major-unknown",
+      "path": "titles-major-unknown",
+      "arguments": [
+        "--rule",
+        "parameterization-candidate=off"
+      ],
+      "rule": "duplicate-test-name",
+      "role": "negative",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-16",
+      "expectedTests": 29,
+      "expectedIncomplete": false,
+      "expectedUnresolved": 0,
+      "expectedFindings": [
+        {
+          "rule": "duplicate-test-name",
+          "severity": "warning",
+          "titles": [
+            "flag true",
+            "flag true"
+          ],
+          "locations": [
+            "titles.test.ts:19",
+            "titles.test.ts:20"
+          ]
+        },
+        {
+          "rule": "duplicate-test-name",
+          "severity": "warning",
+          "titles": [
+            "edge 100000000000000000000000000000000000000n",
+            "edge 100000000000000000000000000000000000000n"
+          ],
+          "locations": [
+            "titles.test.ts:29",
+            "titles.test.ts:30"
+          ]
+        },
+        {
+          "rule": "duplicate-test-name",
+          "severity": "warning",
+          "titles": [
+            "plain",
+            "plain"
+          ],
+          "locations": [
+            "titles.test.ts:33",
+            "titles.test.ts:34"
+          ]
+        }
+      ],
+      "expectedAbsent": [
+        {
+          "rule": "duplicate-test-name",
+          "titles": [
+            "idx 1 'abc'",
+            "idx 1 'abc'"
+          ]
+        },
+        {
+          "rule": "duplicate-test-name",
+          "titles": [
+            "case 'x'",
+            "case 'x'"
+          ]
+        },
+        {
+          "rule": "duplicate-test-name",
+          "titles": [
+            "'x'x",
+            "'x'x"
+          ]
+        },
+        {
+          "rule": "duplicate-test-name",
+          "titles": [
+            "pct 100% 'abc'",
+            "pct 100% 'abc'"
+          ]
+        },
+        {
+          "rule": "duplicate-test-name",
+          "titles": [
+            "over abc undefined",
+            "over abc undefined"
+          ]
+        },
+        {
+          "rule": "duplicate-test-name",
+          "titles": [
+            "named abc",
+            "named abc"
+          ]
+        },
+        {
+          "rule": "duplicate-test-name",
+          "titles": [
+            "zero 0",
+            "zero 0"
+          ]
+        },
+        {
+          "rule": "duplicate-test-name",
+          "titles": [
+            "named 'abc'",
+            "named 'abc'"
+          ]
+        },
+        {
+          "rule": "duplicate-test-name",
+          "titles": [
+            "zero +0",
+            "zero +0"
+          ]
+        },
+        {
+          "rule": "duplicate-test-name",
+          "titles": [
+            "none undefined",
+            "none undefined"
+          ]
+        },
+        {
+          "rule": "duplicate-test-name",
+          "titles": [
+            "none %s",
+            "none %s"
+          ]
+        },
+        {
+          "rule": "duplicate-test-name",
+          "titles": [
+            "again '$1'",
+            "again '$1'"
+          ]
+        },
+        {
+          "rule": "duplicate-test-name",
+          "titles": [
+            "big 10000000000000000000000000000000000000000000000000n",
+            "big 10000000000000000000000000000000000000000000000000n"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "titles-major-override",
+      "path": "titles-major-override",
+      "rule": "duplicate-test-name",
+      "role": "variant",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-16",
+      "expectedTests": 11,
+      "expectedIncomplete": false,
+      "expectedUnresolved": 0,
+      "expectedFindings": [
+        {
+          "rule": "duplicate-test-name",
+          "severity": "warning",
+          "titles": [
+            "named 'abc'",
+            "named 'abc'"
+          ],
+          "locations": [
+            "titles.test.ts:5",
+            "titles.test.ts:6"
+          ]
+        },
+        {
+          "rule": "duplicate-test-name",
+          "severity": "warning",
+          "titles": [
+            "zero +0",
+            "zero +0"
+          ],
+          "locations": [
+            "titles.test.ts:9",
+            "titles.test.ts:11"
+          ]
+        },
+        {
+          "rule": "duplicate-test-name",
+          "severity": "warning",
+          "titles": [
+            "none undefined",
+            "none undefined"
+          ],
+          "locations": [
+            "titles.test.ts:15",
+            "titles.test.ts:16"
+          ]
+        },
+        {
+          "rule": "duplicate-test-name",
+          "severity": "warning",
+          "titles": [
+            "flag true",
+            "flag true"
+          ],
+          "locations": [
+            "titles.test.ts:19",
+            "titles.test.ts:20"
+          ]
+        }
+      ],
+      "expectedAbsent": [
+        {
+          "rule": "duplicate-test-name",
+          "titles": [
+            "named abc",
+            "named abc"
+          ]
+        },
+        {
+          "rule": "duplicate-test-name",
+          "titles": [
+            "zero 0",
+            "zero 0"
+          ]
+        },
+        {
+          "rule": "duplicate-test-name",
+          "titles": [
+            "none %s",
+            "none %s"
+          ]
+        }
+      ],
+      "arguments": [
+        "--vitest-major",
+        "4",
+        "--rule",
+        "parameterization-candidate=off"
+      ]
+    },
+    {
+      "name": "titles-major-config",
+      "path": "titles-major-config",
+      "rule": "duplicate-test-name",
+      "role": "variant",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-16",
+      "expectedTests": 11,
+      "expectedIncomplete": false,
+      "expectedUnresolved": 0,
+      "expectedFindings": [
+        {
+          "rule": "duplicate-test-name",
+          "severity": "warning",
+          "titles": [
+            "named 'abc'",
+            "named 'abc'"
+          ],
+          "locations": [
+            "titles.test.ts:5",
+            "titles.test.ts:6"
+          ]
+        },
+        {
+          "rule": "duplicate-test-name",
+          "severity": "warning",
+          "titles": [
+            "zero +0",
+            "zero +0"
+          ],
+          "locations": [
+            "titles.test.ts:9",
+            "titles.test.ts:11"
+          ]
+        },
+        {
+          "rule": "duplicate-test-name",
+          "severity": "warning",
+          "titles": [
+            "none undefined",
+            "none undefined"
+          ],
+          "locations": [
+            "titles.test.ts:15",
+            "titles.test.ts:16"
+          ]
+        },
+        {
+          "rule": "duplicate-test-name",
+          "severity": "warning",
+          "titles": [
+            "flag true",
+            "flag true"
+          ],
+          "locations": [
+            "titles.test.ts:19",
+            "titles.test.ts:20"
+          ]
+        }
+      ],
+      "expectedAbsent": [
+        {
+          "rule": "duplicate-test-name",
+          "titles": [
+            "named abc",
+            "named abc"
+          ]
+        },
+        {
+          "rule": "duplicate-test-name",
+          "titles": [
+            "zero 0",
+            "zero 0"
+          ]
+        },
+        {
+          "rule": "duplicate-test-name",
+          "titles": [
+            "none %s",
+            "none %s"
+          ]
+        }
+      ],
+      "arguments": [
+        "--rule",
+        "parameterization-candidate=off"
+      ]
+    },
+    {
+      "name": "titles-major-config-flag",
+      "path": "titles-major-config-flag",
+      "arguments": [
+        "--vitest-major",
+        "5",
+        "--rule",
+        "parameterization-candidate=off"
+      ],
+      "rule": "duplicate-test-name",
+      "role": "variant",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-16",
+      "expectedTests": 11,
+      "expectedIncomplete": false,
+      "expectedUnresolved": 0,
+      "expectedFindings": [
+        {
+          "rule": "duplicate-test-name",
+          "severity": "warning",
+          "titles": [
+            "named abc",
+            "named abc"
+          ],
+          "locations": [
+            "titles.test.ts:4",
+            "titles.test.ts:6"
+          ]
+        },
+        {
+          "rule": "duplicate-test-name",
+          "severity": "warning",
+          "titles": [
+            "zero 0",
+            "zero 0"
+          ],
+          "locations": [
+            "titles.test.ts:10",
+            "titles.test.ts:11"
+          ]
+        },
+        {
+          "rule": "duplicate-test-name",
+          "severity": "warning",
+          "titles": [
+            "none undefined",
+            "none undefined"
+          ],
+          "locations": [
+            "titles.test.ts:15",
+            "titles.test.ts:16"
+          ]
+        },
+        {
+          "rule": "duplicate-test-name",
+          "severity": "warning",
+          "titles": [
+            "flag true",
+            "flag true"
+          ],
+          "locations": [
+            "titles.test.ts:19",
+            "titles.test.ts:20"
+          ]
+        }
+      ],
+      "expectedAbsent": [
+        {
+          "rule": "duplicate-test-name",
+          "titles": [
+            "named 'abc'",
+            "named 'abc'"
+          ]
+        },
+        {
+          "rule": "duplicate-test-name",
+          "titles": [
+            "zero +0",
+            "zero +0"
+          ]
+        },
+        {
+          "rule": "duplicate-test-name",
+          "titles": [
+            "none %s",
+            "none %s"
           ]
         }
       ]

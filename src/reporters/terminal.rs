@@ -632,6 +632,7 @@ mod tests {
             exclude: Vec::new(),
             rules: BTreeMap::new(),
             threshold,
+            vitest_major: None,
             source: "test".into(),
         }
     }

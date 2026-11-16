@@ -432,6 +432,8 @@ impl Normalizer<'_> {
     }
 
     /// Supplies typed primitive arguments while preserving the existing partial JSON field reads.
+    /// A title refused on the file's major that renders under the Vitest 5 rules is recorded for
+    /// [`Normalizer::take_unsupported_title`].
     pub(crate) fn render_table_title(
         &mut self,
         parsed: &Parsed,
@@ -439,6 +441,30 @@ impl Normalizer<'_> {
         row: &super::TableRow,
         whole: bool,
         mode: crate::framework::TitleMode,
+    ) -> Option<String> {
+        use crate::framework::Formatting;
+        let formatting = self.setting.formatting;
+        let title = self.render_table_title_as(parsed, pattern, row, whole, mode, formatting);
+        if title.is_none()
+            && formatting != Formatting::Vitest5
+            && self
+                .render_table_title_as(parsed, pattern, row, whole, mode, Formatting::Vitest5)
+                .is_some()
+        {
+            self.unsupported_title = Some(formatting);
+        }
+        title
+    }
+
+    /// [`Self::render_table_title`] as `formatting` renders it.
+    fn render_table_title_as(
+        &mut self,
+        parsed: &Parsed,
+        pattern: &str,
+        row: &super::TableRow,
+        whole: bool,
+        mode: crate::framework::TitleMode,
+        formatting: crate::framework::Formatting,
     ) -> Option<String> {
         use crate::framework::TitleValue;
         let (arguments, fields) = super::titles::row(parsed, &row.value, whole);
@@ -470,6 +496,18 @@ impl Normalizer<'_> {
             };
             if let Some(value) = value {
                 if scalar_whole && matches!(value, Scalar::Null | Scalar::Undefined) {
+                    // Vitest 3 leaves every directive literal for a nullish `test.for` item; 4 and
+                    // 5 render as with no argument. Only a file proved to run 4 or 5 is rendered;
+                    // a title without `%` or `$` reads the same on every major.
+                    if pattern.contains(['%', '$'])
+                        && !matches!(
+                            formatting,
+                            crate::framework::Formatting::Vitest4
+                                | crate::framework::Formatting::Vitest5
+                        )
+                    {
+                        return None;
+                    }
                     arguments.clear();
                     continue;
                 }
@@ -494,7 +532,14 @@ impl Normalizer<'_> {
                 }
             }
         }
-        (self.setting.dialect.render_values)(pattern, &arguments, fields.as_ref(), row.index, mode)
+        (self.setting.dialect.render_values)(
+            pattern,
+            &arguments,
+            fields.as_ref(),
+            row.index,
+            mode,
+            formatting,
+        )
     }
 
     /// Proves a primitive without evaluating arbitrary expressions or mutable objects.

@@ -42,7 +42,11 @@ engines or runs built with different toolchains.
 
 Owned test records carry declaration coordinates, an optional `registrationFile`, a rendered title
 when known, a zero-based written `row` when applicable, `comparable`, `exclusion`, `traceComplete` and
-`ordinaryEvents`. `comparisonKeys` contains the actual owned keys:
+`ordinaryEvents`. `unsupported` is `null`, or `{"feature":"title-rendering","vitest":…}` when a
+row title of the test or an enclosing table suite renders under the Vitest 5 rules but was refused
+for the file's major (`"3"`, `"4"`, `"unknown"` or `"unmeasured"`). It marks every row of that
+registration.
+`comparisonKeys` contains the actual owned keys:
 
 | Key | Comparison evidence |
 | --- | --- |

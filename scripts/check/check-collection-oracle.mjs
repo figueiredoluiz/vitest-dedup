@@ -37,7 +37,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { isDeepStrictEqual } from 'node:util'
-import { collectAnalyzer, collectBenchmarks, collectWithVitest, compareDirectory, compareSites, matchKnown, oracleBinary } from './lib/collection-oracle.mjs'
+import { collectAnalyzer, collectBenchmarks, collectWithVitest, compareDirectory, compareSites, declaredMajor, installedMajor, matchKnown, oracleBinary } from './lib/collection-oracle.mjs'
 import { judgeCase, readCases } from './lib/oracle-cases.mjs'
 import { cachedCollector } from './lib/oracle-vitest-cache.mjs'
 
@@ -169,7 +169,9 @@ function main() {
     totals.sites += located.sites
     totals.unexecuted += located.unexecuted
     foundSites.push(...located.disagreements.map((d) => ({ dir, ...d })))
-    const result = compareDirectory(vitest, analyzer.titles, collectBenchmarks(ROOT, dir))
+    const declared = declaredMajor(resolve(ROOT, dir))
+    const otherMajor = declared !== null && declared !== installedMajor(ROOT)
+    const result = compareDirectory(vitest, analyzer.titles, collectBenchmarks(ROOT, dir), { otherMajor })
     totals.files += result.compared.length
     totals.tests += result.testsCompared
     totals.unproven += result.testsUnproven

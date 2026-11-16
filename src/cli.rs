@@ -289,6 +289,18 @@ struct RawOptions {
     #[arg(long, global = true)]
     globals: bool,
 
+    /// The Vitest major (3, 4 or 5) of files whose installed or declared metadata names none.
+    ///
+    /// Parameterized titles are formatted differently by each major; without a known major, a
+    /// title is proved only where every major renders it alike.
+    #[arg(
+        long,
+        global = true,
+        value_name = "MAJOR",
+        value_parser = clap::value_parser!(u64).range(3..=5)
+    )]
+    vitest_major: Option<u64>,
+
     /// Stop reading files when retained engine state exceeds MIB mebibytes (default 2048),
     /// or when current process RSS exceeds the separate 1.5-times-budget backstop where supported.
     ///
@@ -341,6 +353,8 @@ pub struct ParsedArgs {
     pub fail_on_incomplete: Option<FailOnIncomplete>,
     /// Whether bare test-declaration identifiers should be treated as Vitest globals.
     pub globals: bool,
+    /// The Vitest major of files whose metadata names none (`--vitest-major`).
+    pub vitest_major: Option<u64>,
     /// Baseline file of already-accepted findings, when passed with `--baseline`.
     pub baseline: Option<PathBuf>,
     /// Whether the baseline file should be rewritten from this run (`--update-baseline`).
@@ -571,6 +585,7 @@ impl ParsedArgs {
             rule_overrides: cli.options.rule.into_iter().collect(),
             fail_on_incomplete: cli.options.fail_on_incomplete,
             globals: cli.options.globals,
+            vitest_major: cli.options.vitest_major,
             baseline: cli.options.baseline,
             baseline_from_ref: cli.options.baseline_from_ref,
             update_baseline: cli.options.update_baseline,

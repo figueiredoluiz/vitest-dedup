@@ -109,6 +109,9 @@ export function buildArguments(inputs) {
   if (inputs.globals !== undefined && !["", "false", "true"].includes(inputs.globals)) {
     throw new Error('invalid globals input; expected true, false, or empty');
   }
+  if (inputs.vitestMajor !== undefined && !["", "3", "4", "5"].includes(inputs.vitestMajor)) {
+    throw new Error('invalid vitest-major input; expected 3, 4, 5, or empty');
+  }
   if (
     inputs.failOnIncomplete !== undefined &&
     inputs.failOnIncomplete !== "" &&
@@ -150,6 +153,9 @@ export function buildArguments(inputs) {
   }
   if (inputs.globals === "true") {
     args.push("--globals");
+  }
+  if (inputs.vitestMajor) {
+    args.push("--vitest-major", inputs.vitestMajor);
   }
   // The CLI's selective modes read an `=`-value; "true" keeps the bare form for back-compat.
   if (inputs.failOnIncomplete === "true") {
@@ -806,6 +812,7 @@ async function analyze({ env, cwd }, state) {
     output: readInput(env, "output", "reports/vitest-dedup"),
     rule: readInput(env, "rule", ""),
     globals: readInput(env, "globals", "false"),
+    vitestMajor: readInput(env, "vitest-major", ""),
     noMetrics: readInput(env, "no-metrics", "false"),
     failOnIncomplete: readInput(env, "fail-on-incomplete", "false"),
     baseline: readInput(env, "baseline", ""),

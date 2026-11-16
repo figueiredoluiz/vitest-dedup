@@ -136,6 +136,7 @@ describe("buildArguments", () => {
       output: "",
       rule: "",
       globals: "",
+      vitestMajor: "",
       failOnIncomplete: "",
     });
     assert.deepEqual(args, ["--reporters", "terminal,json", "--", "."]);
@@ -150,6 +151,7 @@ describe("buildArguments", () => {
       output: "reports/out",
       rule: "duplicate-test=warning",
       globals: "true",
+      vitestMajor: "4",
       failOnIncomplete: "true",
     });
     assert.deepEqual(args, [
@@ -164,11 +166,19 @@ describe("buildArguments", () => {
       "--rule",
       "duplicate-test=warning",
       "--globals",
+      "--vitest-major",
+      "4",
       "--fail-on-incomplete",
       "--",
       "src",
     ]);
   });
+
+  for (const vitestMajor of ["2", "6", "4.1", " 4", "v4"]) {
+    test(`rejects invalid vitest-major ${JSON.stringify(vitestMajor)}`, () => {
+      assert.throws(() => buildArguments({ vitestMajor }), /invalid vitest-major input/);
+    });
+  }
 
   for (const path of ["--update-baseline", "-dash", "check", "with space"]) {
     test(`passes path ${JSON.stringify(path)} only after the delimiter`, () => {

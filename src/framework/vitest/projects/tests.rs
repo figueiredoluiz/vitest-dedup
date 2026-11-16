@@ -82,6 +82,7 @@ fn discovery_config(root: &Path) -> crate::config::Config {
         exclude: Vec::new(),
         rules: Default::default(),
         threshold: 0,
+        vitest_major: None,
         source: "test".to_owned(),
     }
 }

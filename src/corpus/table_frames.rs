@@ -23,6 +23,8 @@ pub(super) struct Frame {
     pub display: HashMap<NodeId, Option<String>>,
     /// Ancestor table declarations and their invocation ordinals.
     pub rows: Vec<(u32, usize)>,
+    /// The file's formatting, when an enclosing row title is not supported on it yet.
+    pub unsupported: Option<crate::framework::Formatting>,
 }
 
 impl Default for Frame {
@@ -37,6 +39,7 @@ impl Default for Frame {
             names: HashMap::new(),
             display: HashMap::new(),
             rows: Vec::new(),
+            unsupported: None,
         }
     }
 }
@@ -166,6 +169,7 @@ pub(super) fn around(
                     child.values.extend(values);
                     child.isolated |= isolated;
                 }
+                normalizer.take_unsupported_title();
                 child.names.insert(
                     call,
                     pattern.as_deref().and_then(|p| {
@@ -190,6 +194,7 @@ pub(super) fn around(
                         )
                     }),
                 );
+                child.unsupported = child.unsupported.or(normalizer.take_unsupported_title());
                 next.push(child);
             }
         }

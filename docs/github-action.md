@@ -27,7 +27,7 @@ the workflow only), and only then runs it.
 ## Inputs
 
 The inputs are `path`, `config`, `threshold`, `reporters`, `output`, `rule`, `globals`,
-`no-metrics`, `fail-on-incomplete`, `baseline`, `fail-on-new`, `changed-since`, `max-memory`,
+`vitest-major`, `no-metrics`, `fail-on-incomplete`, `baseline`, `fail-on-new`, `changed-since`, `max-memory`,
 `no-memory-cap`, `version`, and `token`.
 
 - `path` is the positional argument, passed last after `--`, so a value such as `-dir` or
@@ -36,6 +36,7 @@ The inputs are `path`, `config`, `threshold`, `reporters`, `output`, `rule`, `gl
 - Each of the others maps to the flag of the same name.
 - `globals` accepts `true`, `false`, or empty (including omission). Only `true` forces globals;
   the other accepted values preserve config detection. Other values fail before installation or analysis.
+- `vitest-major` accepts `3`, `4`, `5`, or empty. Other values fail before installation or analysis.
 - `fail-on-incomplete` accepts `false` or empty to leave strict failure disabled, `true` for
   `--fail-on-incomplete`, or `any`, `reads`, and `limits` for the corresponding `=mode` flag.
   Other values fail before installation or analysis. See [incomplete runs](incomplete-runs.md)

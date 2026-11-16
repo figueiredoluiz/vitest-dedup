@@ -15,12 +15,7 @@ fn owned_corpus(path: &str, source: &str) -> crate::corpus::FileCorpus {
     crate::corpus::file(
         &root.join(path),
         source,
-        crate::corpus::Setting {
-            dialect: &crate::framework::vitest::DIALECT,
-            globals: false,
-            root,
-            benchmarks: false,
-        },
+        crate::corpus::Setting::vitest5(root),
         &mut crate::corpus::Run::default(),
     )
     .unwrap()
@@ -60,6 +55,7 @@ fn case(line: u32, site: u32, key: u64, module_key: u64) -> TestCase {
         benchmark: false,
         iterations: 1,
         exclusion: None,
+        unsupported: None,
     }
 }
 
@@ -77,6 +73,7 @@ fn config_with(rules: &[(Rule, Severity)]) -> Config {
         exclude: Vec::new(),
         rules: rules.iter().copied().collect::<BTreeMap<_, _>>(),
         threshold: 100,
+        vitest_major: None,
         source: "test".to_owned(),
     }
 }

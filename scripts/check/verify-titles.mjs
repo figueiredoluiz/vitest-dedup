@@ -28,13 +28,15 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { spawnSync } from 'node:child_process'
-import { collectWithVitest } from './lib/collection-oracle.mjs'
+import { collectWithVitest, installedMajor } from './lib/collection-oracle.mjs'
 import { defaultBinary, runAnalyzerJsonl } from './lib/run-analyzer.mjs'
 
 const FIXTURE = 'scripts/vitest-harness/title-values.test.ts'
 const FIXTURE_DIR = 'scripts/vitest-harness'
 const IMPORTED_FIXTURE = 'scripts/vitest-harness/imported/imported.test.ts'
 const binary = process.argv[2] ?? defaultBinary()
+// Titles are rendered as the Vitest this harness collects with renders them.
+const MAJOR = ['--vitest-major', String(installedMajor(resolve('.')))]
 
 // Vitest is spawned as a module under this Node, not through the `.bin` shim: the shim is a
 // POSIX shell script, so on Windows or without its executable bit `spawnSync` would fail with a
@@ -125,7 +127,7 @@ rmSync(outDir, { recursive: true, force: true })
 // 2. The analyzer's rendering, over the same file.
 // `--emit-test-fingerprints` is what puts per-test records on the jsonl stream; without it the
 // run emits only the summary and the harness would compare against nothing.
-const { records, stderr } = runAnalyzerJsonl(binary, [FIXTURE_DIR, '--emit-test-fingerprints'])
+const { records, stderr } = runAnalyzerJsonl(binary, [FIXTURE_DIR, '--emit-test-fingerprints', ...MAJOR])
 // Keep the primary title fixture separate from the imported registration oracle below.
 const titleRecords = records.filter((record) => record.type === 'test' && record.path === 'title-values.test.ts')
 // Only a proven title is compared: a record whose title the analyzer did not prove
@@ -194,7 +196,7 @@ console.log(`ok: ${analyzerTitles.length} proven title(s) byte-match real Vitest
 
 // Imported runner registrations: Vitest runs every repeated call's tests, and the analyzer's count
 // is held against the calls it does not expand.
-const importedRun = runAnalyzerJsonl(binary, ['scripts/vitest-harness/imported', '--emit-test-fingerprints'])
+const importedRun = runAnalyzerJsonl(binary, ['scripts/vitest-harness/imported', '--emit-test-fingerprints', ...MAJOR])
 const importedTests = importedRun.records.filter((record) => record.type === 'test')
 const importedSummary = importedRun.records.find((record) => record.type === 'summary')
 // A runner that declares a suite is not expanded yet (suite frames need their own proof), so each
@@ -213,7 +215,7 @@ console.log(`ok: 7 imported-runner registrations by real Vitest ${installed}; ${
 const RENDERING_DIR = 'fixtures/oracle/name-collisions'
 const RENDERING_COLLISIONS = 8
 const collected = countTitles(collectWithVitest(resolve('.'), RENDERING_DIR).get('rendering.test.ts')?.tests ?? [])
-const collisions = runAnalyzerJsonl(binary, [RENDERING_DIR]).records
+const collisions = runAnalyzerJsonl(binary, [RENDERING_DIR, ...MAJOR]).records
   .filter((record) => record.type === 'finding' && record.rule === 'duplicate-test-name'
     && record.locations.every(({ path }) => path === 'rendering.test.ts'))
   .map((record) => record.titles[0])
@@ -234,7 +236,7 @@ if (!tables || tables.unprobed || tables.overlapping || tables.collectErrors.len
   throw new Error('Wrapped and sparse tables must collect 40 tests without errors or stubs')
 }
 const tableTitles = countTitles(tables.tests)
-const tableRecords = runAnalyzerJsonl(binary, [TABLES_DIR]).records
+const tableRecords = runAnalyzerJsonl(binary, [TABLES_DIR, ...MAJOR]).records
 const tableSummary = tableRecords.find((record) => record.type === 'summary')
 if (tableSummary?.testsAnalyzed !== 40 || tableSummary.unresolvedTests !== 0 || tableSummary.incomplete !== false) {
   throw new Error('The analyzer must analyze all 40 wrapped and sparse table tests without unresolved scope')

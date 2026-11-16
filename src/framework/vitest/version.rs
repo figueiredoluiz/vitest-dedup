@@ -2,10 +2,14 @@
 //!
 //! An installed `node_modules/vitest` above the file decides, as Node's resolution would; only
 //! when none is installed does the nearest `package.json` declaring `vitest` with a one-major
-//! range answer. Nothing outside the analysis root is read, and anything unreadable is unknown.
+//! range answer. Nothing outside the analysis root is read, and anything unreadable is unknown;
+//! a major the user supplies (`--vitest-major`) answers only for files whose metadata names none.
+//! A historical pass reads the same metadata from the committed tree only.
 
+use crate::lang::{SourceKind, SourceTree};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 /// The Vitest majors that export a top-level `bench`, as measured: 4.1.12 does, 5.0.5 does not.
 const BENCH_MAJORS: &[u64] = &[4];
@@ -16,23 +20,46 @@ pub struct Majors {
     root: PathBuf,
     installed: HashMap<PathBuf, Option<Answer>>,
     declared: HashMap<PathBuf, Option<Answer>>,
+    fallback: Option<u64>,
+    tree: Option<Arc<dyn SourceTree>>,
 }
 
 /// What one directory's metadata says: a major, or present but unreadable.
 type Answer = Option<u64>;
 
 impl Majors {
-    /// Answers for files under `root`.
-    pub fn new(root: &Path) -> Self {
+    /// Answers for files under `root`; `fallback` answers where metadata proves no major.
+    pub fn new(root: &Path, fallback: Option<u64>) -> Self {
         Self {
             root: root.to_path_buf(),
             installed: HashMap::new(),
             declared: HashMap::new(),
+            fallback,
+            tree: None,
         }
     }
 
-    /// The major of the `vitest` that `file` imports, when its metadata proves one.
+    /// As [`Self::new`], reading metadata from a committed tree and never from the working tree.
+    pub fn committed(root: &Path, fallback: Option<u64>, tree: Arc<dyn SourceTree>) -> Self {
+        Self {
+            tree: Some(tree),
+            ..Self::new(root, fallback)
+        }
+    }
+
+    /// The major of the `vitest` that `file` imports, when its metadata proves one, else the
+    /// fallback.
     pub fn of(&mut self, file: &Path) -> Option<u64> {
+        self.metadata(file).or(self.fallback)
+    }
+
+    /// How the `vitest` that `file` imports formats row titles.
+    pub fn formatting(&mut self, file: &Path) -> crate::framework::Formatting {
+        crate::framework::Formatting::of(self.of(file))
+    }
+
+    /// The major `file`'s metadata proves, ignoring the fallback.
+    fn metadata(&mut self, file: &Path) -> Option<u64> {
         let directory = file.parent()?;
         match self.nearest(directory, Source::Installed) {
             Some(answer) => answer,
@@ -59,7 +86,7 @@ impl Majors {
         if let Some(answer) = cache.get(directory) {
             return *answer;
         }
-        let answer = source.read(directory).or_else(|| {
+        let answer = source.read(directory, self.tree.as_deref()).or_else(|| {
             directory
                 .parent()
                 .and_then(|parent| self.nearest(parent, source))
@@ -83,18 +110,28 @@ enum Source {
 }
 
 impl Source {
-    /// This directory's answer, `None` when it has no such metadata.
-    fn read(self, directory: &Path) -> Option<Answer> {
+    /// This directory's answer, from `tree` when given, `None` when it has no such metadata.
+    fn read(self, directory: &Path, tree: Option<&dyn SourceTree>) -> Option<Answer> {
         let path = match self {
             Self::Installed => directory.join("node_modules/vitest/package.json"),
             Self::Declared => directory.join("package.json"),
         };
-        if std::fs::symlink_metadata(&path).is_err() {
-            return None;
-        }
-        let manifest = crate::package_json::read(&path)
-            .ok()
-            .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok());
+        let text = match tree {
+            None => {
+                std::fs::symlink_metadata(&path).ok()?;
+                crate::package_json::read(&path).ok()
+            }
+            // A committed link or directory is present but unreadable, as on disk.
+            Some(tree) => match tree.kind(&path)? {
+                SourceKind::File => tree
+                    .read(&path)
+                    .ok()
+                    .filter(|bytes| bytes.len() as u64 <= crate::package_json::MAX_BYTES)
+                    .and_then(|bytes| String::from_utf8(bytes).ok()),
+                _ => None,
+            },
+        };
+        let manifest = text.and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok());
         let Some(manifest) = manifest else {
             // Present but unreadable: the nearest metadata says nothing provable.
             return Some(None);
@@ -181,16 +218,19 @@ mod tests {
         }
     }
 
+    /// Writes `text` at `relative` under `root`, creating its directories.
+    fn put(root: &std::path::Path, relative: &str, text: &str) {
+        let path = root.join(relative);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, text).unwrap();
+    }
+
     /// An installed package decides over any declaration; without one, the nearest declaration
     /// does; outside the root, or unreadable, nothing is known.
     #[test]
     fn installed_wins_then_the_nearest_declaration() {
         let root = tempfile::tempdir().unwrap();
-        let write = |relative: &str, text: &str| {
-            let path = root.path().join(relative);
-            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-            std::fs::write(path, text).unwrap();
-        };
+        let write = |relative: &str, text: &str| put(root.path(), relative, text);
         write("package.json", r#"{"devDependencies":{"vitest":"^5.0.0"}}"#);
         write(
             "a/package.json",
@@ -198,20 +238,138 @@ mod tests {
         );
         write("a/x.bench.ts", "");
         write("b/x.bench.ts", "");
-        let mut majors = Majors::new(root.path());
+        let mut majors = Majors::new(root.path(), None);
         assert_eq!(majors.of(&root.path().join("a/x.bench.ts")), Some(4));
         assert_eq!(majors.of(&root.path().join("b/x.bench.ts")), Some(5));
         assert!(majors.exports_bench(&root.path().join("a/x.bench.ts")));
         assert!(!majors.exports_bench(&root.path().join("b/x.bench.ts")));
 
         write("node_modules/vitest/package.json", r#"{"version":"5.0.5"}"#);
-        let mut majors = Majors::new(root.path());
+        let mut majors = Majors::new(root.path(), None);
         assert_eq!(majors.of(&root.path().join("a/x.bench.ts")), Some(5));
         write("node_modules/vitest/package.json", "not json");
-        let mut majors = Majors::new(root.path());
+        let mut majors = Majors::new(root.path(), None);
         assert_eq!(majors.of(&root.path().join("a/x.bench.ts")), None);
 
-        let mut outside = Majors::new(&root.path().join("a"));
+        let mut outside = Majors::new(&root.path().join("a"), None);
         assert_eq!(outside.of(&root.path().join("b/x.bench.ts")), None);
+    }
+
+    /// A supplied major answers only where metadata proves none: unreadable, absent or outside.
+    #[test]
+    fn the_fallback_answers_only_without_metadata() {
+        let root = tempfile::tempdir().unwrap();
+        let write = |relative: &str, text: &str| put(root.path(), relative, text);
+        write(
+            "a/package.json",
+            r#"{"devDependencies":{"vitest":"^4.1.0"}}"#,
+        );
+        write(
+            "b/package.json",
+            r#"{"devDependencies":{"vitest":"catalog:"}}"#,
+        );
+        let mut majors = Majors::new(root.path(), Some(3));
+        assert_eq!(majors.of(&root.path().join("a/x.test.ts")), Some(4));
+        assert_eq!(majors.of(&root.path().join("b/x.test.ts")), Some(3));
+        assert_eq!(majors.of(&root.path().join("c/x.test.ts")), Some(3));
+        assert_eq!(
+            majors.formatting(&root.path().join("a/x.test.ts")),
+            crate::framework::Formatting::Vitest4
+        );
+        assert_eq!(
+            Majors::new(root.path(), None).formatting(&root.path().join("c/x.test.ts")),
+            crate::framework::Formatting::Unknown
+        );
+    }
+
+    /// A committed tree whose entries are listed by path.
+    #[derive(Debug)]
+    struct Committed(HashMap<PathBuf, (SourceKind, Vec<u8>)>);
+
+    impl SourceTree for Committed {
+        /// The listed bytes, or not found.
+        fn read(&self, path: &Path) -> std::io::Result<Vec<u8>> {
+            self.0
+                .get(path)
+                .map(|(_, bytes)| bytes.clone())
+                .ok_or(std::io::ErrorKind::NotFound.into())
+        }
+        /// The listed kind; anything unlisted is absent.
+        fn kind(&self, path: &Path) -> Option<SourceKind> {
+            self.0.get(path).map(|(kind, _)| *kind)
+        }
+        /// Listed paths are already canonical.
+        fn canonicalize(&self, path: &Path) -> std::io::Result<PathBuf> {
+            Ok(path.to_owned())
+        }
+        /// Unused by version reads.
+        fn reject(&self, _: String) {}
+        /// Unused by version reads.
+        fn configuration_gap(&self) {}
+        /// Unused by version reads.
+        fn unresolved_package(&self, _: &str) {}
+        /// Unused by version reads.
+        fn retained_bytes(&self) -> usize {
+            0
+        }
+    }
+
+    /// A committed pass reads only the tree: working files are ignored, and a committed
+    /// directory, oversized or non-UTF-8 manifest is present but unreadable, so it stops the walk.
+    #[test]
+    fn a_committed_tree_answers_without_the_working_tree() {
+        let root = tempfile::tempdir().unwrap();
+        put(
+            root.path(),
+            "f/node_modules/vitest/package.json",
+            r#"{"version":"3.0.0"}"#,
+        );
+        put(
+            root.path(),
+            "a/package.json",
+            r#"{"devDependencies":{"vitest":"^3.0.0"}}"#,
+        );
+        let file = |text: &str| (SourceKind::File, text.as_bytes().to_vec());
+        // Valid JSON naming a major, so only the size limit makes it unreadable.
+        let mut oversized = br#"{"devDependencies":{"vitest":"^3.0.0"}}"#.to_vec();
+        oversized.resize(crate::package_json::MAX_BYTES as usize + 1, b' ');
+        let entries = [
+            (
+                "package.json",
+                file(r#"{"devDependencies":{"vitest":"^5.0.0"}}"#),
+            ),
+            (
+                "a/package.json",
+                file(r#"{"devDependencies":{"vitest":"^4.0.0"}}"#),
+            ),
+            ("b/package.json", (SourceKind::Directory, Vec::new())),
+            ("d/package.json", (SourceKind::File, oversized)),
+            ("e/package.json", (SourceKind::File, vec![0xff])),
+        ];
+        let tree = Committed(
+            entries
+                .into_iter()
+                .map(|(relative, entry)| (root.path().join(relative), entry))
+                .collect(),
+        );
+        let mut majors = Majors::committed(root.path(), None, Arc::new(tree));
+        let mut of = |directory: &str| majors.of(&root.path().join(directory).join("x.test.ts"));
+        assert_eq!(of("a"), Some(4));
+        assert_eq!(of("c"), Some(5));
+        assert_eq!(of("f"), Some(5));
+        for unreadable in ["b", "d", "e"] {
+            assert_eq!(of(unreadable), None, "{unreadable}");
+        }
+    }
+
+    /// The stub's remaining trait methods are inert, so version reads cannot depend on them.
+    #[test]
+    fn the_committed_stub_is_inert_outside_reads() {
+        let tree = Committed(HashMap::new());
+        tree.reject(String::new());
+        tree.configuration_gap();
+        tree.unresolved_package("vitest");
+        assert_eq!(tree.retained_bytes(), 0);
+        assert_eq!(tree.canonicalize(Path::new("a")).unwrap(), Path::new("a"));
     }
 }
