@@ -63,7 +63,7 @@ fn render_with(
 /// Renders typed row inputs without conflating unknown, undefined, number or bigint values, as
 /// `formatting` renders them. Vitest 3 and 4 render alike, except that 3 reads `$` after `%`
 /// substitution, leaves a directive past the last argument literal, appends items a literal or
-/// unknown `%` counts and, before 3.1, leaves a positional `$0` literal, all refused, and a nullish
+/// unknown `%` counts and, before 3.1, leaves `%$` and a positional `$0` literal, all refused, and a nullish
 /// `test.for` item, which the caller refuses.
 pub(super) fn render_values(
     pattern: &str,
@@ -90,8 +90,8 @@ pub(super) fn render_values(
 /// [`render_values`] in one form: `inspect` is how Vitest 3 and 4 interpolate `$` and `%o`;
 /// `vitest3` refuses what Vitest 3 renders apart from 4: a `%` substitution in a title with a `$`,
 /// which 3 reads after substituting, one past the last argument, which 3 leaves literal, a row
-/// item that a literal or unknown `%` makes 3 append, and a positional `$0`, which 3.0 leaves
-/// literal.
+/// item that a literal or unknown `%` makes 3 append, and `%$` and positional `$0`, which 3.0
+/// leaves literal.
 fn render_form(
     pattern: &str,
     arguments: &[Option<TitleValue>],
@@ -117,9 +117,19 @@ fn render_form(
         return None;
     }
     // Substituted first, so these can spell a `$` key.
-    let pattern = pattern
-        .replace("%#", &index.to_string())
-        .replace("%$", &(index + 1).to_string());
+    let pattern = pattern.replace("%#", &index.to_string());
+    // Vitest 3.1 added `%$` and positional `$0` keys; 3.0 leaves both literal, and only the major
+    // is known. A `$` before a digit is refused even where it would name a key such as `$0a`.
+    if vitest3
+        && (pattern.contains("%$")
+            || pattern
+                .as_bytes()
+                .windows(2)
+                .any(|pair| pair[0] == b'$' && pair[1].is_ascii_digit()))
+    {
+        return None;
+    }
+    let pattern = pattern.replace("%$", &(index + 1).to_string());
     let chars: Vec<char> = pattern.chars().collect();
     let mut text = String::new();
     let mut cursor = 0;
@@ -190,10 +200,7 @@ fn render_form(
                 }
                 let value = if field.bytes().all(|byte| byte.is_ascii_digit()) {
                     // `$01` is a key no item has; an object first item answers before position.
-                    // Vitest 3.0 leaves a positional key literal and 3.1 substitutes it, and only
-                    // the major is known.
-                    if vitest3
-                        || (field.len() > 1 && field.starts_with('0'))
+                    if (field.len() > 1 && field.starts_with('0'))
                         || matches!(
                             arguments.first(),
                             Some(None | Some(TitleValue::Json(Value::Object(_))))

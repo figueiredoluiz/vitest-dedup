@@ -48,3 +48,7 @@ test.each([['x']])('$0%s', (v) => { expect(v).toHaveLength(1) })
 // Vitest 3.0 leaves a positional `$0` literal and later 3.x releases substitute it.
 test("case 'x'", () => { expect(16).toBe(16) })
 test.each([['x']])('case $0', (v) => { expect(v).toBe('x') })
+
+// Vitest 3.0 leaves `%$` literal and appends the row; later releases print the 1-based index.
+test("idx 1 'abc'", () => { expect(17).toBe(17) })
+test.each([{ v: 'abc' }])('idx %$ $v', ({ v }) => { expect(v).toBe('abc') })

@@ -89,9 +89,9 @@ substitution, so a title with both is refused there; it leaves a directive past 
 literal where 4 and 5 insert `undefined`, appends a row item that a literal or unknown `%` counts
 but no directive reads (`100% $v` collects as `100% 'abc' { v: 'abc' }`), and leaves every
 directive literal for a `test.for` row of `null` or `undefined`; these titles are refused there, as
-is a positional `$0`, which Vitest 3.0 leaves literal and 3.1 substitutes. A file whose major is
-unknown (see [Vitest major](configuration.md#vitest-major)) keeps a rendered title only where these
-forms agree; a major outside 3–5 keeps only titles without `$` or `%`. With
+are `%$` and a positional `$0`, which Vitest 3.0 leaves literal and 3.1 substitutes. A file whose
+major is unknown (see [Vitest major](configuration.md#vitest-major)) keeps a rendered title only
+where these forms agree; a major outside 3–5 keeps only titles without `$` or `%`. With
 `--emit-test-fingerprints`, a test whose title was refused only for its major is marked
 `unsupported` (see [Diagnostic records](reports/diagnostic-records.md)).
 

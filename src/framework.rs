@@ -160,7 +160,8 @@ pub enum TitleMode {
 pub enum Formatting {
     /// Vitest 3: as 4, except that a nullish `test.for` item leaves every directive literal, a
     /// directive past the last argument stays literal, `$` is read after `%` substitution, and
-    /// a positional `$0` is not proved, since 3.0 leaves it literal and 3.1 substitutes it.
+    /// `%$` and a positional `$0` are not proved, since 3.0 leaves them literal and 3.1
+    /// substitutes them.
     Vitest3,
     /// Vitest 4: `$` values and `%o` pass through `inspect`, so strings are quoted and `0` is `+0`.
     Vitest4,
