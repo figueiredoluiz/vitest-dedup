@@ -3761,7 +3761,7 @@ mod tests {
             let tests = records_of(&lines, "test");
             assert_eq!(
                 tests.len(),
-                21,
+                23,
                 "{fixture}: every collected test has a record"
             );
             tests
@@ -3782,11 +3782,11 @@ mod tests {
                 .map(|&line| (line, vitest.to_owned()))
                 .collect::<std::collections::BTreeSet<_>>()
         };
-        assert_eq!(unsupported("titles-vitest3"), on("3", &[16, 24, 38]));
+        assert_eq!(unsupported("titles-vitest3"), on("3", &[16, 24, 38, 42]));
         assert_eq!(unsupported("titles-vitest4"), on("4", &[]));
         assert_eq!(
             unsupported("titles-major-unknown"),
-            on("unknown", &[6, 11, 16, 24, 28, 38])
+            on("unknown", &[6, 11, 16, 24, 28, 38, 42])
         );
         // An enclosing table suite's refused title marks the tests inside it.
         let root = single_file_project(

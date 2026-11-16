@@ -12181,7 +12181,7 @@
       "origin": "synthetic",
       "verdict": "generated",
       "classifiedAt": "2026-11-16",
-      "expectedTests": 21,
+      "expectedTests": 23,
       "expectedIncomplete": false,
       "expectedUnresolved": 0,
       "expectedFindings": [
@@ -12250,6 +12250,13 @@
         {
           "rule": "duplicate-test-name",
           "titles": [
+            "pct 100% 'abc'",
+            "pct 100% 'abc'"
+          ]
+        },
+        {
+          "rule": "duplicate-test-name",
+          "titles": [
             "over abc undefined",
             "over abc undefined"
           ]
@@ -12310,10 +12317,22 @@
       "origin": "synthetic",
       "verdict": "generated",
       "classifiedAt": "2026-11-16",
-      "expectedTests": 21,
+      "expectedTests": 23,
       "expectedIncomplete": false,
       "expectedUnresolved": 0,
       "expectedFindings": [
+        {
+          "rule": "duplicate-test-name",
+          "severity": "warning",
+          "titles": [
+            "pct 100% 'abc'",
+            "pct 100% 'abc'"
+          ],
+          "locations": [
+            "titles.test.ts:41",
+            "titles.test.ts:42"
+          ]
+        },
         {
           "rule": "duplicate-test-name",
           "severity": "warning",
@@ -12543,7 +12562,7 @@
       "origin": "synthetic",
       "verdict": "generated",
       "classifiedAt": "2026-11-16",
-      "expectedTests": 21,
+      "expectedTests": 23,
       "expectedIncomplete": false,
       "expectedUnresolved": 0,
       "expectedFindings": [
@@ -12585,6 +12604,13 @@
         }
       ],
       "expectedAbsent": [
+        {
+          "rule": "duplicate-test-name",
+          "titles": [
+            "pct 100% 'abc'",
+            "pct 100% 'abc'"
+          ]
+        },
         {
           "rule": "duplicate-test-name",
           "titles": [

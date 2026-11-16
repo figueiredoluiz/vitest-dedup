@@ -36,3 +36,7 @@ test('plain', () => { expect(12).toBe(12) })
 // Vitest 3 leaves a directive past the last argument literal; 4 and 5 insert `undefined`.
 test('over abc undefined', () => { expect(13).toBe(13) })
 test.each([['abc']])('over %s %s', (v) => { expect(v).toHaveLength(3) })
+
+// Vitest 3 appends a row item a literal `%` counts; 4 and 5 do not.
+test("pct 100% 'abc'", () => { expect(14).toBe(14) })
+test.each([{ v: 'abc' }])('pct 100% $v', ({ v }) => { expect(v.length).toBe(3) })

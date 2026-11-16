@@ -62,8 +62,9 @@ fn render_with(
 
 /// Renders typed row inputs without conflating unknown, undefined, number or bigint values, as
 /// `formatting` renders them. Vitest 3 and 4 render alike, except that 3 interpolates `$` again in
-/// what a `%` directive inserted and leaves a directive past the last argument literal, both
-/// refused, and a nullish `test.for` item, which the caller refuses.
+/// what a `%` directive inserted, leaves a directive past the last argument literal and appends
+/// items a literal or unknown `%` counts, all refused, and a nullish `test.for` item, which the
+/// caller refuses.
 pub(super) fn render_values(
     pattern: &str,
     arguments: &[Option<TitleValue>],
@@ -88,7 +89,8 @@ pub(super) fn render_values(
 
 /// [`render_values`] in one form: `inspect` is how Vitest 3 and 4 interpolate `$` and `%o`;
 /// `vitest3` refuses what Vitest 3 renders apart from 4: a `%` directive that inserts a `$`, which
-/// 3 interpolates again, and one past the last argument, which 3 leaves literal.
+/// 3 interpolates again, one past the last argument, which 3 leaves literal, and a row item that
+/// a literal or unknown `%` makes 3 append.
 fn render_form(
     pattern: &str,
     arguments: &[Option<TitleValue>],
@@ -218,6 +220,11 @@ fn render_form(
         }
         text.push(c);
         position += 1;
+    }
+    // Vitest 3 passes one item per `%` left after `%#` and `%$`, literal or not, and appends each
+    // of those no directive consumed: `100% $v` collects as `100% 'abc' { v: 'abc' }` there.
+    if vitest3 && arguments.len().min(pattern.matches('%').count()) > cursor {
+        return None;
     }
     (text.len() <= MAX_TEXT_BYTES).then(|| crate::lang::text::canonical(text))
 }
