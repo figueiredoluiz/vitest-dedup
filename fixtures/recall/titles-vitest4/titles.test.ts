@@ -44,3 +44,7 @@ test.each([{ v: 'abc' }])('pct 100% $v', ({ v }) => { expect(v.length).toBe(3) }
 // Vitest 3 reads `$` after `%` substitution: `$0%s` of `x` collects as `$0x` there.
 test("'x'x", () => { expect(15).toBe(15) })
 test.each([['x']])('$0%s', (v) => { expect(v).toHaveLength(1) })
+
+// Vitest 3.0 leaves a positional `$0` literal and later 3.x releases substitute it.
+test("case 'x'", () => { expect(16).toBe(16) })
+test.each([['x']])('case $0', (v) => { expect(v).toBe('x') })

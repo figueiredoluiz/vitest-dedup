@@ -12181,7 +12181,7 @@
       "origin": "synthetic",
       "verdict": "generated",
       "classifiedAt": "2026-11-16",
-      "expectedTests": 25,
+      "expectedTests": 27,
       "expectedIncomplete": false,
       "expectedUnresolved": 0,
       "expectedFindings": [
@@ -12247,6 +12247,13 @@
         }
       ],
       "expectedAbsent": [
+        {
+          "rule": "duplicate-test-name",
+          "titles": [
+            "case 'x'",
+            "case 'x'"
+          ]
+        },
         {
           "rule": "duplicate-test-name",
           "titles": [
@@ -12324,10 +12331,22 @@
       "origin": "synthetic",
       "verdict": "generated",
       "classifiedAt": "2026-11-16",
-      "expectedTests": 25,
+      "expectedTests": 27,
       "expectedIncomplete": false,
       "expectedUnresolved": 0,
       "expectedFindings": [
+        {
+          "rule": "duplicate-test-name",
+          "severity": "warning",
+          "titles": [
+            "case 'x'",
+            "case 'x'"
+          ],
+          "locations": [
+            "titles.test.ts:49",
+            "titles.test.ts:50"
+          ]
+        },
         {
           "rule": "duplicate-test-name",
           "severity": "warning",
@@ -12581,7 +12600,7 @@
       "origin": "synthetic",
       "verdict": "generated",
       "classifiedAt": "2026-11-16",
-      "expectedTests": 25,
+      "expectedTests": 27,
       "expectedIncomplete": false,
       "expectedUnresolved": 0,
       "expectedFindings": [
@@ -12623,6 +12642,13 @@
         }
       ],
       "expectedAbsent": [
+        {
+          "rule": "duplicate-test-name",
+          "titles": [
+            "case 'x'",
+            "case 'x'"
+          ]
+        },
         {
           "rule": "duplicate-test-name",
           "titles": [

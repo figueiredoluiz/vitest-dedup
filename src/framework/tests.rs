@@ -500,8 +500,9 @@ fn hostile_titles() -> (impl Fn() -> Option<String>, impl Fn() -> Option<String>
 }
 
 /// `$` and `%o` titles as each major collected them (Vitest 3.2.7, 4.1.12, 5.1.0): 4 and 3 quote and
-/// escape strings through `inspect` and spell `0` as `+0`; an unknown major proves only titles
-/// every major renders alike, and an unmeasured one none with a substitution.
+/// escape strings through `inspect` and spell `0` as `+0`, except a positional `$0`, which 3.0
+/// leaves literal; an unknown major proves only titles every major renders alike, and an
+/// unmeasured one none with a substitution.
 #[test]
 fn titles_render_as_each_major_collects_them() {
     use super::{Formatting, TitleMode, TitleValue};
@@ -610,9 +611,11 @@ fn titles_render_as_each_major_collects_them() {
             four,
             "{pattern} {value} on 4"
         );
+        // Vitest 3.0 leaves a positional `$0` literal and 3.1 substitutes it.
+        let three = if pattern == "$0" { None } else { four.clone() };
         assert_eq!(
             comparison(pattern, value.clone(), Formatting::Vitest3),
-            four,
+            three,
             "{pattern} {value} on 3"
         );
         let agreed = if five == four { five.clone() } else { None };

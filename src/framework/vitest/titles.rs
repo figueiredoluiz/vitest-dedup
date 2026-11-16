@@ -62,9 +62,9 @@ fn render_with(
 
 /// Renders typed row inputs without conflating unknown, undefined, number or bigint values, as
 /// `formatting` renders them. Vitest 3 and 4 render alike, except that 3 reads `$` after `%`
-/// substitution, leaves a directive past the last argument literal and appends
-/// items a literal or unknown `%` counts, all refused, and a nullish `test.for` item, which the
-/// caller refuses.
+/// substitution, leaves a directive past the last argument literal, appends items a literal or
+/// unknown `%` counts and, before 3.1, leaves a positional `$0` literal, all refused, and a nullish
+/// `test.for` item, which the caller refuses.
 pub(super) fn render_values(
     pattern: &str,
     arguments: &[Option<TitleValue>],
@@ -89,8 +89,9 @@ pub(super) fn render_values(
 
 /// [`render_values`] in one form: `inspect` is how Vitest 3 and 4 interpolate `$` and `%o`;
 /// `vitest3` refuses what Vitest 3 renders apart from 4: a `%` substitution in a title with a `$`,
-/// which 3 reads after substituting, one past the last argument, which 3 leaves literal, and a row
-/// item that a literal or unknown `%` makes 3 append.
+/// which 3 reads after substituting, one past the last argument, which 3 leaves literal, a row
+/// item that a literal or unknown `%` makes 3 append, and a positional `$0`, which 3.0 leaves
+/// literal.
 fn render_form(
     pattern: &str,
     arguments: &[Option<TitleValue>],
@@ -189,7 +190,10 @@ fn render_form(
                 }
                 let value = if field.bytes().all(|byte| byte.is_ascii_digit()) {
                     // `$01` is a key no item has; an object first item answers before position.
-                    if (field.len() > 1 && field.starts_with('0'))
+                    // Vitest 3.0 leaves a positional key literal and 3.1 substitutes it, and only
+                    // the major is known.
+                    if vitest3
+                        || (field.len() > 1 && field.starts_with('0'))
                         || matches!(
                             arguments.first(),
                             Some(None | Some(TitleValue::Json(Value::Object(_))))
