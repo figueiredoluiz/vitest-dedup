@@ -281,4 +281,95 @@ mod tests {
             crate::framework::Formatting::Unknown
         );
     }
+
+    /// A committed tree whose entries are listed by path.
+    #[derive(Debug)]
+    struct Committed(HashMap<PathBuf, (SourceKind, Vec<u8>)>);
+
+    impl SourceTree for Committed {
+        /// The listed bytes, or not found.
+        fn read(&self, path: &Path) -> std::io::Result<Vec<u8>> {
+            self.0
+                .get(path)
+                .map(|(_, bytes)| bytes.clone())
+                .ok_or(std::io::ErrorKind::NotFound.into())
+        }
+        /// The listed kind; anything unlisted is absent.
+        fn kind(&self, path: &Path) -> Option<SourceKind> {
+            self.0.get(path).map(|(kind, _)| *kind)
+        }
+        /// Listed paths are already canonical.
+        fn canonicalize(&self, path: &Path) -> std::io::Result<PathBuf> {
+            Ok(path.to_owned())
+        }
+        /// Unused by version reads.
+        fn reject(&self, _: String) {}
+        /// Unused by version reads.
+        fn configuration_gap(&self) {}
+        /// Unused by version reads.
+        fn unresolved_package(&self, _: &str) {}
+        /// Unused by version reads.
+        fn retained_bytes(&self) -> usize {
+            0
+        }
+    }
+
+    /// A committed pass reads only the tree: working files are ignored, and a committed
+    /// directory, oversized or non-UTF-8 manifest is present but unreadable, so it stops the walk.
+    #[test]
+    fn a_committed_tree_answers_without_the_working_tree() {
+        let root = tempfile::tempdir().unwrap();
+        put(
+            root.path(),
+            "f/node_modules/vitest/package.json",
+            r#"{"version":"3.0.0"}"#,
+        );
+        put(
+            root.path(),
+            "a/package.json",
+            r#"{"devDependencies":{"vitest":"^3.0.0"}}"#,
+        );
+        let file = |text: &str| (SourceKind::File, text.as_bytes().to_vec());
+        // Valid JSON naming a major, so only the size limit makes it unreadable.
+        let mut oversized = br#"{"devDependencies":{"vitest":"^3.0.0"}}"#.to_vec();
+        oversized.resize(crate::package_json::MAX_BYTES as usize + 1, b' ');
+        let entries = [
+            (
+                "package.json",
+                file(r#"{"devDependencies":{"vitest":"^5.0.0"}}"#),
+            ),
+            (
+                "a/package.json",
+                file(r#"{"devDependencies":{"vitest":"^4.0.0"}}"#),
+            ),
+            ("b/package.json", (SourceKind::Directory, Vec::new())),
+            ("d/package.json", (SourceKind::File, oversized)),
+            ("e/package.json", (SourceKind::File, vec![0xff])),
+        ];
+        let tree = Committed(
+            entries
+                .into_iter()
+                .map(|(relative, entry)| (root.path().join(relative), entry))
+                .collect(),
+        );
+        let mut majors = Majors::committed(root.path(), None, Arc::new(tree));
+        let mut of = |directory: &str| majors.of(&root.path().join(directory).join("x.test.ts"));
+        assert_eq!(of("a"), Some(4));
+        assert_eq!(of("c"), Some(5));
+        assert_eq!(of("f"), Some(5));
+        for unreadable in ["b", "d", "e"] {
+            assert_eq!(of(unreadable), None, "{unreadable}");
+        }
+    }
+
+    /// The stub's remaining trait methods are inert, so version reads cannot depend on them.
+    #[test]
+    fn the_committed_stub_is_inert_outside_reads() {
+        let tree = Committed(HashMap::new());
+        tree.reject(String::new());
+        tree.configuration_gap();
+        tree.unresolved_package("vitest");
+        assert_eq!(tree.retained_bytes(), 0);
+        assert_eq!(tree.canonicalize(Path::new("a")).unwrap(), Path::new("a"));
+    }
 }
