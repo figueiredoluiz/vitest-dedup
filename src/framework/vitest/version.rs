@@ -4,9 +4,12 @@
 //! when none is installed does the nearest `package.json` declaring `vitest` with a one-major
 //! range answer. Nothing outside the analysis root is read, and anything unreadable is unknown;
 //! a major the user supplies (`--vitest-major`) answers only for files whose metadata names none.
+//! A historical pass reads the same metadata from the committed tree only.
 
+use crate::lang::{SourceKind, SourceTree};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 /// The Vitest majors that export a top-level `bench`, as measured: 4.1.12 does, 5.0.5 does not.
 const BENCH_MAJORS: &[u64] = &[4];
@@ -18,6 +21,7 @@ pub struct Majors {
     installed: HashMap<PathBuf, Option<Answer>>,
     declared: HashMap<PathBuf, Option<Answer>>,
     fallback: Option<u64>,
+    tree: Option<Arc<dyn SourceTree>>,
 }
 
 /// What one directory's metadata says: a major, or present but unreadable.
@@ -31,6 +35,15 @@ impl Majors {
             installed: HashMap::new(),
             declared: HashMap::new(),
             fallback,
+            tree: None,
+        }
+    }
+
+    /// As [`Self::new`], reading metadata from a committed tree and never from the working tree.
+    pub fn committed(root: &Path, fallback: Option<u64>, tree: Arc<dyn SourceTree>) -> Self {
+        Self {
+            tree: Some(tree),
+            ..Self::new(root, fallback)
         }
     }
 
@@ -73,7 +86,7 @@ impl Majors {
         if let Some(answer) = cache.get(directory) {
             return *answer;
         }
-        let answer = source.read(directory).or_else(|| {
+        let answer = source.read(directory, self.tree.as_deref()).or_else(|| {
             directory
                 .parent()
                 .and_then(|parent| self.nearest(parent, source))
@@ -97,18 +110,28 @@ enum Source {
 }
 
 impl Source {
-    /// This directory's answer, `None` when it has no such metadata.
-    fn read(self, directory: &Path) -> Option<Answer> {
+    /// This directory's answer, from `tree` when given, `None` when it has no such metadata.
+    fn read(self, directory: &Path, tree: Option<&dyn SourceTree>) -> Option<Answer> {
         let path = match self {
             Self::Installed => directory.join("node_modules/vitest/package.json"),
             Self::Declared => directory.join("package.json"),
         };
-        if std::fs::symlink_metadata(&path).is_err() {
-            return None;
-        }
-        let manifest = crate::package_json::read(&path)
-            .ok()
-            .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok());
+        let text = match tree {
+            None => {
+                std::fs::symlink_metadata(&path).ok()?;
+                crate::package_json::read(&path).ok()
+            }
+            // A committed link or directory is present but unreadable, as on disk.
+            Some(tree) => match tree.kind(&path)? {
+                SourceKind::File => tree
+                    .read(&path)
+                    .ok()
+                    .filter(|bytes| bytes.len() as u64 <= crate::package_json::MAX_BYTES)
+                    .and_then(|bytes| String::from_utf8(bytes).ok()),
+                _ => None,
+            },
+        };
+        let manifest = text.and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok());
         let Some(manifest) = manifest else {
             // Present but unreadable: the nearest metadata says nothing provable.
             return Some(None);

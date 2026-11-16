@@ -181,7 +181,8 @@ vitest-dedup . --vitest-major 4
 ```
 
 It accepts 3, 4 or 5 and applies only to files whose metadata names no major. Without it, such a
-title is proved only where every major renders it alike.
+title is proved only where every major renders it alike. `--baseline-from-ref` reads the base
+revision's major from its committed metadata in the same order, never from the working tree.
 
 ## Runs that analyze no tests
 

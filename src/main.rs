@@ -346,6 +346,12 @@ fn run_with_engine(
             );
             let mut base_suppressions = Vec::new();
             let mut base_helper_sources = BTreeSet::new();
+            // Titles render as the base revision's own committed Vitest major.
+            let mut base_majors = vitest_dedup::framework::vitest::version::Majors::committed(
+                &config.root,
+                args.vitest_major.or(config.vitest_major),
+                revision_files.clone(),
+            );
             // One base file is held at a time; the roof stops the read, not only the extraction.
             let unread = modes::revision_sources(
                 &config.root,
@@ -375,7 +381,7 @@ fn run_with_engine(
                                 // against the base revision.
                                 benchmarks: projects.collects_benchmarks(&path)
                                     && vitest_majors.exports_bench(&path),
-                                formatting: vitest_majors.formatting(&path),
+                                formatting: base_majors.formatting(&path),
                             },
                             false,
                             Vec::new(),
@@ -2869,6 +2875,63 @@ mod tests {
         assert_eq!(report["modes"]["baselineApplied"], true);
         assert_eq!(report["modes"]["baselined"], 1);
         assert_eq!(report["modes"]["newFindings"], 0);
+    }
+
+    /// The base revision's titles render as its own committed Vitest major: an upgrade that
+    /// makes two titles collide is new, and the same declaration on both sides keeps the
+    /// collision baselined. A base without metadata takes `--vitest-major`, else proves only
+    /// what every major agrees on, and never reads the working tree's declaration.
+    #[test]
+    fn baseline_from_ref_renders_base_titles_with_its_committed_major() {
+        let source = "import { expect, test } from 'vitest'\n\
+                      test('named abc', () => { expect(1).toBe(1) })\n\
+                      test.each([{ v: 'abc' }])('named $v', ({ v }) => { expect(v).toBe('abc') })\n";
+        let manifest = |major: u64| format!(r#"{{"devDependencies":{{"vitest":"^{major}.0.0"}}}}"#);
+        let new_findings = |root: &std::path::Path, extra: &[&str]| {
+            let prefix = root.join("report");
+            let mut arguments = vec![
+                "--baseline-from-ref",
+                "HEAD",
+                "--rule",
+                "parameterization-candidate=off",
+                "--reporters",
+                "json",
+                "--output",
+                prefix.to_str().unwrap(),
+            ];
+            arguments.extend_from_slice(extra);
+            let (_, _, stderr) = run_cli(root, &arguments);
+            let report = read_json_report(&prefix);
+            assert_eq!(report["findings"].as_array().unwrap().len(), 1, "{stderr}");
+            report["modes"]["newFindings"].clone()
+        };
+        let declared = single_file_project("named.test.ts", source);
+        let root = declared.path();
+        std::fs::write(root.join("package.json"), manifest(4)).unwrap();
+        init_repository(root);
+        std::fs::write(root.join("package.json"), manifest(5)).unwrap();
+        assert_eq!(
+            new_findings(root, &[]),
+            1,
+            "the upgrade introduced the collision"
+        );
+        git(root, &["commit", "-qam", "upgrade"]);
+        assert_eq!(
+            new_findings(root, &[]),
+            0,
+            "the base already declared Vitest 5"
+        );
+
+        let undeclared = single_file_project("named.test.ts", source);
+        let root = undeclared.path();
+        init_repository(root);
+        assert_eq!(new_findings(root, &["--vitest-major", "5"]), 0);
+        std::fs::write(root.join("package.json"), manifest(5)).unwrap();
+        assert_eq!(
+            new_findings(root, &[]),
+            1,
+            "the uncommitted declaration does not answer for the base"
+        );
     }
 
     /// A base revision that predates the duplication accepts nothing, so the pair is new and
