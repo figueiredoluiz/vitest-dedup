@@ -5,6 +5,7 @@ use crate::lang::{parse, Lines};
 use std::fs;
 use std::path::Path;
 
+mod conditional_values;
 mod export_identity;
 mod import_limits;
 mod reach_scaling;
@@ -1459,7 +1460,7 @@ fn a_rewritten_namespace_alias_may_register_tests() {
         "const b = api.beforeEach; b(() => {})",
         "const { beforeEach: b } = api; b(() => {})",
         "const other = api; other.beforeEach(() => {})",
-        "(1 ? api.test : api.it)('x', () => {})",
+        ";(1 ? api.test : api.it)('x', () => {})",
     ] {
         assert_eq!(
             wrapper_calls(&format!("{header}{rewritten}{read}"), &files),
@@ -2035,27 +2036,32 @@ fn an_exported_value_that_may_be_a_registration_function_may_register_tests() {
              export const check = on ? v.expect : v.expect\n\
              export const space = on ? v : v\n\
              export const label = on ? test.name : 'x'\n\
-             export const arity = [test.length][0]",
+             export const arity = [test.length][0]\n\
+             export const count = [test].length",
         ),
         (
             "default.ts",
             "import { test } from 'vitest'\nexport default (process.env.X ? test.skip : () => {})",
         ),
+        (
+            "named.ts",
+            "import { test } from 'vitest'\nexport default test.name",
+        ),
     ];
     assert_eq!(
         wrapper_calls(
             "import { ternary, first, either, nullish, extended, nested, listed, member, plain, \
-             none, condition, left, sequence, check, space, label, arity } from './values'\n\
+             none, condition, left, sequence, check, space, label, arity, count } from './values'\n\
              import byDefault from './default'\n\
+             import named from './named'\n\
              ternary('a', () => {})\nfirst('b', () => {})\neither('c', () => {})\n\
              nullish('d', () => {})\nextended('e', () => {})\nnested('f', () => {})\n\
              listed('g', () => {})\nmember('h', () => {})\nbyDefault('i', () => {})\n\
              plain('j', () => {})\nnone('k', () => {})\ncondition('l', () => {})\n\
-             left('m', () => {})\nsequence('n', () => {})\ncheck(1)\nspace.expect(1)\nlabel.toUpperCase()\narity.toFixed()",
+             left('m', () => {})\nsequence('n', () => {})\ncheck(1)\nspace.expect(1)\nlabel.toUpperCase()\narity.toFixed()\ncount.toFixed()\nnamed.toUpperCase()",
             &files
         ),
         [
-            "wrapper@3",
             "wrapper@4",
             "wrapper@5",
             "wrapper@6",
@@ -2063,7 +2069,8 @@ fn an_exported_value_that_may_be_a_registration_function_may_register_tests() {
             "wrapper@8",
             "wrapper@9",
             "wrapper@10",
-            "wrapper@11"
+            "wrapper@11",
+            "wrapper@12"
         ]
     );
 }

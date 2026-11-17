@@ -3,7 +3,7 @@
 //! A fact is a token only this module constructs, so code holding one has run the whole check, not
 //! a local copy of part of it. Callers keep their own work charges; these functions charge nothing.
 
-use super::scopes::{Name, Scopes, SymbolId};
+use super::scopes::{Name, Reference, Scopes, SymbolId};
 use super::tree::{NodeId, Span, Tree};
 use std::collections::HashMap;
 
@@ -21,14 +21,21 @@ pub struct Immutable(());
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Initialized(());
 
-/// Proves [`Unwritten`].
-pub fn unwritten(scopes: &Scopes, symbol: SymbolId) -> Option<Unwritten> {
-    (!scopes
+/// The references that assign the binding, in the sense of [`Unwritten`].
+pub fn writes(scopes: &Scopes, symbol: SymbolId) -> impl Iterator<Item = &Reference> {
+    scopes
         .symbol(symbol)
         .references
         .iter()
-        .any(|reference| reference.write))
-    .then_some(Unwritten(()))
+        .filter(|reference| reference.write)
+}
+
+/// Proves [`Unwritten`].
+pub fn unwritten(scopes: &Scopes, symbol: SymbolId) -> Option<Unwritten> {
+    writes(scopes, symbol)
+        .next()
+        .is_none()
+        .then_some(Unwritten(()))
 }
 
 /// How a symbol is declared among runtime identifiers.

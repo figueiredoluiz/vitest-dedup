@@ -13,6 +13,8 @@ use crate::lang::{
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
+mod flow;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Origin {
     /// A registration function (or one built from it) registering this.
@@ -49,7 +51,7 @@ enum MockCall {
 }
 
 /// One step of a callee chain, from the root outwards.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 enum Step<'t> {
     Member(&'t str),
     Call,
@@ -103,6 +105,12 @@ struct Module<'s> {
     dead_chains: std::cell::RefCell<HashSet<NodeId>>,
     /// An imported registration API was built with a fixture value this core cannot model.
     imported_unreadable_fixture: bool,
+    /// Value-flow evaluation state.
+    flow: flow::Flow<'s>,
+    /// Namespace imports of project modules, with their export summaries.
+    namespaces: flow::Namespaces,
+    /// Named and default imports of project modules, with the summary of what each holds.
+    imported: HashMap<SymbolId, super::Summary>,
 }
 
 /// The inventory of a module, and the export names whose value registers when called with what
@@ -133,6 +141,9 @@ pub(super) fn analyse(
         scanning: std::cell::Cell::new(false),
         dead_chains: std::cell::RefCell::default(),
         imported_unreadable_fixture: false,
+        flow: flow::Flow::default(),
+        namespaces: HashMap::new(),
+        imported: HashMap::new(),
     };
     module.redeclared = module.redeclarations();
     module.evaluates = super::direct_eval(parsed);
@@ -140,6 +151,8 @@ pub(super) fn analyse(
     module.collect_origins(modules, depth);
     let found = module.registrations();
     let mut exports = module.exports(modules, depth, &found);
+    let summaries = module.export_summaries(modules, &exports);
+    modules.summaries.insert(setting.key(path), summaries);
     // A registration outside every wrapper may run while the module loads: at top level, in a
     // getter or an initializer, or in a function this analysis does not see called.
     let bodies = module.wrapper_bodies();
@@ -819,70 +832,40 @@ impl<'s> Module<'s> {
                 return None;
             }
             visited.push(node);
+            if tree.kind(node) == "Identifier" && self.flows_from(node) {
+                return self.flow_root(node, steps);
+            }
             if let Some((origin, provenance)) = self.root_origin(node) {
                 steps.reverse();
                 return Some((origin, provenance, steps));
             }
             match tree.kind(node) {
-                // `only ? it.only : it`: both branches the same kind of registration function.
-                "ConditionalExpression" => {
-                    let branch = |key| {
-                        tree.child(node, key)
-                            .and_then(|branch| self.value_origin(branch))
-                    };
-                    let registers = match (branch("consequent"), branch("alternate")) {
-                        (Some(Origin::Api(left)), Some(Origin::Api(right))) if left == right => {
-                            left
-                        }
-                        (Some(Origin::Wrapper(_) | Origin::Derived(_)), _)
-                        | (_, Some(Origin::Wrapper(_) | Origin::Derived(_))) => {
-                            steps.reverse();
-                            return Some((
-                                Origin::Wrapper(Reach::Tasks),
-                                Provenance::Wrapper,
-                                steps,
-                            ));
-                        }
-                        _ => return None,
-                    };
-                    steps.reverse();
-                    return Some((Origin::Api(registers), Provenance::Direct, steps));
+                // Anything that is not a plain chain step is the value flow's.
+                "MemberExpression" if self.flows_through(node) => {
+                    return self.flow_root(node, steps);
                 }
                 "MemberExpression" => {
-                    // `cases['with organization']` reads as `cases.name` does.
                     steps.push(Step::Member(member_name(tree, node)?));
                     node = tree.child(node, "object")?;
                 }
-                // `filterable(it)`: what a call handed a registration function returns may
-                // register.
                 "CallExpression"
                     if tree
                         .list(node, "arguments")
                         .into_iter()
                         .flatten()
-                        .any(|argument| {
-                            self.value_origin(argument)
-                                .is_some_and(|origin| origin != Origin::Namespace)
-                        }) =>
+                        .any(|argument| self.evaluate(argument).holds_api()) =>
                 {
-                    steps.reverse();
-                    // What it returns is not read: it may register anything.
-                    return Some((Origin::Wrapper(Reach::Tasks), Provenance::Wrapper, steps));
+                    return self.flow_root(node, steps);
                 }
                 "CallExpression" => {
                     steps.push(Step::Call);
                     node = tree.child(node, "callee")?;
                 }
-                // What awaiting a registration function resolves to is not read: it may register.
-                "AwaitExpression" if self.holds_api(tree.child(node, "argument")?) => {
-                    steps.reverse();
-                    return Some((Origin::Wrapper(Reach::Tasks), Provenance::Wrapper, steps));
-                }
                 "TaggedTemplateExpression" => {
                     steps.push(Step::Call);
                     node = tree.child(node, "tag")?;
                 }
-                _ => return None,
+                _ => return self.flow_root(node, steps),
             }
         }
     }
@@ -1104,14 +1087,20 @@ impl<'s> Module<'s> {
                 continue;
             };
             let api = self.setting.dialect.is_api_module(source);
-            let wrapper_exports = if api {
+            let file = if api {
                 None
             } else {
                 modules
                     .sources
                     .resolve(self.path, source, self.setting.root)
-                    .map(|file| modules.exports(&file, self.setting, depth + 1))
             };
+            let wrapper_exports = file
+                .as_ref()
+                .map(|file| modules.exports(file, self.setting, depth + 1));
+            let summaries = file
+                .as_ref()
+                .and_then(|file| modules.recorded_summaries(file, self.setting))
+                .unwrap_or_default();
             if wrapper_exports
                 .as_ref()
                 .is_some_and(|exports| exports.contains_key(ON_LOAD))
@@ -1140,10 +1129,21 @@ impl<'s> Module<'s> {
                     _ => {
                         if api {
                             self.origins.insert(symbol, Origin::Namespace);
+                        } else if wrapper_exports.is_some() {
+                            self.namespaces.insert(symbol, summaries.clone());
                         }
                         continue;
                     }
                 };
+                // The summary only where it says more than the export: a mixed value or a chain.
+                if let Some(summary) = summaries.get(&name) {
+                    let exported = wrapper_exports
+                        .as_ref()
+                        .is_some_and(|exports| exports.contains_key(&name));
+                    if !(exported && summary.plain()) && !summary.roots.is_empty() {
+                        self.imported.insert(symbol, summary.clone());
+                    }
+                }
                 self.imported_unreadable_fixture |= wrapper_exports
                     .as_ref()
                     .is_some_and(|exports| exports.contains_key(&unreadable_fixture_export(&name)));
@@ -1179,62 +1179,29 @@ impl<'s> Module<'s> {
         let tree = self.tree;
         loop {
             let before = self.origins.clone();
-            // An alias found in a pass adds reads, so each pass reads the escapes again.
-            let escaping = self.escaping_reads();
             for node in tree.nodes() {
                 if tree.kind(node) != "VariableDeclarator" {
                     continue;
                 }
-                let (Some(id), Some(init)) = (tree.child(node, "id"), tree.child(node, "init"))
-                else {
+                let Some(id) = tree.child(node, "id") else {
                     continue;
                 };
-                // A registration function read as a value in the initializer may be its value
-                // (`cond ? test : noop`, `[test][0]`, `{ it: test }`): it may register tests.
-                let origin = self.value_origin(init).or_else(|| {
-                    self.holds_escape(init, &escaping)
-                        .then_some(Origin::Wrapper(Reach::Tasks))
-                });
-                if matches!(origin, Some(Origin::Api(_))) {
-                    self.values.insert(tree.inner(init));
-                }
-                match tree.kind(id) {
-                    "Identifier" => {
-                        let Some(symbol) = self.declares(id) else {
-                            continue;
-                        };
-                        if let Some(origin) = origin {
-                            self.alias(symbol, origin);
-                            self.aliased.insert(symbol);
+                // What each bound name holds is the value flow's, through its pattern.
+                for symbol in bound_symbols(tree, &self.parsed.scopes, id) {
+                    let value = self.value_of(symbol);
+                    let Some(origin) = self
+                        .resolve(&value)
+                        .and_then(|(origin, steps)| self.chained(origin, &steps))
+                    else {
+                        continue;
+                    };
+                    if matches!(origin, Origin::Api(_)) && tree.kind(id) == "Identifier" {
+                        if let Some(init) = tree.child(node, "init") {
+                            self.values.insert(tree.inner(init));
                         }
                     }
-                    // A destructured binding holds a member of the wrapper, which may register
-                    // tests whatever the wrapper registers when called.
-                    "ObjectPattern" | "ArrayPattern"
-                        if matches!(origin, Some(Origin::Wrapper(_) | Origin::Derived(_))) =>
-                    {
-                        for symbol in bound_symbols(tree, &self.parsed.scopes, id) {
-                            self.alias(symbol, Origin::Wrapper(Reach::Tasks));
-                        }
-                    }
-                    "ObjectPattern" if origin == Some(Origin::Namespace) => {
-                        for property in tree.list(id, "properties").into_iter().flatten() {
-                            let (Some(key), Some(value)) =
-                                (property_name(tree, property), tree.child(property, "value"))
-                            else {
-                                continue;
-                            };
-                            let Some(registers) = self.api(key) else {
-                                continue;
-                            };
-                            if tree.kind(value) == "Identifier" {
-                                if let Some(symbol) = self.declares(value) {
-                                    self.alias(symbol, Origin::Api(registers));
-                                }
-                            }
-                        }
-                    }
-                    _ => {}
+                    self.alias(symbol, origin);
+                    self.aliased.insert(symbol);
                 }
             }
             if self.origins == before {
@@ -1346,7 +1313,7 @@ impl<'s> Module<'s> {
 
     /// Every read of a registration function: of a binding that holds one, and, when free names
     /// are the API, of a free name the dialect registers with.
-    fn registration_reads(&self) -> impl Iterator<Item = NodeId> + '_ {
+    fn registration_reads(&self) -> impl Iterator<Item = NodeId> + use<'_, 's> {
         let tree = self.tree;
         let scopes = &self.parsed.scopes;
         let bound = self
@@ -2128,59 +2095,6 @@ impl<'s> Module<'s> {
             .collect()
     }
 
-    /// Whether the value of `expression`, which has no origin, may be a registration function
-    /// nothing here reads: a registration read escapes in it outside a nested function, or a
-    /// branch it may evaluate to has an origin (`cond ? test.extend({}) : noop`).
-    /// `escaping` is [`Self::escaping_reads`].
-    fn holds_escape(&self, expression: NodeId, escaping: &[NodeId]) -> bool {
-        self.branch_registers(expression) || self.escape_within(expression, escaping)
-    }
-
-    /// Whether a conditional or logical branch `expression` may evaluate to is a registration
-    /// function ([`Self::is_registration_value`]). Each
-    /// leaf branch is asked once; a nested conditional or logical branch is descended instead.
-    fn branch_registers(&self, expression: NodeId) -> bool {
-        let tree = self.tree;
-        let mut pending = vec![tree.inner(expression)];
-        while let Some(node) = pending.pop() {
-            for key in ["consequent", "alternate", "left", "right"] {
-                let Some(branch) = tree.child(node, key) else {
-                    continue;
-                };
-                if !self.may_evaluate_to(node, branch) {
-                    continue;
-                }
-                let branch = tree.inner(branch);
-                if matches!(
-                    tree.kind(branch),
-                    "ConditionalExpression" | "LogicalExpression"
-                ) {
-                    pending.push(branch);
-                } else if self.is_registration_value(branch) {
-                    return true;
-                }
-            }
-        }
-        false
-    }
-
-    /// Whether `expression`'s origin is a registration function. A namespace is not: `v` and
-    /// `v.expect` are values, and only its members register. Nor is a function's own `name` or
-    /// `length`, a string and a number.
-    fn is_registration_value(&self, expression: NodeId) -> bool {
-        let tree = self.tree;
-        let node = tree.inner(expression);
-        if tree.kind(node) == "MemberExpression"
-            && member_name(tree, node).is_some_and(|name| matches!(name, "name" | "length"))
-        {
-            return false;
-        }
-        matches!(
-            self.value_origin(expression),
-            Some(Origin::Api(_) | Origin::Wrapper(_) | Origin::Derived(_))
-        )
-    }
-
     /// Every symbol a variable declaration's declarators bind, patterns included.
     fn declared_bindings(&self, declaration: NodeId) -> Vec<SymbolId> {
         let tree = self.tree;
@@ -2190,50 +2104,6 @@ impl<'s> Module<'s> {
             .filter_map(|declarator| tree.child(declarator, "id"))
             .flat_map(|id| bound_symbols(tree, &self.parsed.scopes, id))
             .collect()
-    }
-
-    /// Whether a read in `escaping` lies in `expression` outside a nested function, on a path whose
-    /// every step may carry its value: [`Self::may_evaluate_to`], a member of what holds it
-    /// (`[test][0]`), or a call handed it, whose result may be it.
-    fn escape_within(&self, expression: NodeId, escaping: &[NodeId]) -> bool {
-        let tree = self.tree;
-        let span = tree.span(expression);
-        let first = escaping.partition_point(|&read| tree.span(read).start < span.start);
-        // A climb that fails at an edge fails for every read below it: each node is passed once.
-        let mut climbed = HashSet::new();
-        escaping[first..]
-            .iter()
-            .take_while(|&&read| tree.span(read).start < span.end)
-            .filter(|&&read| self.is_registration_value(read))
-            .any(|&read| {
-                let mut node = read;
-                loop {
-                    #[cfg(test)]
-                    WALK_STEPS.with(|steps| steps.set(steps.get() + 1));
-                    if node == expression {
-                        return true;
-                    }
-                    if tree.is_function(node) || !climbed.insert(node) {
-                        return false;
-                    }
-                    let Some(parent) = tree.parent(node) else {
-                        return false;
-                    };
-                    let carries = self.may_evaluate_to(parent, node)
-                        || match tree.kind(parent) {
-                            "MemberExpression" => tree.child(parent, "object") == Some(node),
-                            // Any child of a call but its callee is an argument.
-                            "CallExpression" | "NewExpression" => {
-                                tree.child(parent, "callee") != Some(node)
-                            }
-                            _ => false,
-                        };
-                    if !carries {
-                        return false;
-                    }
-                    node = parent;
-                }
-            })
     }
 
     /// The outermost node of each registration read that is not called, declared, exported or
@@ -2451,16 +2321,18 @@ impl<'s> Module<'s> {
                     .flatten();
                     // An expression binds no name: it is what its value is, and a registration
                     // function read as a value in it may be that value (`cond ? test : noop`).
+                    // An expression is what the value flow says it is.
                     let expression = (symbol.is_none() && !tree.is_function(declaration))
-                        .then(|| match self.value_origin(declaration) {
-                            Some(Origin::Api(registers) | Origin::Derived(registers)) => {
-                                Some(Export::Derived(registers))
+                        .then(|| {
+                            let value = self.evaluate(declaration);
+                            let (origin, steps) = self.resolve(&value)?;
+                            match self.chained(origin, &steps)? {
+                                Origin::Api(registers) | Origin::Derived(registers) => {
+                                    Some(Export::Derived(registers))
+                                }
+                                Origin::Wrapper(reach) => Some(Export::Wrapper(reach)),
+                                Origin::Namespace => Some(Export::Namespace),
                             }
-                            Some(Origin::Wrapper(reach)) => Some(Export::Wrapper(reach)),
-                            Some(Origin::Namespace) => Some(Export::Namespace),
-                            None => self
-                                .holds_escape(declaration, &self.escaping_reads())
-                                .then_some(Export::Wrapper(Reach::Tasks)),
                         })
                         .flatten();
                     if let Some(export) = registers(symbol)
