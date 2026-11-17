@@ -12,6 +12,14 @@ export function coverageOnHost(floors, platform = process.platform) {
   return { measured, deferred }
 }
 
+/** Find source paths that may need a Rust coverage floor. Inventory paths use forward slashes. */
+export function rustInventoryCandidates(files, floors) {
+  return files.filter(path => !Object.hasOwn(floors, path)
+    && path !== 'src/lib.rs'
+    && !path.split('/').includes('tests')
+    && !/(?:\/|_)tests\.rs$/.test(path)).sort()
+}
+
 /**
  * Name the integration-test targets a Cargo test run did not report running.
  * Cargo prints `Running tests/<name>.rs (...)` on stderr for each target it executes; a target

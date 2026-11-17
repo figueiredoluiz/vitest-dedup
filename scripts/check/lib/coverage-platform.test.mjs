@@ -1,6 +1,13 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { coverageOnHost, missingTestTargets, targetReportingEnv } from './coverage-platform.mjs'
+import { coverageOnHost, missingTestTargets, rustInventoryCandidates, targetReportingEnv } from './coverage-platform.mjs'
+
+test('the source inventory flags unregistered candidates and skips test files and the crate root', () => {
+  const registered = { 'src/main.rs': 100, 'src/registered/module.rs': 100 }
+  const files = ['src/main.rs', 'src/registered/module.rs', 'src/lib.rs', 'src/rules/tests/case.rs', 'src/lang/tests.rs', 'src/memory_roof_tests.rs', 'src/rules/suites/scopes.rs', 'src/config/path.rs']
+  assert.deepEqual(rustInventoryCandidates(files, registered), ['src/config/path.rs', 'src/rules/suites/scopes.rs'])
+  assert.deepEqual(rustInventoryCandidates(files, { ...registered, 'src/config/path.rs': 99, 'src/rules/suites/scopes.rs': 99 }), [])
+})
 
 test('macOS enforces every floor; other hosts defer only native proof coverage to macOS CI', () => {
   const floors = { 'scripts/dev/revert-proof.mjs': 97, 'scripts/dev/proof-command.mjs': 95, 'scripts/dev/probe.mjs': 77, 'new-module.mjs': 100 }

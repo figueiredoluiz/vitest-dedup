@@ -249,6 +249,10 @@ const CLIPPY = ['cargo', 'clippy', '--all-targets', '--all-features', '--locked'
 const RUSTDOC = ['cargo', 'doc', '--no-deps', '--document-private-items', '--locked']
 const WINDOWS_CHECK = ['cargo', 'check', '--all-targets', '--all-features', '--locked', '--target', 'x86_64-pc-windows-gnu']
 const CARGO_TESTS = ['node', 'scripts/dev/cargo-tests.mjs']
+const RUST_INVENTORY = ['node', 'scripts/check/check-coverage.mjs', '--rust-inventory']
+const EXCLUSION_PINS = 'tests/fixtures/owned-exclusions.json'
+const OWNED_EXCLUSIONS = [...CARGO_TESTS, 'test', 'excluded_files', '--', 'the_analyzer_reads_the_owned_fixtures', '--exact']
+const RECALL = 'scripts/check/check-recall.mjs'
 // The compilation-free JavaScript suites, all of which an unknown scope runs.
 const JS_TESTS = [['npm', 'run', 'test:action'], ['npm', 'test'], ['npm', 'run', 'pack:check'], ['npm', 'run', 'test:dev-checks'], ['npm', 'run', 'test:check-lib']]
 // What a changed Rust line names when its behaviour can differ on Windows.
@@ -315,8 +319,8 @@ export function quickRustTests(paths, { bin, lib, testTargets }, wholeLibrary = 
  * Build the pre-review lane: what a review or the push hook would otherwise find first, in minutes.
  * Static checks, format, the compilation-free JavaScript suites, duplication, JavaScript coverage,
  * Clippy, rustdoc, the Windows cross-check when the change can differ there, and the Rust tests of
- * what changed. Never a release build, corpus gate, Rust coverage or the whole Rust suite: the push
- * hook runs those.
+ * what changed. Fixture inputs also run the owned-exclusion assertion or recall with the debug
+ * binary. The push hook still runs the release corpus gates, Rust coverage and the full suite.
  * @param {string[]|null} paths Changed paths, or null when the scope is unknown.
  * @param {string} diff Unified diff of the change.
  * @param {string} [docDiff] File holding that diff, for the docstring check.
@@ -328,16 +332,26 @@ export function quickCommands(paths, diff, docDiff, layout = { bin: [], lib: [],
   const full = scopes.includes('full')
   const rust = full || scopes.includes('rust')
   const steps = full ? [...staticCommands(docDiff), FORMAT, ...JS_TESTS] : hookCommands('pre-commit', paths, docDiff)
+  if (full || paths.some(path => path === RUST_INVENTORY[1] || (path.startsWith('src/') && path.endsWith('.rs')))) steps.unshift(RUST_INVENTORY)
   if (full || scopes.some(scope => scope !== 'docs')) steps.push(['npm', 'run', 'check:duplication'])
   // JavaScript coverage runs wherever the push hook runs it, on its own or inside `npm run check`;
   // Rust coverage never runs here.
   const push = hookCommands('pre-push', paths, docDiff).map(step => step.join(' '))
   if (push.includes('npm run check:coverage:js') || push.includes('npm run check')) steps.push(['npm', 'run', 'check:coverage:js'])
-  if (!rust) return steps
-  steps.push(CLIPPY, RUSTDOC)
-  if (windowsSensitive(full ? null : paths, diff)) steps.push(WINDOWS_CHECK)
-  // An unknown path adds the whole library suite and keeps what the known paths select.
-  steps.push(...quickRustTests(paths, layout, full))
+  const rustTests = rust ? quickRustTests(paths?.filter(path => path !== EXCLUSION_PINS) ?? null, layout, full) : []
+  if (rust) {
+    steps.push(CLIPPY, RUSTDOC)
+    if (windowsSensitive(full ? null : paths, diff)) steps.push(WINDOWS_CHECK)
+    // An unknown path adds the whole library suite and keeps what the known paths select.
+    steps.push(...rustTests)
+  }
+  const owned = full || scopes.includes('fixtures') || paths.includes(EXCLUSION_PINS)
+  if (owned && !rustTests.some(([, , kind, ...targets]) => kind === 'test' && targets.includes('excluded_files'))) steps.push(OWNED_EXCLUSIONS)
+  if (full || paths.some(path => path.startsWith('fixtures/recall/') || path === RECALL || path === 'scripts/check/next-duplicates-known.json')) {
+    // Integration tests build the standalone binary, as does the binary-test wrapper.
+    if (!owned && !rustTests.some(([, , kind]) => kind === 'bin' || kind === 'test')) steps.push(['cargo', 'build', '--locked'])
+    steps.push(['node', RECALL, join('target', 'debug', process.platform === 'win32' ? 'vitest-dedup.exe' : 'vitest-dedup')])
+  }
   return steps
 }
 
@@ -492,6 +506,10 @@ export function runSteps(root, steps, { env = process.env, logRoot, meta = {}, s
     if (result.error || result.status !== 0) {
       print(readFileSync(log, 'utf8').split(/\r?\n/).slice(-100).join('\n'))
       throw new Error(`${command} ${args.join(' ')} failed${result.error ? `: ${result.error.message}` : ` (exit ${result.status ?? result.signal})`}. Log: ${log}`)
+    }
+    if (command === RUST_INVENTORY[0] && args[0] === RUST_INVENTORY[1] && args[1] === RUST_INVENTORY[2]) {
+      const advisory = readFileSync(log, 'utf8').trim()
+      if (advisory) print(advisory)
     }
     print(`PASS ${command} ${args.join(' ')}`)
   }

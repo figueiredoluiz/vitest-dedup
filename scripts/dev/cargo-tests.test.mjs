@@ -33,6 +33,12 @@ test('the binary is built before its tests, and integration targets are named', 
   assert.throws(() => plan(['all'], () => ''), /Usage/)
 })
 
+test('a named integration target can run exactly one test', () => {
+  assert.deepEqual(plan(['test', 'excluded_files', '--', 'the_analyzer_reads_the_owned_fixtures', '--exact'], () => '').runs,
+    [['test', '--locked', '--test', 'excluded_files', '--', 'the_analyzer_reads_the_owned_fixtures', '--exact']])
+  assert.throws(() => plan(['test', '--', 'name'], () => ''), /at least one target/)
+})
+
 /** Run main against scripted Cargo results, recording each invocation. */
 function run(args, results) {
   const calls = []
