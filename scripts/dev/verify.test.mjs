@@ -400,6 +400,16 @@ test('successful command uses CI warnings and preserves supplied flags without s
   assert.deepEqual(output, ['PASS cargo clippy'])
 }))
 
+test('a successful Rust coverage inventory step makes its advisory visible', () => fixture(root => {
+  const output = []
+  const advisory = 'Rust coverage inventory advisory for src/new.rs\n'
+  runSteps(root, [['node', 'scripts/check/check-coverage.mjs', '--rust-inventory']], {
+    logRoot: join(root, 'logs'), print: line => output.push(line),
+    spawn: (_cmd, _args, options) => { writeFileSync(options.stdio[1], advisory); return { status: 0 } },
+  })
+  assert.ok(output.join('\n').includes(advisory.trim()))
+}))
+
 test('the run summary records each step, survives a failure, and carries the run metadata', () => fixture(root => {
   const logRoot = join(root, 'logs')
   let clock = 1_000
@@ -1132,8 +1142,11 @@ const reached = step => {
 }
 // What the push hook runs and the quick lane never does.
 const PUSH_ONLY = ['cargo build --release', 'cargo test', 'cargo llvm-cov', 'npm run check:coverage:rust', 'npm run check:corpus', 'npm run check:recall', 'npm run check:oracle', 'npm run verify:titles', 'npm run check:hooks', 'npm run check:behavior-runtime', 'npm run check:parameterization-runtime', 'npm run check:title-properties', 'npm run mutants', 'node scripts/check/check-coverage.mjs --rust', 'node scripts/check/check-collection-oracle.mjs', 'node scripts/check/check-duplicates-corpus.mjs']
+const QUICK_INVENTORY = 'node scripts/check/check-coverage.mjs --rust-inventory'
+const QUICK_EXCLUSIONS = 'node scripts/dev/cargo-tests.mjs test excluded_files -- the_analyzer_reads_the_owned_fixtures --exact'
 const assertQuick = steps => {
   for (const command of steps.flatMap(reached)) {
+    if (command === QUICK_INVENTORY) continue
     // Bare coverage commands run Rust coverage too; only their `:js` and `--js` forms may run here.
     const exact = ['npm run check', 'npm run check:coverage', 'node scripts/check/check-coverage.mjs']
     assert.equal(exact.includes(command) || PUSH_ONLY.some(slow => command.startsWith(slow)), false, `${command} in ${steps.join(', ')}`)
@@ -1155,6 +1168,41 @@ test('documentation and an empty change run the static checks only', () => {
   }
 })
 
+test('quick checks follow fixture inputs and reuse the normal integration binary', () => {
+  const build = 'cargo build --locked'
+  const recall = 'node scripts/check/check-recall.mjs '
+  for (const [paths, expectsInventory, expectsOwned, expectsRecall, expectsBuild] of [
+    [['README.md'], false, false, false, false],
+    [['src/rules/suites/scopes.rs'], true, false, false, false],
+    [['scripts/check/check-coverage.mjs'], true, false, false, false],
+    [['fixtures/oracle/new/case.test.ts'], false, true, false, false],
+    [['tests/fixtures/owned-exclusions.json'], false, true, false, false],
+    [['fixtures/recall/new/nested/config.json'], false, true, true, false],
+    [['fixtures/recall/manifest.json'], false, true, true, false],
+    [['fixtures/recallish/test.ts'], false, true, false, false],
+    [['scripts/check/next-duplicates-known.json'], false, false, true, true],
+    [['scripts/check/check-recall.mjs'], false, false, true, true],
+    [null, true, true, true, false],
+  ]) {
+    const steps = quick(paths)
+    const scope = JSON.stringify(paths)
+    assert.equal(steps.includes(QUICK_INVENTORY), expectsInventory, scope)
+    assert.equal(steps.includes(QUICK_EXCLUSIONS), expectsOwned, scope)
+    assert.equal(steps.includes(build), expectsBuild, scope)
+    const recallStep = steps.find(step => step.startsWith(recall))
+    assert.equal(Boolean(recallStep), expectsRecall, scope)
+    if (recallStep) {
+      assert.equal(recallStep, `${recall}${join('target', 'debug', process.platform === 'win32' ? 'vitest-dedup.exe' : 'vitest-dedup')}`)
+      assert.ok(steps.indexOf(expectsOwned ? QUICK_EXCLUSIONS : build) < steps.indexOf(recallStep))
+    }
+  }
+  const withFullTarget = quickCommands(['fixtures/recall/new/case.test.ts', 'tests/excluded_files.rs'], '', undefined, {
+    ...LAYOUT, testTargets: [...LAYOUT.testTargets, 'excluded_files'],
+  }).map(step => step.join(' '))
+  assert.ok(withFullTarget.includes('node scripts/dev/cargo-tests.mjs test excluded_files'))
+  assert.ok(!withFullTarget.includes(QUICK_EXCLUSIONS) && !withFullTarget.includes(build))
+})
+
 test('a library module runs format, lints, rustdoc, duplication and its own unit tests', () => {
   const steps = quick(['src/lang/js_text.rs', 'src/rules.rs'])
   // Cheapest first: format and duplication precede the first compile.
@@ -1165,7 +1213,7 @@ test('a library module runs format, lints, rustdoc, duplication and its own unit
     'cargo doc --no-deps --document-private-items --locked',
     'node scripts/dev/cargo-tests.mjs lib lang rules',
   ])
-  assert.equal(steps.some(step => step.includes('x86_64-pc-windows-gnu') || step.endsWith(' bin') || step.includes('cargo-tests.mjs test') || step.includes('coverage')), false, steps.join())
+  assert.equal(steps.some(step => step.includes('x86_64-pc-windows-gnu') || step.endsWith(' bin') || step.includes('cargo-tests.mjs test') || step.includes('coverage:')), false, steps.join())
   // JavaScript coverage follows the push hook: none for a workflow, and the manifests' `npm run check` holds it.
   assert.equal(quick(['.github/workflows/ci.yml']).includes('npm run check:coverage:js'), false)
   for (const path of ['package.json', 'package-lock.json']) assert.ok(quick([path]).includes('npm run check:coverage:js'), path)
@@ -1194,7 +1242,7 @@ test('the binary, the shared roots and integration targets select their own test
   assert.deepEqual(quickRustTests(['src/model.rs', 'src/main.rs', 'tests/cli_ux.rs'], LAYOUT).map(step => step.slice(2).join(' ')), ['lib model', 'bin', 'test cli_ux'])
   assert.deepEqual(quickRustTests(null, LAYOUT), [['node', 'scripts/dev/cargo-tests.mjs', 'lib']])
   // An unknown path beside known ones widens the library and keeps the binary and targets.
-  assert.deepEqual(quick(['src/main.rs', 'tests/cli_ux.rs', '.gitignore']).filter(step => step.includes('cargo-tests')), ['node scripts/dev/cargo-tests.mjs lib', 'node scripts/dev/cargo-tests.mjs bin', 'node scripts/dev/cargo-tests.mjs test cli_ux'])
+  assert.deepEqual(quick(['src/main.rs', 'tests/cli_ux.rs', '.gitignore']).filter(step => step.includes('cargo-tests')), ['node scripts/dev/cargo-tests.mjs lib', 'node scripts/dev/cargo-tests.mjs bin', 'node scripts/dev/cargo-tests.mjs test cli_ux', QUICK_EXCLUSIONS])
   assert.deepEqual(quickRustTests(['examples/depth.rs', 'README.md'], LAYOUT), [])
 })
 
@@ -1261,7 +1309,7 @@ test('an unknown path runs every quick check, and still no push-only gate', () =
 })
 
 test('a script change runs its suites, duplication and JavaScript coverage, and compiles nothing', () => {
-  for (const [path, suite] of [['scripts/dev/a.mjs', 'npm run test:dev-checks'], ['scripts/check/a.mjs', 'npm run test:check-lib'], ['fixtures/a.test.ts', 'npm run test:dev-checks'], ['action.yml', 'npm run test:action'], ['npm/a.mjs', 'npm run pack:check']]) {
+  for (const [path, suite] of [['scripts/dev/a.mjs', 'npm run test:dev-checks'], ['scripts/check/a.mjs', 'npm run test:check-lib'], ['action.yml', 'npm run test:action'], ['npm/a.mjs', 'npm run pack:check']]) {
     const steps = quick([path])
     assert.ok(steps.includes(suite) && steps.includes('npm run check:duplication') && steps.includes('npm run check:coverage:js'), steps.join())
     assert.equal(steps.some(step => step.startsWith('cargo') || step.includes('cargo-tests')), false, steps.join())

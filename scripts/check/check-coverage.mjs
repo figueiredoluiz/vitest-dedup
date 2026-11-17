@@ -2,6 +2,7 @@
 // Test-coverage ratchet, per module, for both languages in this repository.
 //
 // Usage: `node scripts/check/check-coverage.mjs [--rust] [--js]` (neither flag means both).
+// `--rust-inventory` is a separate, source-only advisory for the quick lane.
 //
 // ## The destination, and why this is not it
 //
@@ -74,7 +75,7 @@ import * as fs from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { coverageOnHost, missingTestTargets, targetReportingEnv } from './lib/coverage-platform.mjs'
+import { coverageOnHost, missingTestTargets, rustInventoryCandidates, targetReportingEnv } from './lib/coverage-platform.mjs'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
 
@@ -845,9 +846,19 @@ function checkJs(failures) {
 /** Selects requested coverage gates and reports all floor failures together. */
 function main() {
   const argv = process.argv.slice(2)
+  if (argv.length === 1 && argv[0] === '--rust-inventory') {
+    const files = globSync('src/**/*.rs', { cwd: ROOT }).map(posix)
+    const candidates = rustInventoryCandidates(files, RUST_MODULES)
+    if (candidates.length) {
+      console.warn(`Rust coverage inventory advisory: ${candidates.length} source file(s) may need a floor.`)
+      for (const path of candidates.slice(0, 20)) console.warn(`  ${path}`)
+      console.warn('Use instrumented coverage to establish which files need a floor and its measured value.')
+    }
+    return
+  }
   const unknown = argv.filter((flag) => flag !== '--rust' && flag !== '--js')
   if (unknown.length > 0) {
-    console.error(`unknown argument(s): ${unknown.join(', ')}. Usage: [--rust] [--js]`)
+    console.error(`unknown argument(s): ${unknown.join(', ')}. Usage: [--rust] [--js] or --rust-inventory`)
     process.exit(2)
   }
   const wantRust = argv.length === 0 || argv.includes('--rust')

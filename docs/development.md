@@ -249,8 +249,11 @@ hold the file), and each changed integration target. It does not run the tests o
 module's dependents. When a changed Rust line names `cfg` or `cfg_attr`, filesystem calls or
 paths, or a Cargo manifest changes, it also runs `cargo check --target x86_64-pc-windows-gnu`
 (`rustup target add x86_64-pc-windows-gnu` once). A test step that ran no test fails. It never
-builds the release binary or runs the corpus gates, Rust coverage or the whole Rust suite; the push
-hook does.
+builds the release binary or runs instrumented Rust coverage or the full Rust suite. Rust source
+changes get a source-only advisory for files that may need a coverage floor. Changes to owned
+fixtures or their exclusion pins run the existing exclusion assertion, and changes to recall inputs
+also run the recall gate with the debug binary. The push hook still runs the full verification
+selected for the proposed commit.
 
 The full profile does not run the memory and scaling benchmarks, mutation campaigns, or the inline
 CI self-check. Use `npm run check:not-run` and `ci.yml` to select those when a change needs them.

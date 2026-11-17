@@ -5,7 +5,7 @@
 //   cargo-tests.mjs lib [module...]   library unit tests under each `module::`; none named, all of them
 //   cargo-tests.mjs bin               builds the binary first: `cargo test --bin` does not rebuild the
 //                                     standalone binary the assert_cmd tests run
-//   cargo-tests.mjs test <target...>  the named `tests/<target>.rs` targets
+//   cargo-tests.mjs test <target...> [-- <libtest args>]  named integration targets and optional filter
 import { spawnSync } from 'node:child_process'
 import { existsSync, realpathSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
@@ -37,7 +37,7 @@ export function moduleCoverage(listing, modules) {
 
 /**
  * Plan the Cargo invocations for one request, given the library listing when it is needed.
- * @param {string[]} args `lib [module...]`, `bin` or `test <target...>`.
+ * @param {string[]} args `lib [module...]`, `bin` or `test <target...> [-- <libtest args>]`.
  * @param {() => string} list Reads the library's test listing.
  * @returns {{runs: string[][], notes: string[]}} Cargo argument lists in order, and what was widened.
  * @throws {Error} On an unknown kind or a `test` request without targets.
@@ -47,8 +47,11 @@ export function plan(args, list) {
   const locked = ['--locked']
   if (kind === 'bin') return { runs: [['build', ...locked], ['test', '--bin', 'vitest-dedup', ...locked]], notes: [] }
   if (kind === 'test') {
-    if (!names.length) throw new Error('cargo-tests.mjs test needs at least one target')
-    return { runs: [['test', ...locked, ...names.flatMap(name => ['--test', name])]], notes: [] }
+    const separator = names.indexOf('--')
+    const targets = separator < 0 ? names : names.slice(0, separator)
+    if (!targets.length) throw new Error('cargo-tests.mjs test needs at least one target')
+    const filter = separator < 0 ? [] : names.slice(separator)
+    return { runs: [['test', ...locked, ...targets.flatMap(name => ['--test', name]), ...filter]], notes: [] }
   }
   if (kind !== 'lib') throw new Error('Usage: cargo-tests.mjs lib [module...] | bin | test <target...>')
   if (!names.length) return { runs: [['test', '--lib', ...locked]], notes: [] }
