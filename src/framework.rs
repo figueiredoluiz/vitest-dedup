@@ -239,9 +239,11 @@ pub enum Holder {
 pub enum Presence {
     /// The value has it.
     Present,
-    /// No measured major has it: the member is `undefined`.
+    /// The file's major lacks it, or no metadata names a major and no measured major has it: the
+    /// member is `undefined`.
     Absent,
-    /// The file's major was not measured and no measured major has it.
+    /// The file's major was not measured and no measured major has it, or the holder covers
+    /// values that differ on the member.
     Unresolved,
 }
 
@@ -389,14 +391,14 @@ impl Dialect {
             return Presence::Present;
         }
         // Measured on every release the tables cover: `expect` and a table's runner are arrow
-        // functions.
-        if name == "prototype"
-            && matches!(
-                holder,
-                Holder::Test | Holder::Suite | Holder::Bench | Holder::Leaf
-            )
-        {
-            return Presence::Present;
+        // functions, and so are some leaves (`onTestFailed`, `describe.skipIf`) but not others
+        // (`beforeEach`, `test.skipIf`).
+        if name == "prototype" {
+            match holder {
+                Holder::Test | Holder::Suite | Holder::Bench => return Presence::Present,
+                Holder::Leaf => return Presence::Unresolved,
+                Holder::Namespace | Holder::Expect | Holder::Rows => {}
+            }
         }
         let has = |members: &&Members| members.of(holder).iter().any(|part| part.contains(&name));
         let measured = match major {
