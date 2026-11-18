@@ -245,9 +245,9 @@ pub enum Presence {
     Unresolved,
 }
 
-/// What each framework value has on one measured major: own and inherited members, besides
-/// JavaScript's own on every function ([`FUNCTION_MEMBERS`]). Each field is a list of parts, so
-/// majors can share the names they have in common.
+/// What each framework value has on one major, as any measured release of it has: own and
+/// inherited members, besides JavaScript's own on every function ([`FUNCTION_MEMBERS`]). Each
+/// field is a list of parts, so majors can share the names they have in common.
 #[derive(Debug)]
 pub struct Members {
     /// The major measured.
@@ -388,7 +388,7 @@ impl Dialect {
         if holder != Holder::Namespace && FUNCTION_MEMBERS.contains(&name) {
             return Presence::Present;
         }
-        // Measured on Vitest 3.2.7, 4.1.12 and 5.1.0: `expect` and a table's runner are arrow
+        // Measured on every release the tables cover: `expect` and a table's runner are arrow
         // functions.
         if name == "prototype"
             && matches!(

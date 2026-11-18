@@ -678,8 +678,8 @@ fn titles_render_as_each_major_collects_them() {
 }
 
 /// A member is present on the file's measured major only; an unknown major has what some measured
-/// major has; an unmeasured one leaves every other member unresolved. Measured on Vitest 3.2.7,
-/// 4.1.12 and 5.1.0.
+/// major has; an unmeasured one leaves every other member unresolved. A member one release of a
+/// major has is present on that major.
 #[test]
 fn presence_answers_per_measured_major() {
     use super::{Formatting, Holder, Presence};
@@ -702,6 +702,11 @@ fn presence_answers_per_measured_major() {
         (Holder::Test, "aroundEach", Vitest4, Present),
         (Holder::Test, "aroundEach", Unknown, Present),
         (Holder::Test, "aroundEach", Unmeasured, Present),
+        // Vitest 3.0 and 3.1 export `runOnce`; 4.0's test function has `setContext`.
+        (Holder::Namespace, "runOnce", Vitest3, Present),
+        (Holder::Namespace, "runOnce", Vitest4, Absent),
+        (Holder::Test, "setContext", Vitest4, Present),
+        (Holder::Test, "setContext", Vitest5, Absent),
         // Vitest 5 dropped `sequential` and the `bench` export.
         (Holder::Test, "sequential", Vitest4, Present),
         (Holder::Test, "sequential", Vitest5, Absent),

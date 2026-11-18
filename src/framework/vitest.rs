@@ -169,8 +169,10 @@ pub static DIALECT: Dialect = Dialect {
     source_keyed_matchers: &["InlineSnapshot"],
 };
 
-/// Members Vitest 3.2.7, 4.1.12 and 5.1.0 have, measured by walking each value's own keys and its
-/// prototypes up to `Function.prototype`. Vitest 3's test function carries no hooks or `describe`.
+/// Members Vitest 3 has, measured by walking each value's own keys and its prototypes up to
+/// `Function.prototype`. Each major lists what any of its measured releases has: the first and
+/// last patch of every minor, 3.0.0 to 5.1.1 (4.0.1 for 4.0.0, which no longer starts). Vitest 3's
+/// test function carries no hooks or `describe`.
 const V3: Members = Members {
     major: 3,
     namespace: &[&[
@@ -186,10 +188,14 @@ const V3: Members = Members {
         "describe",
         "expect",
         "expectTypeOf",
+        "getRunningMode",
         "inject",
+        "isFirstRun",
+        "isWatchMode",
         "it",
         "onTestFailed",
         "onTestFinished",
+        "runOnce",
         "should",
         "suite",
         "test",
@@ -266,17 +272,34 @@ const V3: Members = Members {
     ]],
 };
 
-/// Vitest 4.1.12 (see [`V3`]): 5's members and what 5 removed, `sequential` and benchmarks.
+/// Vitest 4 (see [`V3`]): 5's members and what 5 removed, `sequential`, the `*Context` members
+/// 4.0 had and benchmarks.
 const V4: Members = Members {
     major: 4,
     namespace: &[NAMESPACE_V5, &["BenchmarkRunner", "bench"]],
-    test: &[TEST_V5, &["sequential"]],
-    suite: &[SUITE_V5, &["sequential"]],
-    bench: &[&["fn", "only", "runIf", "skip", "skipIf", "todo"]],
+    test: &[
+        TEST_V5,
+        &["mergeContext", "sequential", "setContext", "withContext"],
+    ],
+    suite: &[
+        SUITE_V5,
+        &["mergeContext", "sequential", "setContext", "withContext"],
+    ],
+    bench: &[&[
+        "fn",
+        "mergeContext",
+        "only",
+        "runIf",
+        "setContext",
+        "skip",
+        "skipIf",
+        "todo",
+        "withContext",
+    ]],
     expect: &[EXPECT_V4],
 };
 
-/// Vitest 5.1.0 (see [`V3`]): no `bench` export, no `sequential`, and two more matchers.
+/// Vitest 5 (see [`V3`]): no `bench` export, no `sequential`, and two more matchers.
 const V5: Members = Members {
     major: 5,
     namespace: &[NAMESPACE_V5],
@@ -286,7 +309,7 @@ const V5: Members = Members {
     expect: &[EXPECT_V4, &["toBeFasterThan", "toBeSlowerThan"]],
 };
 
-/// The API module's exports on Vitest 5.1.0.
+/// The API module's exports on Vitest 5.
 const NAMESPACE_V5: &[&str] = &[
     "EvaluatedModules",
     "Snapshots",
@@ -316,7 +339,7 @@ const NAMESPACE_V5: &[&str] = &[
     "vitest",
 ];
 
-/// A test function's members on Vitest 5.1.0.
+/// A test function's members on Vitest 5.
 const TEST_V5: &[&str] = &[
     "afterAll",
     "afterEach",
@@ -341,7 +364,7 @@ const TEST_V5: &[&str] = &[
     "todo",
 ];
 
-/// A suite function's members on Vitest 5.1.0.
+/// A suite function's members on Vitest 5.
 const SUITE_V5: &[&str] = &[
     "concurrent",
     "each",
@@ -355,7 +378,7 @@ const SUITE_V5: &[&str] = &[
     "todo",
 ];
 
-/// The assertion entry point's members on Vitest 4.1.12.
+/// The assertion entry point's members on Vitest 4.
 const EXPECT_V4: &[&str] = &[
     "addEqualityTesters",
     "addSnapshotSerializer",
