@@ -225,10 +225,13 @@ pub enum Holder {
     Suite,
     /// A benchmark function.
     Bench,
-    /// The assertion entry point.
+    /// The assertion entry point, an arrow function: it has no `prototype`.
     Expect,
     /// A function with none of its own members besides JavaScript's (`test.each`, a hook).
     Leaf,
+    /// What a table's call returns (`test.each(rows)`): as [`Holder::Leaf`], but an arrow
+    /// function, with no `prototype`.
+    Rows,
 }
 
 /// Whether a framework value has a member, as measured on the file's major.
@@ -270,17 +273,17 @@ impl Members {
             Holder::Suite => self.suite,
             Holder::Bench => self.bench,
             Holder::Expect => self.expect,
-            Holder::Leaf => &[],
+            Holder::Leaf | Holder::Rows => &[],
         }
     }
 }
 
 /// What every function has from JavaScript: its own properties, then `Function.prototype`'s and
-/// `Object.prototype`'s.
-pub const FUNCTION_MEMBERS: [&str; 20] = [
+/// `Object.prototype`'s. An arrow function has no `prototype`, so [`Dialect::presence`] answers it
+/// per holder.
+pub const FUNCTION_MEMBERS: [&str; 19] = [
     "name",
     "length",
-    "prototype",
     "apply",
     "bind",
     "call",
@@ -383,6 +386,16 @@ impl Dialect {
     /// when no metadata names a major, and unresolved on a major outside the measured ones.
     pub fn presence(&self, holder: Holder, name: &str, major: Formatting) -> Presence {
         if holder != Holder::Namespace && FUNCTION_MEMBERS.contains(&name) {
+            return Presence::Present;
+        }
+        // Measured on Vitest 3.2.7, 4.1.12 and 5.1.0: `expect` and a table's runner are arrow
+        // functions.
+        if name == "prototype"
+            && matches!(
+                holder,
+                Holder::Test | Holder::Suite | Holder::Bench | Holder::Leaf
+            )
+        {
             return Presence::Present;
         }
         let has = |members: &&Members| members.of(holder).iter().any(|part| part.contains(&name));

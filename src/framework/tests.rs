@@ -690,6 +690,13 @@ fn presence_answers_per_measured_major() {
         (Holder::Test, "bind", Unmeasured, Present),
         (Holder::Leaf, "name", Vitest5, Present),
         (Holder::Namespace, "name", Vitest5, Absent),
+        // `expect` and a table's runner are arrow functions.
+        (Holder::Test, "prototype", Vitest3, Present),
+        (Holder::Leaf, "prototype", Vitest5, Present),
+        (Holder::Expect, "prototype", Vitest4, Absent),
+        (Holder::Rows, "prototype", Unknown, Absent),
+        (Holder::Rows, "bind", Vitest5, Present),
+        (Holder::Namespace, "prototype", Vitest4, Absent),
         // Vitest 3's test function carries no hooks.
         (Holder::Test, "aroundEach", Vitest3, Absent),
         (Holder::Test, "aroundEach", Vitest4, Present),
