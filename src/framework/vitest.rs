@@ -4,8 +4,8 @@
 //! The names here are the ones `docs/vitest-surface.md` documents.
 
 use super::{
-    AssertionEntry, Chain, ChainMember, Dialect, FileDefaults, Framework, HookTiming, MockMember,
-    Mocking, Namespace, Registers, Registration, TableRows,
+    AssertionEntry, Chain, ChainMember, Dialect, FileDefaults, Framework, HookTiming, Members,
+    MockMember, Mocking, Namespace, Registers, Registration, TableRows,
 };
 
 pub mod config;
@@ -148,6 +148,7 @@ pub static DIALECT: Dialect = Dialect {
         member!("override", Chain::FixtureScoping),
         member!("scoped", Chain::FixtureScoping),
     ],
+    members: &[V3, V4, V5],
     // What Vitest 4.1.12's top-level `bench` has, measured: no `each`, `for` or `concurrent`.
     bench_members: &["skip", "only", "todo"],
     bench_conditions: &["skipIf", "runIf"],
@@ -167,6 +168,219 @@ pub static DIALECT: Dialect = Dialect {
     name_observing_matchers: &["Snapshot"],
     source_keyed_matchers: &["InlineSnapshot"],
 };
+
+/// Members Vitest 3.2.7, 4.1.12 and 5.1.0 have, measured by walking each value's own keys and its
+/// prototypes up to `Function.prototype`. Vitest 3's test function carries no hooks or `describe`.
+const V3: Members = Members {
+    major: 3,
+    namespace: &[&[
+        "afterAll",
+        "afterEach",
+        "assert",
+        "assertType",
+        "beforeAll",
+        "beforeEach",
+        "bench",
+        "chai",
+        "createExpect",
+        "describe",
+        "expect",
+        "expectTypeOf",
+        "inject",
+        "it",
+        "onTestFailed",
+        "onTestFinished",
+        "should",
+        "suite",
+        "test",
+        "vi",
+        "vitest",
+    ]],
+    test: &[&[
+        "concurrent",
+        "each",
+        "extend",
+        "fails",
+        "fn",
+        "for",
+        "mergeContext",
+        "only",
+        "runIf",
+        "scoped",
+        "sequential",
+        "setContext",
+        "skip",
+        "skipIf",
+        "todo",
+        "withContext",
+    ]],
+    suite: &[&[
+        "concurrent",
+        "each",
+        "fn",
+        "for",
+        "mergeContext",
+        "only",
+        "runIf",
+        "sequential",
+        "setContext",
+        "shuffle",
+        "skip",
+        "skipIf",
+        "todo",
+        "withContext",
+    ]],
+    bench: &[&[
+        "fn",
+        "mergeContext",
+        "only",
+        "runIf",
+        "setContext",
+        "skip",
+        "skipIf",
+        "todo",
+        "withContext",
+    ]],
+    expect: &[&[
+        "addEqualityTesters",
+        "addSnapshotSerializer",
+        "any",
+        "anything",
+        "arrayContaining",
+        "assertions",
+        "closeTo",
+        "extend",
+        "fail",
+        "getState",
+        "hasAssertions",
+        "not",
+        "objectContaining",
+        "poll",
+        "setState",
+        "soft",
+        "stringContaining",
+        "stringMatching",
+        "toBeOneOf",
+        "toSatisfy",
+        "unreachable",
+    ]],
+};
+
+/// Vitest 4.1.12 (see [`V3`]): 5's members and what 5 removed, `sequential` and benchmarks.
+const V4: Members = Members {
+    major: 4,
+    namespace: &[NAMESPACE_V5, &["BenchmarkRunner", "bench"]],
+    test: &[TEST_V5, &["sequential"]],
+    suite: &[SUITE_V5, &["sequential"]],
+    bench: &[&["fn", "only", "runIf", "skip", "skipIf", "todo"]],
+    expect: &[EXPECT_V4],
+};
+
+/// Vitest 5.1.0 (see [`V3`]): no `bench` export, no `sequential`, and two more matchers.
+const V5: Members = Members {
+    major: 5,
+    namespace: &[NAMESPACE_V5],
+    test: &[TEST_V5],
+    suite: &[SUITE_V5],
+    bench: &[],
+    expect: &[EXPECT_V4, &["toBeFasterThan", "toBeSlowerThan"]],
+};
+
+/// The API module's exports on Vitest 5.1.0.
+const NAMESPACE_V5: &[&str] = &[
+    "EvaluatedModules",
+    "Snapshots",
+    "TestRunner",
+    "afterAll",
+    "afterEach",
+    "aroundAll",
+    "aroundEach",
+    "assert",
+    "assertType",
+    "beforeAll",
+    "beforeEach",
+    "chai",
+    "createExpect",
+    "describe",
+    "expect",
+    "expectTypeOf",
+    "inject",
+    "it",
+    "onTestFailed",
+    "onTestFinished",
+    "recordArtifact",
+    "should",
+    "suite",
+    "test",
+    "vi",
+    "vitest",
+];
+
+/// A test function's members on Vitest 5.1.0.
+const TEST_V5: &[&str] = &[
+    "afterAll",
+    "afterEach",
+    "aroundAll",
+    "aroundEach",
+    "beforeAll",
+    "beforeEach",
+    "concurrent",
+    "describe",
+    "each",
+    "extend",
+    "fails",
+    "fn",
+    "for",
+    "only",
+    "override",
+    "runIf",
+    "scoped",
+    "skip",
+    "skipIf",
+    "suite",
+    "todo",
+];
+
+/// A suite function's members on Vitest 5.1.0.
+const SUITE_V5: &[&str] = &[
+    "concurrent",
+    "each",
+    "fn",
+    "for",
+    "only",
+    "runIf",
+    "shuffle",
+    "skip",
+    "skipIf",
+    "todo",
+];
+
+/// The assertion entry point's members on Vitest 4.1.12.
+const EXPECT_V4: &[&str] = &[
+    "addEqualityTesters",
+    "addSnapshotSerializer",
+    "any",
+    "anything",
+    "arrayContaining",
+    "assert",
+    "assertions",
+    "closeTo",
+    "extend",
+    "fail",
+    "getState",
+    "hasAssertions",
+    "not",
+    "objectContaining",
+    "poll",
+    "schemaMatching",
+    "setState",
+    "soft",
+    "stringContaining",
+    "stringMatching",
+    "toBeOneOf",
+    "toSatisfy",
+    "unreachable",
+];
 
 /// Vitest's default file globs.
 pub static FILE_DEFAULTS: FileDefaults = FileDefaults {
