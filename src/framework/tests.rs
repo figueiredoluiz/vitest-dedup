@@ -676,3 +676,88 @@ fn titles_render_as_each_major_collects_them() {
         None
     );
 }
+
+/// A member is present on the file's measured major only; an unknown major has what some measured
+/// major has; an unmeasured one leaves every other member unresolved. A member one release of a
+/// major has is present on that major.
+#[test]
+fn presence_answers_per_measured_major() {
+    use super::{Formatting, Holder, Presence};
+    use Formatting::{Unknown, Unmeasured, Vitest3, Vitest4, Vitest5};
+    use Presence::{Absent, Present, Unresolved};
+    for (holder, name, major, expected) in [
+        // JavaScript's own, on every function, whatever the major.
+        (Holder::Test, "bind", Unmeasured, Present),
+        (Holder::Leaf, "name", Vitest5, Present),
+        (Holder::Namespace, "name", Vitest5, Absent),
+        // `expect`, a table's runner and some leaves are arrow functions.
+        (Holder::Test, "prototype", Vitest3, Present),
+        (Holder::Suite, "prototype", Vitest5, Present),
+        (Holder::Leaf, "prototype", Vitest5, Unresolved),
+        (Holder::Leaf, "prototype", Unknown, Unresolved),
+        (Holder::Expect, "prototype", Vitest4, Absent),
+        (Holder::Rows, "prototype", Unknown, Absent),
+        (Holder::Rows, "bind", Vitest5, Present),
+        (Holder::Namespace, "prototype", Vitest4, Absent),
+        // Vitest 3's test function carries no hooks.
+        (Holder::Test, "aroundEach", Vitest3, Absent),
+        (Holder::Test, "aroundEach", Vitest4, Present),
+        (Holder::Test, "aroundEach", Unknown, Present),
+        (Holder::Test, "aroundEach", Unmeasured, Present),
+        // Vitest 3.0 and 3.1 export `runOnce`; 4.0's test function has `setContext`.
+        (Holder::Namespace, "runOnce", Vitest3, Present),
+        (Holder::Namespace, "runOnce", Vitest4, Absent),
+        (Holder::Test, "setContext", Vitest4, Present),
+        (Holder::Test, "setContext", Vitest5, Absent),
+        // Vitest 5 dropped `sequential` and the `bench` export.
+        (Holder::Test, "sequential", Vitest4, Present),
+        (Holder::Test, "sequential", Vitest5, Absent),
+        (Holder::Namespace, "bench", Vitest4, Present),
+        (Holder::Namespace, "bench", Vitest5, Absent),
+        (Holder::Bench, "skip", Vitest5, Absent),
+        (Holder::Expect, "schemaMatching", Vitest3, Absent),
+        (Holder::Expect, "schemaMatching", Vitest4, Present),
+        (Holder::Suite, "shuffle", Vitest5, Present),
+        (Holder::Leaf, "each", Unknown, Absent),
+        // No measured major has it.
+        (Holder::Test, "nope", Vitest4, Absent),
+        (Holder::Test, "nope", Unknown, Absent),
+        (Holder::Test, "nope", Unmeasured, Unresolved),
+    ] {
+        assert_eq!(
+            DIALECT.presence(holder, name, major),
+            expected,
+            "{holder:?}.{name} on {major:?}"
+        );
+    }
+}
+
+/// The member tables agree with the dialect's other measured facts: a chain member and a test
+/// member are on some major's function, and Vitest 4's `bench` has what `bench_members` says.
+#[test]
+fn member_tables_hold_the_dialects_other_facts() {
+    use super::{Formatting, Holder, Presence};
+    let present = |holder, name, major| DIALECT.presence(holder, name, major) == Presence::Present;
+    assert_eq!(DIALECT.members.len(), 3);
+    for member in DIALECT.chain {
+        assert!(
+            present(Holder::Test, member.name, Formatting::Unknown)
+                || present(Holder::Suite, member.name, Formatting::Unknown),
+            "chain member {}",
+            member.name
+        );
+    }
+    for name in DIALECT.test_members {
+        assert!(present(Holder::Test, name, Formatting::Vitest4), "{name}");
+    }
+    for name in DIALECT.bench_members.iter().chain(DIALECT.bench_conditions) {
+        assert!(present(Holder::Bench, name, Formatting::Vitest4), "{name}");
+    }
+    for registration in DIALECT.registrations {
+        assert!(
+            present(Holder::Namespace, registration.name, Formatting::Unknown),
+            "{}",
+            registration.name
+        );
+    }
+}

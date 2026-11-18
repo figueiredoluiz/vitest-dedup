@@ -213,6 +213,98 @@ pub struct AssertionEntry {
     pub modifiers: &'static [&'static str],
 }
 
+/// The kind of framework value a member is read on, for [`Dialect::presence`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Holder {
+    /// The API module's namespace object.
+    Namespace,
+    /// A test function (`test`, `it`, `test.skip`, an extended test). A chained one such as
+    /// `test.skip` lacks `fn`, which the table still lists.
+    Test,
+    /// A suite function. As for [`Holder::Test`], `describe.skip` lacks `fn`.
+    Suite,
+    /// A benchmark function.
+    Bench,
+    /// The assertion entry point, an arrow function: it has no `prototype`.
+    Expect,
+    /// A function with none of its own members besides JavaScript's (`test.each`, a hook).
+    Leaf,
+    /// What a table's call returns (`test.each(rows)`): as [`Holder::Leaf`], but an arrow
+    /// function, with no `prototype`.
+    Rows,
+}
+
+/// Whether a framework value has a member, as measured on the file's major.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Presence {
+    /// The value has it.
+    Present,
+    /// The file's major lacks it, or no metadata names a major and no measured major has it: the
+    /// member is `undefined`.
+    Absent,
+    /// The file's major was not measured and no measured major has it, or the holder covers
+    /// values that differ on the member.
+    Unresolved,
+}
+
+/// What each framework value has on one major, as any measured release of it has: own and
+/// inherited members, besides JavaScript's own on every function ([`FUNCTION_MEMBERS`]). Each
+/// field is a list of parts, so majors can share the names they have in common.
+#[derive(Debug)]
+pub struct Members {
+    /// The major measured.
+    pub major: u64,
+    /// The API module's exports.
+    pub namespace: &'static [&'static [&'static str]],
+    /// A test function's.
+    pub test: &'static [&'static [&'static str]],
+    /// A suite function's.
+    pub suite: &'static [&'static [&'static str]],
+    /// A benchmark function's.
+    pub bench: &'static [&'static [&'static str]],
+    /// The assertion entry point's.
+    pub expect: &'static [&'static [&'static str]],
+}
+
+impl Members {
+    /// The parts of what `holder` has.
+    fn of(&self, holder: Holder) -> &'static [&'static [&'static str]] {
+        match holder {
+            Holder::Namespace => self.namespace,
+            Holder::Test => self.test,
+            Holder::Suite => self.suite,
+            Holder::Bench => self.bench,
+            Holder::Expect => self.expect,
+            Holder::Leaf | Holder::Rows => &[],
+        }
+    }
+}
+
+/// What every function has from JavaScript: its own properties, then `Function.prototype`'s and
+/// `Object.prototype`'s. An arrow function has no `prototype`, so [`Dialect::presence`] answers it
+/// per holder.
+pub const FUNCTION_MEMBERS: [&str; 19] = [
+    "name",
+    "length",
+    "apply",
+    "bind",
+    "call",
+    "toString",
+    "constructor",
+    "caller",
+    "arguments",
+    "hasOwnProperty",
+    "isPrototypeOf",
+    "propertyIsEnumerable",
+    "toLocaleString",
+    "valueOf",
+    "__proto__",
+    "__defineGetter__",
+    "__defineSetter__",
+    "__lookupGetter__",
+    "__lookupSetter__",
+];
+
 /// One framework's test API, described as data.
 #[derive(Debug)]
 pub struct Dialect {
@@ -247,6 +339,8 @@ pub struct Dialect {
     pub assertions: &'static [AssertionEntry],
     /// Members that can be chained onto a registration.
     pub chain: &'static [ChainMember],
+    /// What each framework value has, per measured major.
+    pub members: &'static [Members],
     /// Registrations a test function also carries as members (`test.describe`,
     /// `test.beforeEach`): each is the same function as the top-level export, so calling it
     /// ignores whatever was chained before it.
@@ -287,6 +381,40 @@ impl Dialect {
             previous = Some(member);
             exists
         })
+    }
+
+    /// Whether a value of kind `holder` has the member `name` on the file's `major`. A major no
+    /// measurement covers has what some measured major has; any other member is `undefined`
+    /// when no metadata names a major, and unresolved on a major outside the measured ones.
+    pub fn presence(&self, holder: Holder, name: &str, major: Formatting) -> Presence {
+        if holder != Holder::Namespace && FUNCTION_MEMBERS.contains(&name) {
+            return Presence::Present;
+        }
+        // Measured on every release the tables cover: `expect` and a table's runner are arrow
+        // functions, and so are some leaves (`onTestFailed`, `describe.skipIf`) but not others
+        // (`beforeEach`, `test.skipIf`).
+        if name == "prototype" {
+            match holder {
+                Holder::Test | Holder::Suite | Holder::Bench => return Presence::Present,
+                Holder::Leaf => return Presence::Unresolved,
+                Holder::Namespace | Holder::Expect | Holder::Rows => {}
+            }
+        }
+        let has = |members: &&Members| members.of(holder).iter().any(|part| part.contains(&name));
+        let measured = match major {
+            Formatting::Vitest3 => Some(3),
+            Formatting::Vitest4 => Some(4),
+            Formatting::Vitest5 => Some(5),
+            Formatting::Unknown | Formatting::Unmeasured => None,
+        }
+        .and_then(|major| self.members.iter().find(|members| members.major == major));
+        match measured {
+            Some(members) if has(&members) => Presence::Present,
+            Some(_) => Presence::Absent,
+            None if self.members.iter().any(|members| has(&members)) => Presence::Present,
+            None if major == Formatting::Unmeasured => Presence::Unresolved,
+            None => Presence::Absent,
+        }
     }
 
     /// The registration `name` stands for, if any.
