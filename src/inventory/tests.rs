@@ -2131,3 +2131,21 @@ fn module_export_cache_retains_owned_bytes() {
     );
     assert!(modules.heap_bytes() > reserved);
 }
+
+/// A function held in a local wrapper's result is not proved inert.
+#[test]
+fn a_local_wrapper_result_holding_a_function_stays_opaque() {
+    // Vitest 3.2.7, 4.1.12 and 5.1.0 register `a` through `made.run()`.
+    let found = sites(
+        "import { test } from 'vitest'\n\
+         function make() { return { run: () => test('a', () => {}) } }\n\
+         const made = make()\n\
+         made.run()",
+        &[],
+        false,
+    );
+    assert!(
+        found.iter().any(|site| site.starts_with("wrapper@4:")),
+        "{found:?}"
+    );
+}

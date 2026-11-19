@@ -6,6 +6,22 @@
   "recallDestination": 1,
   "cases": [
     {
+      "name": "registration-read-not-the-value",
+      "path": "registration-read-not-the-value",
+      "rule": "duplicate-test",
+      "role": "positive",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-16",
+      "expectedTests": 2,
+      "expectedIncomplete": false,
+      "expectedUnresolved": 0,
+      "expectedFindings": [
+        { "rule": "duplicate-test", "severity": "error", "titles": ["first", "second"] }
+      ],
+      "expectedAbsent": []
+    },
+    {
       "name": "shared-nested-config",
       "path": "shared-nested-config",
       "rule": "duplicate-test",
