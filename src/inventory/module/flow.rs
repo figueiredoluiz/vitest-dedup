@@ -1293,9 +1293,9 @@ impl<'s> Module<'s> {
     }
 
     /// Whether `value` holds something other than an unknown value that may register: a
-    /// registration value, a function, a module, or a container with a member or a part (a spread
-    /// argument, a computed key) that may be one. A container deeper than
-    /// [`Module::registers_nothing`] opens may.
+    /// registration value, a function, a module, or a container that is not a
+    /// [plain literal](Module::plain_literal) or has a member that may be one, read with `scope`.
+    /// A container deeper than [`Module::registers_nothing`] opens may.
     fn may_hold_registration(&self, value: &Value<'s>, scope: &Scope<'s>, depth: usize) -> bool {
         value.0.iter().any(|atom| match atom {
             Atom::Undefined
@@ -1304,24 +1304,42 @@ impl<'s> Module<'s> {
             | Atom::Builtin
             | Atom::Framework(_)
             | Atom::Unknown => false,
-            // A member read finds what a spread hides only through the spread's argument.
             Atom::Object(_) | Atom::Array(_) => {
                 depth >= 3
+                    || !self.plain_literal(atom)
                     || self.may_hold_registration(
                         &self.get(atom.clone(), Key::Dynamic, scope, 0),
                         scope,
                         depth + 1,
                     )
-                    || self.parts(atom).any(|part| {
-                        self.may_hold_registration(
-                            &self.evaluate_in(part, scope, 0),
-                            scope,
-                            depth + 1,
-                        )
-                    })
             }
             _ => true,
         })
+    }
+
+    /// Whether the container literal `atom` holds only data a member read sees: elements without
+    /// a spread, or properties that are plain `key: value` pairs with no spread, computed key,
+    /// getter, setter or method.
+    fn plain_literal(&self, atom: &Atom<'s>) -> bool {
+        let tree = self.tree;
+        match *atom {
+            Atom::Array(node) => tree
+                .list(node, "elements")
+                .into_iter()
+                .flatten()
+                .all(|element| tree.kind(element) != "SpreadElement"),
+            Atom::Object(node) => tree
+                .list(node, "properties")
+                .into_iter()
+                .flatten()
+                .all(|part| {
+                    tree.kind(part) == "Property"
+                        && tree.text(part, "kind") == Some("init")
+                        && !tree.flag(part, "method")
+                        && !tree.flag(part, "computed")
+                }),
+            _ => false,
+        }
     }
 
     /// What a binding read at `identifier` holds.
