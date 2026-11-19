@@ -373,8 +373,8 @@ impl Default for ImportWork {
 #[derive(Debug, Default)]
 pub struct Modules {
     sources: crate::lang::Sources,
-    /// What each export of an analysed module may hold, by module and setting.
-    summaries: HashMap<(PathBuf, (bool, Formatting)), HashMap<String, Summary>>,
+    /// What each export of an analysed module may hold, by module, globals setting and major.
+    summaries: crate::memory::RetainedMap<(PathBuf, (bool, Formatting)), HashMap<String, Summary>>,
     cache: crate::memory::RetainedMap<(PathBuf, (bool, Formatting)), HashMap<String, Export>>,
     /// Advances only when a new complete module proof enters `cache`.
     cache_generation: usize,
@@ -409,12 +409,21 @@ impl Setting<'_> {
 struct Summary {
     roots: Vec<(Root, Vec<Box<str>>)>,
     other: bool,
+    /// For a project function that registers nothing itself: what calling it returns, with its
+    /// parameters unknown. Only an export's own summary carries one, never the nested one.
+    returns: Option<Box<Summary>>,
+    /// For a project function that registers: what calling it returns, its parameters unknown.
+    /// Its roots still say it is a wrapper; only a call of the binding reads this.
+    called: Option<Box<Summary>>,
 }
 
 impl Summary {
     /// One framework root with nothing applied to it: what its [`Export`] already says.
     fn plain(&self) -> bool {
-        !self.other && matches!(&self.roots[..], [(_, steps)] if steps.is_empty())
+        !self.other
+            && self.returns.is_none()
+            && self.called.is_none()
+            && matches!(&self.roots[..], [(_, steps)] if steps.is_empty())
     }
 }
 
@@ -618,22 +627,31 @@ impl crate::memory::HeapBytes for Modules {
 }
 
 impl crate::memory::HeapBytes for Summary {
-    /// Each root's step list and the text of every step.
+    /// Each root's step list, the text of every step, and what a call returns.
     fn heap_bytes(&self) -> usize {
-        self.roots.iter().fold(
-            self.roots
-                .capacity()
-                .saturating_mul(std::mem::size_of::<(Root, Vec<Box<str>>)>()),
-            |bytes, (_, steps)| {
-                steps.iter().fold(
-                    bytes.saturating_add(
-                        steps
-                            .capacity()
-                            .saturating_mul(std::mem::size_of::<Box<str>>()),
-                    ),
-                    |bytes, step| bytes.saturating_add(step.len()),
-                )
-            },
-        )
+        let boxed = |summary: &Option<Box<Summary>>| {
+            summary.as_ref().map_or(0, |summary| {
+                std::mem::size_of::<Summary>().saturating_add(summary.heap_bytes())
+            })
+        };
+        let returns = boxed(&self.returns).saturating_add(boxed(&self.called));
+        self.roots
+            .iter()
+            .fold(
+                self.roots
+                    .capacity()
+                    .saturating_mul(std::mem::size_of::<(Root, Vec<Box<str>>)>()),
+                |bytes, (_, steps)| {
+                    steps.iter().fold(
+                        bytes.saturating_add(
+                            steps
+                                .capacity()
+                                .saturating_mul(std::mem::size_of::<Box<str>>()),
+                        ),
+                        |bytes, step| bytes.saturating_add(step.len()),
+                    )
+                },
+            )
+            .saturating_add(returns)
     }
 }

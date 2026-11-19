@@ -158,8 +158,103 @@ impl Framework {
         }
     }
 
+    /// Every member it has on some measured major, besides those of [`MEMBERS`]: own and
+    /// inherited, walked up to `Function.prototype` on Vitest 3.2.7, 4.1.12 and 5.1.0.
+    fn others(self) -> &'static [&'static str] {
+        match self {
+            Framework::Test => &[
+                "afterAll",
+                "afterEach",
+                "aroundAll",
+                "aroundEach",
+                "beforeAll",
+                "beforeEach",
+                "describe",
+                "fails",
+                "fn",
+                "mergeContext",
+                "override",
+                "runIf",
+                "scoped",
+                "sequential",
+                "setContext",
+                "skipIf",
+                "suite",
+                "withContext",
+            ],
+            Framework::Describe => &[
+                "fn",
+                "mergeContext",
+                "runIf",
+                "sequential",
+                "setContext",
+                "shuffle",
+                "skipIf",
+                "withContext",
+            ],
+            Framework::Namespace => &[
+                "BenchmarkRunner",
+                "EvaluatedModules",
+                "Snapshots",
+                "TestRunner",
+                "afterAll",
+                "afterEach",
+                "aroundAll",
+                "aroundEach",
+                "assert",
+                "assertType",
+                "beforeAll",
+                "beforeEach",
+                "bench",
+                "chai",
+                "createExpect",
+                "describe",
+                "expectTypeOf",
+                "inject",
+                "it",
+                "onTestFailed",
+                "onTestFinished",
+                "recordArtifact",
+                "should",
+                "suite",
+                "vi",
+                "vitest",
+            ],
+            Framework::Expect => &[
+                "addEqualityTesters",
+                "addSnapshotSerializer",
+                "any",
+                "anything",
+                "arrayContaining",
+                "assert",
+                "assertions",
+                "closeTo",
+                "fail",
+                "getState",
+                "hasAssertions",
+                "not",
+                "objectContaining",
+                "poll",
+                "schemaMatching",
+                "setState",
+                "soft",
+                "stringContaining",
+                "stringMatching",
+                "toBeFasterThan",
+                "toBeOneOf",
+                "toBeSlowerThan",
+                "toSatisfy",
+                "unreachable",
+            ],
+            Framework::Leaf => &[],
+        }
+    }
+
     /// The value of a framework atom: a function, the namespace, `undefined`, or nothing when
-    /// reading through `undefined` throws. A call step or a member outside [`MEMBERS`] is unknown.
+    /// reading through `undefined` or calling it throws. A member outside [`MEMBERS`] that some
+    /// major has is a function or an object (measured `typeof` on each major), and what is read
+    /// or called through it is not known, as is a call of a member that exists; a member no
+    /// major has is `undefined`.
     fn value(atom: &Atom) -> Value {
         let unknown = Value {
             unknown: true,
@@ -175,10 +270,43 @@ impl Framework {
             let Some(current) = at else {
                 return Value::default();
             };
-            if step.arguments.is_some() || !MEMBERS.contains(&step.member.as_str()) {
+            let member = step.member.as_str();
+            if !matches!(current, Framework::Namespace) && INHERITED.contains(&member) {
                 return unknown;
             }
-            at = current.step(&step.member);
+            if current.others().contains(&member) {
+                return if step.arguments.is_none()
+                    && atom
+                        .steps
+                        .last()
+                        .is_some_and(|last| std::ptr::eq(last, step))
+                {
+                    Value {
+                        function: true,
+                        object: true,
+                        ..Value::default()
+                    }
+                } else {
+                    unknown
+                };
+            }
+            at = if MEMBERS.contains(&member) {
+                current.step(member)
+            } else {
+                None
+            };
+            if step.arguments.is_some() {
+                // Measured on Vitest 3.2.7, 4.1.12 and 5.1.0: `test.extend()` has the members of
+                // `test`, and `each()`/`for()` return a function with only `name` and `length`.
+                match (at, current, member) {
+                    (None, ..) => return Value::default(),
+                    (Some(_), Framework::Test, "extend") => at = Some(Framework::Test),
+                    (Some(_), Framework::Test | Framework::Describe, "each" | "for") => {
+                        at = Some(Framework::Leaf);
+                    }
+                    (Some(_), ..) => return unknown,
+                }
+            }
         }
         match at {
             Some(Framework::Namespace) => Value {
@@ -440,6 +568,8 @@ struct Value {
     nullish: bool,
     /// A value nothing here knows: any of the above.
     unknown: bool,
+    /// A truthy value nothing here knows: what is read through it is not known either.
+    opaque: bool,
     registers: Registers,
 }
 
@@ -455,16 +585,24 @@ impl Value {
             falsy: self.falsy || other.falsy,
             nullish: self.nullish || other.nullish,
             unknown: self.unknown || other.unknown,
+            opaque: self.opaque || other.opaque,
             registers: self.registers.max(other.registers),
         }
     }
 
+    /// Whether every value it may be is truthy.
     fn always_truthy(self) -> bool {
         !self.empty && !self.falsy && !self.nullish && !self.unknown
     }
 
+    /// Whether every value it may be is falsy.
     fn always_falsy(self) -> bool {
-        !self.function && !self.object && !self.text && !self.truthy && !self.unknown
+        !self.function
+            && !self.object
+            && !self.text
+            && !self.truthy
+            && !self.unknown
+            && !self.opaque
     }
 
     /// Whether evaluating it always throws: it has no value at all.
@@ -477,12 +615,15 @@ impl Value {
             && !self.falsy
             && !self.nullish
             && !self.unknown
+            && !self.opaque
     }
 
+    /// Whether some value it may be is `null` or `undefined`.
     fn may_be_nullish(self) -> bool {
         self.nullish || self.unknown
     }
 
+    /// Whether every value it may be is `null` or `undefined`.
     fn always_nullish(self) -> bool {
         !self.function
             && !self.object
@@ -491,6 +632,7 @@ impl Value {
             && !self.truthy
             && !self.falsy
             && !self.unknown
+            && !self.opaque
     }
 
     /// The values that are falsy; a function is truthy, so none registers.
@@ -503,20 +645,26 @@ impl Value {
         }
     }
 
-    /// The values that are truthy.
+    /// The values that are truthy; those of an unknown value are any truthy one.
     fn truthy_part(self) -> Value {
         Value {
             empty: false,
             falsy: false,
             nullish: false,
+            unknown: false,
+            opaque: self.opaque || self.unknown,
             ..self
         }
     }
 
-    /// The values that are not nullish.
+    /// The values that are not nullish; those of an unknown value are any other one.
     fn non_nullish_part(self) -> Value {
         Value {
+            empty: self.empty || self.unknown,
+            falsy: self.falsy || self.unknown,
             nullish: false,
+            unknown: false,
+            opaque: self.opaque || self.unknown,
             ..self
         }
     }
@@ -557,7 +705,7 @@ impl Value {
         if self.truthy || self.falsy || self.object {
             read = read.join(missing);
         }
-        if self.unknown {
+        if self.unknown || self.opaque {
             read = read.join(Value {
                 unknown: true,
                 registers: Registers::Undecided,

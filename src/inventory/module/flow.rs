@@ -5,13 +5,14 @@
 //! other receiver.
 
 use super::{Module, Origin, Step};
+use crate::framework::{Holder, Presence};
 use crate::inventory::{Export, Modules, Reach, Registers, Root, Summary};
 use crate::lang::{
     bound_symbols, export_name, member_name, property_name, Declaration, Field, Name, NodeId,
     SymbolId,
 };
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// Whether a primitive is truthy.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -43,17 +44,30 @@ pub(super) enum Atom<'s> {
     Object(NodeId),
     /// A function of this module, by its node.
     Function(NodeId),
+    /// A function another module exports that registers nothing itself, by what calling it
+    /// returns.
+    Helper(Box<Summary>),
     /// A project module's namespace object, by the import binding.
     Module(SymbolId),
     /// A framework value: a root the dialect knows and the steps applied to it.
     Api(Origin, Vec<Step<'s>>),
     /// A built-in function or object: truthy, never nullish, never a registration.
     Builtin,
+    /// A framework value that registers nothing and whose members the dialect measured
+    /// (`v.expect`): truthy, never nullish.
+    Framework(Holder),
     /// Anything.
     Unknown,
 }
 
 impl Atom<'_> {
+    /// A member of a project wrapper, or what calling one returns: any value at all, as
+    /// [`Atom::Unknown`] is, while it may still register when called (`wrap.skip ? a : b`).
+    fn is_opaque(&self) -> bool {
+        matches!(self, Atom::Api(origin, steps) if origin.reach().is_some() && !steps.is_empty())
+    }
+
+    /// Whether some value it may be is truthy.
     fn may_be_truthy(&self) -> bool {
         !matches!(
             self,
@@ -61,6 +75,7 @@ impl Atom<'_> {
         )
     }
 
+    /// Whether some value it may be is falsy.
     fn may_be_falsy(&self) -> bool {
         matches!(
             self,
@@ -68,13 +83,15 @@ impl Atom<'_> {
                 | Atom::Null
                 | Atom::Primitive(_, Truth::No | Truth::Either)
                 | Atom::Unknown
-        )
+        ) || self.is_opaque()
     }
 
+    /// Whether some value it may be is `null` or `undefined`.
     fn may_be_nullish(&self) -> bool {
-        matches!(self, Atom::Undefined | Atom::Null | Atom::Unknown)
+        matches!(self, Atom::Undefined | Atom::Null | Atom::Unknown) || self.is_opaque()
     }
 
+    /// Whether some value it may be is neither `null` nor `undefined`.
     fn may_be_other_than_nullish(&self) -> bool {
         !matches!(self, Atom::Undefined | Atom::Null)
     }
@@ -84,20 +101,33 @@ impl Atom<'_> {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(super) struct Value<'s>(Vec<Atom<'s>>);
 
-/// More alternatives than this widen to [`Atom::Unknown`].
+/// More alternatives than this widen to [`Atom::Unknown`], or to [`Value::exhausted`] when one
+/// of them may register.
 const WIDEST: usize = 16;
-/// Nested evaluations past this depth are [`Atom::Unknown`].
+/// Nested evaluations past this depth are [`Value::exhausted`].
 const DEEPEST: usize = 48;
+/// Steps one evaluation may take, memoised or not, before the rest are [`Value::exhausted`]:
+/// depth alone does not bound branching through calls whose scopes are not memoised.
+const BUSIEST: usize = 20_000;
 
 impl<'s> Value<'s> {
+    /// Exactly `atom`.
     fn of(atom: Atom<'s>) -> Self {
         Value(vec![atom])
     }
 
+    /// Any value that registers nothing when called.
     fn unknown() -> Self {
         Value::of(Atom::Unknown)
     }
 
+    /// What a value past an evaluation limit is: any value, which may register when called. A
+    /// limit proves nothing absent.
+    fn exhausted() -> Self {
+        Value::of(Atom::Api(Origin::Wrapper(Reach::Tasks), vec![Step::Call]))
+    }
+
+    /// Either value: every alternative of both, widened past [`WIDEST`].
     fn join(mut self, other: Value<'s>) -> Self {
         for atom in other.0 {
             if !self.0.contains(&atom) {
@@ -105,11 +135,27 @@ impl<'s> Value<'s> {
             }
         }
         if self.0.len() > WIDEST {
-            return Value::unknown();
+            let plain = self.0.iter().all(|atom| {
+                matches!(
+                    atom,
+                    Atom::Undefined
+                        | Atom::Null
+                        | Atom::Primitive(..)
+                        | Atom::Builtin
+                        | Atom::Framework(_)
+                        | Atom::Unknown
+                )
+            });
+            return if plain {
+                Value::unknown()
+            } else {
+                Value::exhausted()
+            };
         }
         self
     }
 
+    /// The alternatives `keep` accepts.
     fn filter(self, keep: impl Fn(&Atom<'s>) -> bool) -> Self {
         Value(self.0.into_iter().filter(|atom| keep(atom)).collect())
     }
@@ -142,6 +188,7 @@ impl<'s> Value<'s> {
         self.0.is_empty()
     }
 
+    /// Whether some alternative is a framework or project registration value.
     pub(super) fn holds_api(&self) -> bool {
         self.0.iter().any(|atom| matches!(atom, Atom::Api(..)))
     }
@@ -185,6 +232,8 @@ enum Op<'s> {
     Read(NodeId),
     /// What awaiting `value` resolves to.
     Await(NodeId),
+    /// An optional chain: a `?.` link whose object is nullish makes the whole chain `undefined`.
+    Chain(NodeId),
     /// Each expression in order, the last one's value: nothing when an earlier one throws.
     Sequence(Vec<NodeId>),
     /// Syntax with no lowering.
@@ -210,27 +259,138 @@ type Scope<'s> = HashMap<SymbolId, Value<'s>>;
 /// A spike-wide record of the namespace imports of project modules.
 pub(super) type Namespaces = HashMap<SymbolId, HashMap<String, Summary>>;
 
-/// A function's own properties, then its prototype's, as JavaScript defines them.
-const FUNCTION_MEMBERS: [&str; 4] = ["call", "apply", "bind", "toString"];
-/// A string's prototype methods most read.
-const STRING_MEMBERS: [&str; 8] = [
-    "toUpperCase",
-    "toLowerCase",
-    "slice",
-    "split",
-    "trim",
+// The prototype methods past `Object.prototype`'s, measured on Node 24.21 and 26.0.
+/// `Function.prototype`'s methods.
+const FUNCTION_MEMBERS: [&str; 3] = ["apply", "bind", "call"];
+/// `String.prototype`'s methods.
+const STRING_MEMBERS: [&str; 48] = [
+    "anchor",
+    "at",
+    "big",
+    "blink",
+    "bold",
+    "charAt",
+    "charCodeAt",
+    "codePointAt",
+    "concat",
+    "endsWith",
+    "fixed",
+    "fontcolor",
+    "fontsize",
     "includes",
+    "indexOf",
+    "isWellFormed",
+    "italics",
+    "lastIndexOf",
+    "link",
+    "localeCompare",
+    "match",
+    "matchAll",
+    "normalize",
+    "padEnd",
+    "padStart",
+    "repeat",
     "replace",
-    "toString",
+    "replaceAll",
+    "search",
+    "slice",
+    "small",
+    "split",
+    "startsWith",
+    "strike",
+    "sub",
+    "substr",
+    "substring",
+    "sup",
+    "toLocaleLowerCase",
+    "toLocaleUpperCase",
+    "toLowerCase",
+    "toUpperCase",
+    "toWellFormed",
+    "trim",
+    "trimEnd",
+    "trimLeft",
+    "trimRight",
+    "trimStart",
 ];
-/// A number's and a boolean's prototype methods.
-const NUMBER_MEMBERS: [&str; 4] = ["toFixed", "toString", "valueOf", "toPrecision"];
-/// An array's prototype methods most read.
-const ARRAY_MEMBERS: [&str; 8] = [
-    "map", "filter", "forEach", "find", "push", "concat", "join", "toString",
+/// `Number.prototype`'s methods; `Boolean.prototype` adds none.
+const NUMBER_MEMBERS: [&str; 3] = ["toExponential", "toFixed", "toPrecision"];
+/// `Array.prototype`'s methods.
+const ARRAY_MEMBERS: [&str; 36] = [
+    "at",
+    "concat",
+    "copyWithin",
+    "entries",
+    "every",
+    "fill",
+    "filter",
+    "find",
+    "findIndex",
+    "findLast",
+    "findLastIndex",
+    "flat",
+    "flatMap",
+    "forEach",
+    "includes",
+    "indexOf",
+    "join",
+    "keys",
+    "lastIndexOf",
+    "map",
+    "pop",
+    "push",
+    "reduce",
+    "reduceRight",
+    "reverse",
+    "shift",
+    "slice",
+    "some",
+    "sort",
+    "splice",
+    "toReversed",
+    "toSorted",
+    "toSpliced",
+    "unshift",
+    "values",
+    "with",
+];
+/// The built-in methods that change their receiver's members.
+const MUTATORS: [&str; 11] = [
+    "copyWithin",
+    "fill",
+    "pop",
+    "push",
+    "reverse",
+    "shift",
+    "sort",
+    "splice",
+    "unshift",
+    "__defineGetter__",
+    "__defineSetter__",
 ];
 /// `Object.prototype`'s methods.
-const OBJECT_MEMBERS: [&str; 4] = ["toString", "valueOf", "hasOwnProperty", "constructor"];
+const OBJECT_MEMBERS: [&str; 11] = [
+    "__defineGetter__",
+    "__defineSetter__",
+    "__lookupGetter__",
+    "__lookupSetter__",
+    "constructor",
+    "hasOwnProperty",
+    "isPrototypeOf",
+    "propertyIsEnumerable",
+    "toLocaleString",
+    "toString",
+    "valueOf",
+];
+
+/// The key a property name spells: a canonical array index is that index (`'a'['0']`), any other
+/// spelling a name (`[x]['00']`).
+fn key_named(name: &str) -> Key<'_> {
+    match name.parse::<u32>() {
+        Ok(index) if index < u32::MAX && index.to_string() == name => Key::Index(index as usize),
+        _ => Key::Name(name),
+    }
+}
 
 /// What `key` reads on a value whose own properties are `own` and whose prototype's methods are
 /// `methods`: a method is a built-in function, anything else is `undefined`.
@@ -239,6 +399,8 @@ fn table<'s>(key: Key<'s>, own: &[(&str, Atom<'s>)], methods: &[&str]) -> Value<
         Key::Name(name) => {
             if let Some((_, atom)) = own.iter().find(|(own, _)| *own == name) {
                 Value::of(atom.clone())
+            } else if name == "__proto__" {
+                Value::unknown()
             } else if methods.contains(&name) || OBJECT_MEMBERS.contains(&name) {
                 Value::of(Atom::Builtin)
             } else {
@@ -255,6 +417,8 @@ fn table<'s>(key: Key<'s>, own: &[(&str, Atom<'s>)], methods: &[&str]) -> Value<
 pub(super) struct Flow<'s> {
     memo: RefCell<HashMap<NodeId, Value<'s>>>,
     active: RefCell<Vec<NodeId>>,
+    /// Steps taken by the evaluation in progress.
+    steps: std::cell::Cell<usize>,
 }
 
 impl<'s> Flow<'s> {
@@ -276,6 +440,22 @@ impl<'s> Module<'s> {
         }
         match tree.kind(node) {
             "Identifier" => Op::Read(node),
+            // A bigint serializes its value as `null`; its digits tell it from `null`.
+            "Literal"
+                if matches!(
+                    tree.field_of(node, "bigint"),
+                    Field::Value(serde_json::Value::String(_))
+                ) =>
+            {
+                let zero = matches!(
+                    tree.field_of(node, "bigint"),
+                    Field::Value(serde_json::Value::String(digits)) if digits.trim_start_matches(['0', '-']).is_empty()
+                );
+                Op::Is(Atom::Primitive(Primitive::Other, truth(!zero)))
+            }
+            "Literal" if matches!(tree.field_of(node, "regex"), Field::Object(_)) => {
+                Op::Is(Atom::Builtin)
+            }
             "Literal" => Op::Is(match tree.field_of(node, "value") {
                 Field::Value(serde_json::Value::Null) => Atom::Null,
                 Field::Value(serde_json::Value::Bool(value)) => {
@@ -346,23 +526,33 @@ impl<'s> Module<'s> {
             "AssignmentExpression" if tree.text(node, "operator") == Some("=") => {
                 child("right").map_or(Op::Unknown, Op::Last)
             }
+            // A logical assignment is its target's value or, when the operator assigns, the right.
+            "AssignmentExpression" => match (child("left"), child("right")) {
+                (Some(left), Some(right)) => match tree.text(node, "operator") {
+                    Some("&&=") => Op::Choose {
+                        test: left,
+                        guard: Guard::Truthy,
+                        then: Some(right),
+                        otherwise: None,
+                    },
+                    Some("||=") => Op::Choose {
+                        test: left,
+                        guard: Guard::Truthy,
+                        then: None,
+                        otherwise: Some(right),
+                    },
+                    Some("??=") => Op::Choose {
+                        test: left,
+                        guard: Guard::NotNullish,
+                        then: None,
+                        otherwise: Some(right),
+                    },
+                    _ => Op::Unknown,
+                },
+                _ => Op::Unknown,
+            },
             "MemberExpression" => {
-                let Some(object) = child("object") else {
-                    return Op::Unknown;
-                };
-                let key = match member_name(tree, node) {
-                    Some(name) => Key::Name(name),
-                    None => child("property")
-                        .map(|property| tree.inner(property))
-                        .and_then(|property| match tree.field_of(property, "value") {
-                            Field::Value(serde_json::Value::Number(number)) => {
-                                number.as_u64().map(|index| Key::Index(index as usize))
-                            }
-                            _ => None,
-                        })
-                        .unwrap_or(Key::Dynamic),
-                };
-                Op::Get(object, key)
+                child("object").map_or(Op::Unknown, |object| Op::Get(object, self.key(node)))
             }
             "CallExpression" => match child("callee") {
                 Some(callee) => Op::Call(
@@ -375,7 +565,7 @@ impl<'s> Module<'s> {
                 child("tag").map_or(Op::Unknown, |tag| Op::Call(tag, vec![]))
             }
             "AwaitExpression" => child("argument").map_or(Op::Unknown, Op::Await),
-            "ChainExpression" => child("expression").map_or(Op::Unknown, Op::Last),
+            "ChainExpression" => child("expression").map_or(Op::Unknown, Op::Chain),
             "UnaryExpression" => Op::Is(match tree.text(node, "operator") {
                 Some("void") => Atom::Undefined,
                 Some("typeof") => Atom::Primitive(Primitive::String, Truth::Yes),
@@ -393,6 +583,26 @@ impl<'s> Module<'s> {
         }
     }
 
+    /// The key the member expression `member` reads.
+    fn key(&self, member: NodeId) -> Key<'s> {
+        let tree = self.tree;
+        match member_name(tree, member) {
+            // A canonical array index spelled as a string is that index (`'a'['0']`); any other
+            // spelling is a name (`[x]['00']`).
+            Some(name) => key_named(name),
+            None => tree
+                .child(member, "property")
+                .map(|property| tree.inner(property))
+                .and_then(|property| match tree.field_of(property, "value") {
+                    Field::Value(serde_json::Value::Number(number)) => {
+                        number.as_u64().map(|index| Key::Index(index as usize))
+                    }
+                    _ => None,
+                })
+                .unwrap_or(Key::Dynamic),
+        }
+    }
+
     /// What `node` may evaluate to.
     pub(super) fn evaluate(&self, node: NodeId) -> Value<'s> {
         // What the module knows of its bindings may have grown since the last evaluation.
@@ -400,11 +610,19 @@ impl<'s> Module<'s> {
         self.evaluate_in(node, &Scope::new(), 0)
     }
 
+    /// What `node` may evaluate to with `scope`'s parameters bound, `depth` evaluations deep.
     fn evaluate_in(&self, node: NodeId, scope: &Scope<'s>, depth: usize) -> Value<'s> {
         let node = self.tree.inner(node);
         #[cfg(test)]
         super::WALK_STEPS.with(|steps| steps.set(steps.get() + 1));
-        if depth > DEEPEST || self.flow.active.borrow().contains(&node) {
+        if self.flow.active.borrow().is_empty() {
+            self.flow.steps.set(0);
+        }
+        self.flow.steps.set(self.flow.steps.get() + 1);
+        if depth > DEEPEST || self.flow.steps.get() > BUSIEST {
+            return Value::exhausted();
+        }
+        if self.flow.active.borrow().contains(&node) {
             return Value::unknown();
         }
         let memoised = scope.is_empty();
@@ -476,6 +694,9 @@ impl<'s> Module<'s> {
                 let awaited = evaluate(node);
                 if awaited.throws() {
                     Value::default()
+                } else if awaited.0.iter().all(|atom| matches!(atom, Atom::Api(..))) {
+                    // A framework value has no `then`, so awaiting it gives it back.
+                    awaited
                 } else if awaited.holds_api() {
                     Value::of(Atom::Api(Origin::Wrapper(Reach::Tasks), Vec::new()))
                 } else {
@@ -484,30 +705,151 @@ impl<'s> Module<'s> {
                         .join(Value::unknown())
                 }
             }
-            Op::Get(object, key) => {
-                let mut value = Value::default();
-                for atom in evaluate(object).0 {
-                    value = value.join(self.get(atom, key, scope, depth));
-                }
-                value
-            }
+            Op::Get(object, key) => self.member(object, || evaluate(object), key, scope, depth),
             Op::Call(callee, arguments) => {
-                let handed: Vec<Value<'s>> = arguments
-                    .iter()
-                    .map(|&argument| evaluate(argument))
-                    .collect();
-                // An argument that throws stops the call before it happens.
-                if handed.iter().any(Value::throws) {
-                    return Value::default();
-                }
-                let mut value = Value::default();
-                for atom in evaluate(callee).0 {
-                    value = value.join(self.call(atom, &arguments, &handed, depth));
-                }
-                value
+                let callee = self
+                    .wrapper_body(callee)
+                    .unwrap_or_else(|| evaluate(callee));
+                self.called(callee, &arguments, scope, depth)
             }
+            Op::Chain(expression) => self.optional_chain(expression, scope, depth),
             Op::Read(identifier) => self.read_value(identifier, scope, depth),
         }
+    }
+
+    /// What reading `key` of `object`, whose value is `value`, gives.
+    fn member(
+        &self,
+        object: NodeId,
+        value: impl FnOnce() -> Value<'s>,
+        key: Key<'s>,
+        scope: &Scope<'s>,
+        depth: usize,
+    ) -> Value<'s> {
+        if let Some(function) = self.own_members(object) {
+            return self.get(Atom::Function(function), key, scope, depth);
+        }
+        let mut read = Value::default();
+        for atom in value().0 {
+            read = read.join(self.get(atom, key, scope, depth));
+        }
+        read
+    }
+
+    /// A project wrapper `callee` names, as the body its call returns from: a local function
+    /// never reassigned, or an import whose summary records the call. The call stays a wrapper
+    /// site, since sites read the callee; only its result is the body's (`(await run()).stderr`).
+    fn wrapper_body(&self, callee: NodeId) -> Option<Value<'s>> {
+        let tree = self.tree;
+        let identifier = tree.inner(callee);
+        if tree.kind(identifier) != "Identifier" {
+            return None;
+        }
+        let Some(Name::Reference(Some(symbol))) =
+            self.parsed.scopes.name_at(tree.span(identifier).start)
+        else {
+            return None;
+        };
+        if let Some(called) = self
+            .imported
+            .get(&symbol)
+            .and_then(|summary| summary.called.as_ref())
+        {
+            return Some(Value::of(Atom::Helper(called.clone())));
+        }
+        if !self.wrappers.contains_key(&symbol) || self.reassigned(symbol) {
+            return None;
+        }
+        let function = self.declared_function(symbol)?;
+        let returned = self.call(Atom::Function(function), &[], &[], 0);
+        self.registers_nothing(&returned, 0)
+            .then(|| Value::of(Atom::Function(function)))
+    }
+
+    /// Whether nothing `value` may hold can register: primitives, `undefined`, `null`, built-ins,
+    /// measured framework values and containers of those. A wrapper's result that may hold a
+    /// function stays opaque, since a function it returns may register (`make().run()`).
+    fn registers_nothing(&self, value: &Value<'s>, depth: usize) -> bool {
+        value.0.iter().all(|atom| match atom {
+            Atom::Undefined
+            | Atom::Null
+            | Atom::Primitive(..)
+            | Atom::Builtin
+            | Atom::Framework(_) => true,
+            Atom::Object(_) | Atom::Array(_) => {
+                depth < 3
+                    && self.registers_nothing(
+                        &self.get(atom.clone(), Key::Dynamic, &Scope::new(), 0),
+                        depth + 1,
+                    )
+            }
+            _ => false,
+        })
+    }
+
+    /// What calling `callee` with `arguments` returns.
+    fn called(
+        &self,
+        callee: Value<'s>,
+        arguments: &[NodeId],
+        scope: &Scope<'s>,
+        depth: usize,
+    ) -> Value<'s> {
+        let handed: Vec<Value<'s>> = arguments
+            .iter()
+            .map(|&argument| self.evaluate_in(argument, scope, depth))
+            .collect();
+        // An argument that throws stops the call before it happens.
+        if handed.iter().any(Value::throws) {
+            return Value::default();
+        }
+        let mut value = Value::default();
+        for atom in callee.0 {
+            value = value.join(self.call(atom, arguments, &handed, depth));
+        }
+        value
+    }
+
+    /// What the optional chain `expression` evaluates to: its links from the innermost out, each
+    /// `?.` link continuing with the object's alternatives that are not nullish, and `undefined`
+    /// when one may be.
+    fn optional_chain(&self, expression: NodeId, scope: &Scope<'s>, depth: usize) -> Value<'s> {
+        let tree = self.tree;
+        let mut links = Vec::new();
+        let mut node = tree.inner(expression);
+        loop {
+            let next = match tree.kind(node) {
+                "MemberExpression" if self.root_origin(node).is_none() => {
+                    tree.child(node, "object")
+                }
+                "CallExpression" => tree.child(node, "callee"),
+                _ => None,
+            };
+            let Some(next) = next else { break };
+            links.push(node);
+            node = tree.inner(next);
+        }
+        let mut value = self.evaluate_in(node, scope, depth);
+        let mut skipped = false;
+        let mut object = node;
+        for &link in links.iter().rev() {
+            if tree.flag(link, "optional") {
+                skipped |= value.0.iter().any(Atom::may_be_nullish);
+                value = value.filter(Atom::may_be_other_than_nullish);
+            }
+            value = if tree.kind(link) == "MemberExpression" {
+                self.member(object, || value, self.key(link), scope, depth)
+            } else {
+                let arguments: Vec<NodeId> =
+                    tree.list(link, "arguments").into_iter().flatten().collect();
+                self.called(value, &arguments, scope, depth)
+            };
+            object = link;
+        }
+        if skipped {
+            value = value.join(Value::of(Atom::Undefined));
+        }
+        value
     }
 
     /// The expressions a container literal evaluates: its elements, spread arguments, computed
@@ -546,16 +888,37 @@ impl<'s> Module<'s> {
         match atom {
             // Reading a property of `null` or `undefined` throws.
             Atom::Undefined | Atom::Null => Value::default(),
-            Atom::Primitive(Primitive::String, _) => {
-                table(key, &[("length", any_number)], &STRING_MEMBERS)
-            }
-            Atom::Primitive(Primitive::Number | Primitive::Boolean, _) => {
-                table(key, &[], &NUMBER_MEMBERS)
-            }
-            Atom::Primitive(Primitive::Other, _) | Atom::Builtin | Atom::Unknown => match atom {
-                Atom::Unknown => Value::unknown(),
+            Atom::Primitive(Primitive::String, _) => match key {
+                Key::Index(_) => Value::of(any_string).join(Value::of(Atom::Undefined)),
+                _ => table(key, &[("length", any_number)], &STRING_MEMBERS),
+            },
+            Atom::Primitive(Primitive::Number, _) => table(key, &[], &NUMBER_MEMBERS),
+            Atom::Primitive(Primitive::Boolean, _) => table(key, &[], &[]),
+            // Another module may write a member of its function, which is not seen here.
+            Atom::Primitive(Primitive::Other, _)
+            | Atom::Builtin
+            | Atom::Unknown
+            | Atom::Helper(_) => match atom {
+                Atom::Unknown | Atom::Helper(_) => Value::unknown(),
                 _ => Value::of(Atom::Builtin).join(Value::of(Atom::Undefined)),
             },
+            Atom::Framework(holder) => match key {
+                Key::Name("name" | "length") if holder != Holder::Namespace => {
+                    Value::of(if matches!(key, Key::Name("name")) {
+                        any_string
+                    } else {
+                        any_number
+                    })
+                }
+                Key::Name(name) => self.framework_member(Some(holder), name),
+                _ => Value::unknown(),
+            },
+            // Accessors that throw in strict code, and a `prototype` only some functions have.
+            Atom::Function(_) if matches!(key, Key::Name("arguments" | "caller" | "prototype")) => {
+                Value::unknown()
+            }
+            // A member written to the function through its binding (`f.flag = true`).
+            Atom::Function(node) if self.function_members_written(node) => Value::unknown(),
             Atom::Function(_) => table(
                 key,
                 &[("name", any_string), ("length", any_number)],
@@ -580,12 +943,7 @@ impl<'s> Module<'s> {
                         Primitive::Number,
                         truth(!elements.is_empty()),
                     )),
-                    Key::Name(name) => match name.parse::<usize>() {
-                        Ok(index) => elements
-                            .get(index)
-                            .map_or(Value::of(Atom::Undefined), element),
-                        Err(_) => table(key, &[], &ARRAY_MEMBERS),
-                    },
+                    Key::Name(_) => table(key, &[], &ARRAY_MEMBERS),
                     Key::Dynamic => elements
                         .iter()
                         .fold(Value::of(Atom::Undefined), |value, slot| {
@@ -599,10 +957,12 @@ impl<'s> Module<'s> {
                     .into_iter()
                     .flatten()
                     .collect();
+                // `__proto__: value` replaces the literal's prototype, so a missing key is not
+                // proved absent.
                 let opaque = properties.iter().any(|&property| {
                     tree.kind(property) != "Property"
                         || tree.text(property, "kind") != Some("init")
-                        || property_name(tree, property).is_none()
+                        || matches!(property_name(tree, property), None | Some("__proto__"))
                 });
                 let value_of = |property: NodeId| match tree.child(property, "value") {
                     Some(value) => self.evaluate_in(value, scope, depth),
@@ -650,9 +1010,10 @@ impl<'s> Module<'s> {
             },
             Atom::Api(origin, mut steps) => match key {
                 // A function's own properties are JavaScript's; only the module namespace itself
-                // is an object without them.
+                // is an object without them. What a wrapper returns or holds may be any value.
                 Key::Name("name" | "length")
-                    if !(origin == Origin::Namespace && steps.is_empty()) =>
+                    if (origin.reach().is_none() || steps.is_empty())
+                        && !(origin == Origin::Namespace && steps.is_empty()) =>
                 {
                     Value::of(if matches!(key, Key::Name("name")) {
                         any_string
@@ -672,16 +1033,39 @@ impl<'s> Module<'s> {
                     Value::of(Atom::Api(origin, steps))
                 }
                 Key::Name(name) => {
+                    let holder = self
+                        .apply(origin, &steps)
+                        .and_then(|applied| applied.holder);
                     steps.push(Step::Member(name));
-                    // A member the API does not have is not the API's: the dialect cannot say
-                    // what it is (`v.expect`, `test.skip.unknown`).
-                    if self.apply(origin, &steps).is_none() {
-                        return Value::unknown();
+                    match self.apply(origin, &steps) {
+                        Some(applied) if applied.unresolved => {
+                            Value::of(Atom::Api(Origin::Wrapper(Reach::Tasks), Vec::new()))
+                        }
+                        Some(_) => Value::of(Atom::Api(origin, steps)),
+                        // A member that is not the API's is what the dialect measured: `undefined`
+                        // when the value lacks it (`v.skip`, `test.expect`), else a value that
+                        // registers nothing (`test.fn`, `v.expect`).
+                        None => self.framework_member(holder, name),
                     }
-                    Value::of(Atom::Api(origin, steps))
                 }
                 _ => Value::unknown(),
             },
+        }
+    }
+
+    /// The member `name` of a framework value of kind `holder` that is not a registration one.
+    fn framework_member(&self, holder: Option<Holder>, name: &str) -> Value<'s> {
+        let dialect = self.setting.dialect;
+        match holder.map(|holder| (holder, dialect.presence(holder, name, self.setting.major))) {
+            Some((_, Presence::Absent)) => Value::of(Atom::Undefined),
+            Some((Holder::Namespace, Presence::Present)) if dialect.assertion(name).is_some() => {
+                Value::of(Atom::Framework(Holder::Expect))
+            }
+            Some((_, Presence::Present)) => Value::of(Atom::Builtin),
+            Some((_, Presence::Unresolved)) => {
+                Value::of(Atom::Api(Origin::Wrapper(Reach::Tasks), Vec::new()))
+            }
+            None => Value::unknown(),
         }
     }
 
@@ -713,12 +1097,33 @@ impl<'s> Module<'s> {
                 }
                 Value::of(Atom::Api(origin, steps))
             }
-            Atom::Function(function) => self.returned(function, arguments, handed, depth),
-            Atom::Builtin | Atom::Module(_) | Atom::Unknown if handed_api => {
+            // A registration function a project function returns is derived from that function:
+            // what the call registers is the function's to prove (`id(test)`, `t => t.runIf(c)`).
+            // A builder not called yet (`test.each`) registers nothing, through a helper or not.
+            Atom::Function(function) => {
+                let mut value = self.returned(function, arguments, handed, depth);
+                for atom in &mut value.0 {
+                    if let Atom::Api(origin @ Origin::Api(_), steps) = atom {
+                        if let Verdict::Registers(registers) = self.verdict(*origin, steps) {
+                            *atom = Atom::Api(Origin::Derived(registers), Vec::new());
+                        }
+                    }
+                }
+                value
+            }
+            // What another module's helper returns, derived there as a local one's is here.
+            // One whose result is not known may return a registration function handed to it.
+            Atom::Helper(returns) if handed_api && returns.other => value_of_summary(&returns)
+                .join(Value::of(Atom::Api(
+                    Origin::Wrapper(Reach::Tasks),
+                    Vec::new(),
+                ))),
+            Atom::Helper(returns) => value_of_summary(&returns),
+            Atom::Builtin | Atom::Framework(_) | Atom::Module(_) | Atom::Unknown if handed_api => {
                 // What a call handed a registration function returns may register.
                 Value::of(Atom::Api(Origin::Wrapper(Reach::Tasks), Vec::new()))
             }
-            Atom::Builtin | Atom::Module(_) => {
+            Atom::Builtin | Atom::Framework(_) | Atom::Module(_) => {
                 Value::of(Atom::Builtin).join(Value::of(Atom::Undefined))
             }
             Atom::Unknown => Value::unknown(),
@@ -761,26 +1166,59 @@ impl<'s> Module<'s> {
             return Value::unknown();
         };
         if tree.kind(body) != "BlockStatement" {
-            return self.evaluate_in(body, &scope, depth);
+            let value = self.evaluate_in(body, &scope, depth);
+            return self.resumed(function, value);
         }
-        let mut value = Value::of(Atom::Undefined);
+        // A body whose last statement returns or throws never runs off its end.
+        let ends = tree
+            .list(body, "body")
+            .last()
+            .copied()
+            .flatten()
+            .is_some_and(|last| matches!(tree.kind(last), "ReturnStatement" | "ThrowStatement"));
+        let mut value = if ends {
+            Value::default()
+        } else {
+            Value::of(Atom::Undefined)
+        };
+        // A generator's iterator hands out what it yields as well as what it returns.
+        let generator = tree.flag(function, "generator");
         for node in tree.descendants(body) {
-            if tree.kind(node) != "ReturnStatement" {
+            let kind = tree.kind(node);
+            if kind != "ReturnStatement" && !(generator && kind == "YieldExpression") {
                 continue;
             }
             let nested = tree
                 .ancestors(node)
                 .take_while(|&outer| outer != function)
                 .any(|outer| tree.is_function(outer));
-            if nested {
+            // A `return` past an earlier one in its block never runs.
+            if nested || self.unreachable(node) {
                 continue;
             }
             value = value.join(match tree.child(node, "argument") {
+                // A delegated iterator hands out what this one does not see.
+                Some(_) if tree.flag(node, "delegate") => Value::unknown(),
                 Some(argument) => self.evaluate_in(argument, &scope, depth),
                 None => Value::of(Atom::Undefined),
             });
         }
-        value
+        self.resumed(function, value)
+    }
+
+    /// What calling `function` gives when its body returns `value`: that value, or for an async
+    /// function or a generator the promise or iterator holding it. Such an object is truthy and
+    /// has only built-in members; when what it holds may register, it is any value that may.
+    fn resumed(&self, function: NodeId, value: Value<'s>) -> Value<'s> {
+        let tree = self.tree;
+        if !tree.flag(function, "async") && !tree.flag(function, "generator") {
+            return value;
+        }
+        if self.registers_nothing(&value, 0) {
+            Value::of(Atom::Builtin)
+        } else {
+            Value::of(Atom::Api(Origin::Wrapper(Reach::Tasks), vec![Step::Call]))
+        }
     }
 
     /// What a binding read at `identifier` holds.
@@ -798,8 +1236,9 @@ impl<'s> Module<'s> {
             }
             _ => return Value::unknown(),
         };
+        // A parameter holds what it was handed and whatever the body writes to it.
         if let Some(value) = scope.get(&symbol) {
-            return value.clone();
+            return self.with_writes(value.clone(), symbol, scope, depth);
         }
         if self.namespaces.contains_key(&symbol) {
             return Value::of(Atom::Module(symbol));
@@ -836,7 +1275,7 @@ impl<'s> Module<'s> {
     /// with every value written to it, and anything at all in a module that runs `eval`.
     fn symbol_value(&self, symbol: SymbolId, scope: &Scope<'s>, depth: usize) -> Value<'s> {
         let scopes = &self.parsed.scopes;
-        let mut value = if self.redeclared.contains(&symbol) {
+        let value = if self.redeclared.contains(&symbol) {
             self.redeclared_value(symbol, scope, depth)
         } else {
             match scopes.symbol(symbol).declaration.clone() {
@@ -846,7 +1285,19 @@ impl<'s> Module<'s> {
                 _ => Value::unknown(),
             }
         };
-        for reference in crate::lang::proof::writes(scopes, symbol) {
+        self.with_writes(value, symbol, scope, depth)
+    }
+
+    /// `value` joined with every value written to `symbol`, and anything at all in a module that
+    /// runs `eval`.
+    fn with_writes(
+        &self,
+        mut value: Value<'s>,
+        symbol: SymbolId,
+        scope: &Scope<'s>,
+        depth: usize,
+    ) -> Value<'s> {
+        for reference in crate::lang::proof::writes(&self.parsed.scopes, symbol) {
             value = value.join(match reference.node {
                 Some(target) => self.written_value(target, symbol, scope, depth),
                 None => Value::unknown(),
@@ -855,7 +1306,32 @@ impl<'s> Module<'s> {
         if self.evaluates {
             value = value.join(Value::unknown());
         }
-        value
+        self.unwritten(value, symbol)
+    }
+
+    /// `value` read through `symbol`: a container literal whose members may be written through
+    /// it is any value, one that may register when it holds a framework value.
+    fn unwritten(&self, value: Value<'s>, symbol: SymbolId) -> Value<'s> {
+        let containers = |value: &Value<'s>| {
+            value
+                .0
+                .iter()
+                .any(|atom| matches!(atom, Atom::Object(_) | Atom::Array(_)))
+        };
+        if !containers(&value) || !self.members_written(symbol, false, 0) {
+            return value;
+        }
+        let mut read = Value::default();
+        for atom in value.0 {
+            read = read.join(match atom {
+                Atom::Object(_) | Atom::Array(_) if self.holds_within(&atom, 0) => {
+                    Value::exhausted()
+                }
+                Atom::Object(_) | Atom::Array(_) => Value::unknown(),
+                atom => Value::of(atom),
+            });
+        }
+        read
     }
 
     /// What every declaration of a symbol declared more than once binds: each declarator's value,
@@ -1046,7 +1522,7 @@ impl<'s> Module<'s> {
                     }
                     let name = property_name(tree, property)?;
                     let mut path = self.pattern_path(tree.child(property, "value")?, symbol)?;
-                    path.insert(0, Key::Name(name));
+                    path.insert(0, key_named(name));
                     Some(path)
                 }),
             "ArrayPattern" => tree
@@ -1128,6 +1604,7 @@ impl<'s> Module<'s> {
         }
         match self.apply(origin, steps) {
             None => Verdict::Other,
+            Some(applied) if applied.unresolved => Verdict::Wrapper,
             Some(applied) if applied.pending => Verdict::Other,
             Some(applied) => applied
                 .registers
@@ -1150,8 +1627,276 @@ impl<'s> Module<'s> {
             "MemberExpression" | "CallExpression" | "TaggedTemplateExpression" | "MetaProperty" => {
                 false
             }
-            "Identifier" => self.flows_from(object),
+            "Identifier" => self.flows_from(object) || self.own_members(object).is_some(),
             _ => true,
+        }
+    }
+
+    /// The function a local wrapper binding read at `identifier` declares, when every member of
+    /// it is JavaScript's own: the binding is never reassigned or exported and nothing may write a
+    /// member through it ([`Module::members_written`]). A member a function lacks is then
+    /// `undefined` (`wrap.skip`), as it is for any other local function; a write through another
+    /// binding (`const s = wrap; s.t = test`) is not seen.
+    pub(super) fn own_members(&self, identifier: NodeId) -> Option<NodeId> {
+        let tree = self.tree;
+        let scopes = &self.parsed.scopes;
+        let identifier = tree.inner(identifier);
+        if tree.kind(identifier) != "Identifier" {
+            return None;
+        }
+        let Some(Name::Reference(Some(symbol))) = scopes.name_at(tree.span(identifier).start)
+        else {
+            return None;
+        };
+        if !self.wrappers.contains_key(&symbol) || self.reassigned(symbol) {
+            return None;
+        }
+        let function = self.declared_function(symbol)?;
+        let exported = tree
+            .ancestors(function)
+            .any(|outer| tree.kind(outer).starts_with("Export"));
+        (!exported && !self.members_written(symbol, true, 0)).then_some(function)
+    }
+
+    /// Whether a member of the function `function` may be written through a binding of it.
+    fn function_members_written(&self, function: NodeId) -> bool {
+        let tree = self.tree;
+        let own = (tree.kind(function) == "FunctionDeclaration")
+            .then(|| tree.child(function, "id"))
+            .flatten()
+            .and_then(|id| self.declares(id));
+        own.into_iter()
+            .chain(self.declarator_symbol(function))
+            .any(|symbol| self.members_written(symbol, true, 0))
+    }
+
+    /// The function `symbol` is declared as: a declaration, or a declarator initialized with one.
+    fn declared_function(&self, symbol: SymbolId) -> Option<NodeId> {
+        let tree = self.tree;
+        match self.parsed.scopes.symbol(symbol).declaration {
+            Declaration::Function(node) => Some(node),
+            Declaration::Variable(node) => {
+                let declarator = std::iter::once(node)
+                    .chain(tree.ancestors(node))
+                    .find(|&outer| tree.kind(outer) == "VariableDeclarator")?;
+                let init = tree.inner(tree.child(declarator, "init")?);
+                tree.is_function(init).then_some(init)
+            }
+            _ => None,
+        }
+    }
+
+    /// Whether a member of what `symbol` holds may be written through it: through any of its
+    /// references ([`Self::value_written`]). `shallow` asks about its own members only, the only
+    /// ones a function's are read as.
+    fn members_written(&self, symbol: SymbolId, shallow: bool, depth: usize) -> bool {
+        self.parsed
+            .scopes
+            .symbol(symbol)
+            .references
+            .iter()
+            .any(|reference| {
+                reference
+                    .node
+                    .is_none_or(|node| self.value_written(node, shallow, depth))
+            })
+    }
+
+    /// Whether a member of the value `node` evaluates to may be written where the value goes: an
+    /// export of it, a write or `delete` of a member, a method that changes its receiver, a copy to a
+    /// binding whose members may be written, a function's result or a container literal whose
+    /// members may be written, a loop or generator it is handed to, or a call whose receiving
+    /// parameter may. A choice, `await` or sequence passes the value on unchanged. Only a call of
+    /// a local function that is never reassigned is followed, to a parameter it binds by name,
+    /// and a body reading `arguments` may write anything. With `shallow`, a member's value handed
+    /// on, or a write past the value's own members, changes none of them.
+    fn value_written(&self, node: NodeId, shallow: bool, depth: usize) -> bool {
+        const DEEPEST_HANDOFF: usize = 4;
+        let tree = self.tree;
+        let scopes = &self.parsed.scopes;
+        let deeper = |symbol: SymbolId| {
+            depth >= DEEPEST_HANDOFF || self.members_written(symbol, shallow, depth + 1)
+        };
+        // The member chain the value roots (`o.inner.flag`), through what passes it on.
+        let mut top = node;
+        let mut members = 0;
+        let parent = loop {
+            let Some(parent) = tree.outer_parent(top) else {
+                return false;
+            };
+            let at =
+                |key: &str| tree.child(parent, key).map(|child| tree.inner(child)) == Some(top);
+            match tree.kind(parent) {
+                "MemberExpression" if at("object") => members += 1,
+                "ConditionalExpression" if !at("test") => {}
+                "LogicalExpression" | "AwaitExpression" | "ChainExpression" => {}
+                "SequenceExpression"
+                    if tree
+                        .list(parent, "expressions")
+                        .last()
+                        .copied()
+                        .flatten()
+                        .map(|last| tree.inner(last))
+                        == Some(top) => {}
+                _ => break parent,
+            }
+            top = parent;
+        };
+        let at = |key: &str| tree.child(parent, key).map(|child| tree.inner(child)) == Some(top);
+        let handed = !shallow || members == 0;
+        let written = members > 0 && (!shallow || members == 1);
+        match tree.kind(parent) {
+            // Another module may write a binding this one exports by name (`export { o }`); an
+            // alias it is copied to is not followed there.
+            kind if kind.starts_with("Export") => depth == 0 && top == node,
+            // Writing the binding itself is a reassignment, which the value flow reads.
+            "AssignmentExpression" if at("left") => written,
+            "AssignmentExpression" => {
+                handed
+                    && tree
+                        .child(parent, "left")
+                        .and_then(|left| self.read(left))
+                        .is_none_or(deeper)
+            }
+            "UpdateExpression" => written,
+            "UnaryExpression" => written && tree.text(parent, "operator") == Some("delete"),
+            kind if kind.ends_with("Pattern") => written,
+            "VariableDeclarator" if at("init") => {
+                handed
+                    && tree
+                        .child(parent, "id")
+                        .is_none_or(|id| bound_symbols(tree, scopes, id).into_iter().any(deeper))
+            }
+            // A method that changes its receiver (`list.push(test)`).
+            "CallExpression" | "NewExpression" if at("callee") => {
+                written && member_name(tree, top).is_some_and(|name| MUTATORS.contains(&name))
+            }
+            "CallExpression" | "NewExpression" => {
+                handed && self.received_written(parent, top, shallow, depth)
+            }
+            "ReturnStatement" => {
+                handed
+                    && tree
+                        .ancestors(parent)
+                        .find(|&outer| tree.is_function(outer))
+                        .is_none_or(|function| self.result_written(function, shallow, depth))
+            }
+            "ArrowFunctionExpression" if at("body") => {
+                handed && self.result_written(parent, shallow, depth)
+            }
+            // A container holding it, or copying its members, is where it goes next.
+            "ArrayExpression" => {
+                handed
+                    && (depth >= DEEPEST_HANDOFF || self.value_written(parent, shallow, depth + 1))
+            }
+            "Property" | "SpreadElement" if at("value") || at("argument") => {
+                handed
+                    && (depth >= DEEPEST_HANDOFF
+                        || tree.outer_parent(parent).is_none_or(|container| {
+                            !matches!(tree.kind(container), "ObjectExpression" | "ArrayExpression")
+                                || self.value_written(container, shallow, depth + 1)
+                        }))
+            }
+            "YieldExpression" | "ForOfStatement" | "ForInStatement" => handed,
+            _ => false,
+        }
+    }
+
+    /// Whether a member of what `function` returns may be written where a call of it goes. A
+    /// function read other than as a callee may be called where that is not seen.
+    fn result_written(&self, function: NodeId, shallow: bool, depth: usize) -> bool {
+        const DEEPEST_HANDOFF: usize = 4;
+        let tree = self.tree;
+        if depth >= DEEPEST_HANDOFF {
+            return true;
+        }
+        let own = (tree.kind(function) == "FunctionDeclaration")
+            .then(|| tree.child(function, "id"))
+            .flatten()
+            .and_then(|id| self.declares(id));
+        let bindings: Vec<SymbolId> = own
+            .into_iter()
+            .chain(self.declarator_symbol(function))
+            .collect();
+        bindings.is_empty()
+            || bindings.into_iter().any(|binding| {
+                self.reassigned(binding)
+                    || self
+                        .parsed
+                        .scopes
+                        .symbol(binding)
+                        .references
+                        .iter()
+                        .any(|reference| {
+                            let Some(node) = reference.node else {
+                                return true;
+                            };
+                            match tree.outer_parent(node) {
+                                Some(call)
+                                    if tree.kind(call) == "CallExpression"
+                                        && tree
+                                            .child(call, "callee")
+                                            .map(|callee| tree.inner(callee))
+                                            == Some(node) =>
+                                {
+                                    self.value_written(call, shallow, depth + 1)
+                                }
+                                _ => true,
+                            }
+                        })
+            })
+    }
+
+    /// Whether the call `call` handing it `argument` may write a member of that argument.
+    fn received_written(
+        &self,
+        call: NodeId,
+        argument: NodeId,
+        shallow: bool,
+        depth: usize,
+    ) -> bool {
+        const DEEPEST_HANDOFF: usize = 4;
+        let tree = self.tree;
+        let scopes = &self.parsed.scopes;
+        if depth >= DEEPEST_HANDOFF {
+            return true;
+        }
+        let Some(callee) = tree.child(call, "callee").map(|callee| tree.inner(callee)) else {
+            return true;
+        };
+        let Some(Name::Reference(Some(callee))) = (tree.kind(callee) == "Identifier")
+            .then(|| scopes.name_at(tree.span(callee).start))
+            .flatten()
+        else {
+            return true;
+        };
+        if self.reassigned(callee) {
+            return true;
+        }
+        let Some(function) = self.declared_function(callee) else {
+            return true;
+        };
+        let reads_arguments = tree.descendants(function).any(|node| {
+            tree.kind(node) == "Identifier" && tree.text(node, "name") == Some("arguments")
+        });
+        let arguments: Vec<NodeId> = tree.list(call, "arguments").into_iter().flatten().collect();
+        let Some(index) = arguments
+            .iter()
+            .position(|&each| tree.inner(each) == argument)
+        else {
+            return true;
+        };
+        let spread = arguments[..index]
+            .iter()
+            .any(|&each| tree.kind(each) == "SpreadElement");
+        let parameter = tree.list(function, "params").get(index).copied().flatten();
+        match parameter {
+            _ if reads_arguments || spread => true,
+            None => false,
+            Some(parameter) if tree.kind(parameter) == "Identifier" => self
+                .declares(parameter)
+                .is_none_or(|parameter| self.members_written(parameter, shallow, depth + 1)),
+            Some(_) => true,
         }
     }
 
@@ -1229,6 +1974,9 @@ impl<'s> Module<'s> {
             }));
         }
         let applied = self.apply(origin, steps)?;
+        if applied.unresolved {
+            return Some(Origin::Wrapper(Reach::Tasks));
+        }
         Some(applied.registers.map_or(Origin::Namespace, Origin::Api))
     }
 }
@@ -1261,6 +2009,9 @@ fn value_of_summary<'s>(summary: &Summary) -> Value<'s> {
             .collect();
         value = value.join(Value::of(Atom::Api(origin, steps)));
     }
+    if let Some(returns) = &summary.returns {
+        value = value.join(Value::of(Atom::Helper(returns.clone())));
+    }
     if summary.other {
         value = value.join(Value::unknown());
     }
@@ -1291,7 +2042,7 @@ pub(super) fn summary_of_export(export: Export) -> Summary {
     };
     Summary {
         roots: vec![(root, Vec::new())],
-        other: false,
+        ..Summary::default()
     }
 }
 
@@ -1358,6 +2109,18 @@ impl<'s> Module<'s> {
                             }
                         }
                     }
+                    if let Some(function) =
+                        declaration.filter(|&node| tree.kind(node) == "FunctionDeclaration")
+                    {
+                        if let Some(symbol) =
+                            tree.child(function, "id").and_then(|id| self.declares(id))
+                        {
+                            explicit.insert(
+                                self.parsed.scopes.symbol(symbol).name.clone(),
+                                self.summary_of(&self.value_of(symbol)),
+                            );
+                        }
+                    }
                     for (local, exported) in super::specifiers(tree, statement) {
                         let value = self.evaluate(local);
                         explicit.insert(export_name(tree, exported), self.summary_of(&value));
@@ -1368,8 +2131,19 @@ impl<'s> Module<'s> {
                         continue;
                     };
                     let declaration = tree.inner(declaration);
-                    if tree.is_function(declaration) || tree.kind(declaration).starts_with("Class")
-                    {
+                    if tree.kind(declaration).starts_with("Class") {
+                        continue;
+                    }
+                    // An anonymous function has no symbol the wrapper analysis names, so only one
+                    // its export does not already make a wrapper is a helper.
+                    if tree.is_function(declaration) {
+                        if exports.contains_key("default") {
+                            continue;
+                        }
+                        explicit.insert(
+                            "default".to_owned(),
+                            self.summary_of(&Value::of(Atom::Function(declaration))),
+                        );
                         continue;
                     }
                     explicit.insert(
@@ -1386,10 +2160,15 @@ impl<'s> Module<'s> {
                 _ => {}
             }
         }
-        let mut summaries = HashMap::new();
-        if stars.is_empty() {
-            summaries.extend(explicit);
-        } else if stars.iter().all(Option::is_some) {
+        // A name this module spells is its own whatever its stars reach. Beside a star it also
+        // keeps what its export reads, since the spelling may be erased (`export declare const`).
+        let beside_stars: HashSet<String> = if stars.is_empty() {
+            HashSet::new()
+        } else {
+            explicit.keys().cloned().collect()
+        };
+        let mut summaries = explicit;
+        if !stars.is_empty() && stars.iter().all(Option::is_some) {
             let mut reached: HashMap<&String, Vec<&Summary>> = HashMap::new();
             for theirs in stars.iter().flatten() {
                 for (name, summary) in theirs {
@@ -1405,9 +2184,17 @@ impl<'s> Module<'s> {
             }
         }
         for (name, &export) in exports {
+            let table = summary_of_export(export);
             let summary = summaries
                 .entry(name.clone())
-                .or_insert_with(|| summary_of_export(export));
+                .or_insert_with(|| table.clone());
+            if beside_stars.contains(name) {
+                for root in table.roots {
+                    if !summary.roots.contains(&root) {
+                        summary.roots.push(root);
+                    }
+                }
+            }
             // A value built by calling the API (`describe.each(rows)`) stays derived in every
             // importer, as its export says: what it registers depends on the call.
             let built = summary
@@ -1436,7 +2223,42 @@ impl<'s> Module<'s> {
 
     /// The summary of a value, for the modules importing it. A function a wrapper analysis found
     /// registering is that wrapper.
-    fn summary_of(&self, value: &Value) -> Summary {
+    fn summary_of(&self, value: &Value<'s>) -> Summary {
+        self.summary_at(value, true)
+    }
+
+    /// [`Self::summary_of`]; with `call`, a lone function carries what calling it returns, its
+    /// parameters unknown: as its value when it registers nothing, beside its wrapper root when
+    /// it does.
+    fn summary_at(&self, value: &Value<'s>, call: bool) -> Summary {
+        if let [Atom::Function(function)] = &value.0[..] {
+            if call {
+                let function = *function;
+                let parameters = self.tree.list(function, "params").len();
+                let unknown = vec![Value::unknown(); parameters];
+                let returned_value = self.call(Atom::Function(function), &[], &unknown, 0);
+                let returned = Some(Box::new(self.summary_at(&returned_value, false)));
+                return match self.function_reach(function) {
+                    None => Summary {
+                        returns: returned,
+                        ..Summary::default()
+                    },
+                    Some(reach) => Summary {
+                        roots: vec![(Root::Wrapper(reach), Vec::new())],
+                        called: returned.filter(|_| self.registers_nothing(&returned_value, 0)),
+                        ..Summary::default()
+                    },
+                };
+            }
+        }
+        if let [Atom::Helper(returns)] = &value.0[..] {
+            if call {
+                return Summary {
+                    returns: Some(returns.clone()),
+                    ..Summary::default()
+                };
+            }
+        }
         let mut summary = Summary::default();
         for atom in &value.0 {
             match atom {
@@ -1460,9 +2282,34 @@ impl<'s> Module<'s> {
                     Some(reach) => summary.roots.push((Root::Wrapper(reach), Vec::new())),
                     None => summary.other = true,
                 },
+                // A returned container holding a registration function (`{ it: test }`) is not
+                // summarised member by member: what is read from it may register.
+                Atom::Object(_) | Atom::Array(_) if !call && self.holds_within(atom, 0) => {
+                    summary
+                        .roots
+                        .push((Root::Wrapper(Reach::Tasks), Vec::new()));
+                    summary.other = true;
+                }
                 _ => summary.other = true,
             }
         }
         summary
+    }
+
+    /// Whether a container literal holds a framework value, in a member or a nested container.
+    fn holds_within(&self, atom: &Atom<'s>, depth: usize) -> bool {
+        if !matches!(atom, Atom::Object(_) | Atom::Array(_)) {
+            return false;
+        }
+        // Past the limit a container may hold anything.
+        if depth > 3 {
+            return true;
+        }
+        let members = self.get(atom.clone(), Key::Dynamic, &Scope::new(), 0);
+        members.holds_api()
+            || members
+                .0
+                .iter()
+                .any(|atom| self.holds_within(atom, depth + 1))
     }
 }

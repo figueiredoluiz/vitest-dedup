@@ -604,8 +604,7 @@ fn suite_context_is_what_a_suite_adds_not_how_deep_it_is() {
          describe('stub', () => { vi.stubEnv('MODE', 'x'); test('f', () => { expect(x()).toBe(1) }) })\n\
          describe('scoped', () => { test.scoped({ mode: 'x' }); test('g', () => { expect(x()).toBe(1) }) })\n\
          describe('declares', () => { const local = 1; test('h', () => { expect(x()).toBe(1) }) })\n\
-         describe.skipIf(ci)('conditional', () => { test('i', () => { expect(x()).toBe(1) }) })\n\
-         describe.fails('inverted', () => { test('j', () => { expect(x()).toBe(1) }) })",
+         describe.skipIf(ci)('conditional', () => { test('i', () => { expect(x()).toBe(1) }) })",
         &[("a", "b"), ("a", "h")],
         &[
             ("a", "c"),
@@ -615,7 +614,6 @@ fn suite_context_is_what_a_suite_adds_not_how_deep_it_is() {
             ("a", "g"),
             ("e", "f"),
             ("a", "i"),
-            ("a", "j"),
         ],
     );
 }
@@ -948,18 +946,15 @@ fn suite_options_key_their_tests() {
     );
 }
 
-/// An enclosing suite that is expected to fail inverts its tests' outcome; a whole row that cannot
-/// be bound is keyed by its cells as written.
+/// A whole row that cannot be bound is keyed by its cells as written.
 #[test]
-fn an_expected_failure_suite_and_unbound_rows_key_their_tests() {
+fn unbound_rows_key_their_tests() {
     keys(
-        "describe.fails('f', () => { test('in fails', () => { expect(1).toBe(1) }) })\n\
-         describe('p', () => { test('in plain', () => { expect(1).toBe(1) }) })\n\
-         const base = {}\n\
+        "const base = {}\n\
          test.for([{ __proto__: base, n: 1 }, { __proto__: base, n: 2 }, { __proto__: base, n: 1 }])\
          ('proto', ({ n }) => { expect(n).toBe(1) })",
         &[("proto#0", "proto#2")],
-        &[("in fails", "in plain"), ("proto#0", "proto#1")],
+        &[("proto#0", "proto#1")],
     );
 }
 

@@ -108,12 +108,11 @@
       ],
       "next": {
         "reasons": [
-          "registered-elsewhere"
+          "registered-elsewhere",
+          "helper-effects-unproved"
         ],
-        "testsExcluded": 1
-      },
-      "wrapperSitesToday": [],
-      "waitsOn": "collection-scope calls the inventory cannot resolve"
+        "testsExcluded": 3
+      }
     },
     "object-member.test.ts": {
       "tasks": 3,
@@ -149,12 +148,11 @@
       ],
       "next": {
         "reasons": [
-          "registered-elsewhere"
+          "registered-elsewhere",
+          "helper-effects-unproved"
         ],
-        "testsExcluded": 2
-      },
-      "wrapperSitesToday": [],
-      "waitsOn": "collection-scope calls the inventory cannot resolve"
+        "testsExcluded": 4
+      }
     },
     "static-method.test.ts": {
       "tasks": 3,
@@ -227,24 +225,10 @@
       "waitsOn": "collection-scope calls the inventory cannot resolve"
     },
     {
-      "path": "namespace-member.test.ts",
-      "kind": "missing-site",
-      "item": "test@6",
-      "reason": "A member of a project namespace is not resolved.",
-      "waitsOn": "collection-scope calls the inventory cannot resolve"
-    },
-    {
       "path": "object-member.test.ts",
       "kind": "missing-site",
       "item": "test@6",
       "reason": "A member of an imported object is not resolved.",
-      "waitsOn": "collection-scope calls the inventory cannot resolve"
-    },
-    {
-      "path": "sequence-callee.test.ts",
-      "kind": "missing-site",
-      "item": "test@6",
-      "reason": "A sequence expression hides the callee.",
       "waitsOn": "collection-scope calls the inventory cannot resolve"
     },
     {
