@@ -186,7 +186,9 @@
   "blindUnderCurrent": [
     "control-call.test.ts",
     "control-named.test.ts",
-    "describe-title.test.ts"
+    "describe-title.test.ts",
+    "namespace-member.test.ts",
+    "sequence-callee.test.ts"
   ],
   "knownSites": [
     {

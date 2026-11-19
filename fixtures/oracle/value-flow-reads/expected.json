@@ -26,7 +26,7 @@
       }
     },
     "chain.test.ts": {
-      "tasks": 4,
+      "tasks": 5,
       "wrapperSites": [],
       "next": {
         "reasons": [
@@ -135,5 +135,16 @@
         "testsExcluded": 4
       }
     }
-  }
+  },
+  "blindUnderCurrent": [
+    "builtin.test.ts",
+    "depth.test.ts",
+    "handoff.test.ts",
+    "literals.test.ts",
+    "mutation.test.ts",
+    "parameter.test.ts",
+    "results.test.ts",
+    "star.test.ts",
+    "wrapper-result.test.ts"
+  ]
 }

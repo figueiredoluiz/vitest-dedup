@@ -1,4 +1,4 @@
-import { test } from 'vitest'
+import { expect, test } from 'vitest'
 const noop = (..._args: unknown[]) => {}
 const none: any = undefined
 ;(none?.missing ?? test)('short-circuit', () => {})
@@ -7,3 +7,4 @@ const none: any = undefined
 ;(({ m: noop })?.m ?? test)('present link', () => {})
 const o = { r: { run: test } }
 o?.r?.run('optional links to the api', () => {})
+test('plain', () => { expect(1).toBe(1) })
