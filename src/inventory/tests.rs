@@ -2539,6 +2539,26 @@ fn a_returning_helper_keeps_what_its_result_registers() {
             &[("helper.ts", "import { test } from 'vitest'\nasync function make(on) { if (on) return test }\nexport const run: any = (await make(false)) ? () => {} : test\n")][..],
             "import { run } from './helper'\nrun('hidden', () => {})",
         ),
+        (
+            &[("helper.ts", "import { test } from 'vitest'\nconst noop = () => {}\nexport function make() { return (''.includes('x') ?? true) ? noop : test }\n")][..],
+            "import { make } from './helper'\nmake()('hidden', () => {})",
+        ),
+        (
+            &[("helper.ts", "import { test } from 'vitest'\nconst noop = () => {}\nexport const state = { enabled: false }\nexport function make() { return state.enabled ? test : noop }\n")][..],
+            "import { make, state } from './helper'\nstate.enabled = true\nmake()('hidden', () => {})",
+        ),
+        (
+            &[("helper.ts", "import { test } from 'vitest'\nconst noop = () => {}\nconst a = [false]\na.forEach((_, i, self) => { self[i] = true })\nexport function make() { return a[0] ? test : noop }\n")][..],
+            "import { make } from './helper'\nmake()('hidden', () => {})",
+        ),
+        (
+            &[("helper.ts", "import { test } from 'vitest'\nconst noop = () => {}\nconst a = [{ on: false }]\na.forEach((row) => { row.on = true })\nexport function make() { return a[0].on ? test : noop }\n")][..],
+            "import { make } from './helper'\nmake()('hidden', () => {})",
+        ),
+        (
+            &[("helper.ts", "import { test } from 'vitest'\nconst noop = () => {}\nString.prototype.at = undefined\nexport function make() { return ''.at ? noop : test }\n")][..],
+            "import { make } from './helper'\nmake()('hidden', () => {})",
+        ),
     ] {
         let main = format!("import {{ test }} from 'vitest'\ntest('control', () => {{}})\n{read}");
         let (found, _) = inventory_of(&main, files, false);

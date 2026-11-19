@@ -130,6 +130,8 @@ struct Module<'s> {
     namespaces: flow::Namespaces,
     /// Named and default imports of project modules, with the summary of what each holds.
     imported: HashMap<SymbolId, super::Summary>,
+    /// Every binding imported from a project module whose exports may register.
+    project_imports: Vec<SymbolId>,
     /// The member names those summaries spell, set once the imports are read: a value read from
     /// a summary borrows its steps from here.
     names: &'s std::cell::OnceCell<HashSet<Box<str>>>,
@@ -169,6 +171,7 @@ pub(super) fn analyse(
         flow: flow::Flow::default(),
         namespaces: HashMap::new(),
         imported: HashMap::new(),
+        project_imports: Vec::new(),
         names: &names,
         escaped: std::cell::Cell::new(false),
     };
@@ -1200,6 +1203,9 @@ impl<'s> Module<'s> {
                 let Some(symbol) = self.declares(local) else {
                     continue;
                 };
+                if !api {
+                    self.project_imports.push(symbol);
+                }
                 let name = match tree.kind(specifier) {
                     "ImportSpecifier" => match tree.child(specifier, "imported") {
                         Some(imported) => export_name(tree, imported),
@@ -2041,8 +2047,47 @@ impl<'s> Module<'s> {
             escapes.extend(self.escape_from(read));
         }
         escapes.extend(self.escaping_helper_reads());
+        escapes.extend(self.imported_member_writes());
         escapes.sort_by_key(|&node| tree.span(node).start);
         escapes
+    }
+
+    /// Each write of a member of a binding imported from a project module (`state.on = true`):
+    /// what that module's summaries read of the member was read before the write.
+    fn imported_member_writes(&self) -> Vec<NodeId> {
+        let tree = self.tree;
+        let scopes = &self.parsed.scopes;
+        self.project_imports
+            .iter()
+            .flat_map(|&symbol| scopes.symbol(symbol).references.iter())
+            .filter_map(|reference| {
+                let mut top = reference.node?;
+                let mut members = 0;
+                let parent = loop {
+                    let parent = tree.outer_parent(top)?;
+                    if tree.kind(parent) == "MemberExpression"
+                        && tree
+                            .child(parent, "object")
+                            .map(|object| tree.inner(object))
+                            == Some(top)
+                    {
+                        top = parent;
+                        members += 1;
+                        continue;
+                    }
+                    break parent;
+                };
+                let target =
+                    |key| tree.child(parent, key).map(|child| tree.inner(child)) == Some(top);
+                let written = match tree.kind(parent) {
+                    "AssignmentExpression" => target("left"),
+                    "UpdateExpression" => true,
+                    "UnaryExpression" => tree.text(parent, "operator") == Some("delete"),
+                    _ => false,
+                };
+                (members > 0 && written).then_some(parent)
+            })
+            .collect()
     }
 
     /// Where the registration value read at `read` leaves what the value flow follows, if it

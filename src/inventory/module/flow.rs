@@ -192,6 +192,14 @@ impl<'s> Value<'s> {
     }
 
     /// Whether some alternative is a framework or project registration value.
+    /// What a call or read that registers nothing gives: a built-in value, `undefined`, or any
+    /// primitive, so its truth is not known.
+    pub(super) fn inert() -> Self {
+        Value::of(Atom::Builtin)
+            .join(Value::of(Atom::Undefined))
+            .join(Value::of(Atom::Primitive(Primitive::Other, Truth::Either)))
+    }
+
     pub(super) fn holds_api(&self) -> bool {
         self.0.iter().any(|atom| matches!(atom, Atom::Api(..)))
     }
@@ -357,6 +365,23 @@ const ARRAY_MEMBERS: [&str; 36] = [
     "values",
     "with",
 ];
+/// The built-in methods that hand their receiver to a callback they are given, which may write it.
+const RECEIVER_CALLBACKS: [&str; 14] = [
+    "every",
+    "filter",
+    "find",
+    "findIndex",
+    "findLast",
+    "findLastIndex",
+    "flatMap",
+    "forEach",
+    "map",
+    "reduce",
+    "reduceRight",
+    "some",
+    "sort",
+    "toSorted",
+];
 /// The built-in methods that change their receiver's members.
 const MUTATORS: [&str; 11] = [
     "copyWithin",
@@ -405,13 +430,19 @@ fn opaque_property(tree: &Tree, property: NodeId) -> bool {
 }
 
 /// What `key` reads on a value whose own properties are `own` and whose prototype's methods are
-/// `methods`: a method is a built-in function, anything else is `undefined`.
-fn table<'s>(key: Key<'s>, own: &[(&str, Atom<'s>)], methods: &[&str]) -> Value<'s> {
+/// `methods`: a method is a built-in function, anything else is `undefined`. When the module
+/// may have `replaced` a built-in, a key not its own may be anything.
+fn table<'s>(
+    key: Key<'s>,
+    own: &[(&str, Atom<'s>)],
+    methods: &[&str],
+    replaced: bool,
+) -> Value<'s> {
     match key {
         Key::Name(name) => {
             if let Some((_, atom)) = own.iter().find(|(own, _)| *own == name) {
                 Value::of(atom.clone())
-            } else if name == "__proto__" {
+            } else if name == "__proto__" || replaced {
                 Value::unknown()
             } else if methods.contains(&name) || OBJECT_MEMBERS.contains(&name) {
                 Value::of(Atom::Builtin)
@@ -419,6 +450,7 @@ fn table<'s>(key: Key<'s>, own: &[(&str, Atom<'s>)], methods: &[&str]) -> Value<
                 Value::of(Atom::Undefined)
             }
         }
+        Key::Index(_) if replaced => Value::unknown(),
         Key::Index(_) => Value::of(Atom::Undefined),
         Key::Dynamic => Value::unknown(),
     }
@@ -1021,22 +1053,23 @@ impl<'s> Module<'s> {
         let tree = self.tree;
         let any_number = Atom::Primitive(Primitive::Number, Truth::Either);
         let any_string = Atom::Primitive(Primitive::String, Truth::Either);
+        let replaced = self.parsed.scopes.may_replace_builtins();
         match atom {
             // Reading a property of `null` or `undefined` throws.
             Atom::Undefined | Atom::Null => Value::default(),
             Atom::Primitive(Primitive::String, _) => match key {
                 Key::Index(_) => Value::of(any_string).join(Value::of(Atom::Undefined)),
-                _ => table(key, &[("length", any_number)], &STRING_MEMBERS),
+                _ => table(key, &[("length", any_number)], &STRING_MEMBERS, replaced),
             },
-            Atom::Primitive(Primitive::Number, _) => table(key, &[], &NUMBER_MEMBERS),
-            Atom::Primitive(Primitive::Boolean, _) => table(key, &[], &[]),
+            Atom::Primitive(Primitive::Number, _) => table(key, &[], &NUMBER_MEMBERS, replaced),
+            Atom::Primitive(Primitive::Boolean, _) => table(key, &[], &[], replaced),
             // Another module may write a member of its function, which is not seen here.
             Atom::Primitive(Primitive::Other, _)
             | Atom::Builtin
             | Atom::Unknown
             | Atom::Helper(_) => match atom {
                 Atom::Unknown | Atom::Helper(_) => Value::unknown(),
-                _ => Value::of(Atom::Builtin).join(Value::of(Atom::Undefined)),
+                _ => Value::inert(),
             },
             Atom::Framework(holder) => match key {
                 Key::Name("name" | "length") if holder != Holder::Namespace => {
@@ -1067,6 +1100,7 @@ impl<'s> Module<'s> {
                 key,
                 &[("name", any_string), ("length", any_number)],
                 &FUNCTION_MEMBERS,
+                replaced,
             ),
             Atom::Array(node) => {
                 let elements = tree.list(node, "elements");
@@ -1087,7 +1121,7 @@ impl<'s> Module<'s> {
                         Primitive::Number,
                         truth(!elements.is_empty()),
                     )),
-                    Key::Name(_) => table(key, &[], &ARRAY_MEMBERS),
+                    Key::Name(_) => table(key, &[], &ARRAY_MEMBERS, replaced),
                     Key::Dynamic => elements
                         .iter()
                         .fold(Value::of(Atom::Undefined), |value, slot| {
@@ -1116,7 +1150,7 @@ impl<'s> Module<'s> {
                         .find(|&&property| property_name(tree, property) == Some(name))
                     {
                         Some(&property) => value_of(property),
-                        None => table(key, &[], &[]),
+                        None => table(key, &[], &[], replaced),
                     },
                     Key::Index(index) => {
                         let name = index.to_string();
@@ -1144,7 +1178,7 @@ impl<'s> Module<'s> {
                 {
                     Some(summary) => self.value_of_summary(summary),
                     // The module's other exports register nothing when called.
-                    None => Value::of(Atom::Builtin).join(Value::of(Atom::Undefined)),
+                    None => Value::inert(),
                 },
                 _ => Value::unknown(),
             },
@@ -1233,7 +1267,7 @@ impl<'s> Module<'s> {
                 steps.push(Step::Call);
                 if origin.reach().is_none() && self.apply(origin, &steps).is_none() {
                     // A call that registers returns nothing that registers.
-                    return Value::of(Atom::Builtin).join(Value::of(Atom::Undefined));
+                    return Value::inert();
                 }
                 Value::of(Atom::Api(origin, steps))
             }
@@ -1264,9 +1298,7 @@ impl<'s> Module<'s> {
                 // What a call handed a registration function returns may register.
                 Value::of(Atom::Api(Origin::Wrapper(Reach::Tasks), Vec::new()))
             }
-            Atom::Builtin | Atom::Framework(_) | Atom::Module(_) => {
-                Value::of(Atom::Builtin).join(Value::of(Atom::Undefined))
-            }
+            Atom::Builtin | Atom::Framework(_) | Atom::Module(_) => Value::inert(),
             Atom::Unknown => Value::unknown(),
         }
     }
@@ -2048,9 +2080,15 @@ impl<'s> Module<'s> {
                         .child(parent, "id")
                         .is_none_or(|id| bound_symbols(tree, scopes, id).into_iter().any(deeper))
             }
-            // A method that changes its receiver (`list.push(test)`).
+            // A method that changes its receiver (`list.push(test)`), or that hands it to a
+            // callback it is given (`list.forEach((_, i, self) => ...)`).
             "CallExpression" | "NewExpression" if at("callee") => {
-                written && member_name(tree, top).is_some_and(|name| MUTATORS.contains(&name))
+                written
+                    && member_name(tree, top).is_some_and(|name| {
+                        MUTATORS.contains(&name)
+                            || (RECEIVER_CALLBACKS.contains(&name)
+                                && self.callback_written(parent, name, shallow, depth))
+                    })
             }
             "CallExpression" | "NewExpression" => {
                 handed && self.received_written(parent, top, shallow, depth)
@@ -2179,6 +2217,51 @@ impl<'s> Module<'s> {
                 .is_none_or(|parameter| self.members_written(parameter, shallow, depth + 1)),
             Some(_) => true,
         }
+    }
+
+    /// Whether the callback handed to the built-in `name` at `call` may write a member of its
+    /// receiver: one that is not a function literal, reads `arguments` or a rest parameter, takes
+    /// the receiver itself, or, unless `shallow`, may write a member of an element it is handed.
+    fn callback_written(&self, call: NodeId, name: &str, shallow: bool, depth: usize) -> bool {
+        const DEEPEST_HANDOFF: usize = 4;
+        let tree = self.tree;
+        if depth >= DEEPEST_HANDOFF {
+            return true;
+        }
+        let Some(Some(callback)) = tree.list(call, "arguments").first().copied() else {
+            return false;
+        };
+        let callback = tree.inner(callback);
+        if !tree.is_function(callback)
+            || tree.descendants(callback).any(|node| {
+                tree.kind(node) == "Identifier" && tree.text(node, "name") == Some("arguments")
+            })
+        {
+            return true;
+        }
+        let params = tree.list(callback, "params");
+        let (elements, receiver): (&[usize], Option<usize>) = match name {
+            "reduce" | "reduceRight" => (&[1], Some(3)),
+            "sort" | "toSorted" => (&[0, 1], None),
+            _ => (&[0], Some(2)),
+        };
+        if params
+            .iter()
+            .any(|param| param.is_none_or(|param| tree.kind(param) == "RestElement"))
+            || receiver.is_some_and(|index| params.len() > index)
+        {
+            return true;
+        }
+        !shallow
+            && elements
+                .iter()
+                .any(|&index| match params.get(index).copied().flatten() {
+                    None => false,
+                    Some(param) if tree.kind(param) == "Identifier" => self
+                        .declares(param)
+                        .is_none_or(|param| self.members_written(param, false, depth + 1)),
+                    Some(_) => true,
+                })
     }
 
     /// Whether the identifier `node` reads a binding only the value flow knows exactly: a project
