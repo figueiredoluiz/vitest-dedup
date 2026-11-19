@@ -433,6 +433,8 @@ pub(super) struct Flow<'s> {
     steps: std::cell::Cell<usize>,
     /// The innermost right side of each assignment-chain link walked; syntax, so never cleared.
     ends: RefCell<HashMap<NodeId, NodeId>>,
+    /// [`Module::members_written`] by symbol, `shallow` and depth; syntax, so never cleared.
+    written: RefCell<HashMap<(SymbolId, bool, usize), bool>>,
 }
 
 impl<'s> Flow<'s> {
@@ -1812,8 +1814,14 @@ impl<'s> Module<'s> {
     /// Whether a member of what `symbol` holds may be written through it: through any of its
     /// references ([`Self::value_written`]). `shallow` asks about its own members only, the only
     /// ones a function's are read as.
+    /// Each answer is kept, so a parameter handed on by many calls is proved once.
     fn members_written(&self, symbol: SymbolId, shallow: bool, depth: usize) -> bool {
-        self.parsed
+        let key = (symbol, shallow, depth);
+        if let Some(&written) = self.flow.written.borrow().get(&key) {
+            return written;
+        }
+        let written = self
+            .parsed
             .scopes
             .symbol(symbol)
             .references
@@ -1822,7 +1830,9 @@ impl<'s> Module<'s> {
                 reference
                     .node
                     .is_none_or(|node| self.value_written(node, shallow, depth))
-            })
+            });
+        self.flow.written.borrow_mut().insert(key, written);
+        written
     }
 
     /// Whether a member of the value `node` evaluates to may be written where the value goes: an
