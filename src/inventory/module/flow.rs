@@ -109,6 +109,9 @@ const DEEPEST: usize = 48;
 /// Steps one evaluation may take, memoised or not, before the rest are [`Value::exhausted`]:
 /// depth alone does not bound branching through calls whose scopes are not memoised.
 const BUSIEST: usize = 20_000;
+/// Containers `holds_within` opens, nested ones included, before the rest may hold
+/// anything.
+const FULLEST: usize = 1_024;
 
 impl<'s> Value<'s> {
     /// Exactly `atom`.
@@ -1324,9 +1327,7 @@ impl<'s> Module<'s> {
         let mut read = Value::default();
         for atom in value.0 {
             read = read.join(match atom {
-                Atom::Object(_) | Atom::Array(_) if self.holds_within(&atom, 0) => {
-                    Value::exhausted()
-                }
+                Atom::Object(_) | Atom::Array(_) if self.holds_within(&atom) => Value::exhausted(),
                 Atom::Object(_) | Atom::Array(_) => Value::unknown(),
                 atom => Value::of(atom),
             });
@@ -2284,7 +2285,7 @@ impl<'s> Module<'s> {
                 },
                 // A returned container holding a registration function (`{ it: test }`) is not
                 // summarised member by member: what is read from it may register.
-                Atom::Object(_) | Atom::Array(_) if !call && self.holds_within(atom, 0) => {
+                Atom::Object(_) | Atom::Array(_) if !call && self.holds_within(atom) => {
                     summary
                         .roots
                         .push((Root::Wrapper(Reach::Tasks), Vec::new()));
@@ -2297,19 +2298,25 @@ impl<'s> Module<'s> {
     }
 
     /// Whether a container literal holds a framework value, in a member or a nested container.
-    fn holds_within(&self, atom: &Atom<'s>, depth: usize) -> bool {
-        if !matches!(atom, Atom::Object(_) | Atom::Array(_)) {
-            return false;
+    /// Containers are opened one at a time, so nesting depth costs no stack; past [`FULLEST`]
+    /// opened, what is left may hold anything.
+    fn holds_within(&self, atom: &Atom<'s>) -> bool {
+        let mut pending = vec![atom.clone()];
+        let mut opened = 0;
+        while let Some(atom) = pending.pop() {
+            if !matches!(atom, Atom::Object(_) | Atom::Array(_)) {
+                continue;
+            }
+            opened += 1;
+            if opened > FULLEST {
+                return true;
+            }
+            let members = self.get(atom, Key::Dynamic, &Scope::new(), 0);
+            if members.holds_api() {
+                return true;
+            }
+            pending.extend(members.0);
         }
-        // Past the limit a container may hold anything.
-        if depth > 3 {
-            return true;
-        }
-        let members = self.get(atom.clone(), Key::Dynamic, &Scope::new(), 0);
-        members.holds_api()
-            || members
-                .0
-                .iter()
-                .any(|atom| self.holds_within(atom, depth + 1))
+        false
     }
 }
