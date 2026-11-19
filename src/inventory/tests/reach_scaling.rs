@@ -130,9 +130,15 @@ fn escaped_reads_are_climbed_in_linear_work() {
     }
 }
 
-/// Walk steps of a module binding each of `n` names to one element of an `n`-element table.
-fn table_read_steps(n: usize) -> usize {
-    let elements: Vec<String> = (0..n).map(|i| i.to_string()).collect();
+/// Walk steps of a module binding each of `n` names to one element of an `n`-element table,
+/// each element `element` or, if empty, its index.
+fn table_read_steps(n: usize, element: &str) -> usize {
+    let elements: Vec<String> = (0..n)
+        .map(|i| match element {
+            "" => i.to_string(),
+            element => element.to_owned(),
+        })
+        .collect();
     let reads: Vec<String> = (0..n).map(|i| format!("const a{i} = table[{i}]")).collect();
     let source = format!(
         "import {{ test }} from 'vitest'\nconst table = [{}]\n{}\ntest('t', () => {{}})",
@@ -141,22 +147,24 @@ fn table_read_steps(n: usize) -> usize {
     );
     super::super::module::take_walk_steps();
     let (found, _) = inventory_of(&source, &[], false);
-    assert_eq!(found.sites.len(), 1, "{:?}", found.sites);
+    assert!(!found.sites.is_empty());
     super::super::module::take_walk_steps()
 }
 
 /// Bindings reading one shared table are evaluated in linear work: the table and its writes are
-/// read once per pass, not once per binding.
+/// read once per pass, not once per binding, also when each binding read adds an alias.
 #[test]
 fn reads_of_a_shared_table_are_linear() {
-    let small = table_read_steps(400);
-    let large = table_read_steps(800);
-    assert!(
-        small > 0 && large > small,
-        "{small} steps for 400, {large} for 800"
-    );
-    assert!(
-        large <= 2 * small + 64,
-        "{small} steps for 400, {large} for 800"
-    );
+    for element in ["", "test"] {
+        let small = table_read_steps(400, element);
+        let large = table_read_steps(800, element);
+        assert!(
+            small > 0 && large > small,
+            "{element:?}: {small} steps for 400, {large} for 800"
+        );
+        assert!(
+            large <= 2 * small + 64,
+            "{element:?}: {small} steps for 400, {large} for 800"
+        );
+    }
 }

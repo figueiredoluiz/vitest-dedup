@@ -2535,6 +2535,10 @@ fn a_returning_helper_keeps_what_its_result_registers() {
             &[("helper.ts", "import { test } from 'vitest'\nexport async function make() { return test }\n")][..],
             "import { make } from './helper'\nReflect.apply(await make(), null, ['hidden', () => {}])",
         ),
+        (
+            &[("helper.ts", "import { test } from 'vitest'\nasync function make(on) { if (on) return test }\nexport const run: any = (await make(false)) ? () => {} : test\n")][..],
+            "import { run } from './helper'\nrun('hidden', () => {})",
+        ),
     ] {
         let main = format!("import {{ test }} from 'vitest'\ntest('control', () => {{}})\n{read}");
         let (found, _) = inventory_of(&main, files, false);
@@ -2555,6 +2559,18 @@ fn a_returning_helper_keeps_what_its_result_registers() {
         .sites
         .iter()
         .all(|site| site.kind == SiteKind::Registers(Registers::Test)));
+}
+
+/// A function returning itself is summarised to a bounded depth, then read as one that may
+/// register.
+#[test]
+fn a_function_returning_itself_is_summarised_in_bounded_depth() {
+    let (found, _) = inventory_of(
+        "import { test } from 'vitest'\nimport { f } from './helper'\ntest('a', () => { f })",
+        &[("helper.ts", "export function f() { return f }\n")],
+        false,
+    );
+    assert!(!found.sites.is_empty(), "{:?}", found.sites);
 }
 
 /// Destructuring an awaited wrapper call reads what the wrapper returns.

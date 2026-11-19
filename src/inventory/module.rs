@@ -1266,10 +1266,12 @@ impl<'s> Module<'s> {
     fn collect_aliases(&mut self) {
         let tree = self.tree;
         loop {
-            // Origins and wrappers may have changed in place since the last evaluation; within a
-            // pass only a wrapper's reach widens, and the pass then runs again.
+            // Origins and wrappers may have changed in place since the last evaluation. A pass
+            // reads the facts held when it starts, so it runs again until it adds none.
             self.flow.revise();
             let before = self.origins.clone();
+            let facts = self.facts();
+            self.flow.freeze();
             for node in tree.nodes() {
                 if tree.kind(node) != "VariableDeclarator" {
                     continue;
@@ -1295,7 +1297,8 @@ impl<'s> Module<'s> {
                     self.aliased.insert(symbol);
                 }
             }
-            if self.origins == before {
+            self.flow.thaw();
+            if self.origins == before && self.facts() == facts {
                 break;
             }
         }
