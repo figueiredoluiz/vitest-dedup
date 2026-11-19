@@ -9,7 +9,7 @@ use crate::framework::{Holder, Presence};
 use crate::inventory::{Export, Modules, Reach, Registers, Root, Summary};
 use crate::lang::{
     bound_symbols, export_name, member_name, property_name, Declaration, Field, Name, NodeId,
-    SymbolId,
+    SymbolId, Tree,
 };
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -393,6 +393,15 @@ fn key_named(name: &str) -> Key<'_> {
         Ok(index) if index < u32::MAX && index.to_string() == name => Key::Index(index as usize),
         _ => Key::Name(name),
     }
+}
+
+/// Whether an object literal's `property` hides what a member read of the literal finds: a
+/// spread, a getter or setter, a key with no static name, or `__proto__`, which replaces the
+/// literal's prototype so a missing key is not proved absent.
+fn opaque_property(tree: &Tree, property: NodeId) -> bool {
+    tree.kind(property) != "Property"
+        || tree.text(property, "kind") != Some("init")
+        || matches!(property_name(tree, property), None | Some("__proto__"))
 }
 
 /// What `key` reads on a value whose own properties are `own` and whose prototype's methods are
@@ -1015,13 +1024,9 @@ impl<'s> Module<'s> {
                     .into_iter()
                     .flatten()
                     .collect();
-                // `__proto__: value` replaces the literal's prototype, so a missing key is not
-                // proved absent.
-                let opaque = properties.iter().any(|&property| {
-                    tree.kind(property) != "Property"
-                        || tree.text(property, "kind") != Some("init")
-                        || matches!(property_name(tree, property), None | Some("__proto__"))
-                });
+                let opaque = properties
+                    .iter()
+                    .any(|&property| opaque_property(tree, property));
                 let value_of = |property: NodeId| match tree.child(property, "value") {
                     Some(value) => self.evaluate_in(value, scope, depth),
                     None => Value::unknown(),
@@ -1318,8 +1323,8 @@ impl<'s> Module<'s> {
     }
 
     /// Whether the container literal `atom` holds only data a member read sees: elements without
-    /// a spread, or properties that are plain `key: value` pairs with no spread, computed key,
-    /// getter, setter or method.
+    /// a spread, or properties that are plain `key: value` pairs a member read can see
+    /// ([`opaque_property`]) with no computed key or method.
     fn plain_literal(&self, atom: &Atom<'s>) -> bool {
         let tree = self.tree;
         match *atom {
@@ -1333,8 +1338,7 @@ impl<'s> Module<'s> {
                 .into_iter()
                 .flatten()
                 .all(|part| {
-                    tree.kind(part) == "Property"
-                        && tree.text(part, "kind") == Some("init")
+                    !opaque_property(tree, part)
                         && !tree.flag(part, "method")
                         && !tree.flag(part, "computed")
                 }),
