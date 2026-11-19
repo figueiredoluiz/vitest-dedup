@@ -90,6 +90,7 @@ fn repeated_star_bindings_require_the_same_terminal_module() {
             dialect: &dialect,
             globals: false,
             root: dir.path(),
+            major: crate::framework::Formatting::Unknown,
         },
         &mut Modules::default(),
     );

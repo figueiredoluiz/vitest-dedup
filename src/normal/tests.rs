@@ -1466,6 +1466,7 @@ fn run_forms(files: &[(&str, &str)], orders: &[&[&str]]) -> Vec<HashMap<(String,
                     dialect: &DIALECT,
                     globals: false,
                     root: dir.path(),
+                    major: crate::framework::Formatting::Unknown,
                 },
                 &mut Modules::default(),
             );

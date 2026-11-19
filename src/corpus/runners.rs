@@ -1062,6 +1062,7 @@ impl<'a> Planner<'a> {
             dialect: self.setting.dialect,
             globals: self.setting.globals,
             root: self.setting.root,
+            major: self.setting.formatting,
         }
     }
 

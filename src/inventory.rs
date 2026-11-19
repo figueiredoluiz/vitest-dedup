@@ -14,7 +14,7 @@ mod module;
 mod reach;
 pub mod runners;
 
-use crate::framework::{Dialect, Registers};
+use crate::framework::{Dialect, Formatting, Registers};
 use crate::lang::{NodeId, Parsed, Span};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -373,7 +373,7 @@ impl Default for ImportWork {
 #[derive(Debug, Default)]
 pub struct Modules {
     sources: crate::lang::Sources,
-    cache: crate::memory::RetainedMap<(PathBuf, bool), HashMap<String, Export>>,
+    cache: crate::memory::RetainedMap<(PathBuf, (bool, Formatting)), HashMap<String, Export>>,
     /// Advances only when a new complete module proof enters `cache`.
     cache_generation: usize,
     active: HashSet<PathBuf>,
@@ -390,6 +390,15 @@ pub struct Setting<'a> {
     pub globals: bool,
     /// The analysis root: imports resolving outside it are not followed.
     pub root: &'a Path,
+    /// The file's Vitest major, which decides the members its API values have.
+    pub major: Formatting,
+}
+
+impl Setting<'_> {
+    /// The key a module's analysis under this setting is cached by.
+    fn key(&self, path: &Path) -> (PathBuf, (bool, Formatting)) {
+        (path.to_path_buf(), (self.globals, self.major))
+    }
 }
 
 impl Modules {
@@ -426,7 +435,7 @@ impl Modules {
         if self.work.refusal.is_some() {
             return HashMap::new();
         }
-        let key = (path.to_path_buf(), setting.globals);
+        let key = setting.key(path);
         if let Some(found) = self.cache.get(&key) {
             return found.clone();
         }
