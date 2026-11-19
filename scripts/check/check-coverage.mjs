@@ -235,6 +235,8 @@ const RUST_MODULES = {
   'src/lang/tree.rs': 97,
   'src/inventory.rs': 96,
   'src/inventory/module.rs': 95,
+  // Registration value flow: first measured at 93.99% (1595/1697 lines).
+  'src/inventory/module/flow.rs': 93.5,
   // Indexed span containment is guarded by exhaustive queries and an owned-chain work bound.
   'src/inventory/reach.rs': 99,
   // Runner invocation proofs: first measured at 89.52% (487/544 lines).
