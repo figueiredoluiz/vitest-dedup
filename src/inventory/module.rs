@@ -80,6 +80,20 @@ struct Applied {
     unresolved: bool,
 }
 
+/// What applying `steps` to a root with a reach is, `None` for a root without one. An alias of
+/// the wrapper keeps its reach; anything derived from it may register tests.
+fn wrapper_applied(origin: Origin, steps: &[Step]) -> Option<Origin> {
+    let reach = origin.reach()?;
+    if matches!(origin, Origin::Derived(_)) && steps.is_empty() {
+        return Some(origin);
+    }
+    Some(Origin::Wrapper(if steps.is_empty() {
+        reach
+    } else {
+        Reach::Tasks
+    }))
+}
+
 /// The analysis of one module.
 struct Module<'s> {
     path: &'s Path,
@@ -116,6 +130,9 @@ struct Module<'s> {
     namespaces: flow::Namespaces,
     /// Named and default imports of project modules, with the summary of what each holds.
     imported: HashMap<SymbolId, super::Summary>,
+    /// The member names those summaries spell, set once the imports are read: a value read from
+    /// a summary borrows its steps from here.
+    names: &'s std::cell::OnceCell<HashSet<Box<str>>>,
 }
 
 /// The inventory of a module, and the export names whose value registers when called with what
@@ -128,6 +145,7 @@ pub(super) fn analyse(
     modules: &mut Modules,
     depth: usize,
 ) -> (Inventory, HashMap<String, Export>) {
+    let names = std::cell::OnceCell::new();
     let mut module = Module {
         path,
         source,
@@ -148,6 +166,7 @@ pub(super) fn analyse(
         flow: flow::Flow::default(),
         namespaces: HashMap::new(),
         imported: HashMap::new(),
+        names: &names,
     };
     module.redeclared = module.redeclarations();
     module.evaluates = super::direct_eval(parsed);
@@ -1045,17 +1064,8 @@ impl<'s> Module<'s> {
 
     /// [`Self::value_origin`] of `node` from its walked [`Self::chain`].
     fn chained_origin(&self, node: NodeId, origin: Origin, steps: &[Step]) -> Option<Origin> {
-        if let Some(reach) = origin.reach() {
-            if matches!(origin, Origin::Derived(_)) && steps.is_empty() {
-                return Some(origin);
-            }
-            // An alias of the wrapper keeps its reach; anything derived from it may register tests.
-            let reach = if steps.is_empty() {
-                reach
-            } else {
-                Reach::Tasks
-            };
-            return Some(Origin::Wrapper(reach));
+        if let Some(applied) = wrapper_applied(origin, steps) {
+            return Some(applied);
         }
         let applied = self.apply_at(node, origin, steps)?;
         if applied.evaluated || applied.unresolved {
@@ -1161,7 +1171,7 @@ impl<'s> Module<'s> {
                 .map(|file| modules.exports(file, self.setting, depth + 1));
             let summaries = file
                 .as_ref()
-                .and_then(|file| modules.recorded_summaries(file, self.setting))
+                .and_then(|file| modules.recorded_summaries(file, self.setting).cloned())
                 .unwrap_or_default();
             if wrapper_exports
                 .as_ref()
@@ -1236,6 +1246,12 @@ impl<'s> Module<'s> {
                 }
             }
         }
+        let names = flow::step_names(
+            self.imported
+                .values()
+                .chain(self.namespaces.values().flat_map(HashMap::values)),
+        );
+        let _ = self.names.set(names);
         self.collect_aliases();
     }
 

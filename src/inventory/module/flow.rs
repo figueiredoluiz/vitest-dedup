@@ -1005,7 +1005,7 @@ impl<'s> Module<'s> {
                     .get(&symbol)
                     .and_then(|exports| exports.get(name))
                 {
-                    Some(summary) => value_of_summary(summary),
+                    Some(summary) => self.value_of_summary(summary),
                     // The module's other exports register nothing when called.
                     None => Value::of(Atom::Builtin).join(Value::of(Atom::Undefined)),
                 },
@@ -1116,12 +1116,13 @@ impl<'s> Module<'s> {
             }
             // What another module's helper returns, derived there as a local one's is here.
             // One whose result is not known may return a registration function handed to it.
-            Atom::Helper(returns) if handed_api && returns.other => value_of_summary(&returns)
-                .join(Value::of(Atom::Api(
+            Atom::Helper(returns) if handed_api && returns.other => {
+                self.value_of_summary(&returns).join(Value::of(Atom::Api(
                     Origin::Wrapper(Reach::Tasks),
                     Vec::new(),
-                ))),
-            Atom::Helper(returns) => value_of_summary(&returns),
+                )))
+            }
+            Atom::Helper(returns) => self.value_of_summary(&returns),
             Atom::Builtin | Atom::Framework(_) | Atom::Module(_) | Atom::Unknown if handed_api => {
                 // What a call handed a registration function returns may register.
                 Value::of(Atom::Api(Origin::Wrapper(Reach::Tasks), Vec::new()))
@@ -1247,7 +1248,7 @@ impl<'s> Module<'s> {
             return Value::of(Atom::Module(symbol));
         }
         if let Some(summary) = self.imported.get(&symbol) {
-            return value_of_summary(summary);
+            return self.value_of_summary(summary);
         }
         if let Some(&reach) = self.wrappers.get(&symbol) {
             return Value::of(Atom::Api(Origin::Wrapper(reach), Vec::new()));
@@ -1964,15 +1965,8 @@ impl<'s> Module<'s> {
 
     /// What applying `steps` to a root of `origin` is, without a node to locate them.
     pub(super) fn chained(&self, origin: Origin, steps: &[Step]) -> Option<Origin> {
-        if let Some(reach) = origin.reach() {
-            if matches!(origin, Origin::Derived(_)) && steps.is_empty() {
-                return Some(origin);
-            }
-            return Some(Origin::Wrapper(if steps.is_empty() {
-                reach
-            } else {
-                Reach::Tasks
-            }));
+        if let Some(applied) = super::wrapper_applied(origin, steps) {
+            return Some(applied);
         }
         let applied = self.apply(origin, steps)?;
         if applied.unresolved {
@@ -1991,46 +1985,54 @@ fn truth(value: bool) -> Truth {
     }
 }
 
-/// The value an export summary describes, its steps interned for the process.
-fn value_of_summary<'s>(summary: &Summary) -> Value<'s> {
-    let mut value = Value::default();
-    for (root, steps) in &summary.roots {
-        let origin = match *root {
-            Root::Api(registers) => Origin::Api(registers),
-            Root::Namespace => Origin::Namespace,
-            Root::Wrapper(reach) => Origin::Wrapper(reach),
-            Root::Derived(registers) => Origin::Derived(registers),
-        };
-        let steps = steps
-            .iter()
-            .map(|step| match &**step {
-                "()" => Step::Call,
-                name => Step::Member(intern(name)),
-            })
-            .collect();
-        value = value.join(Value::of(Atom::Api(origin, steps)));
+/// The member names `summaries` spell in their steps, nested summaries included.
+pub(super) fn step_names<'a>(summaries: impl Iterator<Item = &'a Summary>) -> HashSet<Box<str>> {
+    let mut names = HashSet::new();
+    let mut pending: Vec<&Summary> = summaries.collect();
+    while let Some(summary) = pending.pop() {
+        for (_, steps) in &summary.roots {
+            names.extend(steps.iter().filter(|step| &***step != "()").cloned());
+        }
+        pending.extend(summary.returns.as_deref());
+        pending.extend(summary.called.as_deref());
     }
-    if let Some(returns) = &summary.returns {
-        value = value.join(Value::of(Atom::Helper(returns.clone())));
-    }
-    if summary.other {
-        value = value.join(Value::unknown());
-    }
-    value
+    names
 }
 
-/// A member name read from another module's summary, kept for the process: the set of names is
-/// the set of member names spelled in the project.
-fn intern(name: &str) -> &'static str {
-    use std::sync::{Mutex, OnceLock};
-    static NAMES: OnceLock<Mutex<std::collections::HashSet<&'static str>>> = OnceLock::new();
-    let mut names = NAMES.get_or_init(Mutex::default).lock().unwrap();
-    if let Some(&held) = names.get(name) {
-        return held;
+impl<'s> Module<'s> {
+    /// The value an export summary describes, its member names borrowed from [`Module::names`].
+    /// A root spelling a name the module did not collect is unknown.
+    fn value_of_summary(&self, summary: &Summary) -> Value<'s> {
+        let names: &'s std::cell::OnceCell<HashSet<Box<str>>> = self.names;
+        let member = |name: &str| names.get()?.get(name).map(|name| &**name);
+        let mut value = Value::default();
+        for (root, steps) in &summary.roots {
+            let origin = match *root {
+                Root::Api(registers) => Origin::Api(registers),
+                Root::Namespace => Origin::Namespace,
+                Root::Wrapper(reach) => Origin::Wrapper(reach),
+                Root::Derived(registers) => Origin::Derived(registers),
+            };
+            let steps: Option<Vec<Step<'s>>> = steps
+                .iter()
+                .map(|step| match &**step {
+                    "()" => Some(Step::Call),
+                    name => member(name).map(Step::Member),
+                })
+                .collect();
+            value = value.join(match steps {
+                Some(steps) => Value::of(Atom::Api(origin, steps)),
+                None => Value::unknown(),
+            });
+        }
+        if let Some(returns) = &summary.returns {
+            value = value.join(Value::of(Atom::Helper(returns.clone())));
+        }
+        if summary.other {
+            value = value.join(Value::unknown());
+        }
+        value
     }
-    let held: &'static str = Box::leak(name.into());
-    names.insert(held);
-    held
 }
 
 /// The summary an export carries when only its [`Export`] is known.
@@ -2059,7 +2061,7 @@ impl<'s> Module<'s> {
     ) -> HashMap<String, Summary> {
         let tree = self.tree;
         let dialect = self.setting.dialect;
-        let theirs = |source: &str| -> Option<HashMap<String, Summary>> {
+        let theirs = |source: &str| -> Option<&HashMap<String, Summary>> {
             if dialect.is_api_module(source) {
                 return None;
             }
@@ -2071,7 +2073,7 @@ impl<'s> Module<'s> {
         let mut explicit: HashMap<String, Summary> = HashMap::new();
         let spelled = self.spelled_exports();
         // Each star's source summaries; `None` for a star nothing here can read.
-        let mut stars: Vec<Option<HashMap<String, Summary>>> = Vec::new();
+        let mut stars: Vec<Option<&HashMap<String, Summary>>> = Vec::new();
         for statement in tree.list(tree.root(), "body").into_iter().flatten() {
             let source = tree
                 .child(statement, "source")
@@ -2172,7 +2174,7 @@ impl<'s> Module<'s> {
         if !stars.is_empty() && stars.iter().all(Option::is_some) {
             let mut reached: HashMap<&String, Vec<&Summary>> = HashMap::new();
             for theirs in stars.iter().flatten() {
-                for (name, summary) in theirs {
+                for (name, summary) in theirs.iter() {
                     if name != "default" && !spelled.contains(name) {
                         reached.entry(name).or_default().push(summary);
                     }

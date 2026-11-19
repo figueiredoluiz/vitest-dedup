@@ -443,8 +443,8 @@ impl Modules {
         &self,
         path: &Path,
         setting: Setting,
-    ) -> Option<HashMap<String, Summary>> {
-        self.summaries.get(&setting.key(path)).cloned()
+    ) -> Option<&HashMap<String, Summary>> {
+        self.summaries.get(&setting.key(path))
     }
 
     /// One private cache belongs to one source authority for its whole lifetime.
