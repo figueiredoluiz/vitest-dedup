@@ -1266,6 +1266,9 @@ impl<'s> Module<'s> {
     fn collect_aliases(&mut self) {
         let tree = self.tree;
         loop {
+            // Origins and wrappers may have changed in place since the last evaluation; within a
+            // pass only a wrapper's reach widens, and the pass then runs again.
+            self.flow.revise();
             let before = self.origins.clone();
             for node in tree.nodes() {
                 if tree.kind(node) != "VariableDeclarator" {
@@ -2032,42 +2035,49 @@ impl<'s> Module<'s> {
         let tree = self.tree;
         let mut escapes = Vec::new();
         for read in self.registration_reads() {
-            let mut current = read;
-            let escaped = loop {
-                #[cfg(test)]
-                CLIMB_STEPS.with(|steps| steps.set(steps.get() + 1));
-                let Some(parent) = tree.parent(current) else {
-                    break true;
-                };
-                let holds = |key| tree.child(parent, key) == Some(current);
-                match tree.kind(parent) {
-                    "MemberExpression" if holds("object") => current = parent,
-                    "ParenthesizedExpression"
-                    | "TSAsExpression"
-                    | "TSSatisfiesExpression"
-                    | "TSNonNullExpression" => current = parent,
-                    "CallExpression" if holds("callee") => break false,
-                    "TaggedTemplateExpression" if holds("tag") => break false,
-                    "VariableDeclarator" if holds("init") => break false,
-                    "ExportSpecifier" | "ExportDefaultDeclaration" | "UnaryExpression" => {
-                        break false
-                    }
-                    _ => break true,
-                }
-            };
-            if escaped {
-                escapes.push(current);
-            }
+            escapes.extend(self.escape_from(read));
         }
         escapes.extend(self.escaping_helper_reads());
         escapes.sort_by_key(|&node| tree.span(node).start);
         escapes
     }
 
+    /// Where the registration value read at `read` leaves what the value flow follows, if it
+    /// does: anywhere but a member read, a call or tag, a declarator, a re-export or an operand.
+    fn escape_from(&self, read: NodeId) -> Option<NodeId> {
+        let tree = self.tree;
+        let mut current = read;
+        loop {
+            #[cfg(test)]
+            CLIMB_STEPS.with(|steps| steps.set(steps.get() + 1));
+            let Some(parent) = tree.parent(current) else {
+                return Some(current);
+            };
+            let holds = |key| tree.child(parent, key) == Some(current);
+            match tree.kind(parent) {
+                "MemberExpression" if holds("object") => current = parent,
+                "ParenthesizedExpression"
+                | "TSAsExpression"
+                | "TSSatisfiesExpression"
+                | "TSNonNullExpression" => current = parent,
+                "CallExpression" if holds("callee") => return None,
+                "TaggedTemplateExpression" if holds("tag") => return None,
+                "VariableDeclarator" if holds("init") => return None,
+                // A value thrown away goes nowhere.
+                "ExportSpecifier"
+                | "ExportDefaultDeclaration"
+                | "UnaryExpression"
+                | "ExpressionStatement" => return None,
+                _ => return Some(current),
+            }
+        }
+    }
+
     /// Reads of an imported helper that registers nothing but whose call returns a framework
     /// value, other than as the callee of a call the value flow reads (`make()`), a re-export or
-    /// an operand. Only that call carries the helper's return summary; an alias, an argument or a
-    /// member such as `call` hands the helper to code that may call it unseen.
+    /// an operand, and calls whose result escapes ([`Module::escape_from`]). Only that call
+    /// carries the helper's return summary; an alias, an argument or a member such as `call`
+    /// hands the helper to code that may call it unseen.
     fn escaping_helper_reads(&self) -> Vec<NodeId> {
         let tree = self.tree;
         let scopes = &self.parsed.scopes;
@@ -2079,9 +2089,22 @@ impl<'s> Module<'s> {
                     .as_ref()
                     .is_some_and(|returned| !returned.roots.is_empty())
             })
-            .flat_map(|(&symbol, _)| scopes.symbol(symbol).references.iter())
-            .filter_map(|reference| reference.node)
-            .filter_map(|read| {
+            .flat_map(|(&symbol, summary)| {
+                // A called wrapper root stands for a result the flow could not read (an async
+                // function's); only a registration value is followed past the call.
+                let framework = summary.returns.as_ref().is_some_and(|returned| {
+                    returned.roots.iter().any(|(root, steps)| {
+                        !matches!(root, super::Root::Wrapper(_)) || steps.is_empty()
+                    })
+                });
+                scopes
+                    .symbol(symbol)
+                    .references
+                    .iter()
+                    .map(move |reference| (reference, framework))
+            })
+            .filter_map(|(reference, framework)| reference.node.map(|read| (read, framework)))
+            .filter_map(|(read, framework)| {
                 let mut current = read;
                 let escaped = loop {
                     let Some(parent) = tree.parent(current) else {
@@ -2093,6 +2116,10 @@ impl<'s> Module<'s> {
                         | "TSAsExpression"
                         | "TSSatisfiesExpression"
                         | "TSNonNullExpression" => current = parent,
+                        // The call returns a framework value: it escapes where that value does.
+                        "CallExpression" if holds("callee") && framework => {
+                            return self.escape_from(parent)
+                        }
                         "CallExpression" if holds("callee") => break false,
                         "ExportSpecifier" | "ExportDefaultDeclaration" | "UnaryExpression" => {
                             break false

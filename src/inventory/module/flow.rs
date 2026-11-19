@@ -438,16 +438,25 @@ pub(super) struct Flow<'s> {
     /// [`Module::members_written`] by symbol, `shallow` and depth; syntax, so never cleared.
     written: RefCell<HashMap<(SymbolId, bool, usize), bool>>,
     /// The module's facts when `memo` was filled: the memo holds while they do.
-    facts: RefCell<Option<Facts>>,
+    facts: std::cell::Cell<Option<Facts>>,
+    /// Counts the passes that may change an origin or wrapper the module already held.
+    revision: std::cell::Cell<u64>,
 }
 
-/// What an evaluation reads of the module besides its syntax. The sets and imports only grow,
-/// so their sizes stand for them.
+/// What an evaluation reads of the module besides its syntax, in constant space: the maps and
+/// sets only grow, so their sizes and the revision of entries changed in place stand for them.
+#[derive(Clone, Copy, PartialEq)]
 struct Facts {
-    origins: HashMap<SymbolId, super::Origin>,
-    wrappers: HashMap<SymbolId, Reach>,
-    sizes: [usize; 8],
+    revision: u64,
+    sizes: [usize; 10],
     escaped: bool,
+}
+
+impl<'s> Flow<'s> {
+    /// Records that an origin or wrapper the module already held may have changed.
+    pub(super) fn revise(&self) {
+        self.revision.set(self.revision.get() + 1);
+    }
 }
 
 impl<'s> Module<'s> {
@@ -628,34 +637,27 @@ impl<'s> Module<'s> {
     /// Forgets every evaluation when what the module knows of its bindings changed since the memo
     /// was filled; otherwise each read of a shared value is evaluated once per pass.
     fn refresh(&self) {
-        let sizes = [
-            self.aliased.len(),
-            self.values.len(),
-            self.imported.len(),
-            self.namespaces.len(),
-            self.redeclared.len(),
-            self.rewritten_globals.len(),
-            usize::from(self.evaluates),
-            usize::from(self.imported_unreadable_fixture),
-        ];
-        let escaped = self.escaped.get();
-        let mut held = self.flow.facts.borrow_mut();
-        if held.as_ref().is_some_and(|facts| {
-            facts.sizes == sizes
-                && facts.escaped == escaped
-                && facts.origins == self.origins
-                && facts.wrappers == self.wrappers
-        }) {
-            return;
+        let facts = Facts {
+            revision: self.flow.revision.get(),
+            sizes: [
+                self.origins.len(),
+                self.wrappers.len(),
+                self.aliased.len(),
+                self.values.len(),
+                self.imported.len(),
+                self.namespaces.len(),
+                self.redeclared.len(),
+                self.rewritten_globals.len(),
+                usize::from(self.evaluates),
+                usize::from(self.imported_unreadable_fixture),
+            ],
+            escaped: self.escaped.get(),
+        };
+        if self.flow.facts.get() != Some(facts) {
+            self.flow.memo.borrow_mut().clear();
+            self.flow.symbols.borrow_mut().clear();
+            self.flow.facts.set(Some(facts));
         }
-        self.flow.memo.borrow_mut().clear();
-        self.flow.symbols.borrow_mut().clear();
-        *held = Some(Facts {
-            origins: self.origins.clone(),
-            wrappers: self.wrappers.clone(),
-            sizes,
-            escaped,
-        });
     }
 
     /// What `node` may evaluate to.
@@ -1338,6 +1340,9 @@ impl<'s> Module<'s> {
         }
         if self.registers_nothing(&value, 0) {
             Value::of(Atom::Builtin)
+        } else if value.holds_api() {
+            // A registration value it holds is handed on wherever it is awaited.
+            Value::of(Atom::Api(Origin::Wrapper(Reach::Tasks), Vec::new()))
         } else if self.may_hold_registration(&value, scope, 0) {
             Value::of(Atom::Api(Origin::Wrapper(Reach::Tasks), vec![Step::Call]))
         } else {
@@ -2196,12 +2201,24 @@ impl<'s> Module<'s> {
             for atom in value.0 {
                 next = next.join(match *step {
                     Step::Member(name) => self.get(atom, Key::Name(name), &scope, 0),
-                    Step::Call => self.call(atom, &[], &[], 0),
+                    Step::Call => self.call_unseen(atom),
                 });
             }
             value = next;
         }
         value
+    }
+
+    /// What calling `atom` with arguments not followed returns: a function's parameters are
+    /// unknown, never `undefined`.
+    fn call_unseen(&self, atom: Atom<'s>) -> Value<'s> {
+        let handed = match atom {
+            Atom::Function(function) => {
+                vec![Value::unknown(); self.tree.list(function, "params").len()]
+            }
+            _ => Vec::new(),
+        };
+        self.call(atom, &[], &handed, 0)
     }
 
     /// What `symbol` may hold wherever it is read.
@@ -2493,9 +2510,7 @@ impl<'s> Module<'s> {
         if let [Atom::Function(function)] = &value.0[..] {
             if call {
                 let function = *function;
-                let parameters = self.tree.list(function, "params").len();
-                let unknown = vec![Value::unknown(); parameters];
-                let returned_value = self.call(Atom::Function(function), &[], &unknown, 0);
+                let returned_value = self.call_unseen(Atom::Function(function));
                 let returned = Some(Box::new(self.summary_at(&returned_value, false)));
                 return match self.function_reach(function) {
                     None => Summary {
@@ -2539,6 +2554,18 @@ impl<'s> Module<'s> {
                 }
                 &Atom::Function(node) => match self.function_reach(node) {
                     Some(reach) => summary.roots.push((Root::Wrapper(reach), Vec::new())),
+                    // Beside other alternatives a function's result is not summarised, so one
+                    // whose result may register is a wrapper (`on ? make : makeSkip`).
+                    None if !self
+                        .summary_at(&self.call_unseen(Atom::Function(node)), false)
+                        .roots
+                        .is_empty() =>
+                    {
+                        summary
+                            .roots
+                            .push((Root::Wrapper(Reach::Tasks), Vec::new()));
+                        summary.other = true;
+                    }
                     None => summary.other = true,
                 },
                 // A returned container holding a registration function (`{ it: test }`) is not

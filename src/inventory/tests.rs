@@ -2495,7 +2495,8 @@ fn a_returning_helper_keeps_what_its_result_registers() {
     }
     // Each export below holds or calls `test` where the value flow cannot prove it does not:
     // `call` on a wrapper, a parameter kept in a returned literal, a factory beside the API's own
-    // star, and a `var` read before its initializer runs, an alias of the API among them.
+    // star, a `var` read before its initializer runs (an alias of the API among them), a factory's
+    // result handed on, a factory called with arguments, and factories chosen at run time.
     let factory = "import { test } from 'vitest'\nexport function make() { return test }\n";
     for (files, read) in [
         (
@@ -2518,11 +2519,27 @@ fn a_returning_helper_keeps_what_its_result_registers() {
             &[("helper.ts", "import { test } from 'vitest'\nexport const run = pick()\nvar api = test\nfunction pick() { return api ? () => {} : test }\n")][..],
             "import { run } from './helper'\nrun('hidden', () => {})",
         ),
+        (
+            &[("helper.ts", factory)][..],
+            "import { make } from './helper'\nReflect.apply(make(), null, ['hidden', () => {}])",
+        ),
+        (
+            &[("helper.ts", "import { test } from 'vitest'\nfunction choose(on) { return on ? test : () => {} }\nchoose(true)('hidden', () => {})\n")][..],
+            "import './helper'",
+        ),
+        (
+            &[("helper.ts", "import { test } from 'vitest'\nfunction a() { return test }\nfunction b() { return test.skip }\nexport const make = process.env.X ? a : b\n")][..],
+            "import { make } from './helper'\nmake()('hidden', () => {})",
+        ),
+        (
+            &[("helper.ts", "import { test } from 'vitest'\nexport async function make() { return test }\n")][..],
+            "import { make } from './helper'\nReflect.apply(await make(), null, ['hidden', () => {}])",
+        ),
     ] {
         let main = format!("import {{ test }} from 'vitest'\ntest('control', () => {{}})\n{read}");
         let (found, _) = inventory_of(&main, files, false);
         assert!(
-            found.sites.len() == 2 || !found.escapes.is_empty(),
+            found.sites.len() >= 2 || !found.escapes.is_empty() || !found.loads.is_empty(),
             "{read}: {:?}",
             found.sites
         );
