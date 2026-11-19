@@ -1226,7 +1226,7 @@ impl<'s> Module<'s> {
         };
         if tree.kind(body) != "BlockStatement" {
             let value = self.evaluate_in(body, &scope, depth);
-            return self.resumed(function, value);
+            return self.resumed(function, value, &scope);
         }
         // A body whose last statement returns or throws never runs off its end.
         let ends = tree
@@ -1270,22 +1270,22 @@ impl<'s> Module<'s> {
                 None => Value::of(Atom::Undefined),
             });
         }
-        self.resumed(function, value)
+        self.resumed(function, value, &scope)
     }
 
     /// What calling `function` gives when its body returns `value`: that value, or for an async
     /// function or a generator the promise or iterator holding it. Such an object is truthy and
     /// has only built-in members; when what it holds may register, it is any value that may, and
     /// when it holds a value nothing here knows, it may be that value, as the same body without
-    /// `async` would return.
-    fn resumed(&self, function: NodeId, value: Value<'s>) -> Value<'s> {
+    /// `async` would return. What it holds is read with `scope`, the body's bound parameters.
+    fn resumed(&self, function: NodeId, value: Value<'s>, scope: &Scope<'s>) -> Value<'s> {
         let tree = self.tree;
         if !tree.flag(function, "async") && !tree.flag(function, "generator") {
             return value;
         }
         if self.registers_nothing(&value, 0) {
             Value::of(Atom::Builtin)
-        } else if self.may_hold_registration(&value, 0) {
+        } else if self.may_hold_registration(&value, scope, 0) {
             Value::of(Atom::Api(Origin::Wrapper(Reach::Tasks), vec![Step::Call]))
         } else {
             Value::of(Atom::Builtin).join(Value::unknown())
@@ -1296,7 +1296,7 @@ impl<'s> Module<'s> {
     /// registration value, a function, a module, or a container with a member or a part (a spread
     /// argument, a computed key) that may be one. A container deeper than
     /// [`Module::registers_nothing`] opens may.
-    fn may_hold_registration(&self, value: &Value<'s>, depth: usize) -> bool {
+    fn may_hold_registration(&self, value: &Value<'s>, scope: &Scope<'s>, depth: usize) -> bool {
         value.0.iter().any(|atom| match atom {
             Atom::Undefined
             | Atom::Null
@@ -1308,12 +1308,14 @@ impl<'s> Module<'s> {
             Atom::Object(_) | Atom::Array(_) => {
                 depth >= 3
                     || self.may_hold_registration(
-                        &self.get(atom.clone(), Key::Dynamic, &Scope::new(), 0),
+                        &self.get(atom.clone(), Key::Dynamic, scope, 0),
+                        scope,
                         depth + 1,
                     )
                     || self.parts(atom).any(|part| {
                         self.may_hold_registration(
-                            &self.evaluate_in(part, &Scope::new(), 0),
+                            &self.evaluate_in(part, scope, 0),
+                            scope,
                             depth + 1,
                         )
                     })
