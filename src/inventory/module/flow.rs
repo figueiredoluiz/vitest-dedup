@@ -422,6 +422,8 @@ pub(super) struct Flow<'s> {
     active: RefCell<Vec<NodeId>>,
     /// Steps taken by the evaluation in progress.
     steps: std::cell::Cell<usize>,
+    /// The innermost right side of each assignment-chain link walked; syntax, so never cleared.
+    ends: RefCell<HashMap<NodeId, NodeId>>,
 }
 
 impl<'s> Flow<'s> {
@@ -647,59 +649,53 @@ impl<'s> Module<'s> {
     }
 
     /// What a right-nested chain of plain assignments starting at `node` evaluates to (`a = b =
-    /// x` is `x`), walked without one evaluation per link so its length does not count as depth;
-    /// `None` when `node` does not start one. With nothing bound, every link is remembered, so each
-    /// is walked once; with parameters bound nothing is, and every link walked is charged to
-    /// [`BUSIEST`].
+    /// x` is `x`): its innermost right side, evaluated without one evaluation per link so the
+    /// chain's length does not count as depth; `None` when `node` does not start one.
     fn assignment_chain(&self, node: NodeId, scope: &Scope<'s>, depth: usize) -> Option<Value<'s>> {
+        let end = self.chain_end(node)?;
+        // Active, so the evaluation below keeps this one's work allowance.
+        self.flow.active.borrow_mut().push(node);
+        let value = self.evaluate_in(end, scope, depth + 1);
+        self.flow.active.borrow_mut().pop();
+        if scope.is_empty() {
+            self.flow.memo.borrow_mut().insert(node, value.clone());
+        }
+        Some(value)
+    }
+
+    /// The innermost right side of the chain of two or more plain assignments `node` starts.
+    /// Every link's end is kept for the module, so a chain is walked once however many of its
+    /// suffixes are evaluated.
+    fn chain_end(&self, node: NodeId) -> Option<NodeId> {
         let tree = self.tree;
         let assignment = |node: NodeId| {
             (tree.kind(node) == "AssignmentExpression" && tree.text(node, "operator") == Some("="))
                 .then(|| tree.child(node, "right").map(|right| tree.inner(right)))
                 .flatten()
         };
+        if let Some(&end) = self.flow.ends.borrow().get(&node) {
+            return Some(end);
+        }
         let mut right = assignment(node)?;
         assignment(right)?;
-        let memoised = scope.is_empty();
         let mut links = vec![node];
-        let known = loop {
-            if memoised {
-                if let Some(value) = self.flow.memo.borrow().get(&right) {
-                    break Some(value.clone());
-                }
+        let end = loop {
+            if let Some(&end) = self.flow.ends.borrow().get(&right) {
+                break end;
             }
             match assignment(right) {
                 Some(next) => {
                     links.push(right);
                     right = next;
                 }
-                None => break None,
+                None => break right,
             }
         };
-        let value = match known {
-            Some(value) => value,
-            None => {
-                if !memoised {
-                    let steps = self.flow.steps.get() + links.len();
-                    self.flow.steps.set(steps);
-                    if steps > BUSIEST {
-                        return Some(Value::exhausted());
-                    }
-                }
-                // Active, so the evaluation below keeps this one's work allowance.
-                self.flow.active.borrow_mut().push(node);
-                let value = self.evaluate_in(right, scope, depth + 1);
-                self.flow.active.borrow_mut().pop();
-                value
-            }
-        };
-        if memoised {
-            let mut memo = self.flow.memo.borrow_mut();
-            for link in links {
-                memo.insert(link, value.clone());
-            }
+        let mut ends = self.flow.ends.borrow_mut();
+        for link in links {
+            ends.insert(link, end);
         }
-        Some(value)
+        Some(end)
     }
 
     /// The rule of each operation.
@@ -1297,8 +1293,9 @@ impl<'s> Module<'s> {
     }
 
     /// Whether `value` holds something other than an unknown value that may register: a
-    /// registration value, a function, a module, or a container whose members may be one. A
-    /// container deeper than [`Module::registers_nothing`] opens may.
+    /// registration value, a function, a module, or a container with a member or a part (a spread
+    /// argument, a computed key) that may be one. A container deeper than
+    /// [`Module::registers_nothing`] opens may.
     fn may_hold_registration(&self, value: &Value<'s>, depth: usize) -> bool {
         value.0.iter().any(|atom| match atom {
             Atom::Undefined
@@ -1307,12 +1304,19 @@ impl<'s> Module<'s> {
             | Atom::Builtin
             | Atom::Framework(_)
             | Atom::Unknown => false,
+            // A member read finds what a spread hides only through the spread's argument.
             Atom::Object(_) | Atom::Array(_) => {
                 depth >= 3
                     || self.may_hold_registration(
                         &self.get(atom.clone(), Key::Dynamic, &Scope::new(), 0),
                         depth + 1,
                     )
+                    || self.parts(atom).any(|part| {
+                        self.may_hold_registration(
+                            &self.evaluate_in(part, &Scope::new(), 0),
+                            depth + 1,
+                        )
+                    })
             }
             _ => true,
         })
