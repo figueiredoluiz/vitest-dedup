@@ -428,6 +428,8 @@ fn table<'s>(key: Key<'s>, own: &[(&str, Atom<'s>)], methods: &[&str]) -> Value<
 #[derive(Default)]
 pub(super) struct Flow<'s> {
     memo: RefCell<HashMap<NodeId, Value<'s>>>,
+    /// [`Module::symbol_value`] of unscoped reads, held and cleared with `memo`.
+    symbols: RefCell<HashMap<SymbolId, Value<'s>>>,
     active: RefCell<Vec<NodeId>>,
     /// Steps taken by the evaluation in progress.
     steps: std::cell::Cell<usize>,
@@ -435,13 +437,17 @@ pub(super) struct Flow<'s> {
     ends: RefCell<HashMap<NodeId, NodeId>>,
     /// [`Module::members_written`] by symbol, `shallow` and depth; syntax, so never cleared.
     written: RefCell<HashMap<(SymbolId, bool, usize), bool>>,
+    /// The module's facts when `memo` was filled: the memo holds while they do.
+    facts: RefCell<Option<Facts>>,
 }
 
-impl<'s> Flow<'s> {
-    /// Forgets every evaluation: what the module knows of its bindings changed.
-    pub(super) fn clear(&self) {
-        self.memo.borrow_mut().clear();
-    }
+/// What an evaluation reads of the module besides its syntax. The sets and imports only grow,
+/// so their sizes stand for them.
+struct Facts {
+    origins: HashMap<SymbolId, super::Origin>,
+    wrappers: HashMap<SymbolId, Reach>,
+    sizes: [usize; 8],
+    escaped: bool,
 }
 
 impl<'s> Module<'s> {
@@ -619,10 +625,42 @@ impl<'s> Module<'s> {
         }
     }
 
+    /// Forgets every evaluation when what the module knows of its bindings changed since the memo
+    /// was filled; otherwise each read of a shared value is evaluated once per pass.
+    fn refresh(&self) {
+        let sizes = [
+            self.aliased.len(),
+            self.values.len(),
+            self.imported.len(),
+            self.namespaces.len(),
+            self.redeclared.len(),
+            self.rewritten_globals.len(),
+            usize::from(self.evaluates),
+            usize::from(self.imported_unreadable_fixture),
+        ];
+        let escaped = self.escaped.get();
+        let mut held = self.flow.facts.borrow_mut();
+        if held.as_ref().is_some_and(|facts| {
+            facts.sizes == sizes
+                && facts.escaped == escaped
+                && facts.origins == self.origins
+                && facts.wrappers == self.wrappers
+        }) {
+            return;
+        }
+        self.flow.memo.borrow_mut().clear();
+        self.flow.symbols.borrow_mut().clear();
+        *held = Some(Facts {
+            origins: self.origins.clone(),
+            wrappers: self.wrappers.clone(),
+            sizes,
+            escaped,
+        });
+    }
+
     /// What `node` may evaluate to.
     pub(super) fn evaluate(&self, node: NodeId) -> Value<'s> {
-        // What the module knows of its bindings may have grown since the last evaluation.
-        self.flow.clear();
+        self.refresh();
         self.evaluate_in(node, &Scope::new(), 0)
     }
 
@@ -1384,28 +1422,38 @@ impl<'s> Module<'s> {
         if let Some(&reach) = self.wrappers.get(&symbol) {
             return Value::of(Atom::Api(Origin::Wrapper(reach), Vec::new()));
         }
-        // An import, or a binding the alias pass already resolved to a framework value: an alias
-        // proved to hold one framework value is a root of its own (`const group = test.describe`).
-        if let Some(&origin) = self.origins.get(&symbol) {
-            if !self.aliased.contains(&symbol) {
-                return Value::of(Atom::Api(origin, Vec::new()));
-            }
-            let value = self.symbol_value(symbol, scope, depth);
-            let settled = self.resolve(&value).is_some_and(|(held, steps)| {
-                match self.verdict(held, &steps) {
+        let value = self.origin_or_symbol_value(symbol, scope, depth);
+        // A `var` read before its initializer runs may still be `undefined`, alias or not.
+        if self.before_initialized(identifier, symbol) {
+            return value.join(Value::of(Atom::Undefined));
+        }
+        value
+    }
+
+    /// What `symbol` holds: an import, or a binding the alias pass already resolved to a
+    /// framework value, is a root of its own (`const group = test.describe`).
+    fn origin_or_symbol_value(
+        &self,
+        symbol: SymbolId,
+        scope: &Scope<'s>,
+        depth: usize,
+    ) -> Value<'s> {
+        let Some(&origin) = self.origins.get(&symbol) else {
+            return self.symbol_value(symbol, scope, depth);
+        };
+        if !self.aliased.contains(&symbol) {
+            return Value::of(Atom::Api(origin, Vec::new()));
+        }
+        let value = self.symbol_value(symbol, scope, depth);
+        let settled =
+            self.resolve(&value)
+                .is_some_and(|(held, steps)| match self.verdict(held, &steps) {
                     Verdict::Registers(_) | Verdict::Namespace => true,
                     Verdict::Wrapper => origin.reach().is_some(),
                     Verdict::Other => false,
-                }
-            });
-            if settled && value.0.iter().all(|atom| matches!(atom, Atom::Api(..))) {
-                return Value::of(Atom::Api(origin, Vec::new()));
-            }
-            return value;
-        }
-        let value = self.symbol_value(symbol, scope, depth);
-        if self.before_initialized(identifier, symbol) {
-            return value.join(Value::of(Atom::Undefined));
+                });
+        if settled && value.0.iter().all(|atom| matches!(atom, Atom::Api(..))) {
+            return Value::of(Atom::Api(origin, Vec::new()));
         }
         value
     }
@@ -1442,6 +1490,28 @@ impl<'s> Module<'s> {
     /// What `symbol` may hold wherever it is read: what each of its declarations binds, joined
     /// with every value written to it, and anything at all in a module that runs `eval`.
     fn symbol_value(&self, symbol: SymbolId, scope: &Scope<'s>, depth: usize) -> Value<'s> {
+        // Unscoped, a binding is read once per pass however many reads name it: its writes are
+        // found by walking every reference.
+        let memoised = scope.is_empty();
+        if memoised {
+            if let Some(value) = self.flow.symbols.borrow().get(&symbol) {
+                return value.clone();
+            }
+        }
+        let value = self.declared_symbol_value(symbol, scope, depth);
+        if memoised {
+            self.flow.symbols.borrow_mut().insert(symbol, value.clone());
+        }
+        value
+    }
+
+    /// [`Module::symbol_value`] without its memo.
+    fn declared_symbol_value(
+        &self,
+        symbol: SymbolId,
+        scope: &Scope<'s>,
+        depth: usize,
+    ) -> Value<'s> {
         let scopes = &self.parsed.scopes;
         let value = if self.redeclared.contains(&symbol) {
             self.redeclared_value(symbol, scope, depth)
@@ -1465,6 +1535,11 @@ impl<'s> Module<'s> {
         scope: &Scope<'s>,
         depth: usize,
     ) -> Value<'s> {
+        // Finding the writes walks every reference of the symbol.
+        #[cfg(test)]
+        super::WALK_STEPS.with(|steps| {
+            steps.set(steps.get() + self.parsed.scopes.symbol(symbol).references.len())
+        });
         for reference in crate::lang::proof::writes(&self.parsed.scopes, symbol) {
             value = value.join(match reference.node {
                 Some(target) => self.written_value(target, symbol, scope, depth),
@@ -2131,7 +2206,7 @@ impl<'s> Module<'s> {
 
     /// What `symbol` may hold wherever it is read.
     pub(super) fn value_of(&self, symbol: SymbolId) -> Value<'s> {
-        self.flow.clear();
+        self.refresh();
         self.symbol_value(symbol, &Scope::new(), 0)
     }
 

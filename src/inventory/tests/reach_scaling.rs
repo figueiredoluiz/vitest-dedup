@@ -129,3 +129,34 @@ fn escaped_reads_are_climbed_in_linear_work() {
         );
     }
 }
+
+/// Walk steps of a module binding each of `n` names to one element of an `n`-element table.
+fn table_read_steps(n: usize) -> usize {
+    let elements: Vec<String> = (0..n).map(|i| i.to_string()).collect();
+    let reads: Vec<String> = (0..n).map(|i| format!("const a{i} = table[{i}]")).collect();
+    let source = format!(
+        "import {{ test }} from 'vitest'\nconst table = [{}]\n{}\ntest('t', () => {{}})",
+        elements.join(", "),
+        reads.join("\n")
+    );
+    super::super::module::take_walk_steps();
+    let (found, _) = inventory_of(&source, &[], false);
+    assert_eq!(found.sites.len(), 1, "{:?}", found.sites);
+    super::super::module::take_walk_steps()
+}
+
+/// Bindings reading one shared table are evaluated in linear work: the table and its writes are
+/// read once per pass, not once per binding.
+#[test]
+fn reads_of_a_shared_table_are_linear() {
+    let small = table_read_steps(400);
+    let large = table_read_steps(800);
+    assert!(
+        small > 0 && large > small,
+        "{small} steps for 400, {large} for 800"
+    );
+    assert!(
+        large <= 2 * small + 64,
+        "{small} steps for 400, {large} for 800"
+    );
+}

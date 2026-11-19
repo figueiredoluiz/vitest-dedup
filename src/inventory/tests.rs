@@ -2495,7 +2495,7 @@ fn a_returning_helper_keeps_what_its_result_registers() {
     }
     // Each export below holds or calls `test` where the value flow cannot prove it does not:
     // `call` on a wrapper, a parameter kept in a returned literal, a factory beside the API's own
-    // star, and a `var` read before its initializer runs.
+    // star, and a `var` read before its initializer runs, an alias of the API among them.
     let factory = "import { test } from 'vitest'\nexport function make() { return test }\n";
     for (files, read) in [
         (
@@ -2512,6 +2512,10 @@ fn a_returning_helper_keeps_what_its_result_registers() {
         ),
         (
             &[("helper.ts", "import { test } from 'vitest'\nexport const run = pick()\nvar enabled = true\nfunction pick() { return enabled ? () => {} : test }\n")][..],
+            "import { run } from './helper'\nrun('hidden', () => {})",
+        ),
+        (
+            &[("helper.ts", "import { test } from 'vitest'\nexport const run = pick()\nvar api = test\nfunction pick() { return api ? () => {} : test }\n")][..],
             "import { run } from './helper'\nrun('hidden', () => {})",
         ),
     ] {
