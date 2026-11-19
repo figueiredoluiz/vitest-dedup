@@ -648,7 +648,9 @@ impl<'s> Module<'s> {
 
     /// What a right-nested chain of plain assignments starting at `node` evaluates to (`a = b =
     /// x` is `x`), walked without one evaluation per link so its length does not count as depth;
-    /// `None` when `node` does not start one. With nothing bound, every link is remembered.
+    /// `None` when `node` does not start one. With nothing bound, every link is remembered, so each
+    /// is walked once; with parameters bound nothing is, and every link walked is charged to
+    /// [`BUSIEST`].
     fn assignment_chain(&self, node: NodeId, scope: &Scope<'s>, depth: usize) -> Option<Value<'s>> {
         let tree = self.tree;
         let assignment = |node: NodeId| {
@@ -674,7 +676,23 @@ impl<'s> Module<'s> {
                 None => break None,
             }
         };
-        let value = known.unwrap_or_else(|| self.evaluate_in(right, scope, depth + 1));
+        let value = match known {
+            Some(value) => value,
+            None => {
+                if !memoised {
+                    let steps = self.flow.steps.get() + links.len();
+                    self.flow.steps.set(steps);
+                    if steps > BUSIEST {
+                        return Some(Value::exhausted());
+                    }
+                }
+                // Active, so the evaluation below keeps this one's work allowance.
+                self.flow.active.borrow_mut().push(node);
+                let value = self.evaluate_in(right, scope, depth + 1);
+                self.flow.active.borrow_mut().pop();
+                value
+            }
+        };
         if memoised {
             let mut memo = self.flow.memo.borrow_mut();
             for link in links {
@@ -1242,8 +1260,16 @@ impl<'s> Module<'s> {
                 continue;
             }
             value = value.join(match tree.child(node, "argument") {
-                // A delegated iterator hands out what this one does not see.
-                Some(_) if tree.flag(node, "delegate") => Value::unknown(),
+                // A delegated iterator hands out what this one does not see, which may register
+                // unless nothing in it does.
+                Some(argument) if tree.flag(node, "delegate") => {
+                    let delegated = self.evaluate_in(argument, &scope, depth);
+                    if self.registers_nothing(&delegated, 0) {
+                        Value::unknown()
+                    } else {
+                        Value::of(Atom::Api(Origin::Wrapper(Reach::Tasks), vec![Step::Call]))
+                    }
+                }
                 Some(argument) => self.evaluate_in(argument, &scope, depth),
                 None => Value::of(Atom::Undefined),
             });
