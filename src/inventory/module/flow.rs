@@ -634,6 +634,9 @@ impl<'s> Module<'s> {
                 return value.clone();
             }
         }
+        if let Some(value) = self.assignment_chain(node, scope, depth) {
+            return value;
+        }
         self.flow.active.borrow_mut().push(node);
         let value = self.apply_op(self.lower(node), scope, depth + 1);
         self.flow.active.borrow_mut().pop();
@@ -641,6 +644,44 @@ impl<'s> Module<'s> {
             self.flow.memo.borrow_mut().insert(node, value.clone());
         }
         value
+    }
+
+    /// What a right-nested chain of plain assignments starting at `node` evaluates to (`a = b =
+    /// x` is `x`), walked without one evaluation per link so its length does not count as depth;
+    /// `None` when `node` does not start one. With nothing bound, every link is remembered.
+    fn assignment_chain(&self, node: NodeId, scope: &Scope<'s>, depth: usize) -> Option<Value<'s>> {
+        let tree = self.tree;
+        let assignment = |node: NodeId| {
+            (tree.kind(node) == "AssignmentExpression" && tree.text(node, "operator") == Some("="))
+                .then(|| tree.child(node, "right").map(|right| tree.inner(right)))
+                .flatten()
+        };
+        let mut right = assignment(node)?;
+        assignment(right)?;
+        let memoised = scope.is_empty();
+        let mut links = vec![node];
+        let known = loop {
+            if memoised {
+                if let Some(value) = self.flow.memo.borrow().get(&right) {
+                    break Some(value.clone());
+                }
+            }
+            match assignment(right) {
+                Some(next) => {
+                    links.push(right);
+                    right = next;
+                }
+                None => break None,
+            }
+        };
+        let value = known.unwrap_or_else(|| self.evaluate_in(right, scope, depth + 1));
+        if memoised {
+            let mut memo = self.flow.memo.borrow_mut();
+            for link in links {
+                memo.insert(link, value.clone());
+            }
+        }
+        Some(value)
     }
 
     /// The rule of each operation.
@@ -1212,7 +1253,9 @@ impl<'s> Module<'s> {
 
     /// What calling `function` gives when its body returns `value`: that value, or for an async
     /// function or a generator the promise or iterator holding it. Such an object is truthy and
-    /// has only built-in members; when what it holds may register, it is any value that may.
+    /// has only built-in members; when what it holds may register, it is any value that may, and
+    /// when it holds a value nothing here knows, it may be that value, as the same body without
+    /// `async` would return.
     fn resumed(&self, function: NodeId, value: Value<'s>) -> Value<'s> {
         let tree = self.tree;
         if !tree.flag(function, "async") && !tree.flag(function, "generator") {
@@ -1220,9 +1263,33 @@ impl<'s> Module<'s> {
         }
         if self.registers_nothing(&value, 0) {
             Value::of(Atom::Builtin)
-        } else {
+        } else if self.may_hold_registration(&value, 0) {
             Value::of(Atom::Api(Origin::Wrapper(Reach::Tasks), vec![Step::Call]))
+        } else {
+            Value::of(Atom::Builtin).join(Value::unknown())
         }
+    }
+
+    /// Whether `value` holds something other than an unknown value that may register: a
+    /// registration value, a function, a module, or a container whose members may be one. A
+    /// container deeper than [`Module::registers_nothing`] opens may.
+    fn may_hold_registration(&self, value: &Value<'s>, depth: usize) -> bool {
+        value.0.iter().any(|atom| match atom {
+            Atom::Undefined
+            | Atom::Null
+            | Atom::Primitive(..)
+            | Atom::Builtin
+            | Atom::Framework(_)
+            | Atom::Unknown => false,
+            Atom::Object(_) | Atom::Array(_) => {
+                depth >= 3
+                    || self.may_hold_registration(
+                        &self.get(atom.clone(), Key::Dynamic, &Scope::new(), 0),
+                        depth + 1,
+                    )
+            }
+            _ => true,
+        })
     }
 
     /// What a binding read at `identifier` holds.
