@@ -133,6 +133,9 @@ struct Module<'s> {
     /// The member names those summaries spell, set once the imports are read: a value read from
     /// a summary borrows its steps from here.
     names: &'s std::cell::OnceCell<HashSet<Box<str>>>,
+    /// A registration function escapes this module ([`Module::escapes`]): set before its exports
+    /// are summarised.
+    escaped: std::cell::Cell<bool>,
 }
 
 /// The inventory of a module, and the export names whose value registers when called with what
@@ -167,6 +170,7 @@ pub(super) fn analyse(
         namespaces: HashMap::new(),
         imported: HashMap::new(),
         names: &names,
+        escaped: std::cell::Cell::new(false),
     };
     module.redeclared = module.redeclarations();
     module.evaluates = super::direct_eval(parsed);
@@ -174,6 +178,8 @@ pub(super) fn analyse(
     module.collect_origins(modules, depth);
     let found = module.registrations();
     let mut exports = module.exports(modules, depth, &found);
+    let escapes = module.escapes();
+    module.escaped.set(!escapes.is_empty());
     let summaries = module.export_summaries(modules, &exports);
     modules.summaries.insert(setting.key(path), summaries);
     // A registration outside every wrapper may run while the module loads: at top level, in a
@@ -186,7 +192,6 @@ pub(super) fn analyse(
     {
         exports.insert(ON_LOAD.to_owned(), Export::Wrapper(Reach::Tasks));
     }
-    let escapes = module.escapes();
     let calls: HashSet<NodeId> = found.iter().map(|(node, ..)| *node).collect();
     let sites = found
         .into_iter()
@@ -1179,7 +1184,9 @@ impl<'s> Module<'s> {
             {
                 self.loads.push(tree.span(statement).start);
             }
-            let helpers = summaries.values().any(|summary| summary.returns.is_some());
+            let helpers = summaries
+                .values()
+                .any(|summary| summary.returns.is_some() || !summary.roots.is_empty());
             if !api && !helpers && wrapper_exports.as_ref().is_none_or(HashMap::is_empty) {
                 continue;
             }

@@ -988,6 +988,14 @@ impl<'s> Module<'s> {
             }
             // A member written to the function through its binding (`f.flag = true`).
             Atom::Function(node) if self.function_members_written(node) => Value::unknown(),
+            // `call`, `apply` and `bind` call the function itself, so they register what it does.
+            Atom::Function(node)
+                if matches!(key, Key::Name(name) if super::INVOKERS.contains(&name))
+                    && self.function_reach(node).is_some() =>
+            {
+                let reach = self.function_reach(node).unwrap_or(Reach::Tasks);
+                Value::of(Atom::Api(Origin::Wrapper(reach), Vec::new()))
+            }
             Atom::Function(_) => table(
                 key,
                 &[("name", any_string), ("length", any_number)],
@@ -1395,7 +1403,40 @@ impl<'s> Module<'s> {
             }
             return value;
         }
-        self.symbol_value(symbol, scope, depth)
+        let value = self.symbol_value(symbol, scope, depth);
+        if self.before_initialized(identifier, symbol) {
+            return value.join(Value::of(Atom::Undefined));
+        }
+        value
+    }
+
+    /// Whether the read `identifier` of a `var` may run before its initializer: it comes first in
+    /// the source, or a function holds it that does not hold the declaration, and may be called
+    /// first (`export const run = pick(); var on = true; function pick() { return on }`).
+    fn before_initialized(&self, identifier: NodeId, symbol: SymbolId) -> bool {
+        let tree = self.tree;
+        let Declaration::Variable(node) = self.parsed.scopes.symbol(symbol).declaration.clone()
+        else {
+            return false;
+        };
+        let Some(declarator) = std::iter::once(node)
+            .chain(tree.ancestors(node))
+            .find(|&outer| tree.kind(outer) == "VariableDeclarator")
+        else {
+            return false;
+        };
+        let declaration = tree.parent(declarator);
+        if declaration.and_then(|declaration| tree.text(declaration, "kind")) != Some("var")
+            || tree.child(declarator, "init").is_none()
+        {
+            return false;
+        }
+        let initialized = tree.span(declarator).end;
+        if tree.span(identifier).start < initialized {
+            return true;
+        }
+        let holder = |node: NodeId| tree.ancestors(node).find(|&outer| tree.is_function(outer));
+        holder(identifier).is_some_and(|function| Some(function) != holder(declarator))
     }
 
     /// What `symbol` may hold wherever it is read: what each of its declarations binds, joined
@@ -2192,9 +2233,13 @@ impl<'s> Module<'s> {
     ) -> HashMap<String, Summary> {
         let tree = self.tree;
         let dialect = self.setting.dialect;
+        // The API module's names are in `exports`; its star adds no project summary.
+        let api_star = HashMap::new();
+        let from_api = std::cell::Cell::new(false);
         let theirs = |source: &str| -> Option<&HashMap<String, Summary>> {
             if dialect.is_api_module(source) {
-                return None;
+                from_api.set(true);
+                return Some(&api_star);
             }
             let file = modules
                 .sources
@@ -2306,7 +2351,12 @@ impl<'s> Module<'s> {
             let mut reached: HashMap<&String, Vec<&Summary>> = HashMap::new();
             for theirs in stars.iter().flatten() {
                 for (name, summary) in theirs.iter() {
-                    if name != "default" && !spelled.contains(name) {
+                    // Beside the API's star, a name the API registers is ambiguous or the API's.
+                    let api = matches!(
+                        exports.get(name),
+                        Some(Export::Api { .. } | Export::Namespace)
+                    ) || (from_api.get() && dialect.registration(name).is_some());
+                    if name != "default" && !spelled.contains(name) && !api {
                         reached.entry(name).or_default().push(summary);
                     }
                 }
@@ -2419,6 +2469,14 @@ impl<'s> Module<'s> {
                 // A returned container holding a registration function (`{ it: test }`) is not
                 // summarised member by member: what is read from it may register.
                 Atom::Object(_) | Atom::Array(_) if !call && self.holds_within(atom) => {
+                    summary
+                        .roots
+                        .push((Root::Wrapper(Reach::Tasks), Vec::new()));
+                    summary.other = true;
+                }
+                // A registration function left this module where the flow could not follow it,
+                // so a value the flow could not evaluate may be one.
+                Atom::Unknown if self.escaped.get() => {
                     summary
                         .roots
                         .push((Root::Wrapper(Reach::Tasks), Vec::new()));

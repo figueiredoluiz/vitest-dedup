@@ -2493,6 +2493,36 @@ fn a_returning_helper_keeps_what_its_result_registers() {
                 .collect::<Vec<_>>()
         );
     }
+    // Each export below holds or calls `test` where the value flow cannot prove it does not:
+    // `call` on a wrapper, a parameter kept in a returned literal, a factory beside the API's own
+    // star, and a `var` read before its initializer runs.
+    let factory = "import { test } from 'vitest'\nexport function make() { return test }\n";
+    for (files, read) in [
+        (
+            &[("helper.ts", "import { test } from 'vitest'\nfunction register() { test('inner', () => {}) }\nexport function run() { register.call(null) }\n")][..],
+            "import { run } from './helper'\nrun()",
+        ),
+        (
+            &[("helper.ts", "import { test } from 'vitest'\nfunction box(t) { return { run: t } }\nexport const run = box(test).run\n")][..],
+            "import { run } from './helper'\nrun('hidden', () => {})",
+        ),
+        (
+            &[("factory.ts", factory), ("barrel.ts", "export * from './factory'\nexport * from 'vitest'\n")][..],
+            "import { make } from './barrel'\nmake()('hidden', () => {})",
+        ),
+        (
+            &[("helper.ts", "import { test } from 'vitest'\nexport const run = pick()\nvar enabled = true\nfunction pick() { return enabled ? () => {} : test }\n")][..],
+            "import { run } from './helper'\nrun('hidden', () => {})",
+        ),
+    ] {
+        let main = format!("import {{ test }} from 'vitest'\ntest('control', () => {{}})\n{read}");
+        let (found, _) = inventory_of(&main, files, false);
+        assert!(
+            found.sites.len() == 2 || !found.escapes.is_empty(),
+            "{read}: {:?}",
+            found.sites
+        );
+    }
     let (found, _) = inventory_of(
         &format!("{head}test('uses', () => {{ make() }})"),
         &[("helper.ts", data)],
