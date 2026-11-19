@@ -1381,27 +1381,15 @@ impl<'s> Module<'s> {
             .collect()
     }
 
-    /// Every read of a registration function: of a binding that holds one or an imported helper
-    /// whose call returns a framework value, and, when free names are the API, of a free name the
-    /// dialect registers with.
+    /// Every read of a registration function: of a binding that holds one, and, when free names
+    /// are the API, of a free name the dialect registers with.
     fn registration_reads(&self) -> impl Iterator<Item = NodeId> + use<'_, 's> {
         let tree = self.tree;
         let scopes = &self.parsed.scopes;
-        let returning = self
-            .imported
-            .iter()
-            .filter(|(_, summary)| {
-                summary
-                    .returns
-                    .as_ref()
-                    .is_some_and(|returned| !returned.roots.is_empty())
-            })
-            .map(|(symbol, _)| symbol);
         let bound = self
             .origins
             .keys()
             .chain(self.wrappers.keys())
-            .chain(returning)
             .flat_map(|&symbol| scopes.symbol(symbol).references.iter())
             .filter_map(|reference| reference.node);
         let free = tree.nodes().filter(move |&node| {
@@ -2064,8 +2052,50 @@ impl<'s> Module<'s> {
                 escapes.push(current);
             }
         }
+        escapes.extend(self.escaping_helper_reads());
         escapes.sort_by_key(|&node| tree.span(node).start);
         escapes
+    }
+
+    /// Reads of an imported helper that registers nothing but whose call returns a framework
+    /// value, other than as the callee of a call the value flow reads (`make()`), a re-export or
+    /// an operand. Only that call carries the helper's return summary; an alias, an argument or a
+    /// member such as `call` hands the helper to code that may call it unseen.
+    fn escaping_helper_reads(&self) -> Vec<NodeId> {
+        let tree = self.tree;
+        let scopes = &self.parsed.scopes;
+        self.imported
+            .iter()
+            .filter(|(_, summary)| {
+                summary
+                    .returns
+                    .as_ref()
+                    .is_some_and(|returned| !returned.roots.is_empty())
+            })
+            .flat_map(|(&symbol, _)| scopes.symbol(symbol).references.iter())
+            .filter_map(|reference| reference.node)
+            .filter_map(|read| {
+                let mut current = read;
+                let escaped = loop {
+                    let Some(parent) = tree.parent(current) else {
+                        break true;
+                    };
+                    let holds = |key| tree.child(parent, key) == Some(current);
+                    match tree.kind(parent) {
+                        "ParenthesizedExpression"
+                        | "TSAsExpression"
+                        | "TSSatisfiesExpression"
+                        | "TSNonNullExpression" => current = parent,
+                        "CallExpression" if holds("callee") => break false,
+                        "ExportSpecifier" | "ExportDefaultDeclaration" | "UnaryExpression" => {
+                            break false
+                        }
+                        _ => break true,
+                    }
+                };
+                escaped.then_some(current)
+            })
+            .collect()
     }
 
     /// Every name this module spells in an export of its own, value or type: whether one replaces

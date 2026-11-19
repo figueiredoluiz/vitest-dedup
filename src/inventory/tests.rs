@@ -2454,6 +2454,58 @@ fn a_wrapper_handed_to_a_local_function_has_unknown_members() {
     }
 }
 
+/// An imported helper returning a registration function registers whatever its result is
+/// called with: each call below collects `hidden` in Vitest 5.1.1. A call the inventory sees keeps
+/// a site; a helper handed away (an alias, an argument, `call`/`apply`/`bind`) is an escape; a
+/// result whose member read is opaque (a spread) keeps a site. Data in a spread does not.
+#[test]
+fn a_returning_helper_keeps_what_its_result_registers() {
+    let returns = "import { test } from 'vitest'\nexport function make() { return test }\n";
+    let spread =
+        "import { test } from 'vitest'\nexport function make() { return { ...{}, run: test } }\n";
+    let nested =
+        "import { test } from 'vitest'\nexport function make() { return { ...{ run: test } } }\n";
+    let data = "export function make() { return { ...{ a: 1 }, b: 2 } }\n";
+    let head = "import { test } from 'vitest'\nimport { make } from './helper'\ntest('control', () => {})\n";
+    for (helper, read) in [
+        (returns, "make()('hidden', () => {})"),
+        (
+            returns,
+            "const alias = make\n;[alias].map((f) => f())[0]('hidden', () => {})",
+        ),
+        (returns, "[make].map((f) => f())[0]('hidden', () => {})"),
+        (returns, "make.call(null)('hidden', () => {})"),
+        (returns, "make.apply(null, [])('hidden', () => {})"),
+        (returns, "make.bind(null)()('hidden', () => {})"),
+        (spread, "make().run('hidden', () => {})"),
+        (nested, "make().run('hidden', () => {})"),
+    ] {
+        let main = format!("{head}{read}");
+        let (found, _) = inventory_of(&main, &[("helper.ts", helper)], false);
+        assert!(
+            found.sites.len() == 2 || !found.escapes.is_empty(),
+            "{read}: {:?} {:?}",
+            found.sites,
+            found
+                .escapes
+                .iter()
+                .map(|escape| &escape.text)
+                .collect::<Vec<_>>()
+        );
+    }
+    let (found, _) = inventory_of(
+        &format!("{head}test('uses', () => {{ make() }})"),
+        &[("helper.ts", data)],
+        false,
+    );
+    assert_eq!(found.sites.len(), 2, "{:?}", found.sites);
+    assert!(found.escapes.is_empty());
+    assert!(found
+        .sites
+        .iter()
+        .all(|site| site.kind == SiteKind::Registers(Registers::Test)));
+}
+
 /// Destructuring an awaited wrapper call reads what the wrapper returns.
 #[test]
 fn a_wrapper_call_is_what_the_wrapper_returns() {

@@ -2444,12 +2444,26 @@ impl<'s> Module<'s> {
             if opened > FULLEST {
                 return true;
             }
-            let members = self.get(atom, Key::Dynamic, &Scope::new(), 0);
+            let members = self.held_parts(&atom);
             if members.holds_api() {
                 return true;
             }
             pending.extend(members.0);
         }
         false
+    }
+
+    /// What a container literal's [parts](Module::parts) hold, a spread contributing what it
+    /// spreads. A member read of a literal with a spread finds nothing ([`opaque_property`]), but
+    /// its parts are still in the source. An accessor's body is not read.
+    fn held_parts(&self, atom: &Atom<'s>) -> Value<'s> {
+        let scope = Scope::new();
+        if self.plain_literal(atom) {
+            return self.get(atom.clone(), Key::Dynamic, &scope, 0);
+        }
+        self.parts(atom)
+            .fold(Value::of(Atom::Undefined), |value, part| {
+                value.join(self.evaluate_in(part, &scope, 0))
+            })
     }
 }
