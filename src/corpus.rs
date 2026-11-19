@@ -560,6 +560,7 @@ fn read_parsed(
                 dialect: setting.dialect,
                 globals: setting.globals,
                 root: setting.root,
+                major: setting.formatting,
             },
             &mut run.modules,
         )

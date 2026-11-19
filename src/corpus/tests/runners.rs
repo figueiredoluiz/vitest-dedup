@@ -276,6 +276,7 @@ impl ProofProject {
                 dialect: &DIALECT,
                 globals: false,
                 root: root.path(),
+                major: crate::framework::Formatting::Unknown,
             },
             &mut run.modules,
         );

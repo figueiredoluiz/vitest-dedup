@@ -133,6 +133,7 @@ fn read(files: &[(&str, &str)], export: &str) -> Result<Template, Refusal> {
             dialect: &DIALECT,
             globals: false,
             root: root.path(),
+            major: crate::framework::Formatting::Unknown,
         },
     )
 }
@@ -315,6 +316,7 @@ fn returned_object_templates_refuse_effects_and_uncertain_outcomes() {
         dialect: &DIALECT,
         globals: false,
         root: root.path(),
+        major: crate::framework::Formatting::Unknown,
     };
     for source in [
         "export function make(mode){const cases={run:()=>mode};return cases}",
@@ -400,6 +402,7 @@ fn returned_parameter_binding_work_is_bounded() {
                 dialect: &DIALECT,
                 globals: false,
                 root: root.path(),
+                major: crate::framework::Formatting::Unknown,
             },
             8 * 1024 * 1024,
         ),
@@ -421,6 +424,7 @@ fn returned_factory_setup_proofs_charge_expanded_work() {
         dialect: &DIALECT,
         globals: false,
         root: root.path(),
+        major: crate::framework::Formatting::Unknown,
     };
     let template =
         factory_template(&Sources::default(), &path, "make", setting, 8 * 1024 * 1024).unwrap();

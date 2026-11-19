@@ -62,6 +62,7 @@ fn read(dir: &Path, source: &str, modules: &mut Modules) -> Inventory {
             dialect: &DIALECT,
             globals: false,
             root: dir,
+            major: crate::framework::Formatting::Unknown,
         },
         modules,
     )
@@ -90,7 +91,10 @@ fn owned_import_cut_stops_work_and_recovers_from_nearer_root() {
         for depth in 0..MAX_DEPTH {
             assert!(modules
                 .cache
-                .get(&(dir.path().join(format!("m{depth}.ts")), false))
+                .get(&(
+                    dir.path().join(format!("m{depth}.ts")),
+                    (false, crate::framework::Formatting::Unknown),
+                ))
                 .is_none());
         }
         let found = read(dir.path(), &control, &mut modules);
@@ -370,6 +374,7 @@ fn runner_plans_refuse_an_incomplete_import_inventory() {
         dialect: &DIALECT,
         globals: false,
         root: dir.path(),
+        major: crate::framework::Formatting::Unknown,
     };
     assert!(matches!(
         runners::template(&crate::lang::Sources::default(), &path, "run", setting),

@@ -20,6 +20,7 @@ fn read_export(source: &str, export: &str, budget: usize) -> Result<ReturnedTemp
             dialect: &DIALECT,
             globals: false,
             root: root.path(),
+            major: crate::framework::Formatting::Unknown,
         },
         budget,
     )
@@ -154,6 +155,7 @@ fn returned_objects_keep_linkage_and_registration_boundaries() {
         dialect: &DIALECT,
         globals: false,
         root: root.path(),
+        major: crate::framework::Formatting::Unknown,
     };
     let sources = Sources::default();
     let found = returned_template(&sources, &path, "make", setting, usize::MAX).unwrap();

@@ -156,7 +156,7 @@ pub enum TitleMode {
 }
 
 /// Which Vitest formats a file's row titles, as far as its package metadata proves.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Formatting {
     /// Vitest 3: as 4, except that a nullish `test.for` item leaves every directive literal, a
     /// directive past the last argument stays literal, `$` is read after `%` substitution, and

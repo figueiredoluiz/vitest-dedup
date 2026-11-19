@@ -668,6 +668,7 @@ fn safe_graph(
                     dialect: setting.dialect,
                     globals: false,
                     root: setting.root,
+                    major: setting.formatting,
                 },
             )
             || !safe_graph(&file, &parsed.tree, setting, visited, bytes)

@@ -24,6 +24,7 @@ fn inventory_of(main: &str, files: &[(&str, &str)], globals: bool) -> (Inventory
         dialect: &DIALECT,
         globals,
         root: dir.path(),
+        major: crate::framework::Formatting::Unknown,
     };
     let found = inventory(&path, main, &parsed, setting, &mut Modules::default());
     (found, main.to_owned())
@@ -1030,6 +1031,7 @@ fn a_module_outside_the_root_is_not_followed() {
             dialect: &DIALECT,
             globals: false,
             root,
+            major: crate::framework::Formatting::Unknown,
         }
     }
     let mut modules = Modules::default();
@@ -1062,6 +1064,7 @@ fn a_shared_helper_is_read_under_each_projects_globals() {
         dialect: &DIALECT,
         globals,
         root: dir.path(),
+        major: crate::framework::Formatting::Unknown,
     };
     let mut modules = Modules::default();
     let without = inventory(&path, main, &parsed, setting(false), &mut modules);
@@ -1091,6 +1094,7 @@ fn a_lookup_cut_by_the_depth_limit_is_not_cached() {
         dialect: &DIALECT,
         globals: false,
         root: dir.path(),
+        major: crate::framework::Formatting::Unknown,
     };
     let mut modules = Modules::default();
     let mut read = |name: &str, main: &str| {
@@ -2119,8 +2123,29 @@ fn module_export_cache_retains_owned_bytes() {
     let reserved = modules.heap_bytes();
     assert!(reserved > 0);
     modules.cache.insert(
-        ("module.ts".into(), false),
+        (
+            "module.ts".into(),
+            (false, crate::framework::Formatting::Unknown),
+        ),
         [("named".repeat(2048), super::Export::Namespace)].into(),
     );
     assert!(modules.heap_bytes() > reserved);
+}
+
+/// A function held in a local wrapper's result is not proved inert.
+#[test]
+fn a_local_wrapper_result_holding_a_function_stays_opaque() {
+    // Vitest 3.2.7, 4.1.12 and 5.1.0 register `a` through `made.run()`.
+    let found = sites(
+        "import { test } from 'vitest'\n\
+         function make() { return { run: () => test('a', () => {}) } }\n\
+         const made = make()\n\
+         made.run()",
+        &[],
+        false,
+    );
+    assert!(
+        found.iter().any(|site| site.starts_with("wrapper@4:")),
+        "{found:?}"
+    );
 }

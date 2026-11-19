@@ -111,7 +111,7 @@ macro_rules! inline_only {
     };
 }
 
-inline_only!(bool, u32, u64, u128, usize);
+inline_only!(bool, u32, u64, u128, usize, crate::framework::Formatting);
 
 impl HeapBytes for String {
     /// Capacity, not length. See the module documentation for why the difference is the entire

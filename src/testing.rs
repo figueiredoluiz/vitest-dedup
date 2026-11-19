@@ -38,6 +38,7 @@ pub(crate) fn project<T>(
             dialect: &DIALECT,
             globals,
             root: dir.path(),
+            major: crate::framework::Formatting::Unknown,
         },
         &mut Modules::default(),
     );
