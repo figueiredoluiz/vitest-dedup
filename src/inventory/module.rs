@@ -2027,6 +2027,8 @@ impl<'s> Module<'s> {
         for read in self.registration_reads() {
             let mut current = read;
             let escaped = loop {
+                #[cfg(test)]
+                CLIMB_STEPS.with(|steps| steps.set(steps.get() + 1));
                 let Some(parent) = tree.parent(current) else {
                     break true;
                 };
@@ -2375,11 +2377,18 @@ fn specifiers(tree: &Tree, statement: NodeId) -> Vec<(NodeId, NodeId)> {
 #[cfg(test)]
 thread_local! {
     static WALK_STEPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static CLIMB_STEPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-/// Reset and return this thread's callee-chain walk and escape climb steps, for deterministic
-/// scaling regressions.
+/// Reset and return this thread's callee-chain walk and value-flow evaluation steps, for
+/// deterministic scaling regressions.
 #[cfg(test)]
 pub(super) fn take_walk_steps() -> usize {
     WALK_STEPS.with(|steps| steps.replace(0))
+}
+
+/// Reset and return this thread's escape-climb steps: one per parent an escaping read climbs.
+#[cfg(test)]
+pub(super) fn take_climb_steps() -> usize {
+    CLIMB_STEPS.with(|steps| steps.replace(0))
 }

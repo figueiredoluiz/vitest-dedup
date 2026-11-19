@@ -49,10 +49,11 @@ fn owned_wrapper_chain_keeps_reach_with_bounded_query_work() {
 }
 
 /// Walk steps reading an exported conditional chain of `arms` arms, none a registration function.
+/// The conditions are unknown, so every arm is read.
 fn chain_walk_steps(arms: usize) -> usize {
     let chain: Vec<String> = (0..arms).map(|arm| format!("on{} ? f", arm % 2)).collect();
     let helper = format!(
-        "const noop = () => {{}}\nconst f = noop, on0 = 1, on1 = 0\n\
+        "const noop = () => {{}}\nconst f = noop, on0 = process.env.A, on1 = process.env.B\n\
          export const run: any = {} : noop",
         chain.join(" : ")
     );
@@ -68,41 +69,47 @@ fn chain_walk_steps(arms: usize) -> usize {
 
 /// Asking whether a conditional chain may hold a registration function reads each arm a bounded
 /// number of times: doubling the arms at most doubles the work, plus slack for constant terms.
+/// Both lengths stay under the depth limit, so neither is cut short.
 #[test]
 fn a_conditional_chain_is_read_in_linear_work() {
-    let small = chain_walk_steps(400);
-    let large = chain_walk_steps(800);
-    assert!(small > 0, "nothing was walked");
+    let small = chain_walk_steps(16);
+    let large = chain_walk_steps(32);
+    assert!(
+        small > 0 && large > small,
+        "{small} steps for 16 arms, {large} for 32"
+    );
     assert!(
         large <= 2 * small + 64,
-        "{small} steps for 400 arms, {large} for 800"
+        "{small} steps for 16 arms, {large} for 32"
     );
 }
 
-/// Walk and climb steps reading an exported value built from `parts` parts by `shape`.
+/// Escape-climb steps reading an exported value built from `parts` parts by `shape`.
 fn value_steps(parts: usize, shape: fn(usize) -> String) -> usize {
     let helper = format!(
         "import {{ test }} from 'vitest'\nconst noop = (..._: unknown[]) => {{}}\n\
          const on0 = 1, on1 = 0\nexport const run: any = {}",
         shape(parts)
     );
-    super::super::module::take_walk_steps();
+    super::super::module::take_climb_steps();
     inventory_of(
         "import { run } from './helper'\nrun('a', () => {})",
         &[("helper.ts", helper.as_str())],
         false,
     );
-    super::super::module::take_walk_steps()
+    super::super::module::take_climb_steps()
 }
 
 /// Escaped reads are climbed in linear work, where each fails only at the top: many arguments of
-/// one call, and a chain reading the API in every arm, both in a condition.
+/// one call, each a nested member read through casts, and a chain reading the API in every arm,
+/// both in a condition.
 #[test]
 fn escaped_reads_are_climbed_in_linear_work() {
     type Shape = (&'static str, fn(usize) -> String);
     let shapes: [Shape; 2] = [
         ("arguments", |n| {
-            format!("noop({}) ? noop : noop", vec!["test"; n].join(", "))
+            let read = "((test as any).each as any).x";
+            format!("noop({}) ? noop : noop", vec![read; n].join(", "))
         }),
         ("chain", |n| {
             let arms: Vec<String> = (0..n).map(|arm| format!("on{} ? test", arm % 2)).collect();
@@ -112,7 +119,10 @@ fn escaped_reads_are_climbed_in_linear_work() {
     for (name, shape) in shapes {
         let small = value_steps(400, shape);
         let large = value_steps(800, shape);
-        assert!(small > 0, "{name}: nothing was climbed");
+        assert!(
+            small > 0 && large > small,
+            "{name}: {small} steps for 400, {large} for 800"
+        );
         assert!(
             large <= 2 * small + 64,
             "{name}: {small} steps for 400, {large} for 800"

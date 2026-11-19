@@ -670,7 +670,8 @@ impl Value {
     }
 
     /// Reading `member` (`name` or `length`) of it: a function's are a string and a number, a
-    /// string's `length` is a number, and any other primitive has neither. Reading either of a
+    /// string's `length` is a number as truthy as the string, and any other primitive has
+    /// neither. Reading either of a
     /// nullish value throws, so it yields nothing.
     fn own(self, member: &str) -> Value {
         let any_string = Value {
@@ -697,7 +698,12 @@ impl Value {
         }
         if self.text || self.empty {
             read = read.join(if member == "length" {
-                any_number
+                // A non-empty string's length is truthy, the empty string's is `0`.
+                Value {
+                    truthy: self.text,
+                    falsy: self.empty,
+                    ..Value::default()
+                }
             } else {
                 missing
             });
@@ -895,6 +901,65 @@ fn name() -> impl Strategy<Value = String> {
         .prop_filter("a free identifier", |name| !TAKEN.contains(&name.as_str()))
 }
 
+/// Words a module cannot bind with `const` (reserved, strict-mode reserved, or TypeScript's).
+const RESERVED: [&str; 48] = [
+    "arguments",
+    "await",
+    "break",
+    "case",
+    "catch",
+    "class",
+    "const",
+    "continue",
+    "debugger",
+    "default",
+    "delete",
+    "do",
+    "else",
+    "enum",
+    "eval",
+    "export",
+    "extends",
+    "false",
+    "finally",
+    "for",
+    "function",
+    "if",
+    "implements",
+    "import",
+    "in",
+    "instanceof",
+    "interface",
+    "let",
+    "new",
+    "null",
+    "package",
+    "private",
+    "protected",
+    "public",
+    "return",
+    "static",
+    "super",
+    "switch",
+    "this",
+    "throw",
+    "true",
+    "try",
+    "typeof",
+    "var",
+    "void",
+    "while",
+    "with",
+    "yield",
+];
+
+/// A [`name`] a module can bind.
+fn binding() -> impl Strategy<Value = String> {
+    name().prop_filter("a bindable identifier", |name| {
+        !RESERVED.contains(&name.as_str())
+    })
+}
+
 /// A member chain of up to two steps from a prelude root.
 fn atom() -> impl Strategy<Value = Atom> {
     let member = prop_oneof![
@@ -971,7 +1036,7 @@ fn a_call_registers_exactly_when_some_value_it_may_evaluate_to_registers() {
     let decided = std::cell::Cell::new(0);
     property(
         512,
-        (form(), name(), location()),
+        (form(), binding(), location()),
         |(form, name, location)| {
             let verdicts = verdicts(&form);
             let expected = match form.value(&verdicts).registers {
@@ -1014,7 +1079,7 @@ fn a_call_registers_exactly_when_some_value_it_may_evaluate_to_registers() {
 /// value written inline.
 #[test]
 fn where_a_value_is_written_does_not_change_whether_its_call_registers() {
-    property(256, (form(), name()), |(form, name)| {
+    property(256, (form(), binding()), |(form, name)| {
         let verdict = |location| call_registers(&form, &name, location);
         let inline = verdict(Location::Inline);
         for location in &LOCATIONS[1..] {

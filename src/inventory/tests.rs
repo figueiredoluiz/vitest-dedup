@@ -2068,7 +2068,7 @@ fn an_exported_value_that_may_be_a_registration_function_may_register_tests() {
         ),
     ];
     assert_eq!(
-        wrapper_calls(
+        sites(
             "import { ternary, first, either, nullish, extended, nested, listed, member, plain, \
              none, condition, left, sequence, check, space, label, arity, count } from './values'\n\
              import byDefault from './default'\n\
@@ -2078,18 +2078,19 @@ fn an_exported_value_that_may_be_a_registration_function_may_register_tests() {
              listed('g', () => {})\nmember('h', () => {})\nbyDefault('i', () => {})\n\
              plain('j', () => {})\nnone('k', () => {})\ncondition('l', () => {})\n\
              left('m', () => {})\nsequence('n', () => {})\ncheck(1)\nspace.expect(1)\nlabel.toUpperCase()\narity.toFixed()\ncount.toFixed()\nnamed.toUpperCase()",
-            &files
+            &files,
+            false
         ),
         [
-            "wrapper@4",
-            "wrapper@5",
-            "wrapper@6",
-            "wrapper@7",
-            "wrapper@8",
-            "wrapper@9",
-            "wrapper@10",
-            "wrapper@11",
-            "wrapper@12"
+            "wrapper@4:1  via-wrapper",
+            "wrapper@5:1  via-wrapper",
+            "wrapper@6:1  via-wrapper",
+            "wrapper@7:1  via-wrapper",
+            "wrapper@8:1  via-wrapper",
+            "wrapper@9:1  via-wrapper",
+            "wrapper@10:1  via-wrapper",
+            "wrapper@11:1  via-wrapper",
+            "wrapper@12:1  via-wrapper"
         ]
     );
 }
