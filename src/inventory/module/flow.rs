@@ -1088,10 +1088,13 @@ impl<'s> Module<'s> {
             }
             // A member written to the function through its binding (`f.flag = true`).
             Atom::Function(node) if self.function_members_written(node) => Value::unknown(),
-            // `call`, `apply` and `bind` call the function itself, so they register what it does.
+            // `call`, `apply` and `bind` call the function itself, so they register what it does
+            // and give what it may return.
             Atom::Function(node)
                 if matches!(key, Key::Name(name) if super::INVOKERS.contains(&name))
-                    && self.function_reach(node).is_some() =>
+                    && (self.function_reach(node).is_some()
+                        || !self
+                            .registers_nothing(&self.call_at(Atom::Function(node), depth), 0)) =>
             {
                 let reach = self.function_reach(node).unwrap_or(Reach::Tasks);
                 Value::of(Atom::Api(Origin::Wrapper(reach), Vec::new()))
@@ -1114,9 +1117,12 @@ impl<'s> Module<'s> {
                 };
                 match key {
                     _ if spread => Value::unknown(),
-                    Key::Index(index) => elements
-                        .get(index)
-                        .map_or(Value::of(Atom::Undefined), element),
+                    // A hole or a missing index reads the prototype, which may be replaced.
+                    Key::Index(index) => match elements.get(index) {
+                        Some(Some(slot)) => self.evaluate_in(*slot, scope, depth),
+                        _ if replaced => Value::unknown(),
+                        _ => Value::of(Atom::Undefined),
+                    },
                     Key::Name("length") => Value::of(Atom::Primitive(
                         Primitive::Number,
                         truth(!elements.is_empty()),
@@ -1160,6 +1166,7 @@ impl<'s> Module<'s> {
                             .find(|&&property| property_name(tree, property) == Some(name.as_str()))
                         {
                             Some(&property) => value_of(property),
+                            None if replaced => Value::unknown(),
                             None => Value::of(Atom::Undefined),
                         }
                     }
@@ -1486,7 +1493,16 @@ impl<'s> Module<'s> {
         if let Some(&reach) = self.wrappers.get(&symbol) {
             return Value::of(Atom::Api(Origin::Wrapper(reach), Vec::new()));
         }
-        let value = self.origin_or_symbol_value(symbol, scope, depth);
+        let mut value = self.origin_or_symbol_value(symbol, scope, depth);
+        // Another module may write a member of an exported binding once this one has run, so a
+        // function, which reads it later, does not see its declared members.
+        if self.export_declared(symbol)
+            && tree
+                .ancestors(identifier)
+                .any(|outer| tree.is_function(outer))
+        {
+            value = self.opened(value);
+        }
         // A `var` read before its initializer runs may still be `undefined`, alias or not.
         if self.before_initialized(identifier, symbol) {
             return value.join(Value::of(Atom::Undefined));
@@ -1628,6 +1644,12 @@ impl<'s> Module<'s> {
         if !containers(&value) || !self.members_written(symbol, false, 0) {
             return value;
         }
+        self.opened(value)
+    }
+
+    /// `value` with each container literal any value, one that may register when it holds a
+    /// framework value: its members may have been written where that is not seen.
+    fn opened(&self, value: Value<'s>) -> Value<'s> {
         let mut read = Value::default();
         for atom in value.0 {
             read = read.join(match atom {
@@ -1972,7 +1994,7 @@ impl<'s> Module<'s> {
             .and_then(|id| self.declares(id));
         own.into_iter()
             .chain(self.declarator_symbol(function))
-            .any(|symbol| self.members_written(symbol, true, 0))
+            .any(|symbol| self.export_declared(symbol) || self.members_written(symbol, true, 0))
     }
 
     /// The function `symbol` is declared as: a declaration, or a declarator initialized with one.
@@ -1989,6 +2011,21 @@ impl<'s> Module<'s> {
             }
             _ => None,
         }
+    }
+
+    /// Whether an export declaration declares `symbol` (`export const o = {}`), so that another
+    /// module may write its members or call it where that is not seen.
+    fn export_declared(&self, symbol: SymbolId) -> bool {
+        let tree = self.tree;
+        let node = match self.parsed.scopes.symbol(symbol).declaration {
+            Declaration::Variable(node)
+            | Declaration::Function(node)
+            | Declaration::Class(node) => node,
+            _ => return false,
+        };
+        tree.ancestors(node)
+            .take_while(|&outer| !tree.is_function(outer))
+            .any(|outer| tree.kind(outer).starts_with("Export"))
     }
 
     /// Whether a member of what `symbol` holds may be written through it: through any of its
@@ -2103,6 +2140,15 @@ impl<'s> Module<'s> {
             "ArrowFunctionExpression" if at("body") => {
                 handed && self.result_written(parent, shallow, depth)
             }
+            // An assignment target inside a pattern or a loop head (`({ on: o.on } = v)`).
+            "Property"
+                if at("value")
+                    && tree
+                        .outer_parent(parent)
+                        .is_some_and(|pattern| tree.kind(pattern) == "ObjectPattern") =>
+            {
+                written
+            }
             // A container holding it, or copying its members, is where it goes next.
             "ArrayExpression" => {
                 handed
@@ -2116,6 +2162,8 @@ impl<'s> Module<'s> {
                                 || self.value_written(container, shallow, depth + 1)
                         }))
             }
+            "RestElement" => written,
+            "ForOfStatement" | "ForInStatement" if at("left") => written,
             "YieldExpression" | "ForOfStatement" | "ForInStatement" => handed,
             _ => false,
         }
@@ -2140,6 +2188,7 @@ impl<'s> Module<'s> {
         bindings.is_empty()
             || bindings.into_iter().any(|binding| {
                 self.reassigned(binding)
+                    || self.export_declared(binding)
                     || self
                         .parsed
                         .scopes
@@ -2322,13 +2371,18 @@ impl<'s> Module<'s> {
     /// What calling `atom` with arguments not followed returns: a function's parameters are
     /// unknown, never `undefined`.
     fn call_unseen(&self, atom: Atom<'s>) -> Value<'s> {
+        self.call_at(atom, 0)
+    }
+
+    /// [`Self::call_unseen`], `depth` evaluations deep.
+    fn call_at(&self, atom: Atom<'s>, depth: usize) -> Value<'s> {
         let handed = match atom {
             Atom::Function(function) => {
                 vec![Value::unknown(); self.tree.list(function, "params").len()]
             }
             _ => Vec::new(),
         };
-        self.call(atom, &[], &handed, 0)
+        self.call(atom, &[], &handed, depth)
     }
 
     /// What `symbol` may hold wherever it is read.

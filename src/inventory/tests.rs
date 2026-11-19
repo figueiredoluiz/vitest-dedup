@@ -2559,6 +2559,54 @@ fn a_returning_helper_keeps_what_its_result_registers() {
             &[("helper.ts", "import { test } from 'vitest'\nconst noop = () => {}\nString.prototype.at = undefined\nexport function make() { return ''.at ? noop : test }\n")][..],
             "import { make } from './helper'\nmake()('hidden', () => {})",
         ),
+        (
+            &[("helper.ts", "import { test } from 'vitest'\nconst noop = () => {}\nfunction make() { return test }\nexport const run = make.call(null)\n")][..],
+            "import { run } from './helper'\nrun('hidden', () => {})",
+        ),
+        (
+            &[("helper.ts", "import { test } from 'vitest'\nconst noop = () => {}\nfunction make() { return test }\nexport const run = make.apply(null, [])\n")][..],
+            "import { run } from './helper'\nrun('hidden', () => {})",
+        ),
+        (
+            &[("helper.ts", "import { test } from 'vitest'\nconst noop = () => {}\nfunction make() { return test }\nexport const run = make.bind(null)()\n")][..],
+            "import { run } from './helper'\nrun('hidden', () => {})",
+        ),
+        (
+            &[("helper.ts", "import { test } from 'vitest'\nconst noop = () => {}\nexport const state = { on: false }\nexport function make() { return state.on ? test : noop }\n")][..],
+            "import { make, state } from './helper'\nObject.assign(state, { on: true })\nmake()('hidden', () => {})",
+        ),
+        (
+            &[("helper.ts", "import { test } from 'vitest'\nconst noop = () => {}\nexport const state = { on: false }\nexport function make() { return state.on ? test : noop }\n")][..],
+            "import { make, state } from './helper'\n;({ on: state.on } = { on: true })\nmake()('hidden', () => {})",
+        ),
+        (
+            &[("helper.ts", "import { test } from 'vitest'\nconst noop = () => {}\nconst state = { on: false }\nexport function get() { return state }\nexport function make() { return state.on ? test : noop }\n")][..],
+            "import { get, make } from './helper'\nget().on = true\nmake()('hidden', () => {})",
+        ),
+        (
+            &[("helper.ts", "import { test } from 'vitest'\nconst noop = () => {}\nexport function make() { return make.on ? test : noop }\n")][..],
+            "import { make } from './helper'\nObject.assign(make, { on: true })\nmake()('hidden', () => {})",
+        ),
+        (
+            &[("helper.ts", "import { test } from 'vitest'\nconst noop = () => {}\nconst f = () => {}\n;({ on: f.on } = { on: true })\nexport function make() { return f.on ? test : noop }\n")][..],
+            "import { make } from './helper'\nmake()('hidden', () => {})",
+        ),
+        (
+            &[("helper.ts", "import { test } from 'vitest'\nconst noop = () => {}\nconst f = () => {}\nfor (f.on of [true]) {}\nexport function make() { return f.on ? test : noop }\n")][..],
+            "import { make } from './helper'\nmake()('hidden', () => {})",
+        ),
+        (
+            &[("helper.ts", "import { test } from 'vitest'\nconst noop = () => {}\nconst f = { r: [] }\n;[...f.r] = [1]\nexport function make() { return f.r.length ? test : noop }\n")][..],
+            "import { make } from './helper'\nmake()('hidden', () => {})",
+        ),
+        (
+            &[("helper.ts", "import { test } from 'vitest'\nconst noop = () => {}\nArray.prototype[12345] = true\nexport function make() { return [][12345] ? test : noop }\n")][..],
+            "import { make } from './helper'\nmake()('hidden', () => {})",
+        ),
+        (
+            &[("helper.ts", "import { test } from 'vitest'\nconst noop = () => {}\nObject.prototype[5] = true\nexport function make() { return ({})[5] ? test : noop }\n")][..],
+            "import { make } from './helper'\nmake()('hidden', () => {})",
+        ),
     ] {
         let main = format!("import {{ test }} from 'vitest'\ntest('control', () => {{}})\n{read}");
         let (found, _) = inventory_of(&main, files, false);
