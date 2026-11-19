@@ -1281,8 +1281,8 @@ impl<'s> Module<'s> {
     /// What calling `function` gives when its body returns `value`: that value, or for an async
     /// function or a generator the promise or iterator holding it. Such an object is truthy and
     /// has only built-in members; when what it holds may register, it is any value that may, and
-    /// when it holds a value nothing here knows, it may be that value, as the same body without
-    /// `async` would return. What it holds is read with `scope`, the body's bound parameters.
+    /// otherwise it may be a value nothing here knows, as the same body without `async` would
+    /// return. What it holds is read with `scope`, the body's bound parameters.
     fn resumed(&self, function: NodeId, value: Value<'s>, scope: &Scope<'s>) -> Value<'s> {
         let tree = self.tree;
         if !tree.flag(function, "async") && !tree.flag(function, "generator") {
@@ -1297,18 +1297,18 @@ impl<'s> Module<'s> {
         }
     }
 
-    /// Whether `value` holds something other than an unknown value that may register: a
-    /// registration value, a function, a module, or a container that is not a
-    /// [plain literal](Module::plain_literal) or has a member that may be one, read with `scope`.
-    /// A container deeper than [`Module::registers_nothing`] opens may.
+    /// Whether `value` may register: an unknown value, a registration value, a function, a module,
+    /// or a container that is not a [plain literal](Module::plain_literal) or has a member that may
+    /// be one, read with `scope`. An unknown member is read as data, so an unknown value inside a
+    /// literal does not count. A container deeper than [`Module::registers_nothing`] opens may.
     fn may_hold_registration(&self, value: &Value<'s>, scope: &Scope<'s>, depth: usize) -> bool {
         value.0.iter().any(|atom| match atom {
             Atom::Undefined
             | Atom::Null
             | Atom::Primitive(..)
             | Atom::Builtin
-            | Atom::Framework(_)
-            | Atom::Unknown => false,
+            | Atom::Framework(_) => false,
+            Atom::Unknown => depth == 0,
             Atom::Object(_) | Atom::Array(_) => {
                 depth >= 3
                     || !self.plain_literal(atom)
