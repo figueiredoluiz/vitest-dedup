@@ -1381,15 +1381,27 @@ impl<'s> Module<'s> {
             .collect()
     }
 
-    /// Every read of a registration function: of a binding that holds one, and, when free names
-    /// are the API, of a free name the dialect registers with.
+    /// Every read of a registration function: of a binding that holds one or an imported helper
+    /// whose call returns a framework value, and, when free names are the API, of a free name the
+    /// dialect registers with.
     fn registration_reads(&self) -> impl Iterator<Item = NodeId> + use<'_, 's> {
         let tree = self.tree;
         let scopes = &self.parsed.scopes;
+        let returning = self
+            .imported
+            .iter()
+            .filter(|(_, summary)| {
+                summary
+                    .returns
+                    .as_ref()
+                    .is_some_and(|returned| !returned.roots.is_empty())
+            })
+            .map(|(symbol, _)| symbol);
         let bound = self
             .origins
             .keys()
             .chain(self.wrappers.keys())
+            .chain(returning)
             .flat_map(|&symbol| scopes.symbol(symbol).references.iter())
             .filter_map(|reference| reference.node);
         let free = tree.nodes().filter(move |&node| {
