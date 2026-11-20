@@ -121,6 +121,93 @@ pub(crate) fn callee_link(tree: &Tree, node: NodeId) -> Option<CalleeLink<'_>> {
     })
 }
 
+/// A direct child's structural role in its parent's value, without interpreting an API.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ValueRole<'t> {
+    /// Parentheses or erased TypeScript syntax around the expression.
+    Transparent,
+    /// The input of a member, call or tagged invocation; its result still needs interpretation.
+    Callee,
+    /// An operand whose value can supply the result when that operand is evaluated.
+    Result,
+    /// A value held in an array, object, property or spread.
+    Contained,
+    /// A tested left operand; its operator lets the consumer retain its value eligibility policy.
+    LogicalLeft(&'t str),
+    /// A condition, discarded operand or operation computing a new value from its input.
+    Consumed,
+    /// No result-flow fact, without claiming the use has no effects or cannot escape.
+    Other,
+}
+
+/// The role of one actual parent/child edge. Unknown positions establish no result flow.
+pub(crate) fn value_role(tree: &Tree, outer: NodeId, inner: NodeId) -> ValueRole<'_> {
+    if tree.parent(inner) != Some(outer) {
+        return ValueRole::Other;
+    }
+    let holds = |field| tree.child(outer, field) == Some(inner);
+    match tree.kind(outer) {
+        "ParenthesizedExpression"
+        | "TSAsExpression"
+        | "TSSatisfiesExpression"
+        | "TSNonNullExpression"
+        | "TSTypeAssertion"
+        | "TSInstantiationExpression" => {
+            if holds("expression") {
+                ValueRole::Transparent
+            } else {
+                ValueRole::Other
+            }
+        }
+        "AwaitExpression" if holds("argument") => ValueRole::Result,
+        "ArrayExpression" | "ObjectExpression" | "SpreadElement" => ValueRole::Contained,
+        "Property" => {
+            if holds("value") {
+                ValueRole::Contained
+            } else {
+                ValueRole::Consumed
+            }
+        }
+        "ConditionalExpression" => {
+            if holds("consequent") || holds("alternate") {
+                ValueRole::Result
+            } else {
+                ValueRole::Consumed
+            }
+        }
+        "LogicalExpression" if holds("right") => ValueRole::Result,
+        "LogicalExpression" if holds("left") => tree
+            .text(outer, "operator")
+            .map_or(ValueRole::Other, ValueRole::LogicalLeft),
+        "SequenceExpression" => {
+            if tree.list(outer, "expressions").last() == Some(&Some(inner)) {
+                ValueRole::Result
+            } else {
+                ValueRole::Consumed
+            }
+        }
+        "AssignmentExpression" => {
+            if !holds("right") {
+                ValueRole::Other
+            } else if matches!(
+                tree.text(outer, "operator"),
+                Some("=" | "||=" | "&&=" | "??=")
+            ) {
+                ValueRole::Result
+            } else {
+                ValueRole::Consumed
+            }
+        }
+        "UnaryExpression" | "BinaryExpression" | "TemplateLiteral" => ValueRole::Consumed,
+        _ if callee_link(tree, outer)
+            .is_some_and(|link| link.node == outer && link.input == inner) =>
+        {
+            ValueRole::Callee
+        }
+        _ => ValueRole::Other,
+    }
+}
+
 /// Every symbol a binding pattern declares, in source order.
 pub fn bound_symbols(tree: &Tree, scopes: &Scopes, pattern: NodeId) -> Vec<SymbolId> {
     let mut symbols = Vec::new();
@@ -165,6 +252,56 @@ mod tests {
     fn body_reads(source: &str) -> bool {
         let (parsed, body) = arrow_body(source);
         uses_receiver(&parsed.tree, &parsed.scopes, body)
+    }
+
+    /// Roles distinguish the actual result operand from conditions, keys and other inputs.
+    #[test]
+    fn value_roles_distinguish_result_positions() {
+        use ValueRole::{Callee, Consumed, Contained, LogicalLeft, Other, Result, Transparent};
+        for (expression, expected) in [
+            ("(held as any)", Transparent),
+            ("held!", Transparent),
+            ("held<number>", Transparent),
+            ("held.member", Callee),
+            ("held()", Callee),
+            ("held`text`", Callee),
+            ("await held", Result),
+            ("flag ? held : 0", Result),
+            ("flag ? 0 : held", Result),
+            ("held ? 1 : 0", Consumed),
+            ("0 && held", Result),
+            ("held && 0", LogicalLeft("&&")),
+            ("held || 0", LogicalLeft("||")),
+            ("held ?? 0", LogicalLeft("??")),
+            ("(0, held)", Result),
+            ("(held, 0)", Consumed),
+            ("[held]", Contained),
+            ("[...held]", Contained),
+            ("({ value: held })", Contained),
+            ("({ [held]: 0 })", Consumed),
+            ("target = held", Result),
+            ("target += held", Consumed),
+            ("held = 0", Other),
+            ("held ||= 0", Other),
+            ("typeof held", Consumed),
+            ("held === 0", Consumed),
+            ("`${held}`", Consumed),
+            ("consume(held)", Other),
+            ("() => held", Other),
+        ] {
+            let (parsed, _) = arrow_body(&format!("async () => {expression}"));
+            assert_eq!(parsed.parse_errors, 0, "{expression}");
+            let tree = &parsed.tree;
+            let child = tree
+                .nodes()
+                .find(|&node| {
+                    tree.kind(node) == "Identifier" && tree.text(node, "name") == Some("held")
+                })
+                .unwrap();
+            let parent = tree.parent(child).unwrap();
+            assert_eq!(value_role(tree, parent, child), expected, "{expression}");
+            assert_eq!(value_role(tree, child, parent), Other, "not a child edge");
+        }
     }
 
     /// Each link keeps its original anchor while walking from the outer invocation to the root.

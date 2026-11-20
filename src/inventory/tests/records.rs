@@ -5,6 +5,98 @@ use crate::lang::{Parsed, Span};
 
 const TEST: SiteKind = SiteKind::Registers(Registers::Test);
 
+/// Result positions keep factory accounting across declaration forms and module boundaries.
+#[test]
+fn return_positions_preserve_factory_records_and_direct_controls() {
+    for (expression, factory) in [
+        ("base", true),
+        ("base.skip", true),
+        ("base.extend({})", true),
+        ("(base as any)", true),
+        ("flag ? base : 0", true),
+        ("base ? 1 : 0", false),
+        ("0 && base", true),
+        ("base && 0", false),
+        ("base || 0", true),
+        ("base ?? 0", true),
+        ("0, base", true),
+        ("base, 0", false),
+        ("[base]", true),
+        ("{ value: base }", true),
+        ("target ??= base", true),
+        ("target += base", false),
+        ("typeof base", false),
+        ("base === 0", false),
+        ("`${base}`", false),
+        ("String(base)", false),
+        ("null as unknown as typeof base", false),
+        ("alias", false),
+        ("() => base", false),
+        ("base.name", false),
+    ] {
+        for form in 0..3 {
+            let declaration = match form {
+                0 => format!("function make() {{ return ({expression}); }}"),
+                1 => format!("const make = () => {{ return ({expression}); }};"),
+                _ => format!("const make = () => ({expression});"),
+            };
+            for imported in [false, true] {
+                let helper = format!(
+                    "import {{ test as base }} from 'vitest';\n\
+                     const alias = base; let target; const flag = true;\n{}\n{declaration}",
+                    if imported { "export { make };" } else { "" }
+                );
+                let source = format!(
+                    "import {{ test as control }} from 'vitest';\n{}\n\
+                     make(0);\ncontrol('kept', () => {{}})",
+                    if imported {
+                        "import { make } from './factory';"
+                    } else {
+                        &helper
+                    }
+                );
+                let mut expected = Vec::new();
+                if factory {
+                    expected.push(Record {
+                        provenance: Provenance::Wrapper,
+                        ..Record::call("make(0)", "make(0)", SiteKind::Wrapper(Reach::Tasks))
+                    });
+                }
+                expected.push(Record {
+                    title: Some("kept"),
+                    ..Record::call("control('kept', () => {})", "control(", TEST)
+                });
+                records(&source, &[("factory.ts", &helper)], false, &expected);
+            }
+        }
+    }
+}
+
+/// The same owned sources used by the collection oracle keep their direct and wrapper controls.
+#[test]
+fn owned_return_sources_keep_their_registration_kinds() {
+    let helper = include_str!("../../../fixtures/oracle/factory-returned-api/factories.ts");
+    for (source, kinds) in [
+        (
+            include_str!("../../../fixtures/oracle/factory-returned-api/control.test.ts"),
+            &[TEST, TEST, TEST][..],
+        ),
+        (
+            include_str!("../../../fixtures/oracle/factory-returned-api/plain.test.ts"),
+            &[SiteKind::Wrapper(Reach::Tasks); 2][..],
+        ),
+    ] {
+        let source = source.replace("\r\n", "\n");
+        let (found, parsed) = inventory_with_tree(&source, &[("factories.ts", helper)], false);
+        assert_eq!(parsed.parse_errors, 0);
+        assert_eq!(found.sites.len(), kinds.len(), "{source}: {found:?}");
+        assert_eq!(
+            found.sites.iter().map(|site| site.kind).collect::<Vec<_>>(),
+            kinds
+        );
+    }
+}
+
 /// A type-only namespace never becomes a runtime alias; a runtime import remains a control.
 #[test]
 fn binding_transport_does_not_create_values_for_type_only_imports() {
