@@ -105,14 +105,12 @@ impl Sources {
             return resolve::resolve_file(from, specifier, root);
         };
         // This resolver lasts one lookup; its opaque caches are never retained by the engine.
-        let resolver = ResolverGeneric::new_with_file_system(
-            CommittedFs(Some(Arc::clone(tree))),
-            resolve::options(),
-        );
+        let fs = CommittedFs(Some(Arc::clone(tree)));
+        let resolver = ResolverGeneric::new_with_file_system(fs.clone(), resolve::options());
         // A verbatim Windows prefix contains `?`, which the resolver parses as a query.
         // Use the catalog's identity; supplied caller text may have no catalog entry.
         let from = tree.canonicalize(from).unwrap_or_else(|_| from.to_owned());
-        let file = match resolver.resolve_file(&from, specifier) {
+        let file = match super::nuxt::resolve_file(&resolver, &fs, &from, specifier, root) {
             Ok(file) => file.into_path_buf(),
             Err(
                 error @ (ResolveError::NotFound(_)
@@ -241,7 +239,7 @@ fn text(tree: &Arc<dyn SourceTree>, path: &Path) -> io::Result<String> {
 }
 
 /// The default required by the resolver trait is an empty filesystem, never OS access.
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct CommittedFs(Option<Arc<dyn SourceTree>>);
 
 impl CommittedFs {

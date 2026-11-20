@@ -45,15 +45,17 @@ a `fix` and `unresolvedImports`, and the terminal and HTML banners print it as a
 | `node-modules` | A project's `package.json` lists dependencies, and an import of a package from a file in that project could not be resolved, where `node_modules` is missing or empty in that file's directory and in every parent directory. One entry per such project directory, with its own `path` (relative to the analyzed root, such as `packages/web/node_modules`), count and install command. `vitest`, `node:` and Node core module imports do not count, nor do imports spelled as something other than a package (relative and absolute paths, `#` imports, `~/` and `@/` aliases, URLs, drive paths). An alias written like a package (`@app/missing`) cannot be told apart by its spelling and does count. | `pnpm install`, `bun install`, `yarn install` or `npm ci` for the nearest `pnpm-lock.yaml`, `bun.lock`/`bun.lockb`, `yarn.lock` or `package-lock.json`; otherwise `install the dependencies`. |
 
 `unresolvedImports` counts the import resolutions that failed for that reason, once per analyzed
-file and specifier. A file's project is the nearest `package.json` at or above it that lists dependencies, so a workspace member that lists none is judged by the manifest above it. A project that never needed the file is not told about it: no `extends`, no
-listed dependencies, or only relative imports produce nothing. Only resolution failures are
-reported, so a tsconfig that is merely unusual is silent.
+file and specifier. Nuxt projects without a root tsconfig also report missing generated configuration
+when automatic discovery needs it. A file's project is the nearest `package.json` at or above it
+that lists dependencies, so a workspace member that lists none is judged by the manifest above it.
+Projects without `extends` or Nuxt fallback do not need generated TypeScript configuration.
+Missing installed dependencies are reported only for package-style imports, not relative ones.
+Only resolution failures are reported, so a tsconfig that is merely unusual is silent.
 
 Limits: tsconfig detection relies on what the resolver reports. A tsconfig target that cannot be read because of an
 I/O error (invalid UTF-8, no read permission) is swallowed by the resolver during discovery and is not
-reported. On Windows a tsconfig is not found from a canonical importer path at all, so the two
-`tsconfig-*` kinds are not detected there (the same gap that keeps `paths` aliases from applying); the
-`node-modules` kind does not depend on tsconfig discovery. The failures are collected process-wide and
+reported. Windows verbatim disk and UNC importer prefixes are normalized for resolver lookup;
+file confinement still compares canonical identities. The failures are collected process-wide and
 drained once per run, so the reports describe one analysis per process.
 
 ### Blind spots

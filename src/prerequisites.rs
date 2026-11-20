@@ -141,6 +141,20 @@ fn displayed(path: &Path, root: &Path) -> String {
 fn generated_by_nuxt(path: &str, root: &Path, manifest: &str) -> bool {
     path.split('/').any(|part| part == ".nuxt")
         && (NUXT_CONFIGS.iter().any(|name| root.join(name).is_file())
+            || path
+                .split("/.nuxt/")
+                .next()
+                .filter(|prefix| *prefix != path)
+                .is_some_and(|prefix| {
+                    let project = root.join(prefix);
+                    NUXT_CONFIGS.iter().any(|name| project.join(name).is_file())
+                        || crate::package_json::read(&project.join("package.json"))
+                            .ok()
+                            .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+                            .is_some_and(|value| {
+                                dependency_names(&value).any(|name| name == "nuxt")
+                            })
+                })
             || serde_json::from_str::<serde_json::Value>(manifest)
                 .ok()
                 .is_some_and(|value| dependency_names(&value).any(|name| name == "nuxt")))
@@ -326,6 +340,37 @@ mod tests {
         )
         .unwrap();
         assert_eq!(nuxt(".nuxt/tsconfig.json").fix, GENERIC_FIX);
+    }
+
+    /// A workspace-level scan still names the generation command for its nested Nuxt app.
+    #[test]
+    fn nested_nuxt_projects_name_their_own_generation_command() {
+        for marker in ["nuxt.config.ts", "package.json"] {
+            let directory = tempfile::tempdir().unwrap();
+            let root = directory.path();
+            let project = root.join("packages/web");
+            fs::create_dir_all(&project).unwrap();
+            let text = if marker == "package.json" {
+                r#"{"dependencies":{"nuxt":"4"}}"#
+            } else {
+                "export default {}"
+            };
+            fs::write(project.join(marker), text).unwrap();
+            let missing = assess(
+                root,
+                &gaps(
+                    vec![(
+                        TsconfigGap::Absent(project.join(".nuxt/tsconfig.app.json")),
+                        2,
+                    )],
+                    0,
+                ),
+            );
+            assert_eq!(missing.len(), 1);
+            assert_eq!(missing[0].path, "packages/web/.nuxt/tsconfig.app.json");
+            assert_eq!(missing[0].fix, "nuxt prepare");
+            assert_eq!(missing[0].unresolved_imports, 2);
+        }
     }
 
     /// A package `extends` target is fixed by installing, not by generating.

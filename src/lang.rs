@@ -10,6 +10,7 @@ mod completion;
 pub(crate) mod js_text;
 pub(crate) mod limits;
 pub(crate) mod manifest_fs;
+mod nuxt;
 pub(crate) mod packages;
 pub(crate) mod proof;
 mod resolve;

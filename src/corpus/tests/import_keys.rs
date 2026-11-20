@@ -3,6 +3,49 @@
 
 use super::*;
 
+/// Generated Nuxt aliases enable runner extraction without erasing argument differences.
+#[test]
+fn nuxt_generated_tsconfig_retains_duplicate_and_distinct_runner_inputs() {
+    let results = corpora(
+        &[
+            (
+                "nuxt.config.ts",
+                include_str!("../../../fixtures/recall/nuxt-generated-tsconfig/nuxt.config.ts"),
+            ),
+            (
+                ".nuxt/tsconfig.json",
+                include_str!(
+                    "../../../fixtures/recall/nuxt-generated-tsconfig/.nuxt/tsconfig.json"
+                ),
+            ),
+            (
+                "app/runner.ts",
+                include_str!("../../../fixtures/recall/nuxt-generated-tsconfig/app/runner.ts"),
+            ),
+            (
+                "run.test.ts",
+                include_str!("../../../fixtures/recall/nuxt-generated-tsconfig/run.test.ts"),
+            ),
+        ],
+        &["run.test.ts"],
+    );
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].tests.len(), 3);
+    assert!(
+        results[0].tests.iter().all(|test| test.exclusion.is_none()),
+        "{:?}",
+        results[0]
+    );
+    let outcome = owned_outcome(vec![("run.test.ts", results[0].clone())]);
+    let duplicates: Vec<_> = outcome
+        .findings
+        .iter()
+        .filter(|finding| finding.rule == crate::model::Rule::DuplicateTest)
+        .collect();
+    assert_eq!(duplicates.len(), 1, "{:?}", outcome.findings);
+    assert_eq!(duplicates[0].titles, ["alias first", "alias second"]);
+}
+
 /// The test's same-file key and module key in `source`, read beside `recipes.ts` and `setup.css`
 /// in a fresh root.
 fn keys_in_fresh_root(source: &str) -> (u64, u64) {

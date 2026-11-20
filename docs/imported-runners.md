@@ -104,8 +104,22 @@ file with its reason; see [Excluded files](incomplete-runs.md#excluded-files).
 
 ## Nuxt projects
 
-Aliases such as `~/` resolve through `.nuxt/tsconfig.json`; run `nuxt prepare` when the
-[missing-prerequisite notice](incomplete-runs.md#missing-prerequisites) names it. The generated
+The nearest applicable `tsconfig.json`, including its `extends` and project references, takes
+precedence. When no user tsconfig exists on the importer's route to its Nuxt project root,
+vitest-dedup automatically uses the generated configuration in `.nuxt`. It recognizes a
+`nuxt.config.ts`, `.js`, `.mjs`, `.mts` or `.cjs` file, or a `nuxt` dependency in `package.json`.
+Discovery stops at the analysis root or a separate package boundary.
+
+Legacy projects use `.nuxt/tsconfig.json`. Projects with generated app, shared or node configs
+use Nuxt's app/server/shared/node project references: each file gets the aliases of the context
+that includes it. Files outside those contexts do not inherit app aliases. Existing user configs
+are never replaced, including configs that exclude the importing file.
+
+Run `nuxt prepare` when the [missing-prerequisite notice](incomplete-runs.md#missing-prerequisites)
+names generated configuration. vitest-dedup does not execute Nuxt or write a root tsconfig.
+For a custom build directory, link the generated config from your own root tsconfig. Historical
+analysis reads only committed configuration; it cannot borrow your working `.nuxt` directory.
+The generated
 auto-import tables (`.nuxt/imports.d.ts`) are not read: an auto-imported call is setup like any
 other call that registers nothing.
 
