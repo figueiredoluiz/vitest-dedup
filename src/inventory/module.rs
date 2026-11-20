@@ -1422,7 +1422,10 @@ impl<'s> Module<'s> {
             while let Some(parent) = tree.parent(value) {
                 if !matches!(
                     value_role(tree, parent, value),
-                    ValueRole::Transparent | ValueRole::Callee
+                    ValueRole::Transparent
+                        | ValueRole::TypeAssertion
+                        | ValueRole::Instantiation
+                        | ValueRole::Callee(_)
                 ) {
                     break;
                 }
@@ -1467,6 +1470,8 @@ impl<'s> Module<'s> {
         matches!(
             value_role(self.tree, outer, inner),
             ValueRole::Transparent
+                | ValueRole::TypeAssertion
+                | ValueRole::Instantiation
                 | ValueRole::Result
                 | ValueRole::Contained
                 | ValueRole::LogicalLeft("||" | "??")
@@ -2070,19 +2075,14 @@ impl<'s> Module<'s> {
                 let Some(parent) = tree.parent(current) else {
                     break true;
                 };
-                let holds = |key| tree.child(parent, key) == Some(current);
-                match tree.kind(parent) {
-                    "MemberExpression" if holds("object") => current = parent,
-                    "ParenthesizedExpression"
-                    | "TSAsExpression"
-                    | "TSSatisfiesExpression"
-                    | "TSNonNullExpression" => current = parent,
-                    "CallExpression" if holds("callee") => break false,
-                    "TaggedTemplateExpression" if holds("tag") => break false,
-                    "VariableDeclarator" if holds("init") => break false,
-                    "ExportSpecifier" | "ExportDefaultDeclaration" | "UnaryExpression" => {
-                        break false
+                match value_role(tree, parent, current) {
+                    ValueRole::Transparent | ValueRole::Callee(CalleeLinkKind::Member(_)) => {
+                        current = parent
                     }
+                    ValueRole::Callee(CalleeLinkKind::Call | CalleeLinkKind::Tagged)
+                    | ValueRole::Initializer
+                    | ValueRole::Exported
+                    | ValueRole::UnaryOperand => break false,
                     _ => break true,
                 }
             };
