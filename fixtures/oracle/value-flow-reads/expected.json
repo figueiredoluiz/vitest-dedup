@@ -1,0 +1,150 @@
+{
+  "files": {
+    "star.test.ts": {
+      "tasks": 1,
+      "wrapperSites": [
+        "wrapper@2"
+      ],
+      "next": {
+        "reasons": [
+          "registered-elsewhere"
+        ],
+        "testsExcluded": 1
+      }
+    },
+    "builtin.test.ts": {
+      "tasks": 4,
+      "wrapperSites": [
+        "wrapper@6"
+      ],
+      "next": {
+        "reasons": [
+          "registered-elsewhere",
+          "helper-effects-unproved"
+        ],
+        "testsExcluded": 10
+      }
+    },
+    "chain.test.ts": {
+      "tasks": 5,
+      "wrapperSites": [],
+      "next": {
+        "reasons": [
+          "registered-elsewhere"
+        ],
+        "testsExcluded": 5
+      }
+    },
+    "parameter.test.ts": {
+      "tasks": 2,
+      "wrapperSites": [
+        "wrapper@6",
+        "wrapper@7",
+        "wrapper@8"
+      ],
+      "next": {
+        "reasons": [
+          "registered-elsewhere"
+        ],
+        "testsExcluded": 5
+      }
+    },
+    "handoff.test.ts": {
+      "tasks": 5,
+      "wrapperSites": [
+        "wrapper@8",
+        "wrapper@11",
+        "wrapper@14",
+        "wrapper@17"
+      ],
+      "next": {
+        "reasons": [
+          "registered-elsewhere",
+          "helper-effects-unproved"
+        ],
+        "testsExcluded": 16
+      }
+    },
+    "wrapper-result.test.ts": {
+      "tasks": 2,
+      "wrapperSites": [
+        "wrapper@3"
+      ],
+      "next": {
+        "reasons": [
+          "registered-elsewhere",
+          "helper-effects-unproved"
+        ],
+        "testsExcluded": 3
+      }
+    },
+    "literals.test.ts": {
+      "tasks": 5,
+      "wrapperSites": [
+        "wrapper@5",
+        "wrapper@6"
+      ],
+      "next": {
+        "reasons": [
+          "registered-elsewhere",
+          "helper-effects-unproved"
+        ],
+        "testsExcluded": 21
+      }
+    },
+    "mutation.test.ts": {
+      "tasks": 3,
+      "wrapperSites": [
+        "wrapper@5",
+        "wrapper@10",
+        "wrapper@15"
+      ],
+      "next": {
+        "reasons": [
+          "registered-elsewhere",
+          "helper-effects-unproved"
+        ],
+        "testsExcluded": 12
+      }
+    },
+    "results.test.ts": {
+      "tasks": 3,
+      "wrapperSites": [
+        "wrapper@10",
+        "wrapper@14"
+      ],
+      "next": {
+        "reasons": [
+          "registered-elsewhere",
+          "helper-effects-unproved"
+        ],
+        "testsExcluded": 9
+      }
+    },
+    "depth.test.ts": {
+      "tasks": 3,
+      "wrapperSites": [
+        "wrapper@3",
+        "wrapper@4",
+        "wrapper@23"
+      ],
+      "next": {
+        "reasons": [
+          "registered-elsewhere"
+        ],
+        "testsExcluded": 4
+      }
+    }
+  },
+  "blindUnderCurrent": [
+    "builtin.test.ts",
+    "depth.test.ts",
+    "handoff.test.ts",
+    "literals.test.ts",
+    "mutation.test.ts",
+    "parameter.test.ts",
+    "results.test.ts",
+    "star.test.ts",
+    "wrapper-result.test.ts"
+  ]
+}

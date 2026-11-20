@@ -1,5 +1,12 @@
 {
   "files": {
+    "oracle/conditional-api-values/case.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 10
+    },
     "oracle/helper-proof-work/large.test.ts": {
       "reason": "registered-elsewhere",
       "otherReasons": [],
@@ -397,7 +404,7 @@
       "otherReasons": [
         "helper-effects-unproved"
       ],
-      "testsExcluded": 8
+      "testsExcluded": 5
     },
     "oracle/binding-stability/rewritten-namespace-export.test.ts": {
       "reason": "registered-elsewhere",
@@ -451,8 +458,10 @@
     },
     "oracle/collection-scope-calls/namespace-member.test.ts": {
       "reason": "registered-elsewhere",
-      "otherReasons": [],
-      "testsExcluded": 1
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 3
     },
     "oracle/collection-scope-calls/object-member.test.ts": {
       "reason": "registered-elsewhere",
@@ -468,8 +477,10 @@
     },
     "oracle/collection-scope-calls/sequence-callee.test.ts": {
       "reason": "registered-elsewhere",
-      "otherReasons": [],
-      "testsExcluded": 2
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 4
     },
     "oracle/collection-scope-calls/static-method.test.ts": {
       "reason": "registered-elsewhere",
@@ -484,7 +495,7 @@
     "oracle/factory-returned-api/arrow.test.ts": {
       "reason": "registered-elsewhere",
       "otherReasons": [],
-      "testsExcluded": 3
+      "testsExcluded": 2
     },
     "oracle/factory-returned-api/chained.test.ts": {
       "reason": "registered-elsewhere",
@@ -496,39 +507,32 @@
     "oracle/factory-returned-api/holder.test.ts": {
       "reason": "registered-elsewhere",
       "otherReasons": [],
-      "testsExcluded": 2
+      "testsExcluded": 1
     },
     "oracle/factory-returned-api/imported.test.ts": {
       "reason": "registered-elsewhere",
-      "otherReasons": [
-        "helper-effects-unproved"
-      ],
-      "testsExcluded": 4
+      "otherReasons": [],
+      "testsExcluded": 2
     },
     "oracle/factory-returned-api/inline.test.ts": {
       "reason": "registered-elsewhere",
       "otherReasons": [],
       "testsExcluded": 2
     },
-    "oracle/factory-returned-api/label.test.ts": {
-      "reason": "registered-elsewhere",
-      "otherReasons": [],
-      "testsExcluded": 1
-    },
     "oracle/factory-returned-api/local.test.ts": {
       "reason": "registered-elsewhere",
       "otherReasons": [],
-      "testsExcluded": 4
+      "testsExcluded": 2
     },
     "oracle/factory-returned-api/name.test.ts": {
       "reason": "registered-elsewhere",
       "otherReasons": [],
-      "testsExcluded": 2
+      "testsExcluded": 1
     },
     "oracle/factory-returned-api/plain.test.ts": {
       "reason": "registered-elsewhere",
       "otherReasons": [],
-      "testsExcluded": 2
+      "testsExcluded": 1
     },
     "oracle/hook-proof-boundaries/reset-alias.test.ts": {
       "reason": "order-dependent-state",
@@ -643,7 +647,7 @@
       "otherReasons": [
         "helper-effects-unproved"
       ],
-      "testsExcluded": 5
+      "testsExcluded": 7
     },
     "oracle/hooks-only-evaluation/conditional.test.ts": {
       "reason": "registered-elsewhere",
@@ -1773,6 +1777,68 @@
       "reason": "unresolved-context",
       "otherReasons": [],
       "testsExcluded": 1
+    },
+    "oracle/value-flow-reads/builtin.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 10
+    },
+    "oracle/value-flow-reads/chain.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [],
+      "testsExcluded": 5
+    },
+    "oracle/value-flow-reads/depth.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [],
+      "testsExcluded": 4
+    },
+    "oracle/value-flow-reads/handoff.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 16
+    },
+    "oracle/value-flow-reads/literals.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 21
+    },
+    "oracle/value-flow-reads/mutation.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 12
+    },
+    "oracle/value-flow-reads/parameter.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [],
+      "testsExcluded": 5
+    },
+    "oracle/value-flow-reads/results.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 9
+    },
+    "oracle/value-flow-reads/star.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [],
+      "testsExcluded": 1
+    },
+    "oracle/value-flow-reads/wrapper-result.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 3
     }
   }
 }

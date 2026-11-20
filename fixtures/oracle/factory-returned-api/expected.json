@@ -3,7 +3,6 @@
     "arrow.test.ts": {
       "tasks": 2,
       "wrapperSites": [
-        "wrapper@4",
         "wrapper@5",
         "wrapper@6"
       ],
@@ -11,7 +10,7 @@
         "reasons": [
           "registered-elsewhere"
         ],
-        "testsExcluded": 3
+        "testsExcluded": 2
       }
     },
     "chained.test.ts": {
@@ -38,60 +37,8 @@
     "holder.test.ts": {
       "tasks": 1,
       "wrapperSites": [
-        "wrapper@4",
         "wrapper@5"
       ],
-      "next": {
-        "reasons": [
-          "registered-elsewhere"
-        ],
-        "testsExcluded": 2
-      }
-    },
-    "imported.test.ts": {
-      "tasks": 3,
-      "wrapperSites": [
-        "wrapper@4",
-        "wrapper@5",
-        "wrapper@6"
-      ],
-      "next": {
-        "reasons": [
-          "registered-elsewhere",
-          "helper-effects-unproved"
-        ],
-        "testsExcluded": 4
-      }
-    },
-    "inline.test.ts": {
-      "tasks": 2,
-      "wrapperSites": [
-        "wrapper@4",
-        "wrapper@4",
-        "wrapper@5",
-        "wrapper@5"
-      ],
-      "next": {
-        "reasons": [
-          "registered-elsewhere"
-        ],
-        "testsExcluded": 4
-      },
-      "wrapperSitesToday": [
-        "wrapper@4",
-        "wrapper@4"
-      ],
-      "nextToday": {
-        "reasons": [
-          "registered-elsewhere"
-        ],
-        "testsExcluded": 2
-      },
-      "waitsOn": "a test API returned through a local alias or a conditional"
-    },
-    "label.test.ts": {
-      "tasks": 2,
-      "wrapperSites": [],
       "next": {
         "reasons": [
           "registered-elsewhere"
@@ -99,11 +46,40 @@
         "testsExcluded": 1
       }
     },
+    "imported.test.ts": {
+      "tasks": 3,
+      "wrapperSites": [
+        "wrapper@5",
+        "wrapper@6"
+      ],
+      "next": {
+        "reasons": [
+          "registered-elsewhere"
+        ],
+        "testsExcluded": 2
+      }
+    },
+    "inline.test.ts": {
+      "tasks": 2,
+      "wrapperSites": [
+        "wrapper@4",
+        "wrapper@5"
+      ],
+      "next": {
+        "reasons": [
+          "registered-elsewhere"
+        ],
+        "testsExcluded": 2
+      }
+    },
+    "label.test.ts": {
+      "tasks": 2,
+      "wrapperSites": [],
+      "next": {}
+    },
     "local.test.ts": {
       "tasks": 2,
       "wrapperSites": [
-        "wrapper@13",
-        "wrapper@14",
         "wrapper@15",
         "wrapper@16"
       ],
@@ -111,7 +87,7 @@
         "reasons": [
           "registered-elsewhere"
         ],
-        "testsExcluded": 4
+        "testsExcluded": 2
       }
     },
     "name.test.ts": {
@@ -121,30 +97,20 @@
         "reasons": [
           "registered-elsewhere"
         ],
-        "testsExcluded": 2
+        "testsExcluded": 1
       }
     },
     "plain.test.ts": {
       "tasks": 1,
       "wrapperSites": [
-        "wrapper@4",
         "wrapper@5"
       ],
       "next": {
         "reasons": [
           "registered-elsewhere"
         ],
-        "testsExcluded": 2
+        "testsExcluded": 1
       }
     }
-  },
-  "knownSites": [
-    {
-      "path": "inline.test.ts",
-      "kind": "missing-site",
-      "item": "test@5",
-      "reason": "`selected` returns `flag ? t : t.skip` for a local `t`, which is not read as the API, so the call through its result has no site.",
-      "waitsOn": "a test API returned through a local alias or a conditional"
-    }
-  ]
+  }
 }

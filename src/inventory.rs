@@ -373,6 +373,8 @@ impl Default for ImportWork {
 #[derive(Debug, Default)]
 pub struct Modules {
     sources: crate::lang::Sources,
+    /// What each export of an analysed module may hold, by module, globals setting and major.
+    summaries: crate::memory::RetainedMap<(PathBuf, (bool, Formatting)), HashMap<String, Summary>>,
     cache: crate::memory::RetainedMap<(PathBuf, (bool, Formatting)), HashMap<String, Export>>,
     /// Advances only when a new complete module proof enters `cache`.
     cache_generation: usize,
@@ -401,7 +403,50 @@ impl Setting<'_> {
     }
 }
 
+/// What an export may hold, self-contained: the framework roots it may be, each with the
+/// member and call (`"()"`) steps applied to it, and whether it may be anything else.
+#[derive(Clone, Debug, Default, PartialEq)]
+struct Summary {
+    roots: Vec<(Root, Vec<Box<str>>)>,
+    other: bool,
+    /// For a project function that registers nothing itself: what calling it returns, with its
+    /// parameters unknown. Only an export's own summary carries one, never the nested one.
+    returns: Option<Box<Summary>>,
+    /// For a project function that registers: what calling it returns, its parameters unknown.
+    /// Its roots still say it is a wrapper; only a call of the binding reads this.
+    called: Option<Box<Summary>>,
+}
+
+impl Summary {
+    /// One framework root with nothing applied to it: what its [`Export`] already says.
+    fn plain(&self) -> bool {
+        !self.other
+            && self.returns.is_none()
+            && self.called.is_none()
+            && matches!(&self.roots[..], [(_, steps)] if steps.is_empty())
+    }
+}
+
+/// A framework root an export summary names; the importer's origin for it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Root {
+    Api(Registers),
+    Namespace,
+    Wrapper(Reach),
+    Derived(Registers),
+}
+
 impl Modules {
+    /// The export summaries the latest analysis of the module at `path` recorded. Reading them
+    /// never analyses: an importer reads them after its [`Modules::exports`] of the same module.
+    fn recorded_summaries(
+        &self,
+        path: &Path,
+        setting: Setting,
+    ) -> Option<&HashMap<String, Summary>> {
+        self.summaries.get(&setting.key(path))
+    }
+
     /// One private cache belongs to one source authority for its whole lifetime.
     pub(crate) fn with_sources(sources: crate::lang::Sources) -> Self {
         Self {
@@ -568,11 +613,45 @@ impl crate::memory::HeapBytes for Modules {
         let Self {
             // The owning Run charges this shared catalog once, alongside the module cache.
             sources: _,
+            summaries,
             cache,
             cache_generation: _,
             active,
             work: _,
         } = self;
-        cache.heap_bytes().saturating_add(active.heap_bytes())
+        cache
+            .heap_bytes()
+            .saturating_add(active.heap_bytes())
+            .saturating_add(summaries.heap_bytes())
+    }
+}
+
+impl crate::memory::HeapBytes for Summary {
+    /// Each root's step list, the text of every step, and what a call returns.
+    fn heap_bytes(&self) -> usize {
+        let boxed = |summary: &Option<Box<Summary>>| {
+            summary.as_ref().map_or(0, |summary| {
+                std::mem::size_of::<Summary>().saturating_add(summary.heap_bytes())
+            })
+        };
+        let returns = boxed(&self.returns).saturating_add(boxed(&self.called));
+        self.roots
+            .iter()
+            .fold(
+                self.roots
+                    .capacity()
+                    .saturating_mul(std::mem::size_of::<(Root, Vec<Box<str>>)>()),
+                |bytes, (_, steps)| {
+                    steps.iter().fold(
+                        bytes.saturating_add(
+                            steps
+                                .capacity()
+                                .saturating_mul(std::mem::size_of::<Box<str>>()),
+                        ),
+                        |bytes, step| bytes.saturating_add(step.len()),
+                    )
+                },
+            )
+            .saturating_add(returns)
     }
 }

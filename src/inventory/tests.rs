@@ -5,12 +5,23 @@ use crate::lang::{parse, Lines};
 use std::fs;
 use std::path::Path;
 
+mod conditional_values;
 mod export_identity;
 mod import_limits;
 mod reach_scaling;
 
 /// The inventory of `main` (`a.test.ts`) in a project holding `files` besides it.
 fn inventory_of(main: &str, files: &[(&str, &str)], globals: bool) -> (Inventory, String) {
+    inventory_on(main, files, globals, crate::framework::Formatting::Unknown)
+}
+
+/// [`inventory_of`] for a file the major `major` of Vitest collects.
+fn inventory_on(
+    main: &str,
+    files: &[(&str, &str)],
+    globals: bool,
+    major: crate::framework::Formatting,
+) -> (Inventory, String) {
     let dir = tempfile::tempdir().unwrap();
     for (path, content) in files {
         let path = dir.path().join(path);
@@ -24,7 +35,7 @@ fn inventory_of(main: &str, files: &[(&str, &str)], globals: bool) -> (Inventory
         dialect: &DIALECT,
         globals,
         root: dir.path(),
-        major: crate::framework::Formatting::Unknown,
+        major,
     };
     let found = inventory(&path, main, &parsed, setting, &mut Modules::default());
     (found, main.to_owned())
@@ -32,7 +43,17 @@ fn inventory_of(main: &str, files: &[(&str, &str)], globals: bool) -> (Inventory
 
 /// Each site as `kind@line:column chain provenance`.
 fn sites(main: &str, files: &[(&str, &str)], globals: bool) -> Vec<String> {
-    let (found, source) = inventory_of(main, files, globals);
+    sites_on(main, files, globals, crate::framework::Formatting::Unknown)
+}
+
+/// [`sites`] for a file the major `major` of Vitest collects.
+fn sites_on(
+    main: &str,
+    files: &[(&str, &str)],
+    globals: bool,
+    major: crate::framework::Formatting,
+) -> Vec<String> {
+    let (found, source) = inventory_on(main, files, globals, major);
     let lines = Lines::new(&source);
     found
         .sites
@@ -206,7 +227,7 @@ fn collection_time_helper_chains_are_bounded() {
 /// A test function carries the suite and hook registrations as members (`test.describe`,
 /// `test.beforeEach`): each is the top-level function, so nothing chained before it applies. A
 /// call before the member ran code the registration does not record, so that site is a wrapper;
-/// a table's call returns a function that carries none.
+/// a table's call returns a function that carries none, so `test.each(rows).describe` throws.
 #[test]
 fn a_test_function_member_registers_what_the_top_level_name_does() {
     let main = "import { test, it } from 'vitest'\n\
@@ -229,7 +250,6 @@ fn a_test_function_member_registers_what_the_top_level_name_does() {
             "suite@5:20 skip",
             "wrapper@6:19 skipIf.().suite via-wrapper",
             "suite@8:1 ",
-            "test@9:18 each.().describe",
             "test@10:6 skip",
             "wrapper@11:32 describe via-wrapper",
         ]
@@ -242,7 +262,7 @@ fn a_test_function_member_registers_what_the_top_level_name_does() {
         .collect();
     assert_eq!(
         members,
-        [true, true, false, true, false, false, false, false, false]
+        [true, true, false, true, false, false, false, false]
     );
 }
 
@@ -587,6 +607,7 @@ fn unrelated_runtime_imports_do_not_propagate_fixture_refusals() {
     assert!(!found.unreadable_fixture);
 }
 
+/// A wrapper calling an imported wrapper is found once both modules settle.
 #[test]
 fn wrappers_are_found_to_a_fixpoint_across_modules() {
     let helpers = "import { it } from 'vitest'\n\
@@ -640,10 +661,9 @@ fn wrappers_are_found_to_a_fixpoint_across_modules() {
     );
 }
 
-/// A function returning a registration function is a wrapper: its call and every call through what
-/// it returns are sites, here and in an importer. A wrapper's other results, a type read and a
-/// nested function's return are not registration functions, and an API returned through a local
-/// alias (`selected`) is not read.
+/// A call through what a function returns registers what the returned value does, derived from
+/// the function, here and in an importer; the function's own call registers nothing. A wrapper's
+/// other results, a type read and a nested function's return are not registration functions.
 #[test]
 fn calls_through_a_returned_registration_function_are_sites() {
     let local = sites(
@@ -661,12 +681,9 @@ fn calls_through_a_returned_registration_function_are_sites() {
     assert_eq!(
         local,
         [
-            "wrapper@4:12  via-wrapper",
-            "wrapper@5:22  via-wrapper",
             "wrapper@6:1  via-wrapper",
             "wrapper@7:1  via-wrapper",
-            "wrapper@8:8 ().skip via-wrapper",
-            "wrapper@8:1  via-wrapper"
+            "wrapper@8:8 skip via-wrapper"
         ]
     );
     let factories = "import { test } from 'vitest'\n\
@@ -686,10 +703,9 @@ fn calls_through_a_returned_registration_function_are_sites() {
     assert_eq!(
         imported,
         [
-            "wrapper@2:12  via-wrapper",
-            "wrapper@3:22  via-wrapper",
             "wrapper@4:1  via-wrapper",
-            "wrapper@5:1  via-wrapper"
+            "wrapper@5:1  via-wrapper",
+            "wrapper@6:15  via-wrapper"
         ]
     );
     let controls = sites(
@@ -752,15 +768,8 @@ fn only_a_returned_value_that_may_be_the_registration_value_makes_a_factory() {
         &[],
         false,
     );
-    // `member` calls the factory, so its body registers: a wrapper by the body, not its return.
-    assert_eq!(
-        consumed,
-        [
-            "wrapper@14:28  via-wrapper",
-            "wrapper@16:33  via-wrapper",
-            "test@17:1 "
-        ]
-    );
+    // `member` calls the factory, which registers nothing, and returns a string.
+    assert_eq!(consumed, ["test@17:1 "]);
     let retained = sites(
         "import { test } from 'vitest'\n\
          function either(x) { return x || test } function assigned() { let r; return r ??= test }\n\
@@ -778,15 +787,11 @@ fn only_a_returned_value_that_may_be_the_registration_value_makes_a_factory() {
     assert_eq!(
         retained,
         [
-            "wrapper@5:29  via-wrapper",
-            "wrapper@6:10 () via-wrapper",
-            "wrapper@6:1  via-wrapper",
-            "wrapper@7:7 () via-wrapper",
-            "wrapper@7:1  via-wrapper",
-            "wrapper@8:1  via-wrapper",
-            "wrapper@9:1  via-wrapper",
-            "wrapper@10:11 () via-wrapper",
-            "wrapper@10:1  via-wrapper"
+            "wrapper@6:10  via-wrapper",
+            "wrapper@7:7  via-wrapper",
+            "test@8:1 ",
+            "test@9:1 ",
+            "wrapper@10:11  via-wrapper"
         ]
     );
 }
@@ -996,6 +1001,7 @@ fn a_title_past_the_text_limit_is_not_read() {
     assert_eq!(titles, [Some(at.len()), None, None]);
 }
 
+/// Each hook records when it runs, and registration values are recorded.
 #[test]
 fn hooks_carry_their_timing_and_registration_values_are_recorded() {
     let (found, _) = inventory_of(
@@ -1012,6 +1018,7 @@ fn hooks_carry_their_timing_and_registration_values_are_recorded() {
     assert_eq!(found.registration_values.len(), 1);
 }
 
+/// An import resolving outside the analysis root contributes no summary.
 #[test]
 fn a_module_outside_the_root_is_not_followed() {
     let dir = tempfile::tempdir().unwrap();
@@ -1026,6 +1033,7 @@ fn a_module_outside_the_root_is_not_followed() {
     let path = inner.join("a.test.ts");
     fs::write(&path, main).unwrap();
     let parsed = parse(&path, main).unwrap();
+    /// The inventory setting for `root`.
     fn setting(root: &Path) -> Setting<'_> {
         Setting {
             dialect: &DIALECT,
@@ -1288,9 +1296,14 @@ fn a_hooks_only_wrapper_runs_nothing_but_hooks() {
         "function setup(timeout) { beforeEach(() => {}, timeout) }",
         "var setup = function () { beforeEach(() => {}) }; var setup = helpers.cases",
     ] {
+        // A call of a namespace member is a wrapper site as the same function imported by name.
+        let nested = open.matches("helpers.cases()").count();
+        let expected: Vec<_> = std::iter::repeat_n("wrapper@4", nested)
+            .chain(["wrapper@5"])
+            .collect();
         assert_eq!(
             wrapper_calls(&format!("{header}{open}\nsetup()"), &files),
-            ["wrapper@5"],
+            expected,
             "{open}"
         );
     }
@@ -1459,7 +1472,7 @@ fn a_rewritten_namespace_alias_may_register_tests() {
         "const b = api.beforeEach; b(() => {})",
         "const { beforeEach: b } = api; b(() => {})",
         "const other = api; other.beforeEach(() => {})",
-        "(1 ? api.test : api.it)('x', () => {})",
+        ";(1 ? api.test : api.it)('x', () => {})",
     ] {
         assert_eq!(
             wrapper_calls(&format!("{header}{rewritten}{read}"), &files),
@@ -1934,14 +1947,21 @@ fn an_imported_wrapper_keeps_its_reach_through_re_exports() {
         ),
         ["hook-wrapper@2", "wrapper@3"]
     );
-    // Arguments are evaluated before the call: one that runs code may register a test.
+    // Arguments are evaluated before the call: one that runs code may register a test. The
+    // argument `h.cases()` is itself a wrapper site.
     assert_eq!(
         wrapper_calls(
             "import { setupServer } from './server'\nimport * as h from './cases'\n\
              setupServer('a', () => {})\nsetupServer(h.cases())\nsetupServer`${h.cases()}`",
             &files
         ),
-        ["hook-wrapper@3", "wrapper@4", "wrapper@5"]
+        [
+            "hook-wrapper@3",
+            "wrapper@4",
+            "wrapper@4",
+            "wrapper@5",
+            "wrapper@5"
+        ]
     );
     assert_eq!(
         wrapper_calls(
@@ -2004,6 +2024,74 @@ fn a_helper_reading_a_registration_function_may_register_tests() {
             &files
         ),
         ["wrapper@2", "hook-wrapper@3"]
+    );
+}
+
+/// An exported value that may be a registration function nothing reads, held in a branch, a
+/// container, a pattern or a default export, may register tests where it is called; a value no
+/// branch of which is one, or that only reads one where it cannot be the value, registers nothing.
+#[test]
+fn an_exported_value_that_may_be_a_registration_function_may_register_tests() {
+    let files = [
+        (
+            "values.ts",
+            "import { test, describe } from 'vitest'\n\
+             import * as v from 'vitest'\n\
+             const noop = () => {}\n\
+             const on = process.env.X !== 'true'\n\
+             export const ternary = on ? test : noop\n\
+             export const first = on ? noop : describe\n\
+             export const either = on && test\n\
+             export const nullish = undefined ?? test\n\
+             export const extended = on ? test.extend({}) : noop\n\
+             export const nested = on ? noop : (on ? test.extend({}) : noop)\n\
+             export const listed = [test][0]\n\
+             export const { member } = { member: on ? test : noop }\n\
+             export const plain = on ? 1 : noop\n\
+             export const none = on && noop\n\
+             export const condition = test ? noop : noop\n\
+             export const left = test && noop\n\
+             export const sequence = (test, noop)\n\
+             export const check = on ? v.expect : v.expect\n\
+             export const space = on ? v : v\n\
+             export const label = on ? test.name : 'x'\n\
+             export const arity = [test.length][0]\n\
+             export const count = [test].length",
+        ),
+        (
+            "default.ts",
+            "import { test } from 'vitest'\nexport default (process.env.X ? test.skip : () => {})",
+        ),
+        (
+            "named.ts",
+            "import { test } from 'vitest'\nexport default test.name",
+        ),
+    ];
+    assert_eq!(
+        sites(
+            "import { ternary, first, either, nullish, extended, nested, listed, member, plain, \
+             none, condition, left, sequence, check, space, label, arity, count } from './values'\n\
+             import byDefault from './default'\n\
+             import named from './named'\n\
+             ternary('a', () => {})\nfirst('b', () => {})\neither('c', () => {})\n\
+             nullish('d', () => {})\nextended('e', () => {})\nnested('f', () => {})\n\
+             listed('g', () => {})\nmember('h', () => {})\nbyDefault('i', () => {})\n\
+             plain('j', () => {})\nnone('k', () => {})\ncondition('l', () => {})\n\
+             left('m', () => {})\nsequence('n', () => {})\ncheck(1)\nspace.expect(1)\nlabel.toUpperCase()\narity.toFixed()\ncount.toFixed()\nnamed.toUpperCase()",
+            &files,
+            false
+        ),
+        [
+            "wrapper@4:1  via-wrapper",
+            "wrapper@5:1  via-wrapper",
+            "wrapper@6:1  via-wrapper",
+            "wrapper@7:1  via-wrapper",
+            "wrapper@8:1  via-wrapper",
+            "wrapper@9:1  via-wrapper",
+            "wrapper@10:1  via-wrapper",
+            "wrapper@11:1  via-wrapper",
+            "wrapper@12:1  via-wrapper"
+        ]
     );
 }
 
@@ -2130,6 +2218,486 @@ fn module_export_cache_retains_owned_bytes() {
         [("named".repeat(2048), super::Export::Namespace)].into(),
     );
     assert!(modules.heap_bytes() > reserved);
+}
+
+/// A member of a wrapper may hold any value, falsy ones included: a condition on it may take
+/// either branch, wherever the expression is written.
+#[test]
+fn a_condition_on_a_wrapper_member_may_take_either_branch() {
+    // Exported, so code elsewhere may give it members.
+    let header = "import { test } from 'vitest'\nimport * as v from 'vitest'\n\
+                  export const wrap = (name: string, fn: () => void) => test(name, fn)\n";
+    for (main, expected) in [
+        (";((wrap.skip ? v : test))('a', () => {})", "wrapper@4"),
+        (
+            "const a = wrap.skip ? v : test\n;a('a', () => {})",
+            "wrapper@5",
+        ),
+        (";(([wrap.skip][0] ? v : test))('a', () => {})", "wrapper@4"),
+        // The control: a condition that is never falsy keeps only the namespace.
+        (";((wrap ? v : test))('a', () => {})", ""),
+    ] {
+        let calls: Vec<_> = wrapper_calls(&format!("{header}{main}"), &[])
+            .into_iter()
+            .filter(|call| call != "wrapper@3")
+            .collect();
+        let expected: Vec<_> = Some(expected)
+            .filter(|e| !e.is_empty())
+            .into_iter()
+            .collect();
+        assert_eq!(calls, expected, "{main}");
+    }
+}
+
+/// A member the file's Vitest major lacks is `undefined`: `test.describe` exists on 4 and 5, not on
+/// 3.2.7. An unknown major reads a member some measured major has; an unmeasured one leaves a member
+/// none has unresolved, an opaque wrapper.
+#[test]
+fn a_member_follows_the_files_vitest_major() {
+    use crate::framework::Formatting;
+    let header = "import { test } from 'vitest'\n";
+    for (main, major, expected) in [
+        ("test.describe('s', () => {})", Formatting::Vitest3, vec![]),
+        (
+            "test.describe('s', () => {})",
+            Formatting::Vitest4,
+            vec!["suite@2:6"],
+        ),
+        (
+            "test.describe('s', () => {})",
+            Formatting::Vitest5,
+            vec!["suite@2:6"],
+        ),
+        (
+            "test.describe('s', () => {})",
+            Formatting::Unknown,
+            vec!["suite@2:6"],
+        ),
+        ("test.whatever('a', () => {})", Formatting::Unknown, vec![]),
+        ("test.whatever('a', () => {})", Formatting::Vitest5, vec![]),
+        (
+            "test.whatever('a', () => {})",
+            Formatting::Unmeasured,
+            vec!["wrapper@2:6 whatever via-wrapper"],
+        ),
+    ] {
+        let found: Vec<_> = sites_on(&format!("{header}{main}"), &[], false, major)
+            .into_iter()
+            .map(|site| site.trim_end().to_owned())
+            .collect();
+        assert_eq!(found, expected, "{main} on {major:?}");
+    }
+}
+
+/// A table's call returns a function with only `name` and `length`, for `describe` as for `test`.
+#[test]
+fn a_called_table_has_no_registration_members() {
+    let main = "import { test, describe } from 'vitest'\n\
+                describe.each([[1]]).skip('s', () => {})\n\
+                test.each([[1]]).skip('t', () => {})\n\
+                describe.each([[1]])('u', () => {})";
+    assert_eq!(sites(main, &[], false), ["suite@4:21 each.()"]);
+}
+
+/// A member of a local wrapper that nothing writes and nothing receives is the function's own, so
+/// `wrap.skip` is `undefined`; writing it or exporting the wrapper makes it unknown.
+#[test]
+fn a_local_wrapper_has_only_its_own_members() {
+    let header = "import { test } from 'vitest'\nimport * as v from 'vitest'\n\
+                  const wrap = (name: string, fn: () => void) => test(name, fn)\n";
+    for (extra, expected) in [
+        ("", "test@4:"),
+        ("wrap.skip = v\n", "wrapper@5:"),
+        ("Object.assign(wrap, { skip: v })\n", "wrapper@5:"),
+        ("export { wrap }\n", "wrapper@5:"),
+    ] {
+        let main = format!("{header}{extra};((wrap.skip ? v : test))('a', () => {{}})");
+        let found: Vec<_> = sites(&main, &[], false)
+            .into_iter()
+            .filter(|site| !site.starts_with("test@3") && !site.starts_with("wrapper@3"))
+            .collect();
+        assert_eq!(found.len(), 1, "{main}: {found:?}");
+        assert!(found[0].starts_with(expected), "{main}: {found:?}");
+    }
+}
+
+/// A helper exported beside a star keeps what calling it returns, whichever side of the star it
+/// is spelled on; a helper returning something else registers nothing.
+#[test]
+fn a_helper_exported_beside_a_star_keeps_what_it_returns() {
+    let main = "import { make } from './mod'\nmake()('hidden', () => {})";
+    let other = ("other.ts", "export const x = 1");
+    for (module, expected) in [
+        (
+            "import { test } from 'vitest'\nexport function make() { return test }",
+            &["wrapper@2:7  via-wrapper"][..],
+        ),
+        (
+            "import { test } from 'vitest'\nexport * from './other'\nexport function make() { return test }",
+            &["wrapper@2:7  via-wrapper"],
+        ),
+        (
+            "import { test } from 'vitest'\nexport function make() { return test }\nexport * from './other'",
+            &["wrapper@2:7  via-wrapper"],
+        ),
+        (
+            "export * from './other'\nexport function make() { return () => {} }",
+            &[],
+        ),
+    ] {
+        assert_eq!(sites(main, &[("mod.ts", module), other], false), expected, "{module}");
+    }
+}
+
+/// A `?.` link whose object is nullish makes its whole chain `undefined`, however many links
+/// follow it, so `?? test` may be taken; an object that is never nullish continues the chain.
+#[test]
+fn an_optional_chain_is_undefined_when_a_link_is_nullish() {
+    let header = "import { test } from 'vitest'\nconst noop = (_n: string, _f: () => void) => {}\nconst none: any = undefined\n";
+    for (line, expected) in [
+        ("const t = none?.missing ?? test", &["test@5:1 "][..]),
+        ("const t = none?.a.b.c ?? test", &["test@5:1 "]),
+        ("const t = (none?.a)?.b ?? test", &["test@5:1 "]),
+        ("const t = none?.make() ?? test", &["test@5:1 "]),
+        ("const t = ({ m: noop })?.m ?? test", &[]),
+        ("const t = ({ m: test })?.m", &["test@5:1 "]),
+    ] {
+        let main = format!("{header}{line}\nt('a', () => {{}})");
+        assert_eq!(sites(&main, &[], false), expected, "{line}");
+    }
+    let api = "import { test } from 'vitest'\ntest?.skip('a', () => {})\nconst o = { r: { run: test } }\no?.r?.run('b', () => {})";
+    assert_eq!(sites(api, &[], false), ["test@2:7 skip", "test@4:7 "]);
+}
+
+/// A built-in value has the members its prototype has on Node, and a string has a character at
+/// each index: `''.at` is a function, so a condition on it takes the first branch.
+#[test]
+fn a_built_in_value_has_its_prototypes_members() {
+    let header = "import { test } from 'vitest'\nconst noop = (_n: string, _f: () => void) => {}\n";
+    for (condition, expected) in [
+        ("''.at", &["test@4:1 "][..]),
+        ("[].toSorted", &["test@4:1 "]),
+        ("(1).toExponential", &["test@4:1 "]),
+        ("''.zzz", &[]),
+        ("true.toFixed", &[]),
+        ("'ab'[0]", &["wrapper@4:1  via-wrapper"]),
+        ("(function () {}).prototype", &["wrapper@4:1  via-wrapper"]),
+        ("''.__proto__", &["wrapper@4:1  via-wrapper"]),
+    ] {
+        let main = format!("{header}const pick = {condition} ? test : noop\npick('a', () => {{}})");
+        assert_eq!(sites(&main, &[], false), expected, "{condition}");
+    }
+}
+
+/// Inside a helper a parameter holds what it was handed and whatever the body writes to it.
+#[test]
+fn a_parameter_holds_what_the_body_writes_to_it() {
+    let header = "import { test } from 'vitest'\nconst noop = (_n: string, _f: () => void) => {}\n";
+    for (helper, argument, expected) in [
+        (
+            "function pick(t: any) { t = test; return t }",
+            "noop",
+            &["wrapper@4:11  via-wrapper"][..],
+        ),
+        (
+            "function pick(t: any) { if (!t) t = test; return t }",
+            "undefined",
+            &["wrapper@4:16  via-wrapper"],
+        ),
+        ("function pick(t: any) { return t }", "noop", &[]),
+    ] {
+        let main = format!("{header}{helper}\npick({argument})('a', () => {{}})");
+        assert_eq!(sites(&main, &[], false), expected, "{helper}");
+    }
+    let imported = sites(
+        "import { pick } from './mod'\nconst noop = (_n: string, _f: () => void) => {}\npick(noop)('a', () => {})",
+        &[("mod.ts", "import { test } from 'vitest'\nexport function pick(t: any) { t = test; return t }")],
+        false,
+    );
+    assert_eq!(imported, ["wrapper@3:11  via-wrapper"]);
+}
+
+/// A wrapper handed to a call whose parameter may write a member, directly, through another call
+/// or through `arguments`, has unknown members; one only handed to `keep(f) { return f }` has
+/// only its own.
+#[test]
+fn a_wrapper_handed_to_a_local_function_has_unknown_members() {
+    let header = "import { test } from 'vitest'\nfunction setup() { test('own', () => {}) }\n";
+    for (extra, expected) in [
+        (
+            "function attach(f: any) { f.reg = test }\nattach(setup)\n",
+            &["test@2:20 ", "wrapper@5:17 reg via-wrapper"][..],
+        ),
+        (
+            "function attach(f: any) { f.reg = test }\n\n",
+            &["test@2:20 "],
+        ),
+        (
+            "function keep(f: any) { return f }\nkeep(setup)\n",
+            &["test@2:20 "],
+        ),
+        (
+            "function attach(f: any) { f.reg = test }\nfunction relay(g: any) { attach(g) }; relay(setup)\n",
+            &["test@2:20 ", "wrapper@5:17 reg via-wrapper"],
+        ),
+        (
+            "function attach(f: any) { arguments[0].reg = test }\nattach(setup)\n",
+            &["test@2:20 ", "wrapper@5:17 reg via-wrapper"],
+        ),
+        (
+            "function attach(f: any, g: any) { f.reg = test }\nattach(...[], setup)\n",
+            &["test@2:20 ", "wrapper@5:17 reg via-wrapper"],
+        ),
+    ] {
+        let main = format!("{header}{extra};(setup as any).reg('a', () => {{}})");
+        assert_eq!(sites(&main, &[], false), expected, "{extra}");
+    }
+}
+
+/// An imported helper returning a registration function registers whatever its result is
+/// called with: each call below collects `hidden` in Vitest 5.1.1. A call the inventory sees keeps
+/// a site; a helper handed away (an alias, an argument, `call`/`apply`/`bind`) is an escape; a
+/// result whose member read is opaque (a spread) keeps a site. Data in a spread does not.
+#[test]
+fn a_returning_helper_keeps_what_its_result_registers() {
+    let returns = "import { test } from 'vitest'\nexport function make() { return test }\n";
+    let spread =
+        "import { test } from 'vitest'\nexport function make() { return { ...{}, run: test } }\n";
+    let nested =
+        "import { test } from 'vitest'\nexport function make() { return { ...{ run: test } } }\n";
+    let data = "export function make() { return { ...{ a: 1 }, b: 2 } }\n";
+    let head = "import { test } from 'vitest'\nimport { make } from './helper'\ntest('control', () => {})\n";
+    for (helper, read) in [
+        (returns, "make()('hidden', () => {})"),
+        (
+            returns,
+            "const alias = make\n;[alias].map((f) => f())[0]('hidden', () => {})",
+        ),
+        (returns, "[make].map((f) => f())[0]('hidden', () => {})"),
+        (returns, "make.call(null)('hidden', () => {})"),
+        (returns, "make.apply(null, [])('hidden', () => {})"),
+        (returns, "make.bind(null)()('hidden', () => {})"),
+        (spread, "make().run('hidden', () => {})"),
+        (nested, "make().run('hidden', () => {})"),
+    ] {
+        let main = format!("{head}{read}");
+        let (found, _) = inventory_of(&main, &[("helper.ts", helper)], false);
+        assert!(
+            found.sites.len() == 2 || !found.escapes.is_empty(),
+            "{read}: {:?} {:?}",
+            found.sites,
+            found
+                .escapes
+                .iter()
+                .map(|escape| &escape.text)
+                .collect::<Vec<_>>()
+        );
+    }
+    // Each export below holds or calls `test` where the value flow cannot prove it does not:
+    // `call` on a wrapper, a parameter kept in a returned literal, a factory beside the API's own
+    // star, a `var` read before its initializer runs (an alias of the API among them), a factory's
+    // result handed on, a factory called with arguments, and factories chosen at run time.
+    let factory = "import { test } from 'vitest'\nexport function make() { return test }\n";
+    for (files, read) in [
+        (
+            &[("helper.ts", "import { test } from 'vitest'\nfunction register() { test('inner', () => {}) }\nexport function run() { register.call(null) }\n")][..],
+            "import { run } from './helper'\nrun()",
+        ),
+        (
+            &[("helper.ts", "import { test } from 'vitest'\nfunction box(t) { return { run: t } }\nexport const run = box(test).run\n")][..],
+            "import { run } from './helper'\nrun('hidden', () => {})",
+        ),
+        (
+            &[("factory.ts", factory), ("barrel.ts", "export * from './factory'\nexport * from 'vitest'\n")][..],
+            "import { make } from './barrel'\nmake()('hidden', () => {})",
+        ),
+        (
+            &[("helper.ts", "import { test } from 'vitest'\nexport const run = pick()\nvar enabled = true\nfunction pick() { return enabled ? () => {} : test }\n")][..],
+            "import { run } from './helper'\nrun('hidden', () => {})",
+        ),
+        (
+            &[("helper.ts", "import { test } from 'vitest'\nexport const run = pick()\nvar api = test\nfunction pick() { return api ? () => {} : test }\n")][..],
+            "import { run } from './helper'\nrun('hidden', () => {})",
+        ),
+        (
+            &[("helper.ts", factory)][..],
+            "import { make } from './helper'\nReflect.apply(make(), null, ['hidden', () => {}])",
+        ),
+        (
+            &[("helper.ts", "import { test } from 'vitest'\nfunction choose(on) { return on ? test : () => {} }\nchoose(true)('hidden', () => {})\n")][..],
+            "import './helper'",
+        ),
+        (
+            &[("helper.ts", "import { test } from 'vitest'\nfunction a() { return test }\nfunction b() { return test.skip }\nexport const make = process.env.X ? a : b\n")][..],
+            "import { make } from './helper'\nmake()('hidden', () => {})",
+        ),
+        (
+            &[("helper.ts", "import { test } from 'vitest'\nexport async function make() { return test }\n")][..],
+            "import { make } from './helper'\nReflect.apply(await make(), null, ['hidden', () => {}])",
+        ),
+        (
+            &[("helper.ts", "import { test } from 'vitest'\nasync function make(on) { if (on) return test }\nexport const run: any = (await make(false)) ? () => {} : test\n")][..],
+            "import { run } from './helper'\nrun('hidden', () => {})",
+        ),
+        (
+            &[("helper.ts", "import { test } from 'vitest'\nconst noop = () => {}\nexport function make() { return (''.includes('x') ?? true) ? noop : test }\n")][..],
+            "import { make } from './helper'\nmake()('hidden', () => {})",
+        ),
+        (
+            &[("helper.ts", "import { test } from 'vitest'\nconst noop = () => {}\nexport const state = { enabled: false }\nexport function make() { return state.enabled ? test : noop }\n")][..],
+            "import { make, state } from './helper'\nstate.enabled = true\nmake()('hidden', () => {})",
+        ),
+        (
+            &[("helper.ts", "import { test } from 'vitest'\nconst noop = () => {}\nconst a = [false]\na.forEach((_, i, self) => { self[i] = true })\nexport function make() { return a[0] ? test : noop }\n")][..],
+            "import { make } from './helper'\nmake()('hidden', () => {})",
+        ),
+        (
+            &[("helper.ts", "import { test } from 'vitest'\nconst noop = () => {}\nconst a = [{ on: false }]\na.forEach((row) => { row.on = true })\nexport function make() { return a[0].on ? test : noop }\n")][..],
+            "import { make } from './helper'\nmake()('hidden', () => {})",
+        ),
+        (
+            &[("helper.ts", "import { test } from 'vitest'\nconst noop = () => {}\nString.prototype.at = undefined\nexport function make() { return ''.at ? noop : test }\n")][..],
+            "import { make } from './helper'\nmake()('hidden', () => {})",
+        ),
+        (
+            &[("helper.ts", "import { test } from 'vitest'\nconst noop = () => {}\nfunction make() { return test }\nexport const run = make.call(null)\n")][..],
+            "import { run } from './helper'\nrun('hidden', () => {})",
+        ),
+        (
+            &[("helper.ts", "import { test } from 'vitest'\nconst noop = () => {}\nfunction make() { return test }\nexport const run = make.apply(null, [])\n")][..],
+            "import { run } from './helper'\nrun('hidden', () => {})",
+        ),
+        (
+            &[("helper.ts", "import { test } from 'vitest'\nconst noop = () => {}\nfunction make() { return test }\nexport const run = make.bind(null)()\n")][..],
+            "import { run } from './helper'\nrun('hidden', () => {})",
+        ),
+        (
+            &[("helper.ts", "import { test } from 'vitest'\nconst noop = () => {}\nexport const state = { on: false }\nexport function make() { return state.on ? test : noop }\n")][..],
+            "import { make, state } from './helper'\nObject.assign(state, { on: true })\nmake()('hidden', () => {})",
+        ),
+        (
+            &[("helper.ts", "import { test } from 'vitest'\nconst noop = () => {}\nexport const state = { on: false }\nexport function make() { return state.on ? test : noop }\n")][..],
+            "import { make, state } from './helper'\n;({ on: state.on } = { on: true })\nmake()('hidden', () => {})",
+        ),
+        (
+            &[("helper.ts", "import { test } from 'vitest'\nconst noop = () => {}\nconst state = { on: false }\nexport function get() { return state }\nexport function make() { return state.on ? test : noop }\n")][..],
+            "import { get, make } from './helper'\nget().on = true\nmake()('hidden', () => {})",
+        ),
+        (
+            &[("helper.ts", "import { test } from 'vitest'\nconst noop = () => {}\nexport function make() { return make.on ? test : noop }\n")][..],
+            "import { make } from './helper'\nObject.assign(make, { on: true })\nmake()('hidden', () => {})",
+        ),
+        (
+            &[("helper.ts", "import { test } from 'vitest'\nconst noop = () => {}\nconst f = () => {}\n;({ on: f.on } = { on: true })\nexport function make() { return f.on ? test : noop }\n")][..],
+            "import { make } from './helper'\nmake()('hidden', () => {})",
+        ),
+        (
+            &[("helper.ts", "import { test } from 'vitest'\nconst noop = () => {}\nconst f = () => {}\nfor (f.on of [true]) {}\nexport function make() { return f.on ? test : noop }\n")][..],
+            "import { make } from './helper'\nmake()('hidden', () => {})",
+        ),
+        (
+            &[("helper.ts", "import { test } from 'vitest'\nconst noop = () => {}\nconst f = { r: [] }\n;[...f.r] = [1]\nexport function make() { return f.r.length ? test : noop }\n")][..],
+            "import { make } from './helper'\nmake()('hidden', () => {})",
+        ),
+        (
+            &[("helper.ts", "import { test } from 'vitest'\nconst noop = () => {}\nArray.prototype[12345] = true\nexport function make() { return [][12345] ? test : noop }\n")][..],
+            "import { make } from './helper'\nmake()('hidden', () => {})",
+        ),
+        (
+            &[("helper.ts", "import { test } from 'vitest'\nconst noop = () => {}\nObject.prototype[5] = true\nexport function make() { return ({})[5] ? test : noop }\n")][..],
+            "import { make } from './helper'\nmake()('hidden', () => {})",
+        ),
+    ] {
+        let main = format!("import {{ test }} from 'vitest'\ntest('control', () => {{}})\n{read}");
+        let (found, _) = inventory_of(&main, files, false);
+        assert!(
+            found.sites.len() >= 2 || !found.escapes.is_empty() || !found.loads.is_empty(),
+            "{read}: {:?}",
+            found.sites
+        );
+    }
+    let (found, _) = inventory_of(
+        &format!("{head}test('uses', () => {{ make() }})"),
+        &[("helper.ts", data)],
+        false,
+    );
+    assert_eq!(found.sites.len(), 2, "{:?}", found.sites);
+    assert!(found.escapes.is_empty());
+    assert!(found
+        .sites
+        .iter()
+        .all(|site| site.kind == SiteKind::Registers(Registers::Test)));
+}
+
+/// A function returning itself is summarised to a bounded depth, then read as one that may
+/// register.
+#[test]
+fn a_function_returning_itself_is_summarised_in_bounded_depth() {
+    let (found, _) = inventory_of(
+        "import { test } from 'vitest'\nimport { f } from './helper'\ntest('a', () => { f })",
+        &[("helper.ts", "export function f() { return f }\n")],
+        false,
+    );
+    assert!(!found.sites.is_empty(), "{:?}", found.sites);
+}
+
+/// Destructuring an awaited wrapper call reads what the wrapper returns.
+#[test]
+fn a_wrapper_call_is_what_the_wrapper_returns() {
+    let run = "import { onTestFinished } from 'vitest'\n\
+               export async function run() { onTestFinished(() => {}); return { stderr: '' } }\n";
+    let read = "test('a', async () => { const { stderr } = await run(); expect(stderr).toBe('') })";
+    let imported =
+        format!("import {{ expect, test }} from 'vitest'\nimport {{ run }} from './run'\n{read}");
+    let local = format!(
+        "{}import {{ expect, test }} from 'vitest'\n{read}",
+        run.replace("export ", "")
+    );
+    // A local wrapper that registers a test, called where its result is read.
+    let tasks = "import { expect, test } from 'vitest'\n\
+                 function run() { test('own', () => {}); return { stderr: '' } }\n\
+                 const { stderr } = run()\n\
+                 expect(stderr).toBe('')"
+        .to_owned();
+    for (main, files) in [
+        (&imported, &[("run.ts", run)][..]),
+        (&local, &[][..]),
+        (&tasks, &[][..]),
+    ] {
+        let escapes: Vec<_> = inventory_of(main, files, false)
+            .0
+            .escapes
+            .iter()
+            .map(|escape| escape.text.clone())
+            .collect();
+        assert!(escapes.is_empty(), "{main}: {escapes:?}");
+    }
+    // A wrapper that returns the registration function keeps a site through its result.
+    let make = "import { beforeEach, test } from 'vitest'\n\
+                export function make() { beforeEach(() => {}); return test }\n";
+    assert_eq!(
+        sites(
+            "import { make } from './make'\nmake()('x', () => {})",
+            &[("make.ts", make)],
+            false
+        ),
+        [
+            "wrapper@2:7 () via-wrapper",
+            "hook-wrapper@2:1  via-wrapper"
+        ]
+    );
+    assert_eq!(
+        sites(
+            &format!("{}make()('x', () => {{}})", make.replace("export ", "")),
+            &[],
+            false
+        ),
+        [
+            "BeforeEach@2:19 ",
+            "wrapper@3:7 () via-wrapper",
+            "hook-wrapper@3:1  via-wrapper"
+        ]
+    );
 }
 
 /// A function held in a local wrapper's result is not proved inert.

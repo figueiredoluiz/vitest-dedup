@@ -29,6 +29,8 @@ const COLLISIONS: &[(&str, &str)] = &[
     ("src/lang/limits.rs", "for"),
     // ESTree's field for the condition of an `if`.
     ("src/inventory/module.rs", "test"),
+    // The same field, a conditional expression's condition in the value flow.
+    ("src/inventory/module/flow.rs", "test"),
     // The same field, in the trace walk's control flow.
     ("src/behavior.rs", "test"),
     ("src/behavior/dataflow.rs", "test"),

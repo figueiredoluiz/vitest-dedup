@@ -382,7 +382,7 @@
           "registered-elsewhere",
           "helper-effects-unproved"
         ],
-        "testsExcluded": 8
+        "testsExcluded": 5
       }
     },
     "rewritten-namespace-export.test.ts": {

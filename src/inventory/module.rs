@@ -5,13 +5,15 @@ use super::{
     Escape, Export, InPlaceMock, Inventory, Label, Modules, Provenance, Reach, Setting, Site,
     SiteKind, ON_LOAD, UNREADABLE_FIXTURE,
 };
-use crate::framework::{Chain, Mocking, Registers};
+use crate::framework::{Chain, Holder, Mocking, Presence, Registers};
 use crate::lang::{
     bound_symbols, export_name, member_name, property_name, Declaration, Imported, Name, NodeId,
     Parsed, Span, SymbolId, Tree,
 };
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
+
+mod flow;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Origin {
@@ -49,11 +51,14 @@ enum MockCall {
 }
 
 /// One step of a callee chain, from the root outwards.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 enum Step<'t> {
     Member(&'t str),
     Call,
 }
+
+/// A function's members that call the function itself, so a registration stays one through them.
+const INVOKERS: [&str; 3] = ["call", "apply", "bind"];
 
 /// What a callee chain reads as when applied to its root.
 struct Applied {
@@ -68,6 +73,25 @@ struct Applied {
     /// `(setup() ? test : it).describe`) its registration does not record: the site may depend on
     /// it, so it is not admitted.
     evaluated: bool,
+    /// The kind of framework value a further member is read on, when the dialect measured it.
+    holder: Option<Holder>,
+    /// Whether a member is one the file's major was not measured for: what it is, and what
+    /// calling it registers, is not known.
+    unresolved: bool,
+}
+
+/// What applying `steps` to a root with a reach is, `None` for a root without one. An alias of
+/// the wrapper keeps its reach; anything derived from it may register tests.
+fn wrapper_applied(origin: Origin, steps: &[Step]) -> Option<Origin> {
+    let reach = origin.reach()?;
+    if matches!(origin, Origin::Derived(_)) && steps.is_empty() {
+        return Some(origin);
+    }
+    Some(Origin::Wrapper(if steps.is_empty() {
+        reach
+    } else {
+        Reach::Tasks
+    }))
 }
 
 /// The analysis of one module.
@@ -81,9 +105,6 @@ struct Module<'s> {
     /// Functions of this module whose body holds a registration, by the symbol naming them, with
     /// what calling them may register.
     wrappers: HashMap<SymbolId, Reach>,
-    /// Functions of this module whose returned value may be a registration function: calling
-    /// what one returns may register tests.
-    returners: HashSet<SymbolId>,
     /// Bindings a declarator gave a registration value: what they hold is read elsewhere.
     aliased: HashSet<SymbolId>,
     loads: Vec<u32>,
@@ -103,6 +124,20 @@ struct Module<'s> {
     dead_chains: std::cell::RefCell<HashSet<NodeId>>,
     /// An imported registration API was built with a fixture value this core cannot model.
     imported_unreadable_fixture: bool,
+    /// Value-flow evaluation state.
+    flow: flow::Flow<'s>,
+    /// Namespace imports of project modules, with their export summaries.
+    namespaces: flow::Namespaces,
+    /// Named and default imports of project modules, with the summary of what each holds.
+    imported: HashMap<SymbolId, super::Summary>,
+    /// Every binding imported from a project module whose exports may register.
+    project_imports: Vec<SymbolId>,
+    /// The member names those summaries spell, set once the imports are read: a value read from
+    /// a summary borrows its steps from here.
+    names: &'s std::cell::OnceCell<HashSet<Box<str>>>,
+    /// A registration function escapes this module ([`Module::escapes`]): set before its exports
+    /// are summarised.
+    escaped: std::cell::Cell<bool>,
 }
 
 /// The inventory of a module, and the export names whose value registers when called with what
@@ -115,6 +150,7 @@ pub(super) fn analyse(
     modules: &mut Modules,
     depth: usize,
 ) -> (Inventory, HashMap<String, Export>) {
+    let names = std::cell::OnceCell::new();
     let mut module = Module {
         path,
         source,
@@ -123,7 +159,6 @@ pub(super) fn analyse(
         setting,
         origins: HashMap::new(),
         wrappers: HashMap::new(),
-        returners: HashSet::new(),
         aliased: HashSet::new(),
         loads: Vec::new(),
         values: HashSet::new(),
@@ -133,6 +168,12 @@ pub(super) fn analyse(
         scanning: std::cell::Cell::new(false),
         dead_chains: std::cell::RefCell::default(),
         imported_unreadable_fixture: false,
+        flow: flow::Flow::default(),
+        namespaces: HashMap::new(),
+        imported: HashMap::new(),
+        project_imports: Vec::new(),
+        names: &names,
+        escaped: std::cell::Cell::new(false),
     };
     module.redeclared = module.redeclarations();
     module.evaluates = super::direct_eval(parsed);
@@ -140,6 +181,10 @@ pub(super) fn analyse(
     module.collect_origins(modules, depth);
     let found = module.registrations();
     let mut exports = module.exports(modules, depth, &found);
+    let escapes = module.escapes();
+    module.escaped.set(!escapes.is_empty());
+    let summaries = module.export_summaries(modules, &exports);
+    modules.summaries.insert(setting.key(path), summaries);
     // A registration outside every wrapper may run while the module loads: at top level, in a
     // getter or an initializer, or in a function this analysis does not see called.
     let bodies = module.wrapper_bodies();
@@ -150,7 +195,6 @@ pub(super) fn analyse(
     {
         exports.insert(ON_LOAD.to_owned(), Export::Wrapper(Reach::Tasks));
     }
-    let escapes = module.escapes();
     let calls: HashSet<NodeId> = found.iter().map(|(node, ..)| *node).collect();
     let sites = found
         .into_iter()
@@ -813,74 +857,46 @@ impl<'s> Module<'s> {
         let mut steps = Vec::new();
         loop {
             node = tree.inner(node);
+            #[cfg(test)]
+            WALK_STEPS.with(|steps| steps.set(steps.get() + 1));
             if self.dead_chains.borrow().contains(&node) {
                 return None;
             }
             visited.push(node);
+            if tree.kind(node) == "Identifier" && self.flows_from(node) {
+                return self.flow_root(node, steps);
+            }
             if let Some((origin, provenance)) = self.root_origin(node) {
                 steps.reverse();
                 return Some((origin, provenance, steps));
             }
             match tree.kind(node) {
-                // `only ? it.only : it`: both branches the same kind of registration function.
-                "ConditionalExpression" => {
-                    let branch = |key| {
-                        tree.child(node, key)
-                            .and_then(|branch| self.value_origin(branch))
-                    };
-                    let registers = match (branch("consequent"), branch("alternate")) {
-                        (Some(Origin::Api(left)), Some(Origin::Api(right))) if left == right => {
-                            left
-                        }
-                        (Some(Origin::Wrapper(_) | Origin::Derived(_)), _)
-                        | (_, Some(Origin::Wrapper(_) | Origin::Derived(_))) => {
-                            steps.reverse();
-                            return Some((
-                                Origin::Wrapper(Reach::Tasks),
-                                Provenance::Wrapper,
-                                steps,
-                            ));
-                        }
-                        _ => return None,
-                    };
-                    steps.reverse();
-                    return Some((Origin::Api(registers), Provenance::Direct, steps));
+                // Anything that is not a plain chain step is the value flow's.
+                "MemberExpression" if self.flows_through(node) => {
+                    return self.flow_root(node, steps);
                 }
                 "MemberExpression" => {
-                    // `cases['with organization']` reads as `cases.name` does.
                     steps.push(Step::Member(member_name(tree, node)?));
                     node = tree.child(node, "object")?;
                 }
-                // `filterable(it)`: what a call handed a registration function returns may
-                // register.
                 "CallExpression"
                     if tree
                         .list(node, "arguments")
                         .into_iter()
                         .flatten()
-                        .any(|argument| {
-                            self.value_origin(argument)
-                                .is_some_and(|origin| origin != Origin::Namespace)
-                        }) =>
+                        .any(|argument| self.evaluate(argument).holds_api()) =>
                 {
-                    steps.reverse();
-                    // What it returns is not read: it may register anything.
-                    return Some((Origin::Wrapper(Reach::Tasks), Provenance::Wrapper, steps));
+                    return self.flow_root(node, steps);
                 }
                 "CallExpression" => {
                     steps.push(Step::Call);
                     node = tree.child(node, "callee")?;
                 }
-                // What awaiting a registration function resolves to is not read: it may register.
-                "AwaitExpression" if self.holds_api(tree.child(node, "argument")?) => {
-                    steps.reverse();
-                    return Some((Origin::Wrapper(Reach::Tasks), Provenance::Wrapper, steps));
-                }
                 "TaggedTemplateExpression" => {
                     steps.push(Step::Call);
                     node = tree.child(node, "tag")?;
                 }
-                _ => return None,
+                _ => return self.flow_root(node, steps),
             }
         }
     }
@@ -916,41 +932,91 @@ impl<'s> Module<'s> {
     }
 
     /// What applying `steps` to a root of `origin` reads as ([`Applied`]); `None` when a step
-    /// leaves the API (a call of a registration function, a namespace member that is not one).
+    /// leaves the API (a call of a registration function, a member that is not a registration
+    /// one) or reads a member the value does not have, which is `undefined`.
     fn apply(&self, origin: Origin, steps: &[Step]) -> Option<Applied> {
+        let dialect = self.setting.dialect;
         let mut registers = match origin {
             Origin::Api(registers) => Some(registers),
             _ => None,
         };
-        let mut pending = false;
-        // A table's call returns a plain function, which carries no registration members.
+        // The builder chained last and not called yet (`each` in `test.each`).
+        let mut pending: Option<&str> = None;
+        // A table's call returns a function with only `name` and `length` (measured on Vitest
+        // 3.2.7, 4.1.12 and 5.1.0, for `test` and `describe`).
         let mut tabled = false;
         let mut start = 0;
+        let holder = |registers: Option<Registers>, pending: Option<&str>, tabled: bool| match (
+            registers, pending,
+        ) {
+            (None, _) => matches!(origin, Origin::Namespace).then_some(Holder::Namespace),
+            // A builder not called yet has a function's members only (`each`, `skipIf`, `runIf`,
+            // `extend`, `scoped`; measured on Vitest 3.2.7, 4.1.12 and 5.1.0).
+            (Some(_), Some(_)) => Some(Holder::Leaf),
+            (Some(_), None) if tabled => Some(Holder::Rows),
+            (Some(Registers::Test), None) => Some(Holder::Test),
+            (Some(Registers::Suite), None) => Some(Holder::Suite),
+            (Some(Registers::Bench), None) => Some(Holder::Bench),
+            (Some(Registers::Hook(_)), None) => Some(Holder::Leaf),
+        };
         for (index, step) in steps.iter().enumerate() {
+            if let (Step::Member(name), Some(kind)) = (step, holder(registers, pending, tabled)) {
+                match dialect.presence(kind, name, self.setting.major) {
+                    // A benchmark through a member `bench` lacks stays a site: it throws while
+                    // the file loads, and the corpus refuses every benchmark there for it.
+                    Presence::Absent if kind == Holder::Bench => {}
+                    Presence::Absent => return None,
+                    Presence::Unresolved => {
+                        return Some(Applied {
+                            registers,
+                            pending: false,
+                            start,
+                            evaluated: false,
+                            holder: None,
+                            unresolved: true,
+                        })
+                    }
+                    // A member the value has that is neither a registration one nor one calling
+                    // the function itself (`test.fn`, `test.toString`) leaves the API.
+                    Presence::Present
+                        if kind != Holder::Namespace
+                            && !INVOKERS.contains(name)
+                            && dialect.chain_member(name).is_none()
+                            && !(kind == Holder::Test && dialect.test_member(name).is_some()) =>
+                    {
+                        return None
+                    }
+                    Presence::Present => {}
+                }
+            }
             match step {
                 Step::Member(name) if registers.is_none() => registers = Some(self.api(name)?),
-                Step::Member(name) if !pending && !tabled && registers == Some(Registers::Test) => {
-                    if let Some(member) = self.setting.dialect.test_member(name) {
+                Step::Member(name)
+                    if pending.is_none() && !tabled && registers == Some(Registers::Test) =>
+                {
+                    if let Some(member) = dialect.test_member(name) {
                         registers = Some(member);
                         start = index + 1;
                     } else {
-                        tabled = matches!(
-                            self.setting.dialect.chain_member(name),
-                            Some(Chain::Table(_))
-                        );
-                        pending = self.builds(name);
+                        tabled = matches!(dialect.chain_member(name), Some(Chain::Table(_)));
+                        pending = self.builds(name).then_some(*name);
                     }
                 }
-                Step::Member(name) => pending = self.builds(name),
-                Step::Call if pending => pending = false,
+                Step::Member(name) => {
+                    tabled |= matches!(dialect.chain_member(name), Some(Chain::Table(_)));
+                    pending = self.builds(name).then_some(*name);
+                }
+                Step::Call if pending.is_some() => pending = None,
                 Step::Call => return None,
             }
         }
         Some(Applied {
             registers,
-            pending,
+            pending: pending.is_some(),
             start,
             evaluated: false,
+            holder: holder(registers, pending, tabled),
+            unresolved: false,
         })
     }
 
@@ -1006,20 +1072,11 @@ impl<'s> Module<'s> {
 
     /// [`Self::value_origin`] of `node` from its walked [`Self::chain`].
     fn chained_origin(&self, node: NodeId, origin: Origin, steps: &[Step]) -> Option<Origin> {
-        if let Some(reach) = origin.reach() {
-            if matches!(origin, Origin::Derived(_)) && steps.is_empty() {
-                return Some(origin);
-            }
-            // An alias of the wrapper keeps its reach; anything derived from it may register tests.
-            let reach = if steps.is_empty() {
-                reach
-            } else {
-                Reach::Tasks
-            };
-            return Some(Origin::Wrapper(reach));
+        if let Some(applied) = wrapper_applied(origin, steps) {
+            return Some(applied);
         }
         let applied = self.apply_at(node, origin, steps)?;
-        if applied.evaluated {
+        if applied.evaluated || applied.unresolved {
             return Some(Origin::Wrapper(Reach::Tasks));
         }
         Some(applied.registers.map_or(Origin::Namespace, Origin::Api))
@@ -1033,9 +1090,12 @@ impl<'s> Module<'s> {
             return None;
         }
         let Applied {
-            start, evaluated, ..
+            start,
+            evaluated,
+            unresolved,
+            ..
         } = self.apply_at(callee, origin, &steps)?;
-        if evaluated || start == 0 {
+        if evaluated || unresolved || start == 0 {
             return None;
         }
         self.member_at(callee, steps.len() - start)
@@ -1072,7 +1132,12 @@ impl<'s> Module<'s> {
             pending,
             start,
             evaluated,
+            unresolved,
+            ..
         } = self.apply_at(callee, origin, &steps)?;
+        if unresolved {
+            return Some((SiteKind::Wrapper(Reach::Tasks), chain, Provenance::Wrapper));
+        }
         let registers = registers?;
         if pending || chain.last().is_some_and(|last| self.inert(last)) {
             return None;
@@ -1102,21 +1167,30 @@ impl<'s> Module<'s> {
                 continue;
             };
             let api = self.setting.dialect.is_api_module(source);
-            let wrapper_exports = if api {
+            let file = if api {
                 None
             } else {
                 modules
                     .sources
                     .resolve(self.path, source, self.setting.root)
-                    .map(|file| modules.exports(&file, self.setting, depth + 1))
             };
+            let wrapper_exports = file
+                .as_ref()
+                .map(|file| modules.exports(file, self.setting, depth + 1));
+            let summaries = file
+                .as_ref()
+                .and_then(|file| modules.recorded_summaries(file, self.setting).cloned())
+                .unwrap_or_default();
             if wrapper_exports
                 .as_ref()
                 .is_some_and(|exports| exports.contains_key(ON_LOAD))
             {
                 self.loads.push(tree.span(statement).start);
             }
-            if !api && wrapper_exports.as_ref().is_none_or(HashMap::is_empty) {
+            let helpers = summaries
+                .values()
+                .any(|summary| summary.returns.is_some() || !summary.roots.is_empty());
+            if !api && !helpers && wrapper_exports.as_ref().is_none_or(HashMap::is_empty) {
                 continue;
             }
             for specifier in tree.list(statement, "specifiers").into_iter().flatten() {
@@ -1129,6 +1203,9 @@ impl<'s> Module<'s> {
                 let Some(symbol) = self.declares(local) else {
                     continue;
                 };
+                if !api {
+                    self.project_imports.push(symbol);
+                }
                 let name = match tree.kind(specifier) {
                     "ImportSpecifier" => match tree.child(specifier, "imported") {
                         Some(imported) => export_name(tree, imported),
@@ -1138,10 +1215,23 @@ impl<'s> Module<'s> {
                     _ => {
                         if api {
                             self.origins.insert(symbol, Origin::Namespace);
+                        } else if wrapper_exports.is_some() {
+                            self.namespaces.insert(symbol, summaries.clone());
                         }
                         continue;
                     }
                 };
+                // The summary only where it says more than the export: a mixed value or a chain.
+                if let Some(summary) = summaries.get(&name) {
+                    let exported = wrapper_exports
+                        .as_ref()
+                        .is_some_and(|exports| exports.contains_key(&name));
+                    if !(exported && summary.plain())
+                        && (!summary.roots.is_empty() || summary.returns.is_some())
+                    {
+                        self.imported.insert(symbol, summary.clone());
+                    }
+                }
                 self.imported_unreadable_fixture |= wrapper_exports
                     .as_ref()
                     .is_some_and(|exports| exports.contains_key(&unreadable_fixture_export(&name)));
@@ -1169,6 +1259,12 @@ impl<'s> Module<'s> {
                 }
             }
         }
+        let names = flow::step_names(
+            self.imported
+                .values()
+                .chain(self.namespaces.values().flat_map(HashMap::values)),
+        );
+        let _ = self.names.set(names);
         self.collect_aliases();
     }
 
@@ -1176,59 +1272,39 @@ impl<'s> Module<'s> {
     fn collect_aliases(&mut self) {
         let tree = self.tree;
         loop {
+            // Origins and wrappers may have changed in place since the last evaluation. A pass
+            // reads the facts held when it starts, so it runs again until it adds none.
+            self.flow.revise();
             let before = self.origins.clone();
+            let facts = self.facts();
+            self.flow.freeze();
             for node in tree.nodes() {
                 if tree.kind(node) != "VariableDeclarator" {
                     continue;
                 }
-                let (Some(id), Some(init)) = (tree.child(node, "id"), tree.child(node, "init"))
-                else {
+                let Some(id) = tree.child(node, "id") else {
                     continue;
                 };
-                let origin = self.value_origin(init);
-                if matches!(origin, Some(Origin::Api(_))) {
-                    self.values.insert(tree.inner(init));
-                }
-                match tree.kind(id) {
-                    "Identifier" => {
-                        let Some(symbol) = self.declares(id) else {
-                            continue;
-                        };
-                        if let Some(origin) = origin {
-                            self.alias(symbol, origin);
-                            self.aliased.insert(symbol);
+                // What each bound name holds is the value flow's, through its pattern.
+                for symbol in bound_symbols(tree, &self.parsed.scopes, id) {
+                    let value = self.value_of(symbol);
+                    let Some(origin) = self
+                        .resolve(&value)
+                        .and_then(|(origin, steps)| self.chained(origin, &steps))
+                    else {
+                        continue;
+                    };
+                    if matches!(origin, Origin::Api(_)) && tree.kind(id) == "Identifier" {
+                        if let Some(init) = tree.child(node, "init") {
+                            self.values.insert(tree.inner(init));
                         }
                     }
-                    // A destructured binding holds a member of the wrapper, which may register
-                    // tests whatever the wrapper registers when called.
-                    "ObjectPattern" | "ArrayPattern"
-                        if matches!(origin, Some(Origin::Wrapper(_) | Origin::Derived(_))) =>
-                    {
-                        for symbol in bound_symbols(tree, &self.parsed.scopes, id) {
-                            self.alias(symbol, Origin::Wrapper(Reach::Tasks));
-                        }
-                    }
-                    "ObjectPattern" if origin == Some(Origin::Namespace) => {
-                        for property in tree.list(id, "properties").into_iter().flatten() {
-                            let (Some(key), Some(value)) =
-                                (property_name(tree, property), tree.child(property, "value"))
-                            else {
-                                continue;
-                            };
-                            let Some(registers) = self.api(key) else {
-                                continue;
-                            };
-                            if tree.kind(value) == "Identifier" {
-                                if let Some(symbol) = self.declares(value) {
-                                    self.alias(symbol, Origin::Api(registers));
-                                }
-                            }
-                        }
-                    }
-                    _ => {}
+                    self.alias(symbol, origin);
+                    self.aliased.insert(symbol);
                 }
             }
-            if self.origins == before {
+            self.flow.thaw();
+            if self.origins == before && self.facts() == facts {
                 break;
             }
         }
@@ -1256,8 +1332,6 @@ impl<'s> Module<'s> {
             let found = self.scan();
             let reaches = ReachIndex::new(found.iter().map(|(_, span, kind, ..)| (*span, *kind)));
             let before = self.wrappers.clone();
-            // A new returner can make its callers return the API without changing a wrapper.
-            let returners = self.returners.len();
             // Vitest calls a suite factory with its `test` API, so a call through a parameter of a
             // suite callback may register tests the inventory cannot attribute.
             for symbol in self.suite_parameters(&found) {
@@ -1272,18 +1346,9 @@ impl<'s> Module<'s> {
                     *held = (*held).max(reach);
                 }
             }
-            // What a call of a function returning a registration value returns may register. A
-            // wrapper's result already may, so one keeps the reach of its own call.
-            for symbol in self.returns_registration() {
-                self.wrappers.entry(symbol).or_insert(Reach::Tasks);
-                self.returners.insert(symbol);
-            }
             let aliases = self.origins.clone();
             self.collect_aliases();
-            if self.wrappers == before
-                && self.origins == aliases
-                && self.returners.len() == returners
-            {
+            if self.wrappers == before && self.origins == aliases {
                 break;
             }
         }
@@ -1337,7 +1402,7 @@ impl<'s> Module<'s> {
 
     /// Every read of a registration function: of a binding that holds one, and, when free names
     /// are the API, of a free name the dialect registers with.
-    fn registration_reads(&self) -> impl Iterator<Item = NodeId> + '_ {
+    fn registration_reads(&self) -> impl Iterator<Item = NodeId> + use<'_, 's> {
         let tree = self.tree;
         let scopes = &self.parsed.scopes;
         let bound = self
@@ -1355,163 +1420,6 @@ impl<'s> Module<'s> {
                     .is_some_and(|name| self.setting.dialect.registration(name).is_some())
         });
         bound.chain(free)
-    }
-
-    /// Whether `node`'s value is seen here to be a registration function or the API's namespace, or
-    /// is what a call of a function returning one returns. A registration value must be read from
-    /// the framework's own binding (an import, a namespace member, a global) through members the
-    /// dialect knows: through a local alias, a conditional or another module's export the value is
-    /// not read here, and `test.name` is a string.
-    fn holds_api(&self, node: NodeId) -> bool {
-        let tree = self.tree;
-        let mut root = tree.inner(node);
-        // Only `await make()` holds the API through an `await`: a chain through one is a wrapper
-        // (`walk`), so the scan stops at the next and nested awaits stay linear.
-        if tree.kind(root) == "AwaitExpression" {
-            let Some(argument) = tree.child(root, "argument") else {
-                return false;
-            };
-            root = tree.inner(argument);
-        }
-        while let Some(next) = match tree.kind(root) {
-            "MemberExpression" => tree.child(root, "object"),
-            "CallExpression" => tree.child(root, "callee"),
-            "TaggedTemplateExpression" => tree.child(root, "tag"),
-            _ => None,
-        } {
-            root = tree.inner(next);
-        }
-        if tree.kind(root) != "Identifier" {
-            return false;
-        }
-        let symbol = self.read(root);
-        // One walk: each `await` in the chain asks this again, so walking twice doubles per level.
-        let chained = self.chain(node);
-        let value = chained
-            .as_ref()
-            .and_then(|(origin, _, steps)| self.chained_origin(node, *origin, steps));
-        if !matches!(value, Some(Origin::Api(_) | Origin::Namespace)) {
-            // Only the call itself: `make.name` and `make().name` are not what `make` returns.
-            let mut value = tree.inner(node);
-            if tree.kind(value) == "AwaitExpression" {
-                let Some(argument) = tree.child(value, "argument") else {
-                    return false;
-                };
-                value = tree.inner(argument);
-            }
-            return tree.kind(value) == "CallExpression"
-                && tree.child(value, "callee").map(|callee| tree.inner(callee)) == Some(root)
-                && symbol.is_some_and(|symbol| self.returners.contains(&symbol));
-        }
-        let own = symbol.is_none_or(|symbol| {
-            !self.aliased.contains(&symbol)
-                && matches!(
-                    self.origins.get(&symbol),
-                    Some(Origin::Api(_) | Origin::Namespace)
-                )
-        });
-        let dialect = &self.setting.dialect;
-        own && chained.is_some_and(|(_, _, steps)| {
-            steps.iter().all(|step| match step {
-                Step::Member(name) => {
-                    dialect.registration(name).is_some()
-                        || dialect.test_member(name).is_some()
-                        || dialect.chain_member(name).is_some()
-                }
-                Step::Call => true,
-            })
-        })
-    }
-
-    /// The symbols of functions whose returned value may hold a registration value: a read of one,
-    /// still a registration value after its member and call steps, within a `return` argument or
-    /// an arrow's expression body and no nested function, and reachable. Type positions are erased.
-    fn returns_registration(&self) -> Vec<SymbolId> {
-        let tree = self.tree;
-        let mut symbols = Vec::new();
-        for read in self.registration_reads() {
-            let mut value = read;
-            while let Some(parent) = tree.parent(value) {
-                let holds = |key| tree.child(parent, key) == Some(value);
-                match tree.kind(parent) {
-                    "MemberExpression" if holds("object") => value = parent,
-                    "CallExpression" if holds("callee") => value = parent,
-                    "TaggedTemplateExpression" if holds("tag") => value = parent,
-                    "ParenthesizedExpression"
-                    | "TSAsExpression"
-                    | "TSSatisfiesExpression"
-                    | "TSNonNullExpression"
-                    | "TSTypeAssertion"
-                    | "TSInstantiationExpression" => value = parent,
-                    _ => break,
-                }
-            }
-            let mut inner = value;
-            let function = tree.ancestors(value).find_map(|outer| {
-                let found = if tree.kind(outer) == "ReturnStatement" {
-                    tree.ancestors(outer).find(|&node| tree.is_function(node))
-                } else if tree.is_function(outer) {
-                    (tree.child(outer, "body") == Some(inner)
-                        && tree.kind(inner) != "BlockStatement")
-                        .then_some(outer)
-                } else {
-                    None
-                };
-                let stop = found.is_some()
-                    || tree.is_function(outer)
-                    || !self.may_evaluate_to(outer, inner);
-                inner = outer;
-                stop.then_some(found)
-            });
-            let Some(Some(function)) = function else {
-                continue;
-            };
-            if self.unreachable(read) || !self.holds_api(value) {
-                continue;
-            }
-            symbols.extend(
-                tree.child(function, "id")
-                    .and_then(|id| self.declares(id))
-                    .into_iter()
-                    .chain(self.declarator_symbol(function)),
-            );
-        }
-        symbols
-    }
-
-    /// Whether `outer`'s value may be, or hold, its child `inner`'s value. Operators that consume a
-    /// value (`typeof`, comparison, a call argument, a template, `+=`) and type positions do not.
-    fn may_evaluate_to(&self, outer: NodeId, inner: NodeId) -> bool {
-        let tree = self.tree;
-        let holds = |key| tree.child(outer, key) == Some(inner);
-        match tree.kind(outer) {
-            "ParenthesizedExpression"
-            | "TSAsExpression"
-            | "TSSatisfiesExpression"
-            | "TSNonNullExpression"
-            | "TSTypeAssertion"
-            | "TSInstantiationExpression"
-            | "AwaitExpression"
-            | "ArrayExpression"
-            | "ObjectExpression"
-            | "SpreadElement" => true,
-            "ConditionalExpression" => holds("consequent") || holds("alternate"),
-            "LogicalExpression" => {
-                holds("right")
-                    || (holds("left") && matches!(tree.text(outer, "operator"), Some("||" | "??")))
-            }
-            "SequenceExpression" => tree.list(outer, "expressions").last() == Some(&Some(inner)),
-            "Property" => holds("value"),
-            // `+=` and the other compound assignments compute a new value.
-            "AssignmentExpression" => {
-                holds("right")
-                    && matches!(
-                        tree.text(outer, "operator"),
-                        Some("=" | "||=" | "&&=" | "??=")
-                    )
-            }
-            _ => false,
-        }
     }
 
     /// Whether `symbol` may hold anything but what it was declared with: it is declared more than
@@ -2104,42 +2012,172 @@ impl<'s> Module<'s> {
     /// Registration functions read as values rather than called.
     fn escapes(&self) -> Vec<Escape> {
         let tree = self.tree;
-        let mut escapes = Vec::new();
-        for read in self.registration_reads() {
-            let mut current = read;
-            let escaped = loop {
-                let Some(parent) = tree.parent(current) else {
-                    break true;
-                };
-                let holds = |key| tree.child(parent, key) == Some(current);
-                match tree.kind(parent) {
-                    "MemberExpression" if holds("object") => current = parent,
-                    "ParenthesizedExpression"
-                    | "TSAsExpression"
-                    | "TSSatisfiesExpression"
-                    | "TSNonNullExpression" => current = parent,
-                    "CallExpression" if holds("callee") => break false,
-                    "TaggedTemplateExpression" if holds("tag") => break false,
-                    "VariableDeclarator" if holds("init") => break false,
-                    "ExportSpecifier" | "ExportDefaultDeclaration" | "UnaryExpression" => {
-                        break false
-                    }
-                    _ => break true,
-                }
-            };
-            if escaped {
+        self.escaping_reads()
+            .into_iter()
+            .map(|current| {
                 let span = tree.span(current);
-                escapes.push(Escape {
+                Escape {
                     offset: span.start,
                     text: self.source[span.start as usize..span.end as usize]
                         .chars()
                         .take(80)
                         .collect(),
-                });
+                }
+            })
+            .collect()
+    }
+
+    /// Every symbol a variable declaration's declarators bind, patterns included.
+    fn declared_bindings(&self, declaration: NodeId) -> Vec<SymbolId> {
+        let tree = self.tree;
+        tree.list(declaration, "declarations")
+            .into_iter()
+            .flatten()
+            .filter_map(|declarator| tree.child(declarator, "id"))
+            .flat_map(|id| bound_symbols(tree, &self.parsed.scopes, id))
+            .collect()
+    }
+
+    /// The outermost node of each registration read that is not called, declared, exported or
+    /// consumed by an operator, sorted by start.
+    fn escaping_reads(&self) -> Vec<NodeId> {
+        let tree = self.tree;
+        let mut escapes = Vec::new();
+        for read in self.registration_reads() {
+            escapes.extend(self.escape_from(read));
+        }
+        escapes.extend(self.escaping_helper_reads());
+        escapes.extend(self.imported_member_writes());
+        escapes.sort_by_key(|&node| tree.span(node).start);
+        escapes
+    }
+
+    /// Each write of a member of a binding imported from a project module (`state.on = true`):
+    /// what that module's summaries read of the member was read before the write.
+    fn imported_member_writes(&self) -> Vec<NodeId> {
+        let tree = self.tree;
+        let scopes = &self.parsed.scopes;
+        self.project_imports
+            .iter()
+            .flat_map(|&symbol| scopes.symbol(symbol).references.iter())
+            .filter_map(|reference| {
+                let mut top = reference.node?;
+                let mut members = 0;
+                let parent = loop {
+                    let parent = tree.outer_parent(top)?;
+                    if tree.kind(parent) == "MemberExpression"
+                        && tree
+                            .child(parent, "object")
+                            .map(|object| tree.inner(object))
+                            == Some(top)
+                    {
+                        top = parent;
+                        members += 1;
+                        continue;
+                    }
+                    break parent;
+                };
+                let target =
+                    |key| tree.child(parent, key).map(|child| tree.inner(child)) == Some(top);
+                let written = match tree.kind(parent) {
+                    "AssignmentExpression" => target("left"),
+                    "UpdateExpression" => true,
+                    "UnaryExpression" => tree.text(parent, "operator") == Some("delete"),
+                    _ => false,
+                };
+                (members > 0 && written).then_some(parent)
+            })
+            .collect()
+    }
+
+    /// Where the registration value read at `read` leaves what the value flow follows, if it
+    /// does: anywhere but a member read, a call or tag, a declarator, a re-export or an operand.
+    fn escape_from(&self, read: NodeId) -> Option<NodeId> {
+        let tree = self.tree;
+        let mut current = read;
+        loop {
+            #[cfg(test)]
+            CLIMB_STEPS.with(|steps| steps.set(steps.get() + 1));
+            let Some(parent) = tree.parent(current) else {
+                return Some(current);
+            };
+            let holds = |key| tree.child(parent, key) == Some(current);
+            match tree.kind(parent) {
+                "MemberExpression" if holds("object") => current = parent,
+                "ParenthesizedExpression"
+                | "TSAsExpression"
+                | "TSSatisfiesExpression"
+                | "TSNonNullExpression" => current = parent,
+                "CallExpression" if holds("callee") => return None,
+                "TaggedTemplateExpression" if holds("tag") => return None,
+                "VariableDeclarator" if holds("init") => return None,
+                // A value thrown away goes nowhere.
+                "ExportSpecifier"
+                | "ExportDefaultDeclaration"
+                | "UnaryExpression"
+                | "ExpressionStatement" => return None,
+                _ => return Some(current),
             }
         }
-        escapes.sort_by_key(|escape| escape.offset);
-        escapes
+    }
+
+    /// Reads of an imported helper that registers nothing but whose call returns a framework
+    /// value, other than as the callee of a call the value flow reads (`make()`), a re-export or
+    /// an operand, and calls whose result escapes ([`Module::escape_from`]). Only that call
+    /// carries the helper's return summary; an alias, an argument or a member such as `call`
+    /// hands the helper to code that may call it unseen.
+    fn escaping_helper_reads(&self) -> Vec<NodeId> {
+        let tree = self.tree;
+        let scopes = &self.parsed.scopes;
+        self.imported
+            .iter()
+            .filter(|(_, summary)| {
+                summary
+                    .returns
+                    .as_ref()
+                    .is_some_and(|returned| !returned.roots.is_empty())
+            })
+            .flat_map(|(&symbol, summary)| {
+                // A called wrapper root stands for a result the flow could not read (an async
+                // function's); only a registration value is followed past the call.
+                let framework = summary.returns.as_ref().is_some_and(|returned| {
+                    returned.roots.iter().any(|(root, steps)| {
+                        !matches!(root, super::Root::Wrapper(_)) || steps.is_empty()
+                    })
+                });
+                scopes
+                    .symbol(symbol)
+                    .references
+                    .iter()
+                    .map(move |reference| (reference, framework))
+            })
+            .filter_map(|(reference, framework)| reference.node.map(|read| (read, framework)))
+            .filter_map(|(read, framework)| {
+                let mut current = read;
+                let escaped = loop {
+                    let Some(parent) = tree.parent(current) else {
+                        break true;
+                    };
+                    let holds = |key| tree.child(parent, key) == Some(current);
+                    match tree.kind(parent) {
+                        "ParenthesizedExpression"
+                        | "TSAsExpression"
+                        | "TSSatisfiesExpression"
+                        | "TSNonNullExpression" => current = parent,
+                        // The call returns a framework value: it escapes where that value does.
+                        "CallExpression" if holds("callee") && framework => {
+                            return self.escape_from(parent)
+                        }
+                        "CallExpression" if holds("callee") => break false,
+                        "ExportSpecifier" | "ExportDefaultDeclaration" | "UnaryExpression" => {
+                            break false
+                        }
+                        _ => break true,
+                    }
+                };
+                escaped.then_some(current)
+            })
+            .collect()
     }
 
     /// Every name this module spells in an export of its own, value or type: whether one replaces
@@ -2164,14 +2202,10 @@ impl<'s> Module<'s> {
                     let Some(declaration) = tree.child(statement, "declaration") else {
                         continue;
                     };
-                    let bindings = tree
-                        .list(declaration, "declarations")
-                        .into_iter()
-                        .flatten()
-                        .filter_map(|declarator| tree.child(declarator, "id"))
-                        .flat_map(|id| bound_symbols(tree, &self.parsed.scopes, id));
                     names.extend(
-                        bindings.map(|symbol| self.parsed.scopes.symbol(symbol).name.clone()),
+                        self.declared_bindings(declaration)
+                            .into_iter()
+                            .map(|symbol| self.parsed.scopes.symbol(symbol).name.clone()),
                     );
                     names.extend(
                         tree.child(declaration, "id")
@@ -2280,24 +2314,19 @@ impl<'s> Module<'s> {
                         continue;
                     }
                     if let Some(declaration) = tree.child(statement, "declaration") {
-                        let ids: Vec<NodeId> = match tree.kind(declaration) {
-                            "FunctionDeclaration" => {
-                                tree.child(declaration, "id").into_iter().collect()
-                            }
-                            "VariableDeclaration" => tree
-                                .list(declaration, "declarations")
+                        // `export const { t } = ...` binds `t` through a pattern.
+                        let symbols: Vec<SymbolId> = match tree.kind(declaration) {
+                            "FunctionDeclaration" => tree
+                                .child(declaration, "id")
+                                .and_then(|id| self.declares(id))
                                 .into_iter()
-                                .flatten()
-                                .filter_map(|declarator| tree.child(declarator, "id"))
-                                .filter(|id| tree.kind(*id) == "Identifier")
                                 .collect(),
+                            "VariableDeclaration" => self.declared_bindings(declaration),
                             _ => Vec::new(),
                         };
-                        for id in ids {
-                            if let (Some(export), Some(name)) =
-                                (registers(self.declares(id)), tree.text(id, "name"))
-                            {
-                                add(name.to_owned(), export);
+                        for symbol in symbols {
+                            if let Some(export) = registers(Some(symbol)) {
+                                add(self.parsed.scopes.symbol(symbol).name.clone(), export);
                             }
                         }
                     }
@@ -2329,7 +2358,26 @@ impl<'s> Module<'s> {
                         })
                     })
                     .flatten();
-                    if let Some(export) = registers(symbol).or(anonymous.map(Export::Wrapper)) {
+                    // An expression binds no name: it is what its value is, and a registration
+                    // function read as a value in it may be that value (`cond ? test : noop`).
+                    // An expression is what the value flow says it is.
+                    let expression = (symbol.is_none() && !tree.is_function(declaration))
+                        .then(|| {
+                            let value = self.evaluate(declaration);
+                            let (origin, steps) = self.resolve(&value)?;
+                            match self.chained(origin, &steps)? {
+                                Origin::Api(registers) | Origin::Derived(registers) => {
+                                    Some(Export::Derived(registers))
+                                }
+                                Origin::Wrapper(reach) => Some(Export::Wrapper(reach)),
+                                Origin::Namespace => Some(Export::Namespace),
+                            }
+                        })
+                        .flatten();
+                    if let Some(export) = registers(symbol)
+                        .or(anonymous.map(Export::Wrapper))
+                        .or(expression)
+                    {
                         add("default".to_owned(), export);
                     }
                 }
@@ -2448,4 +2496,23 @@ fn specifiers(tree: &Tree, statement: NodeId) -> Vec<(NodeId, NodeId)> {
             ))
         })
         .collect()
+}
+
+#[cfg(test)]
+thread_local! {
+    static WALK_STEPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static CLIMB_STEPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Reset and return this thread's callee-chain walk and value-flow evaluation steps, for
+/// deterministic scaling regressions.
+#[cfg(test)]
+pub(super) fn take_walk_steps() -> usize {
+    WALK_STEPS.with(|steps| steps.replace(0))
+}
+
+/// Reset and return this thread's escape-climb steps: one per parent an escaping read climbs.
+#[cfg(test)]
+pub(super) fn take_climb_steps() -> usize {
+    CLIMB_STEPS.with(|steps| steps.replace(0))
 }
