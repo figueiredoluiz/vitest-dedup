@@ -5,6 +5,99 @@ use crate::lang::{Parsed, Span};
 
 const TEST: SiteKind = SiteKind::Registers(Registers::Test);
 
+/// Direct and aliased values keep one registration kind but retain their distinct chain boundary.
+#[test]
+fn callee_value_projections_preserve_direct_and_alias_records() {
+    let suite = SiteKind::Registers(Registers::Suite);
+    let wrapper = SiteKind::Wrapper(Reach::Tasks);
+    for (expression, kind, chain, member) in [
+        ("test", TEST, &[][..], None),
+        ("test.skip", TEST, &["skip"][..], None),
+        ("test.describe", suite, &[][..], Some("test.describe")),
+        (
+            "test.skip.describe",
+            suite,
+            &[][..],
+            Some("test.skip.describe"),
+        ),
+        (
+            "test.skip['describe']",
+            suite,
+            &[][..],
+            Some("test.skip['describe']"),
+        ),
+        (
+            "(test as any).describe",
+            suite,
+            &[][..],
+            Some("(test as any).describe"),
+        ),
+        ("test.each([[1]])", TEST, &["each", "()"][..], None),
+        (
+            "test.describe.each([[1]])",
+            suite,
+            &["each", "()"][..],
+            Some("test.describe"),
+        ),
+        (
+            "test.describe.each`n\n${1}`",
+            suite,
+            &["each", "()"][..],
+            Some("test.describe"),
+        ),
+        (
+            "test['skip'].describe",
+            wrapper,
+            &["skip", "describe"][..],
+            None,
+        ),
+    ] {
+        for alias in [false, true] {
+            let call = format!(
+                "{}('case', () => {{}})",
+                if alias { "held" } else { expression }
+            );
+            let binding = if alias {
+                format!("const held = {expression};\n")
+            } else {
+                String::new()
+            };
+            let source = format!("import {{ test }} from 'vitest';\n{binding}{call}");
+            let (found, parsed) = inventory_with_tree(&source, &[], false);
+            assert_eq!(found.sites.len(), 1, "{source}: {found:?}");
+            let site = &found.sites[0];
+            assert_eq!(site.kind, kind, "{source}");
+            assert_eq!(site.chain, if alias { &[][..] } else { chain }, "{source}");
+            assert_eq!(
+                site.provenance,
+                if kind == wrapper {
+                    Provenance::Wrapper
+                } else {
+                    Provenance::Direct
+                },
+                "{source}"
+            );
+            assert_eq!(site.title.as_deref(), Some("case"), "{source}");
+            assert_eq!(site.span, span(&source, &call), "{source}");
+            assert_eq!(
+                site.member.map(|id| parsed.tree.span(id)),
+                if alias {
+                    None
+                } else {
+                    member.map(|text| span(&source, text))
+                },
+                "{source}"
+            );
+            assert_eq!(
+                found.registration_values.len(),
+                usize::from(alias && kind != wrapper),
+                "{source}"
+            );
+            assert!(found.escapes.is_empty(), "{source}: {found:?}");
+        }
+    }
+}
+
 /// Equivalent spellings preserve the superseding member's exact anchor and the applied chain.
 #[test]
 fn structural_chain_spellings_keep_registration_records() {
