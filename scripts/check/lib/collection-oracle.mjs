@@ -18,6 +18,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'no
 import { tmpdir } from 'node:os'
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
+import { validateOwnedRecord } from './owned-records.mjs'
 import { defaultBinary, parseJsonl, runAnalyzerJsonl } from './run-analyzer.mjs'
 
 const LIB = dirname(fileURLToPath(import.meta.url))
@@ -342,12 +343,18 @@ export function collectWithAnalyzer(binary, root, dir) {
 
 /**
  * One analyzer run over `dir`, read three ways: tests and hooks by title (`analyzerView`),
- * registration sites (`siteView`) and exclusions (`exclusionView`).
+ * registration sites (`siteView`) and file exclusions (`exclusionView`).
+ * Owned cases that pin test exclusions also read the exact test records.
  */
-export function collectAnalyzer(binary, root, dir) {
+export function collectAnalyzer(binary, root, dir, { pinTestExclusions = false } = {}) {
   const records = analyzerRecords(binary, root, dir)
   const absolute = resolve(root, dir)
-  return { titles: analyzerView(records, absolute), sites: siteView(records, absolute), exclusions: exclusionView(records, absolute) }
+  return {
+    titles: analyzerView(records, absolute),
+    sites: siteView(records, absolute),
+    exclusions: exclusionView(records, absolute),
+    ...(pinTestExclusions && { testExclusions: testExclusionView(records, absolute) }),
+  }
 }
 
 /** The analyzer's JSONL records for `dir` with `--emit-test-fingerprints`; a directory of lookalikes yields none. */
@@ -399,6 +406,45 @@ export function exclusionView(records, absoluteDir) {
     exclusions.set(path, { reasons: [record.reason, ...record.otherReasons], testsExcluded: record.testsExcluded })
   }
   return exclusions
+}
+
+/** Declaration and row coordinates identify a test within its registering file. */
+export function testExclusionIdentity({ path, line, column, row, runtimeRow }) {
+  return JSON.stringify([path, line, column, row, runtimeRow])
+}
+
+/** Owned record counts and reported refusals by registering file. */
+export function testExclusionView(records, absoluteDir) {
+  const local = (path) => normalizePath(isAbsolute(path) ? relative(absoluteDir, path) : path)
+  const files = new Map()
+  for (const record of records) {
+    if (record.type !== 'test') continue
+    validateOwnedRecord(record)
+    if (record.engine !== 'owned') throw new Error('test exclusions need owned test records')
+    const { registrationFile, line, column, row, runtimeRow, iterations, exclusion, truncatedFields } = record
+    if ((registrationFile !== undefined && (typeof registrationFile !== 'string' || registrationFile === '')) ||
+        !(runtimeRow === null || (Number.isSafeInteger(runtimeRow) && runtimeRow >= 0)) ||
+        !Number.isSafeInteger(iterations) || iterations < 1 || !Array.isArray(truncatedFields)) {
+      throw new Error('owned test lacks its exclusion identity')
+    }
+    if (truncatedFields.includes('registrationFile') || (registrationFile === undefined && truncatedFields.includes('path'))) {
+      throw new Error('owned test has a truncated registering file')
+    }
+    const file = local(registrationFile ?? record.path)
+    if (!files.has(file)) files.set(file, { records: 0, excluded: [], occurrences: new Map(), ambiguous: false })
+    const view = files.get(file)
+    const entry = { path: local(record.path), line, column, row, runtimeRow, iterations, reason: exclusion }
+    const identity = testExclusionIdentity(entry)
+    view.records += 1
+    view.occurrences.set(identity, (view.occurrences.get(identity) ?? 0) + 1)
+    view.ambiguous ||= truncatedFields.includes('path') || exclusion === 'registered-elsewhere'
+    if (exclusion !== null) view.excluded.push(entry)
+  }
+  for (const [file, { records, excluded, occurrences, ambiguous }] of files) {
+    const unresolved = ambiguous || excluded.some((entry) => occurrences.get(testExclusionIdentity(entry)) > 1)
+    files.set(file, { records, excluded, ...(unresolved && { ambiguous: true }) })
+  }
+  return files
 }
 
 /** The `site` records among `records`, per file relative to `absoluteDir`. */

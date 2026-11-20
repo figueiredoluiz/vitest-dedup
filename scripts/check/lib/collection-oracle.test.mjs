@@ -2,12 +2,12 @@
 import assert from 'node:assert/strict'
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
 
 import { missingModuleStubs, wholeModuleImports } from './collection-oracle-stubs.mjs'
-import { analyzerRecordsOf, analyzerView, collectWithVitest, compareDirectory, declaredMajor, declaresVitest4, compareSites, installedMajor, configSource, exclusionView, oracleEnvironment, hookSite, matchKnown, minus, oracleBinary, oracleSetupError, ownConfig, siteView, vitestInstallError, vitestView } from './collection-oracle.mjs'
+import { analyzerRecordsOf, analyzerView, collectWithVitest, compareDirectory, declaredMajor, declaresVitest4, compareSites, installedMajor, configSource, exclusionView, oracleEnvironment, hookSite, matchKnown, minus, oracleBinary, oracleSetupError, ownConfig, siteView, testExclusionView, vitestInstallError, vitestView } from './collection-oracle.mjs'
 
 /** A file the probe collected cleanly, with `over` replacing any field. */
 const collected = (over = {}) => ({
@@ -29,6 +29,55 @@ const analyzed = ({ tests = {}, hooks = {}, excluded = [], unproven = {} } = {})
   hooks: new Map(Object.entries(hooks)),
   excluded: new Set(excluded),
   unproven: new Map(Object.entries(unproven)),
+})
+
+/** An excluded owned record with no body-comparison evidence. */
+const refusedTest = (over = {}) => ({
+  type: 'test', engine: 'owned', schemaVersion: '0.2',
+  path: 'helper.ts', line: 2, column: 3, title: 'same title',
+  row: null, runtimeRow: null, iterations: 1, comparable: false,
+  exclusion: 'order-dependent-state', traceComplete: false, ordinaryEvents: 0,
+  comparisonKeys: {
+    duplicate: null, crossFile: null, parameterization: null, similarity: null,
+    subsumption: null, name: null, rowClass: null, eventSet: null,
+  },
+  views: null, truncatedFields: [],
+  ...over,
+})
+
+test('test exclusions preserve declaration, caller, rows and iteration weight', () => {
+  const root = resolve('project')
+  const records = [0, 1, 2].map((runtimeRow) => refusedTest({
+    path: join(root, 'helpers', 'helper.ts'),
+    registrationFile: 'cases\\caller.test.ts',
+    row: runtimeRow % 2, runtimeRow, iterations: runtimeRow + 1,
+  }))
+  records.push(refusedTest({ ...records[0], registrationFile: 'other.test.ts' }))
+  const view = testExclusionView(records, root)
+  assert.deepEqual([...view.keys()], ['cases/caller.test.ts', 'other.test.ts'])
+  const entries = [
+    { path: 'helpers/helper.ts', line: 2, column: 3, row: 0, runtimeRow: 0, iterations: 1, reason: 'order-dependent-state' },
+    { path: 'helpers/helper.ts', line: 2, column: 3, row: 1, runtimeRow: 1, iterations: 2, reason: 'order-dependent-state' },
+    { path: 'helpers/helper.ts', line: 2, column: 3, row: 0, runtimeRow: 2, iterations: 3, reason: 'order-dependent-state' },
+  ]
+  assert.deepEqual(view.get('cases/caller.test.ts'), { records: 3, excluded: entries })
+  assert.deepEqual(view.get('other.test.ts'), { records: 1, excluded: entries.slice(0, 1) })
+})
+
+test('a test exclusion cannot claim an exact identity for colliding or truncated records', () => {
+  const record = refusedTest()
+  const comparable = {
+    ...record, title: 'another title', comparable: true, exclusion: null,
+    comparisonKeys: { ...record.comparisonKeys, duplicate: '0123456789abcdef', crossFile: '0123456789abcdef' },
+  }
+  const collision = testExclusionView([record, comparable], '/root').get(record.path)
+  assert.equal(collision.records, 2)
+  assert.equal(collision.excluded.length, 1)
+  assert.equal(collision.ambiguous, true)
+  const truncated = refusedTest({ registrationFile: 'caller.test.ts', truncatedFields: ['path'] })
+  assert.equal(testExclusionView([truncated], '/root').get('caller.test.ts').ambiguous, true)
+  assert.throws(() => testExclusionView([{ ...truncated, truncatedFields: ['registrationFile'] }], '/root'), /truncated registering file/)
+  assert.throws(() => testExclusionView([refusedTest({ runtimeRow: undefined })], '/root'), /lacks its exclusion identity/)
 })
 
 const kinds = (result) => result.disagreements.map((d) => `${d.kind} ${d.path} ${d.item}`)

@@ -127,13 +127,15 @@ function runCases(binary) {
   for (const oracleCase of cases) {
     const { dir } = oracleCase
     const vitest = collectVitest(ROOT, dir)
-    const { titles, sites, exclusions } = collectAnalyzer(binary, ROOT, dir)
+    const pinTestExclusions = Object.values(oracleCase.expected.files).some((entry) => entry.testExclusions !== undefined)
+    const { titles, sites, exclusions, testExclusions } = collectAnalyzer(binary, ROOT, dir, { pinTestExclusions })
     const judged = judgeCase(oracleCase, {
       vitest,
       located: compareSites(vitest, sites),
       titles: compareDirectory(vitest, titles),
       sites,
       exclusions,
+      testExclusions,
     })
     totals.failures.push(...judged.failures)
     totals.held.push(...judged.held)
