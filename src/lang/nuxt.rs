@@ -53,8 +53,10 @@ pub(super) fn resolve_file<F: FileSystem + Clone + 'static>(
     };
     // A fresh resolver prevents an absent-config cache entry from hiding this virtual file,
     // and avoids retaining a separate cache for every project in a long-lived process.
-    ResolverGeneric::new_with_file_system(fs, super::resolve::options())
-        .resolve_file(from, specifier)
+    let generated = ResolverGeneric::new_with_file_system(fs, super::resolve::options());
+    // Auto discovery skips I/O failures; validate the generated graph before selecting ownership.
+    generated.resolve_tsconfig(project.join("tsconfig.json"))?;
+    generated.resolve_file(from, specifier)
 }
 
 /// Oxc parses importers as specifiers: the question mark in a Windows verbatim prefix is a
@@ -100,8 +102,9 @@ fn project<F: FileSystem>(
     {
         // An existing user config remains authoritative even when it excludes this file or
         // could not be read by automatic discovery. No generated config overrides that choice.
-        match fs.symlink_metadata(&directory.join("tsconfig.json")) {
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        let config = directory.join("tsconfig.json");
+        match fs.symlink_metadata(&config) {
+            Err(error) if is_absent(fs, &config, &error) => {}
             _ => return Ok(None),
         }
         for name in CONFIG_NAMES {
@@ -130,11 +133,17 @@ fn project<F: FileSystem>(
     Ok(None)
 }
 
+/// Foreign metadata error kinds need independent absence evidence from the same source view.
+fn is_absent<F: FileSystem>(fs: &F, path: &Path, error: &io::Error) -> bool {
+    error.kind() == io::ErrorKind::NotFound
+        || matches!(fs.canonicalize(path), Err(error) if error.kind() == io::ErrorKind::NotFound)
+}
+
 /// Missing entries are ordinary absence; other source-authority failures stay errors.
 fn is_file<F: FileSystem>(fs: &F, path: &Path) -> io::Result<bool> {
     match fs.metadata(path) {
         Ok(metadata) => Ok(metadata.is_file()),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(error) if is_absent(fs, path, &error) => Ok(false),
         Err(error) => Err(error),
     }
 }

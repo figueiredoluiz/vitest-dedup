@@ -4,6 +4,97 @@ use oxc_resolver::FileSystemOs;
 
 const ALIASES: &str = r#"{"compilerOptions":{"paths":{"~/*":["../src/*"]}},"include":["../**/*"]}"#;
 
+/// A source authority whose metadata failures do not preserve native missing-file error kinds.
+#[derive(Clone)]
+struct ForeignMetadataErrors {
+    inner: FileSystemOs,
+    denied: Option<PathBuf>,
+}
+
+impl ForeignMetadataErrors {
+    /// Preserve a refusal for existing configuration while wrapping missing-entry errors.
+    fn metadata_result(&self, path: &Path, link: bool) -> io::Result<FileMetadata> {
+        if self.denied.as_deref() == Some(path) {
+            return Err(io::Error::other("configuration metadata refused"));
+        }
+        let result = if link {
+            self.inner.symlink_metadata(path)
+        } else {
+            self.inner.metadata(path)
+        };
+        result.map_err(|error| {
+            if error.kind() == io::ErrorKind::NotFound {
+                io::Error::other("foreign missing-file error")
+            } else {
+                error
+            }
+        })
+    }
+}
+
+impl FileSystem for ForeignMetadataErrors {
+    /// The default view has ordinary reads and foreign metadata errors.
+    fn new() -> Self {
+        Self {
+            inner: FileSystemOs::new(),
+            denied: None,
+        }
+    }
+    /// Source bytes are unchanged by metadata error translation.
+    fn read(&self, path: &Path) -> io::Result<Vec<u8>> {
+        self.inner.read(path)
+    }
+    /// Text reads preserve the real configuration's decoding errors.
+    fn read_to_string(&self, path: &Path) -> io::Result<String> {
+        self.inner.read_to_string(path)
+    }
+    /// File metadata retains foreign missing-file error kinds.
+    fn metadata(&self, path: &Path) -> io::Result<FileMetadata> {
+        self.metadata_result(path, false)
+    }
+    /// Link metadata retains foreign missing-file error kinds too.
+    fn symlink_metadata(&self, path: &Path) -> io::Result<FileMetadata> {
+        self.metadata_result(path, true)
+    }
+    /// Link targets stay under the original source authority.
+    fn read_link(&self, path: &Path) -> Result<PathBuf, ResolveError> {
+        self.inner.read_link(path)
+    }
+    /// Canonical identity remains an independent source-authority result.
+    fn canonicalize(&self, path: &Path) -> io::Result<PathBuf> {
+        self.inner.canonicalize(path)
+    }
+}
+
+/// Absence needs source-authority evidence; an existing configuration refusal stays authoritative.
+#[test]
+fn foreign_metadata_failures_distinguish_absence_from_unreadable_user_configs() {
+    for user_config in [false, true] {
+        let (_dir, root) = fixture(&[
+            ("nuxt.config.ts", "export default {}"),
+            (".nuxt/tsconfig.json", ALIASES),
+            ("run.test.ts", ""),
+            ("src/helper.ts", ""),
+        ]);
+        let mut fs = ForeignMetadataErrors::new();
+        if user_config {
+            let config = root.join("tsconfig.json");
+            std::fs::write(&config, [0xff]).unwrap();
+            fs.denied = Some(config);
+        }
+        let resolver =
+            ResolverGeneric::new_with_file_system(fs.clone(), super::super::resolve::options());
+        let result = resolve_file(&resolver, &fs, &root.join("run.test.ts"), "~/helper", &root);
+        assert_eq!(result.is_ok(), !user_config, "{result:?}");
+        if let Ok(result) = result {
+            assert_eq!(
+                result.path().canonicalize().unwrap(),
+                root.join("src/helper.ts")
+            );
+        }
+    }
+}
+
 /// Build a fresh source view before any resolver can cache its configuration.
 fn fixture(files: &[(&str, &str)]) -> (tempfile::TempDir, PathBuf) {
     let dir = tempfile::tempdir().unwrap();
@@ -20,6 +111,14 @@ fn fixture(files: &[(&str, &str)]) -> (tempfile::TempDir, PathBuf) {
 fn resolved(root: &Path, from: &str, specifier: &str) -> Option<PathBuf> {
     super::super::resolve::resolve_file(&root.join(from), specifier, root)
         .map(|path| path.canonicalize().unwrap())
+}
+
+/// Keep typed discovery errors while giving each lookup a fresh configuration cache.
+fn resolve_direct(root: &Path, from: &str, specifier: &str) -> Result<Resolution, ResolveError> {
+    let fs = FileSystemOs::new();
+    let resolver =
+        ResolverGeneric::new_with_file_system(fs.clone(), super::super::resolve::options());
+    resolve_file(&resolver, &fs, &root.join(from), specifier, root)
 }
 
 /// Every supported Nuxt marker routes aliases through one shared discovery policy.
@@ -195,17 +294,7 @@ fn generated_config_failures_are_not_silently_retried_without_aliases() {
         if let Some((path, text)) = extra {
             std::fs::write(root.join(path), text).unwrap();
         }
-        let fs = FileSystemOs::new();
-        let resolver =
-            ResolverGeneric::new_with_file_system(fs.clone(), super::super::resolve::options());
-        let error = resolve_file(
-            &resolver,
-            &fs,
-            &root.join("run.test.ts"),
-            "./src/helper",
-            &root,
-        )
-        .unwrap_err();
+        let error = resolve_direct(&root, "run.test.ts", "./src/helper").unwrap_err();
         let gap = super::super::resolve::classify_tsconfig_gap(&error).unwrap();
         assert_eq!(
             matches!(gap, super::super::resolve::TsconfigGap::Absent(_)),
@@ -227,6 +316,44 @@ fn generated_config_failures_are_not_silently_retried_without_aliases() {
                     && (!absent || item.fix == "nuxt prepare")),
             "{missing:?}"
         );
+    }
+}
+
+/// Unreadable generated targets cannot disappear behind successful relative-import fallback.
+#[test]
+fn unreadable_generated_configuration_is_reported_for_relative_imports() {
+    for generated in [
+        "tsconfig.json",
+        "tsconfig.app.json",
+        "tsconfig.server.json",
+        "tsconfig.shared.json",
+        "tsconfig.node.json",
+    ] {
+        let (_dir, root) = fixture(&[
+            ("nuxt.config.ts", "export default {}"),
+            ("run.test.ts", ""),
+            ("src/helper.ts", ""),
+            (".nuxt/tsconfig.json", ALIASES),
+            (".nuxt/tsconfig.app.json", ALIASES),
+            (".nuxt/tsconfig.server.json", ALIASES),
+            (".nuxt/tsconfig.shared.json", ALIASES),
+            (".nuxt/tsconfig.node.json", ALIASES),
+        ]);
+        if generated == "tsconfig.json" {
+            for context in ["app", "server", "shared", "node"] {
+                std::fs::remove_file(root.join(format!(".nuxt/tsconfig.{context}.json"))).unwrap();
+            }
+        }
+        assert!(resolve_direct(&root, "run.test.ts", "./src/helper").is_ok());
+        let target = root.join(".nuxt").join(generated);
+        std::fs::write(&target, [0xff]).unwrap();
+        let error = resolve_direct(&root, "run.test.ts", "./src/helper").unwrap_err();
+        let Some(super::super::resolve::TsconfigGap::Unreadable(path)) =
+            super::super::resolve::classify_tsconfig_gap(&error)
+        else {
+            panic!("expected an unreadable generated configuration: {error}");
+        };
+        assert_eq!(path.canonicalize().unwrap(), target.canonicalize().unwrap());
     }
 }
 
@@ -341,6 +468,8 @@ fn canonical_windows_importers_preserve_generated_and_user_config_identity() {
             std::fs::write(root.join("tsconfig.json"), config).unwrap();
         }
         for spelling in [dir.path().to_owned(), root.clone()] {
+            let result = resolve_direct(&spelling, "run.test.ts", "~/helper");
+            assert!(result.is_ok(), "{spelling:?}: {result:?}");
             assert_eq!(
                 resolved(&spelling, "run.test.ts", "~/helper"),
                 Some(root.join("src/helper.ts"))

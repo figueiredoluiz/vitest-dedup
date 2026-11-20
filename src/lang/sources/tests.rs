@@ -23,13 +23,20 @@ fn nuxt_generated_config_never_borrows_working_tree_metadata() {
     )
     .unwrap();
     let sources = Sources::committed(catalog.clone());
+    let committed = sources
+        .resolve_file(&root.join("run.test.ts"), "~/helper", &root)
+        .unwrap();
     assert_eq!(
-        sources.resolve_file(&root.join("run.test.ts"), "~/helper", &root),
-        Some(root.join("committed/helper.ts"))
+        sources.relative(&committed, &root),
+        Some(PathBuf::from("committed").join("helper.ts"))
     );
+    let working = Sources::default();
+    let present = working
+        .resolve_file(&root.join("run.test.ts"), "~/helper", &root)
+        .unwrap();
     assert_eq!(
-        Sources::default().resolve_file(&root.join("run.test.ts"), "~/helper", &root),
-        Some(root.join("present/helper.ts"))
+        working.relative(&present, &root),
+        Some(PathBuf::from("present").join("helper.ts"))
     );
     catalog.ensure_readable().unwrap();
 
