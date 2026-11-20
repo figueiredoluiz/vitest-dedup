@@ -5,6 +5,208 @@ use crate::lang::{Parsed, Span};
 
 const TEST: SiteKind = SiteKind::Registers(Registers::Test);
 
+/// A type-only namespace never becomes a runtime alias; a runtime import remains a control.
+#[test]
+fn binding_transport_does_not_create_values_for_type_only_imports() {
+    let source = "import type * as erased from 'vitest';\n\
+                  import { test } from 'vitest';\n\
+                  const namespace = erased;\nconst { test: held } = namespace;\n\
+                  held('erased', () => {});\ntest('control', () => {})";
+    let (found, _) = records(
+        source,
+        &[],
+        false,
+        &[Record {
+            title: Some("control"),
+            ..Record::call("test('control', () => {})", "test('control'", TEST)
+        }],
+    );
+    assert!(found.registration_values.is_empty());
+    assert!(found.escapes.is_empty());
+}
+
+/// Alias depth and declaration order do not confuse separately resolved same-spelling bindings.
+#[test]
+fn binding_transport_keeps_scope_identity_across_alias_fixpoints() {
+    for expression in ["base", "(base as any)", "api.test"] {
+        for depth in 1..=3 {
+            for reverse in [false, true] {
+                let mut bindings: Vec<_> = (0..depth)
+                    .map(|index| {
+                        let input = if index == 0 {
+                            expression.to_owned()
+                        } else {
+                            format!("held{}", index - 1)
+                        };
+                        format!("const held{index} = {input};")
+                    })
+                    .collect();
+                if reverse {
+                    bindings.reverse();
+                }
+                let name = format!("held{}", depth - 1);
+                let call = format!("{name}('case', () => {{}})");
+                let source = format!(
+                    "import {{ test as base }} from 'vitest';\n\
+                     import * as api from 'vitest';\n{}\n\
+                     {{ const {name} = () => {{}}; {name}('shadow', () => {{}}); }}\n{call}",
+                    bindings.join("\n")
+                );
+                let (found, _) = records(
+                    &source,
+                    &[],
+                    false,
+                    &[Record {
+                        title: Some("case"),
+                        ..Record::call(&call, &call, TEST)
+                    }],
+                );
+                assert_eq!(found.registration_values.len(), depth, "{source}");
+                assert!(found.escapes.is_empty(), "{source}: {found:?}");
+            }
+        }
+    }
+}
+
+/// Namespace projections transport the recorded uncertainty through subsequent aliases.
+#[test]
+fn binding_transport_preserves_write_and_redeclaration_uncertainty() {
+    for (binding, uncertain, escaped) in [
+        ("const namespace = api;", false, None),
+        (
+            "type namespace = number; const namespace = api;",
+            false,
+            None,
+        ),
+        ("const namespace = api; interface namespace {}", false, None),
+        (
+            "let namespace = api; namespace = other;",
+            true,
+            Some("namespace = other"),
+        ),
+        (
+            "let namespace = api; namespace ||= other;",
+            true,
+            Some("namespace ||= other"),
+        ),
+        ("var namespace = api; var namespace = other;", true, None),
+    ] {
+        let source = format!(
+            "import * as api from 'vitest';\n\
+             import {{ test as control }} from 'vitest';\n{binding}\n\
+             const projected = namespace.test;\nconst held = projected;\n\
+             held('case', () => {{}});\ncontrol('control', () => {{}})"
+        );
+        let (found, _) = records(
+            &source,
+            &[],
+            false,
+            &[
+                Record {
+                    title: Some("case"),
+                    provenance: if uncertain {
+                        Provenance::Wrapper
+                    } else {
+                        Provenance::Direct
+                    },
+                    ..Record::call(
+                        "held('case', () => {})",
+                        "held(",
+                        if uncertain {
+                            SiteKind::Wrapper(Reach::Tasks)
+                        } else {
+                            TEST
+                        },
+                    )
+                },
+                Record {
+                    title: Some("control"),
+                    ..Record::call("control('control', () => {})", "control(", TEST)
+                },
+            ],
+        );
+        assert_eq!(
+            found.registration_values.len(),
+            if uncertain { 0 } else { 2 },
+            "{source}"
+        );
+        assert_eq!(
+            found.escapes.len(),
+            usize::from(escaped.is_some()),
+            "{source}"
+        );
+        if let Some(anchor) = escaped {
+            assert_eq!(found.escapes[0].text, "namespace", "{source}");
+            assert_eq!(found.escapes[0].offset, offset(&source, anchor), "{source}");
+        }
+    }
+}
+
+/// Pattern bindings retain conservative wrapper reach without widening namespace projection.
+#[test]
+fn binding_transport_distinguishes_wrapper_patterns_from_namespace_patterns() {
+    let helper = "import { beforeEach } from 'vitest';\n\
+                  export function setup() { beforeEach(() => {}) }";
+    for pattern in [
+        "{ test: held }",
+        "[held]",
+        "{ nested: { test: held } }",
+        "{ test: held = fallback }",
+        "{ ...held }",
+        "[, ...held]",
+    ] {
+        let source = format!(
+            "import {{ setup }} from './setup';\n\
+             const bare = setup;\nconst {pattern} = setup;\n\
+             bare();\nheld('case', () => {{}})"
+        );
+        let (found, _) = records(
+            &source,
+            &[("setup.ts", helper)],
+            false,
+            &[
+                Record {
+                    provenance: Provenance::Wrapper,
+                    ..Record::call("bare()", "bare()", SiteKind::Wrapper(Reach::Hooks))
+                },
+                Record {
+                    title: Some("case"),
+                    provenance: Provenance::Wrapper,
+                    ..Record::call(
+                        "held('case', () => {})",
+                        "held(",
+                        SiteKind::Wrapper(Reach::Tasks),
+                    )
+                },
+            ],
+        );
+        assert!(found.registration_values.is_empty());
+        assert!(found.escapes.is_empty(), "{source}: {found:?}");
+
+        // Only a shallow, non-defaulted static property transports a namespace API member.
+        let source = format!(
+            "import * as api from 'vitest';\n\
+             const {pattern} = api;\nheld('case', () => {{}});\n\
+             api.test('control', () => {{}})"
+        );
+        let mut expected = Vec::new();
+        if pattern == "{ test: held }" {
+            expected.push(Record {
+                title: Some("case"),
+                ..Record::call("held('case', () => {})", "held(", TEST)
+            });
+        }
+        expected.push(Record {
+            title: Some("control"),
+            chain: &["test"],
+            ..Record::call("api.test('control', () => {})", "test('control'", TEST)
+        });
+        let (found, _) = records(&source, &[], false, &expected);
+        assert!(found.registration_values.is_empty());
+        assert!(found.escapes.is_empty(), "{source}: {found:?}");
+    }
+}
+
 /// Direct and aliased values keep one registration kind but retain their distinct chain boundary.
 #[test]
 fn callee_value_projections_preserve_direct_and_alias_records() {
@@ -207,6 +409,7 @@ fn records(
     expected: &[Record<'_>],
 ) -> (Inventory, Parsed) {
     let (found, parsed) = inventory_with_tree(source, files, globals);
+    assert_eq!(parsed.parse_errors, 0, "{source}");
     assert_eq!(found.sites.len(), expected.len(), "{:#?}", found.sites);
     for (site, want) in found.sites.iter().zip(expected) {
         assert_eq!(site.span, span(source, want.call), "{}", want.call);
