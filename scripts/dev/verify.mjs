@@ -697,23 +697,75 @@ export function installHooks(root) {
 }
 
 /**
+ * Run the original hook driver through Wings, retaining its immutable Git blob and ref input.
+ * The wrapper supplies Git objects/index and enforces source freshness; failures never fall back.
+ * @param {string} root Repository checkout on the Mac.
+ * @param {string} driver Staged/proposed driver loaded by the shell hook.
+ * @param {string[]} args Hook mode followed by Git's optional remote arguments.
+ * @param {string} input Original selected pre-push ref input, or empty for pre-commit.
+ * @param {object} [options] Caller environment and subprocess adapter.
+ * @returns {void}
+ */
+export function runWingsHook(root, driver, args, input, { env = process.env, spawn = spawnSync } = {}) {
+  const blob = git(root, ['hash-object', driver], env)
+  const tree = args[0] === 'pre-commit' ? git(root, ['write-tree'], env) : ''
+  const candidates = args[0] === 'pre-push' ? pushUpdates(input).flatMap(update => [update.revision, ...update.remotes]) : []
+  const commits = [...new Set(candidates)].filter(sha => {
+    try { git(root, ['cat-file', '-e', `${sha}^{commit}`], env); return true }
+    catch { return false } // An old remote head absent locally keeps the existing scope fallback.
+  })
+  // Remote URLs can contain credentials. Only the mode and ref input are needed by the verifier.
+  const payload = JSON.stringify([[args[0]], input])
+  const bootstrap = `
+import { execFileSync, spawnSync } from 'node:child_process'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+const [blob, tree, payload] = process.argv.slice(1)
+const git = args => execFileSync('git', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+if (tree && git(['write-tree']).trim() !== tree) throw new Error('Wings staged tree differs from the hook candidate')
+const source = git(['cat-file', 'blob', blob])
+const work = mkdtempSync(join(tmpdir(), 'vitest-dedup-wings-driver-'))
+try {
+  const driver = join(work, 'verify.mjs')
+  writeFileSync(driver, source)
+  const [args, input] = JSON.parse(payload)
+  const result = spawnSync(process.execPath, [driver, ...args], {
+    env: { ...process.env, VITEST_DEDUP_HOOK_RUNNER: 'local' }, input, stdio: ['pipe', 'inherit', 'inherit'],
+  })
+  if (result.error) throw result.error
+  process.exitCode = result.status ?? 1
+} finally { rmSync(work, { recursive: true, force: true }) }
+`
+  const result = spawn('wings-run', ['--cwd', root, '--timeout', '3600', ...commits.flatMap(sha => ['--git-revision', sha]), '--', 'node', '--input-type=module', '-e', bootstrap, blob, tree, payload], { cwd: root, env, stdio: 'inherit' })
+  if (result.error || result.status !== 0) throw new Error(`Wings hook failed: ${result.error?.message ?? result.status ?? result.signal}; no local fallback`)
+  if (tree && git(root, ['write-tree'], env) !== tree) throw new Error('Staged tree changed during Wings hook verification')
+}
+
+/**
  * Dispatch manual checks, staged/commit snapshot verification, or hook installation.
  * Manual modes check the checkout in its cache; hook modes check isolated exports under one lock,
  * building in `hook-snapshot` beneath that cache so no artifact crosses between a snapshot and
  * the checkout. Deletion-only pushes run no checks. Check logs are retained in the common Git
  * directory.
  * @param {string[]} [args] Mode followed by optional pre-push remote arguments.
- * @param {object} [options] Caller environment, ref input, check/print adapters, and root.
+ * @param {object} [options] Caller environment, ref input, check/print/remote adapters, and root.
  * @returns {void}
  * @throws {Error} If usage, ref input, snapshot/cache validation, or verification fails.
  */
-export function main(args = process.argv.slice(2), { env = process.env, input, check = runSteps, print = console.log, root = process.cwd() } = {}) {
+export function main(args = process.argv.slice(2), { env = process.env, input, check = runSteps, print = console.log, root = process.cwd(), remote = runWingsHook } = {}) {
   const [mode, ...rest] = args
   if (!['quick', 'fast', 'full', 'pre-commit', 'pre-push', 'install'].includes(mode) || (mode !== 'pre-push' && rest.length)) throw new Error('Usage: verify.mjs quick|fast|full|pre-commit|pre-push|install')
   root = resolve(git(root, ['rev-parse', '--show-toplevel'], env))
   if (mode === 'install') { print(`Hooks installed for this worktree: ${installHooks(root)}`); return }
-  const updates = mode === 'pre-push' ? pushUpdates(input ?? readFileSync(0, 'utf8')) : []
+  const refs = mode === 'pre-push' ? input ?? readFileSync(0, 'utf8') : ''
+  const updates = mode === 'pre-push' ? pushUpdates(refs) : []
   if (mode === 'pre-push' && !updates.length) { print('No commits to verify (deletion or up-to-date push).'); return }
+  if (mode === 'pre-commit' || mode === 'pre-push') {
+    const runner = env.VITEST_DEDUP_HOOK_RUNNER || 'local'
+    if (!['local', 'wings'].includes(runner)) throw new Error('VITEST_DEDUP_HOOK_RUNNER must be local or wings')
+    if (runner === 'wings') { remote(root, SELF, args, refs, { env }); return }
+  }
   const common = resolve(root, git(root, ['rev-parse', '--git-common-dir'], env))
   const cache = env.CARGO_TARGET_DIR ? resolve(root, env.CARGO_TARGET_DIR) : join(dirname(common), 'target')
   const logRoot = join(common, 'delivery-check-logs')

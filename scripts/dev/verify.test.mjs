@@ -4,11 +4,182 @@ import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, realpathSync,
 import { tmpdir } from 'node:os'
 import { basename, delimiter, dirname, join, resolve, sep } from 'node:path'
 import { test } from 'node:test'
-import { LANES, changedPaths, cleanEnvironment, crateLayout, rootModules, laneShare, pause, commands, hookCommands, hookScope, installHooks, main, pruneLogs, pushCommits, quickChange, quickCommands, quickRustTests, repositoryKey, runSteps, rustChanged, windowsSensitive, withLock, withNodeModules, withSnapshot, withTargetCache } from './verify.mjs'
+import { LANES, changedPaths, cleanEnvironment, crateLayout, rootModules, laneShare, pause, commands, hookCommands, hookScope, installHooks, main, pruneLogs, pushCommits, quickChange, quickCommands, quickRustTests, repositoryKey, runSteps, runWingsHook, rustChanged, windowsSensitive, withLock, withNodeModules, withSnapshot, withTargetCache } from './verify.mjs'
 import { coverage } from '../check/check-docstrings.mjs'
+
+// Fixture repositories stay local; Wings transport tests opt in explicitly below.
+process.env.VITEST_DEDUP_HOOK_RUNNER = 'local'
 
 const oid = 'a'.repeat(40)
 const zero = '0'.repeat(40)
+
+test('fixture checks stay local under an exported Wings runner', { skip: process.platform === 'win32' ? 'uses a POSIX Wings executable stub on the Mac/Wings host' : false }, () => fixture(root => {
+  const bin = join(root, 'bin')
+  const called = join(root, 'wings-called')
+  mkdirSync(bin)
+  writeFileSync(join(bin, 'wings-run'), `#!/bin/sh\ntouch '${called}'\nexit 99\n`, { mode: 0o755 })
+  const env = { ...process.env, VITEST_DEDUP_HOOK_RUNNER: 'wings', PATH: `${bin}${delimiter}${process.env.PATH}` }
+  delete env.NODE_TEST_CONTEXT // The child must start its own runner rather than reuse this worker.
+  const result = spawnSync(process.execPath, ['--test', '--test-reporter=tap', '--test-name-pattern=^hooks size jobs and test threads per lane', resolve('scripts/dev/verify.test.mjs')], {
+    env,
+    encoding: 'utf8', timeout: 30_000,
+  })
+  assert.equal(result.status, 0, result.stderr || result.stdout)
+  assert.match(result.stdout, /hooks size jobs and test threads per lane/)
+  assert.match(result.stdout, /# pass 1\b/)
+  assert.equal(existsSync(called), false, 'fixture checks submitted a Wings job')
+}))
+
+for (const mode of ['pre-commit', 'pre-push']) test(`Wings selection: ${mode} forwards the hook without running local checks`, () => fixture(root => {
+  const input = `refs/heads/topic ${git(root, 'rev-parse', 'HEAD')} refs/heads/topic ${zero}\n`
+  const args = mode === 'pre-push' ? [mode, 'origin', 'remote with spaces;literal'] : [mode]
+  let calls = 0
+  main(args, {
+    root, input, env: { ...process.env, VITEST_DEDUP_HOOK_RUNNER: 'wings' },
+    check() { assert.fail('The Wings hook ran local checks') }, print() {},
+    remote(where, driver, forwarded, refs, options) {
+      calls++
+      assert.equal(where, root)
+      assert.equal(realpathSync(driver), realpathSync(resolve('scripts/dev/verify.mjs')))
+      assert.deepEqual(forwarded, args)
+      assert.equal(refs, mode === 'pre-push' ? input : '')
+      assert.equal(options.env.VITEST_DEDUP_HOOK_RUNNER, 'wings')
+    },
+  })
+  assert.equal(calls, 1)
+}))
+
+test('Wings selection: unknown runner refuses instead of using local checks', () => fixture(root => {
+  assert.throws(() => main(['pre-commit'], {
+    root, env: { ...process.env, VITEST_DEDUP_HOOK_RUNNER: 'wing' },
+    check() { assert.fail('invalid selection ran checks') }, print() {},
+  }), /VITEST_DEDUP_HOOK_RUNNER/)
+}))
+
+test('Wings selection: deletion-only push does not submit a remote job', () => fixture(root => {
+  main(['pre-push'], {
+    root, input: `refs/heads/topic ${zero} refs/heads/topic ${oid}\n`,
+    env: { ...process.env, VITEST_DEDUP_HOOK_RUNNER: 'wings' }, print() {},
+    check() { assert.fail('deletion ran local checks') },
+    remote() { assert.fail('deletion submitted a job') },
+  })
+}))
+
+for (const mode of ['pre-commit', 'pre-push']) test(`Wings transport: ${mode} uses the original blob and preserves literal ref input`, () => fixture(root => {
+  const driver = join(root, 'loaded.mjs')
+  const source = `console.log(JSON.stringify({ args: process.argv.slice(2), runner: process.env.VITEST_DEDUP_HOOK_RUNNER, input: (await import('node:fs')).readFileSync(0, 'utf8'), driver: process.argv[1] }))\n`
+  writeFileSync(driver, source)
+  writeFileSync(join(root, 'driver.mjs'), source)
+  git(root, 'add', 'driver.mjs')
+  writeFileSync(join(root, 'driver.mjs'), 'throw new Error("unstaged driver ran")\n')
+  const proposed = git(root, 'rev-parse', 'HEAD')
+  const input = `refs/heads/a;literal ${proposed} refs/heads/b$literal ${zero}\n`
+  let calls = 0
+  runWingsHook(root, driver, [mode, 'origin', 'https://private:credential@example.invalid'], input, {
+    env: { ...process.env, VITEST_DEDUP_HOOK_RUNNER: 'wings' },
+    spawn(command, args, options) {
+      calls++
+      assert.equal(command, 'wings-run')
+      assert.deepEqual(args.slice(0, 4), ['--cwd', root, '--timeout', '3600'])
+      const commandIndex = args.indexOf('--') + 1
+      assert.deepEqual(args.slice(4, commandIndex - 1), mode === 'pre-push' ? ['--git-revision', proposed] : [])
+      assert.equal(args[commandIndex], 'node')
+      assert.equal(args.includes(driver), false, 'Mac temporary path must not be forwarded')
+      assert.equal(args.join(' ').includes('private:credential'), false)
+      const result = spawnSync(process.execPath, args.slice(commandIndex + 1), { cwd: root, env: options.env, encoding: 'utf8' })
+      assert.equal(result.status, 0, result.stderr)
+      const record = JSON.parse(result.stdout)
+      assert.deepEqual(record.args, [mode])
+      assert.equal(record.runner, 'local', 'remote driver must not dispatch another Wings job')
+      assert.equal(record.input, input)
+      assert.equal(existsSync(dirname(record.driver)), false, 'remote driver must be removed')
+      return result
+    },
+  })
+  assert.equal(calls, 1)
+}))
+
+test('Wings transport: explicit object inputs include an unreferenced old head and skip an unavailable one', () => fixture(root => {
+  const base = git(root, 'rev-parse', 'HEAD')
+  const old = commitChanges(root, { 'source.txt': 'old remote head\n' })
+  git(root, 'reset', '--hard', base)
+  const proposed = commitChanges(root, { 'source.txt': 'new proposed head\n' })
+  const input = `refs/heads/a ${proposed} refs/heads/a ${old}\nrefs/heads/b ${proposed} refs/heads/b ${oid}\n`
+  runWingsHook(root, join(root, 'source.txt'), ['pre-push'], input, {
+    spawn(_command, args) {
+      assert.deepEqual(args.slice(4, args.indexOf('--')), ['--git-revision', proposed, '--git-revision', old])
+      return { status: 0 }
+    },
+  })
+}))
+
+for (const conflict of ['index', 'blob', 'driver-failure']) test(`Wings transport: ${conflict} stops the hook`, () => fixture(root => {
+  const driver = join(root, 'driver.mjs')
+  writeFileSync(driver, 'process.exit(7)\n')
+  git(root, 'add', 'driver.mjs')
+  assert.throws(() => runWingsHook(root, driver, ['pre-commit'], '', {
+    spawn(_command, args) {
+      if (conflict === 'index') {
+        writeFileSync(join(root, 'source.txt'), 'changed index\n')
+        git(root, 'add', 'source.txt')
+      }
+      if (conflict === 'blob') args[9] = oid
+      const result = spawnSync(process.execPath, args.slice(6), { cwd: root, encoding: 'utf8' })
+      assert.notEqual(result.status, 0)
+      if (conflict === 'index') assert.match(result.stderr, /staged tree differs/)
+      if (conflict === 'blob') assert.match(result.stderr, /cat-file/)
+      return result
+    },
+  }), /Wings hook failed/)
+}))
+
+for (const result of [
+  { status: 1 }, { status: 3 }, { status: null, signal: 'SIGTERM' },
+  { status: null, error: new Error('wings-run not installed') },
+]) test(`Wings transport: ${result.error?.message ?? result.status ?? result.signal} never falls back locally`, () => fixture(root => {
+  let calls = 0
+  assert.throws(() => runWingsHook(root, join(root, 'source.txt'), ['pre-push'], '', {
+    spawn() { calls++; return result },
+  }), /Wings hook failed: .*no local fallback/)
+  assert.equal(calls, 1)
+}))
+
+test('Wings selection: an offload failure cannot fall through to local checks', () => fixture(root => {
+  assert.throws(() => main(['pre-commit'], {
+    root, env: { ...process.env, VITEST_DEDUP_HOOK_RUNNER: 'wings' }, print() {},
+    remote() { throw new Error('remote gate rejected') },
+    check() { assert.fail('failure ran local checks') },
+  }), /remote gate rejected/)
+}))
+
+test('Wings transport: changing the Mac index during a passing job invalidates it', () => fixture(root => {
+  assert.throws(() => runWingsHook(root, join(root, 'source.txt'), ['pre-commit'], '', {
+    spawn() {
+      writeFileSync(join(root, 'source.txt'), 'different staged candidate\n')
+      git(root, 'add', 'source.txt')
+      return { status: 0 }
+    },
+  }), /Staged tree changed/)
+}))
+
+for (const [mode, scanner] of [['pre-commit', 0], ['pre-commit', 9], ['pre-push', 0]]) test(`Wings shell hook: ${mode}, scanner ${scanner}`, { skip: process.platform === 'win32' && 'Wings CLI and shell stubs require a POSIX host' }, () => fixture(root => {
+  mkdirSync(join(root, 'scripts/dev'), { recursive: true })
+  writeFileSync(join(root, 'scripts/dev/verify.mjs'), readFileSync(resolve('scripts/dev/verify.mjs')))
+  git(root, 'add', 'scripts/dev/verify.mjs')
+  if (mode === 'pre-push') git(root, '-c', 'core.hooksPath=/dev/null', 'commit', '--quiet', '-m', 'fixture verifier')
+  withGitleaks(scanner, env => {
+    const bin = env.PATH.split(delimiter)[0]
+    writeFileSync(join(bin, 'wings-run'), '#!/bin/sh\necho "remote hook selected" >&2\nexit 7\n', { mode: 0o755 })
+    const result = spawnSync('sh', [resolve(`.githooks/${mode}`), 'origin', 'unused-url'], {
+      cwd: root, env: { ...env, VITEST_DEDUP_HOOK_RUNNER: 'wings' }, encoding: 'utf8',
+      input: `refs/heads/topic ${git(root, 'rev-parse', 'HEAD')} refs/heads/topic ${zero}\n`,
+    })
+    assert.notEqual(result.status, 0)
+    assert.equal(result.stderr.includes('remote hook selected'), scanner === 0)
+    assert.doesNotMatch(result.stdout, /Local check scope/)
+    if (scanner === 0) assert.match(result.stderr, /Wings hook failed: 7/)
+  })
+}))
 
 test('CI jobs consuming the docstring parser install locked dependencies before their tests', () => {
   const workflow = readFileSync(resolve('.github/workflows/ci.yml'), 'utf8')

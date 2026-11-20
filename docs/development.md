@@ -388,6 +388,22 @@ Full verification also needs `cargo-llvm-cov` and LLVM tools, as the coverage ga
 checkout's `node_modules` (`npm ci`), which the snapshot links in for the title harness. The hooks
 are local safeguards; CI remains authoritative and Git can bypass them.
 
+### Running hook checks on Wings
+
+On the Mac, in a checkout under `~/RemoteWings`, opt in with `VITEST_DEDUP_HOOK_RUNNER=wings` in the Git
+command's environment, or export it for the shell. The default (or explicit `local`) keeps checks
+on the current machine. Other values are rejected. Manual verification commands are unchanged.
+
+The staged secret scan still runs locally before pre-commit submits anything. The verifier then
+uses `wings-run` with its normal queue, limits, synchronized Git objects/index and freshness guard.
+It loads the staged/proposed driver's original Git blob, checks the staged tree for pre-commit,
+and runs the same snapshot checks remotely. Git delivery and credentials stay local; remote URLs
+are not forwarded. A missing wrapper, failed job or stale result blocks the hook without local
+fallback. Deletion-only pushes submit no job. Install the required dependencies on Wings first;
+offloading does not install them or replace Windows runtime validation with Linux results.
+The installed Wings client must support `--git-revision`: pre-push explicitly transfers proposed
+commits and locally available old remote heads, including commits not reachable from local refs.
+
 ## Logs, locks and caches
 
 - Commands run sequentially with complete output saved under the common Git directory's
