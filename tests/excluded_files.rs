@@ -398,13 +398,6 @@ fn an_import_leaving_the_root_leads_the_helper_refusal_it_causes() {
         "import { run } from '@out/target';\nrun();\n",
     );
     let run = analyze(&root, &[]);
-    if cfg!(windows) {
-        // The Windows resolver cannot follow this alias from its canonical importer. The next
-        // core consequently has no local registration to attach the confinement fact to; the
-        // resolver's platform-specific tests pin that behavior.
-        assert!(run.json["excludedFiles"].as_array().unwrap().is_empty());
-        return;
-    }
     let (reason, others): (&str, &[&str]) = ("import-outside-root", &[]);
     assert_listed(
         &run,

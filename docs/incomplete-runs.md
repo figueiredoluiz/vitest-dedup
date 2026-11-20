@@ -41,7 +41,7 @@ a `fix` and `unresolvedImports`, and the terminal and HTML banners print it as a
 | `kind` | Reported when | `fix` |
 | --- | --- | --- |
 | `tsconfig-extends` | A tsconfig's `extends` target does not exist. Nothing under that tsconfig then resolves, relative imports included. | `nuxt prepare` for a path under `.nuxt` in a project with a `nuxt.config.*` or a `nuxt` dependency; the install command for a package target; otherwise `generate or restore this file`. |
-| `tsconfig-unreadable` | The target exists but is not valid JSON, or a generated Nuxt target cannot be read. An empty file or one holding only comments loads as an empty config and is not reported; neither is a user root tsconfig that cannot be read at all, which automatic discovery skips. | `generate or restore this file`. |
+| `tsconfig-unreadable` | The target exists but is not valid JSON, or Nuxt fallback needs a generated target that cannot be read. An empty file or one holding only comments loads as an empty config and is not reported. Automatic discovery skips I/O failures in existing user-config graphs, including generated targets they extend or reference. | `generate or restore this file`. |
 | `node-modules` | A project's `package.json` lists dependencies, and an import of a package from a file in that project could not be resolved, where `node_modules` is missing or empty in that file's directory and in every parent directory. One entry per such project directory, with its own `path` (relative to the analyzed root, such as `packages/web/node_modules`), count and install command. `vitest`, `node:` and Node core module imports do not count, nor do imports spelled as something other than a package (relative and absolute paths, `#` imports, `~/` and `@/` aliases, URLs, drive paths). An alias written like a package (`@app/missing`) cannot be told apart by its spelling and does count. | `pnpm install`, `bun install`, `yarn install` or `npm ci` for the nearest `pnpm-lock.yaml`, `bun.lock`/`bun.lockb`, `yarn.lock` or `package-lock.json`; otherwise `install the dependencies`. |
 
 `unresolvedImports` counts the import resolutions that failed for that reason, once per analyzed
@@ -54,9 +54,10 @@ Projects without `extends` or Nuxt fallback do not need generated TypeScript con
 Missing installed dependencies are reported only for package-style imports, not relative ones.
 Only resolution failures are reported, so a tsconfig that is merely unusual is silent.
 
-Limits: tsconfig detection relies on what the resolver reports. Automatic discovery skips user
-tsconfigs that cannot be read because of an I/O error (invalid UTF-8, no read permission).
-Generated Nuxt configurations are loaded explicitly, so their I/O failures are reported.
+Limits: tsconfig detection relies on what the resolver reports. Automatic discovery skips I/O
+failures in existing user-config graphs (invalid UTF-8, no read permission), including generated
+targets reached through `extends` or references. Nuxt fallback loads its generated graph
+explicitly, so those I/O failures are reported when no user config prevents fallback.
 Windows verbatim disk and UNC importer prefixes are normalized for resolver lookup;
 file confinement still compares canonical identities. The failures are collected process-wide and
 drained once per run, so the reports describe one analysis per process.

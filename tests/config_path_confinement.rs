@@ -546,12 +546,8 @@ test('doubles three', () => { check(3) })\ntest('doubles three again', () => { c
     };
     write(&layout.root, "tsconfig.json", &config("../outside/*"));
     // The binary canonicalizes its root, which is a verbatim `\\?\` path on Windows, and the
-    // resolver does not apply tsconfig `paths` from such a path at all (see
-    // `tsconfig_alias_is_judged_from_canonical_paths`): the alias never resolves there, so nothing
-    // outside is read and there is nothing to refuse.
-    if !cfg!(windows) {
-        assert_refused(&run(&layout.root), "tsconfig paths out");
-    }
+    // same alias confinement contract applies to every platform.
+    assert_refused(&run(&layout.root), "tsconfig paths out");
     write(&layout.root, "tsconfig.json", &config("helpers/*"));
     assert_kept(&run(&layout.root), "tsconfig paths in");
 }

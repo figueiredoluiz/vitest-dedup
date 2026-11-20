@@ -329,31 +329,53 @@ fn unreadable_generated_configuration_is_reported_for_relative_imports() {
         "tsconfig.shared.json",
         "tsconfig.node.json",
     ] {
-        let (_dir, root) = fixture(&[
-            ("nuxt.config.ts", "export default {}"),
-            ("run.test.ts", ""),
-            ("src/helper.ts", ""),
-            (".nuxt/tsconfig.json", ALIASES),
-            (".nuxt/tsconfig.app.json", ALIASES),
-            (".nuxt/tsconfig.server.json", ALIASES),
-            (".nuxt/tsconfig.shared.json", ALIASES),
-            (".nuxt/tsconfig.node.json", ALIASES),
-        ]);
-        if generated == "tsconfig.json" {
-            for context in ["app", "server", "shared", "node"] {
-                std::fs::remove_file(root.join(format!(".nuxt/tsconfig.{context}.json"))).unwrap();
+        for user_config in [false, true] {
+            let (_dir, root) = fixture(&[
+                ("nuxt.config.ts", "export default {}"),
+                ("run.test.ts", ""),
+                ("src/helper.ts", ""),
+                (".nuxt/tsconfig.json", ALIASES),
+                (".nuxt/tsconfig.app.json", ALIASES),
+                (".nuxt/tsconfig.server.json", ALIASES),
+                (".nuxt/tsconfig.shared.json", ALIASES),
+                (".nuxt/tsconfig.node.json", ALIASES),
+            ]);
+            if generated == "tsconfig.json" {
+                for context in ["app", "server", "shared", "node"] {
+                    std::fs::remove_file(root.join(format!(".nuxt/tsconfig.{context}.json")))
+                        .unwrap();
+                }
+            }
+            if user_config {
+                std::fs::write(
+                    root.join("tsconfig.json"),
+                    if generated == "tsconfig.json" {
+                        LEGACY
+                    } else {
+                        CONTEXTS
+                    },
+                )
+                .unwrap();
+            }
+            assert!(resolve_direct(&root, "run.test.ts", "./src/helper").is_ok());
+            let target = root.join(".nuxt").join(generated);
+            std::fs::write(&target, [0xff]).unwrap();
+            let result = resolve_direct(&root, "run.test.ts", "./src/helper");
+            if user_config {
+                assert!(
+                    result.is_ok(),
+                    "existing user graph retains automatic I/O skipping: {result:?}"
+                );
+            } else {
+                let error = result.unwrap_err();
+                let Some(super::super::resolve::TsconfigGap::Unreadable(path)) =
+                    super::super::resolve::classify_tsconfig_gap(&error)
+                else {
+                    panic!("expected an unreadable generated configuration: {error}");
+                };
+                assert_eq!(path.canonicalize().unwrap(), target.canonicalize().unwrap());
             }
         }
-        assert!(resolve_direct(&root, "run.test.ts", "./src/helper").is_ok());
-        let target = root.join(".nuxt").join(generated);
-        std::fs::write(&target, [0xff]).unwrap();
-        let error = resolve_direct(&root, "run.test.ts", "./src/helper").unwrap_err();
-        let Some(super::super::resolve::TsconfigGap::Unreadable(path)) =
-            super::super::resolve::classify_tsconfig_gap(&error)
-        else {
-            panic!("expected an unreadable generated configuration: {error}");
-        };
-        assert_eq!(path.canonicalize().unwrap(), target.canonicalize().unwrap());
     }
 }
 

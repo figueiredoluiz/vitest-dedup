@@ -1,9 +1,9 @@
 //! Nuxt's generated TypeScript configuration, without evaluating project code.
 
+use crate::confine::ordinary_path as resolver_path;
 use oxc_resolver::{FileMetadata, FileSystem, Resolution, ResolveError, ResolverGeneric};
-use std::borrow::Cow;
 use std::io;
-use std::path::{Component, Path, PathBuf, Prefix};
+use std::path::{Path, PathBuf};
 
 /// Nuxt's supported configuration filenames, used as project markers only.
 pub(crate) const CONFIG_NAMES: [&str; 5] = [
@@ -57,28 +57,6 @@ pub(super) fn resolve_file<F: FileSystem + Clone + 'static>(
     // Auto discovery skips I/O failures; validate the generated graph before selecting ownership.
     generated.resolve_tsconfig(project.join("tsconfig.json"))?;
     generated.resolve_file(from, specifier)
-}
-
-/// Oxc parses importers as specifiers: the question mark in a Windows verbatim prefix is a
-/// query separator. Preserve the disk/UNC identity in its ordinary absolute path spelling.
-fn resolver_path(path: &Path) -> Cow<'_, Path> {
-    let mut components = path.components();
-    let Some(Component::Prefix(prefix)) = components.next() else {
-        return Cow::Borrowed(path);
-    };
-    let mut ordinary = match prefix.kind() {
-        Prefix::VerbatimDisk(drive) => PathBuf::from(format!("{}:", char::from(drive))),
-        Prefix::VerbatimUNC(server, share) => {
-            let mut prefix = std::ffi::OsString::from(r"\\");
-            prefix.push(server);
-            prefix.push(r"\");
-            prefix.push(share);
-            PathBuf::from(prefix)
-        }
-        _ => return Cow::Borrowed(path),
-    };
-    ordinary.extend(components);
-    Cow::Owned(ordinary)
 }
 
 /// The closest recognized project, bounded by the analysis root and nested package boundaries.

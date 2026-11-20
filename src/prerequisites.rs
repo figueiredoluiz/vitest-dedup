@@ -116,6 +116,8 @@ fn governing_manifest(root: &Path, accepts: impl Fn(&str) -> bool) -> Option<(&P
 /// need the path's real components (the Nuxt check) use this; what is printed goes through
 /// `terminal_safe` first, since it is repository-controlled text.
 fn displayed(path: &Path, root: &Path) -> String {
+    let path = crate::confine::ordinary_path(path);
+    let root = crate::confine::ordinary_path(root);
     let relative = if path.is_absolute() {
         let shared = path
             .components()
@@ -440,6 +442,35 @@ mod tests {
         let hostile = root.join("x\u{202e}evil\u{2028}y\u{200b}z.json");
         let missing = assess(root, &gaps(vec![(TsconfigGap::Absent(hostile), 1)], 0));
         assert_eq!(missing[0].path, "xevilyz.json");
+    }
+
+    /// Missing targets use relative report paths across equivalent Windows disk and UNC prefixes.
+    #[cfg(windows)]
+    #[test]
+    fn windows_prerequisite_paths_share_the_roots_prefix_spelling() {
+        for (ordinary, verbatim) in [
+            (r"C:\project", r"\\?\C:\project"),
+            (r"\\server\share\project", r"\\?\UNC\server\share\project"),
+        ] {
+            for root in [ordinary, verbatim] {
+                for target in [ordinary, verbatim] {
+                    assert_eq!(
+                        displayed(
+                            &Path::new(target).join(".nuxt/tsconfig.json"),
+                            Path::new(root)
+                        ),
+                        ".nuxt/tsconfig.json"
+                    );
+                    assert_eq!(
+                        displayed(
+                            &Path::new(target).parent().unwrap().join("shared/base.json"),
+                            Path::new(root)
+                        ),
+                        "../shared/base.json"
+                    );
+                }
+            }
+        }
     }
 
     /// All three conditions are required for a `node_modules` entry.
