@@ -18,7 +18,8 @@
     "helper-write-control.test.ts": {
       "tasks": 3,
       "wrapperSites": [],
-      "next": {}
+      "next": {},
+      "testExclusions": { "records": 3, "excluded": [] }
     },
     "helper-write.test.ts": {
       "tasks": 3,
@@ -30,12 +31,28 @@
         "testsExcluded": 1
       },
       "nextToday": {},
+      "testExclusions": {
+        "records": 3,
+        "excluded": [
+          {
+            "path": "helper-write.test.ts",
+            "line": 16,
+            "column": 1,
+            "row": null,
+            "runtimeRow": null,
+            "iterations": 1,
+            "reason": "order-dependent-state"
+          }
+        ]
+      },
+      "testExclusionsToday": { "records": 3, "excluded": [] },
       "waitsOn": "writes inside a helper a test calls"
     },
     "method-mutation-control.test.ts": {
       "tasks": 3,
       "wrapperSites": [],
-      "next": {}
+      "next": {},
+      "testExclusions": { "records": 3, "excluded": [] }
     },
     "method-mutation.test.ts": {
       "tasks": 3,
@@ -47,6 +64,21 @@
         "testsExcluded": 1
       },
       "nextToday": {},
+      "testExclusions": {
+        "records": 3,
+        "excluded": [
+          {
+            "path": "method-mutation.test.ts",
+            "line": 11,
+            "column": 1,
+            "row": null,
+            "runtimeRow": null,
+            "iterations": 1,
+            "reason": "order-dependent-state"
+          }
+        ]
+      },
+      "testExclusionsToday": { "records": 3, "excluded": [] },
       "waitsOn": "mutation through methods and properties"
     },
     "sibling-suite-write-control.test.ts": {

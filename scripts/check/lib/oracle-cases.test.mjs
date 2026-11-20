@@ -46,6 +46,61 @@ test('the next-engine ledger is exact, and no record reads as {}', () => {
   assert.match(failures(passing({ next: { reasons: ['r'], testsExcluded: 1 } })), /next is \{\}, expected/)
 })
 
+const reader = { path: PATH, line: 8, column: 1, row: null, runtimeRow: null, iterations: 1, reason: 'order-dependent-state' }
+const testPin = (excluded) => ({ records: 2, excluded })
+
+test('the test exclusion pin catches a wrong reader with the same file reason and count', () => {
+  const next = { reasons: [reader.reason], testsExcluded: 1 }
+  const oracleCase = passing({ next, testExclusions: testPin([reader]) })
+  const view = (pin) => observed({
+    exclusions: new Map([[PATH, next]]),
+    testExclusions: new Map([[PATH, pin]]),
+  })
+  assert.deepEqual(judgeCase(oracleCase, view(testPin([reader]))).failures, [])
+  for (const wrong of [
+    testPin([{ ...reader, line: 5 }]),
+    testPin([{ ...reader, reason: 'unresolved-context' }]),
+    testPin([]),
+    { records: 1, excluded: [reader] },
+  ]) {
+    assert.match(failures(oracleCase, view(wrong)), /testExclusions is/)
+  }
+})
+
+test('an empty exclusion pin needs positive evidence of the expected test records', () => {
+  const oracleCase = passing({ testExclusions: testPin([]) })
+  assert.match(failures(oracleCase), /missing owned test records/)
+  assert.deepEqual(judgeCase(oracleCase, observed({ testExclusions: new Map([[PATH, testPin([])]]) })).failures, [])
+  const ambiguous = new Map([[PATH, { ...testPin([]), ambiguous: true }]])
+  assert.match(failures(oracleCase, observed({ testExclusions: ambiguous })), /ambiguous test identities/)
+})
+
+test('exclusion lists are order independent and held pins require a distinct current value', () => {
+  const other = { ...reader, column: 2 }
+  const target = testPin([reader, other])
+  const reversed = testPin([other, reader])
+  const view = (pin) => observed({ testExclusions: new Map([[PATH, pin]]) })
+  const oracleCase = passing({ testExclusions: target })
+  assert.deepEqual(judgeCase(oracleCase, view(reversed)).failures, [])
+  const held = passing({ testExclusions: target, testExclusionsToday: testPin([]), waitsOn: WAITS })
+  assert.deepEqual(expectedProblems(held.expected, 'c'), [])
+  assert.match(judgeCase(held, view(testPin([]))).held.join('\n'), /testExclusions waits on/)
+  assert.match(failures(held, view(reversed)), /testExclusions reached its target/)
+  const problems = (entry) => expectedProblems(passing(entry).expected, 'c').join('\n')
+  assert.match(problems({ testExclusionsToday: target }), /needs testExclusions/)
+  assert.match(problems({ testExclusions: testPin([reader, { ...reader, iterations: 2 }]) }), /repeated test identity/)
+  assert.match(problems({ testExclusions: target, testExclusionsToday: reversed, waitsOn: WAITS }), /nothing is held/)
+})
+
+test('an exclusion pin rejects impossible counts and entries without a test identity', () => {
+  const problems = (pin) => expectedProblems(passing({ testExclusions: pin }).expected, 'c').join('\n')
+  assert.match(problems(null), /testExclusions: must be an object/)
+  assert.match(problems({ records: 0, excluded: [] }), /records must be a positive count/)
+  assert.match(problems({ records: 1, excluded: [reader, { ...reader, line: 9 }] }), /excluded must list at most records refusals/)
+  assert.match(problems(testPin([{ ...reader, iterations: 0 }])), /needs a declaration, row coordinates, iterations and a test exclusion reason/)
+  assert.match(problems(testPin([{ ...reader, reason: 'registered-elsewhere' }])), /needs a declaration, row coordinates, iterations and a test exclusion reason/)
+})
+
 test('a held value holds while it is today, fails when the target is met, and fails on anything else', () => {
   const held = passing({ wrapperSites: ['hook-wrapper@3'], wrapperSitesToday: ['hook-wrapper@3', 'wrapper@4'], waitsOn: WAITS })
   const result = judgeCase(held, observed())

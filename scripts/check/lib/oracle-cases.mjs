@@ -17,19 +17,23 @@
 // its exact list of `wrapper@L` and `hook-wrapper@L`, which the site comparison cannot pin: it only
 // sees a task with no site. `next` is the analyzer's `{reasons, testsExcluded}` for the file,
 // `{}` for no record, with the file's primary reason first. `waitsOn` says in plain words what the
-// held value waits on.
+// held value waits on. A file may also pin `testExclusions` and `testExclusionsToday`.
+// Each is {records, excluded}: the number of owned test records and the complete list of
+// excluded declarations with path, line, column, row, runtimeRow, iterations and reason.
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
-import { matchKnown } from './collection-oracle.mjs'
+import { matchKnown, testExclusionIdentity } from './collection-oracle.mjs'
 
 /** The directory of the cases, relative to the checkout. */
 export const CASES_DIR = 'fixtures/oracle'
 
 const CASE_KEYS = new Set(['files', 'knownSites', 'knownTitles', 'blindUnderCurrent'])
-const FILE_KEYS = new Set(['oracle', 'tasks', 'wrapperSites', 'wrapperSitesToday', 'next', 'nextToday', 'waitsOn'])
+const FILE_KEYS = new Set(['oracle', 'tasks', 'wrapperSites', 'wrapperSitesToday', 'next', 'nextToday', 'testExclusions', 'testExclusionsToday', 'waitsOn'])
 const KNOWN_KEYS = new Set(['path', 'kind', 'item', 'reason', 'waitsOn'])
 const LEDGER_KEYS = new Set(['reasons', 'testsExcluded'])
+const TEST_PIN_KEYS = new Set(['records', 'excluded'])
+const TEST_EXCLUSION_KEYS = new Set(['path', 'line', 'column', 'row', 'runtimeRow', 'iterations', 'reason'])
 
 /** @returns {boolean} Whether `value` is an object, not an array. */
 const isObject = (value) => typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -55,6 +59,40 @@ function ledgerProblems(ledger, where) {
   return problems
 }
 
+/** Compare exclusion lists in identity order, independent of emission and ledger order. */
+function orderedTestPin({ records, excluded }) {
+  const order = (a, b) => a < b ? -1 : a > b ? 1 : 0
+  return { records, excluded: [...excluded].sort((a, b) => order(testExclusionIdentity(a), testExclusionIdentity(b))) }
+}
+
+/** An exact test pin needs a positive record count and one refusal per distinct identity. */
+function testPinProblems(pin, where) {
+  if (!isObject(pin)) return [`${where}: must be an object`]
+  const problems = unknownKeys(pin, TEST_PIN_KEYS, where)
+  const positive = (value) => Number.isSafeInteger(value) && value > 0
+  const row = (value) => value === null || (Number.isSafeInteger(value) && value >= 0)
+  if (!positive(pin.records)) problems.push(`${where}: records must be a positive count`)
+  if (!Array.isArray(pin.excluded) || pin.excluded.length > pin.records) {
+    return [...problems, `${where}: excluded must list at most records refusals`]
+  }
+  const seen = new Set()
+  for (const [index, test] of pin.excluded.entries()) {
+    const at = `${where}.excluded[${index}]`
+    if (!isObject(test) || typeof test.path !== 'string' || !test.path ||
+        !positive(test.line) || !positive(test.column) || !row(test.row) || !row(test.runtimeRow) ||
+        !positive(test.iterations) || typeof test.reason !== 'string' || !test.reason ||
+        test.reason === 'registered-elsewhere') {
+      problems.push(`${at}: needs a declaration, row coordinates, iterations and a test exclusion reason`)
+      continue
+    }
+    problems.push(...unknownKeys(test, TEST_EXCLUSION_KEYS, at))
+    const identity = testExclusionIdentity(test)
+    if (seen.has(identity)) problems.push(`${at}: repeated test identity`)
+    seen.add(identity)
+  }
+  return problems
+}
+
 /** Why the held `today` value of `field` cannot stand: it needs a reason to wait, and a difference. */
 function heldProblems(entry, field, today, where) {
   if (entry[today] === undefined) return []
@@ -71,7 +109,23 @@ function fileProblems(entry, where) {
   problems.push(...ledgerProblems(entry.next, `${where}.next`))
   if (entry.nextToday !== undefined) problems.push(...ledgerProblems(entry.nextToday, `${where}.nextToday`))
   problems.push(...heldProblems(entry, 'next', 'nextToday', where))
-  if (entry.waitsOn !== undefined && entry.nextToday === undefined && entry.wrapperSitesToday === undefined) {
+  const testProblems = []
+  for (const field of ['testExclusions', 'testExclusionsToday']) {
+    if (entry[field] !== undefined) testProblems.push(...testPinProblems(entry[field], `${where}.${field}`))
+  }
+  problems.push(...testProblems)
+  if (entry.testExclusionsToday !== undefined) {
+    if (entry.testExclusions === undefined) problems.push(`${where}: testExclusionsToday needs testExclusions`)
+    else if (testProblems.length === 0) {
+      problems.push(...heldProblems({
+        testExclusions: orderedTestPin(entry.testExclusions),
+        testExclusionsToday: orderedTestPin(entry.testExclusionsToday),
+        waitsOn: entry.waitsOn,
+      }, 'testExclusions', 'testExclusionsToday', where))
+    }
+  }
+  if (entry.waitsOn !== undefined && entry.nextToday === undefined &&
+      entry.wrapperSitesToday === undefined && entry.testExclusionsToday === undefined) {
     problems.push(`${where}: waitsOn without a held value`)
   }
   if (entry.oracle !== undefined) {
@@ -225,13 +279,15 @@ function judgeKnown(check, found, known, dir, out) {
  * @param {Map<string, {kind: string, line: number}[]>} view.sites The analyzer's sites by file.
  * @param {Map<string, {reasons: string[], testsExcluded: number}>} view.exclusions The next
  *   engine's excluded-file records by file.
+ * @param {Map<string, {records: number, excluded: object[], ambiguous?: boolean}>} [view.testExclusions]
+ *   The owned test records projected by registering file, when the case pins them.
  * @returns {{failures: string[], held: string[], files: number}} Failure lines, what is held and
  *   on what, and how many declared files were compared.
  */
-export function judgeCase({ dir, expected }, { vitest, located, titles, sites, exclusions }) {
+export function judgeCase({ dir, expected }, { vitest, located, titles, sites, exclusions, testExclusions }) {
   const out = { failures: [], held: [] }
   const compared = new Set(located.compared)
-  const seen = new Set([...vitest.keys(), ...sites.keys(), ...exclusions.keys()])
+  const seen = new Set([...vitest.keys(), ...sites.keys(), ...exclusions.keys(), ...(testExclusions?.keys() ?? [])])
   for (const path of seen) {
     if (expected.files[path] === undefined) out.failures.push(`${dir}/${path}: collected or analysed, but not declared in expected.json`)
   }
@@ -259,6 +315,19 @@ export function judgeCase({ dir, expected }, { vitest, located, titles, sites, e
       pin({ where, field: 'wrapperSites', observed, target: entry.wrapperSites, today: entry.wrapperSitesToday, waitsOn }, out)
     }
     pin({ where, field: 'next', observed: exclusions.get(path) ?? {}, target: entry.next, today: entry.nextToday, waitsOn }, out)
+    if (entry.testExclusions !== undefined) {
+      const observed = testExclusions?.get(path)
+      if (!observed) out.failures.push(`${where}: testExclusions missing owned test records`)
+      else if (observed.ambiguous) out.failures.push(`${where}: testExclusions has ambiguous test identities`)
+      else pin({
+        where,
+        field: 'testExclusions',
+        observed: orderedTestPin(observed),
+        target: orderedTestPin(entry.testExclusions),
+        today: entry.testExclusionsToday && orderedTestPin(entry.testExclusionsToday),
+        waitsOn,
+      }, out)
+    }
   }
   judgeKnown('site', located.disagreements, expected.knownSites ?? [], dir, out)
   judgeKnown('title', titles.disagreements, expected.knownTitles ?? [], dir, out)
