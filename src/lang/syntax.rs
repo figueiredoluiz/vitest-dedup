@@ -84,6 +84,43 @@ pub fn member_name(tree: &Tree, member: NodeId) -> Option<&str> {
     }
 }
 
+/// The structural operation between a callee expression and its immediate input.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CalleeLinkKind<'t> {
+    /// A member read; a dynamic key has no proved name but still has an object and anchor.
+    Member(Option<&'t str>),
+    /// A call, whose arguments remain available on the original node.
+    Call,
+    /// A template invocation, distinct from a call with arguments.
+    Tagged,
+}
+
+/// One borrowed link, retaining the source identity of the expression that owns it.
+pub(crate) struct CalleeLink<'t> {
+    /// The member, call or tag expression, past transparent wrappers.
+    pub node: NodeId,
+    /// Its object, callee or tag, before removing that input's transparent wrappers.
+    pub input: NodeId,
+    /// Syntax only: no framework or binding interpretation.
+    pub kind: CalleeLinkKind<'t>,
+}
+
+/// One inward callee link. Unknown member names remain structural links; other shapes end a path.
+pub(crate) fn callee_link(tree: &Tree, node: NodeId) -> Option<CalleeLink<'_>> {
+    let node = tree.inner(node);
+    let (field, kind) = match tree.kind(node) {
+        "MemberExpression" => ("object", CalleeLinkKind::Member(member_name(tree, node))),
+        "CallExpression" => ("callee", CalleeLinkKind::Call),
+        "TaggedTemplateExpression" => ("tag", CalleeLinkKind::Tagged),
+        _ => return None,
+    };
+    Some(CalleeLink {
+        node,
+        input: tree.child(node, field)?,
+        kind,
+    })
+}
+
 /// Every symbol a binding pattern declares, in source order.
 pub fn bound_symbols(tree: &Tree, scopes: &Scopes, pattern: NodeId) -> Vec<SymbolId> {
     let mut symbols = Vec::new();
@@ -128,6 +165,62 @@ mod tests {
     fn body_reads(source: &str) -> bool {
         let (parsed, body) = arrow_body(source);
         uses_receiver(&parsed.tree, &parsed.scopes, body)
+    }
+
+    /// Each link keeps its original anchor while walking from the outer invocation to the root.
+    #[test]
+    fn callee_links_keep_order_and_source_identity() {
+        let source = "() => root.alpha(1).beta`text`";
+        let (parsed, mut node) = arrow_body(source);
+        assert_eq!(parsed.parse_errors, 0);
+        let tree = &parsed.tree;
+        for (anchor, kind) in [
+            ("root.alpha(1).beta`text`", CalleeLinkKind::Tagged),
+            ("root.alpha(1).beta", CalleeLinkKind::Member(Some("beta"))),
+            ("root.alpha(1)", CalleeLinkKind::Call),
+            ("root.alpha", CalleeLinkKind::Member(Some("alpha"))),
+        ] {
+            let link = callee_link(tree, node).expect("a structural link");
+            assert_eq!(link.kind, kind);
+            let span = tree.span(link.node);
+            assert_eq!(&source[span.start as usize..span.end as usize], anchor);
+            node = link.input;
+        }
+        assert!(callee_link(tree, node).is_none());
+        assert_eq!(tree.text(node, "name"), Some("root"));
+    }
+
+    /// Transparent syntax and static keys do not change the underlying member's identity.
+    #[test]
+    fn callee_links_unwrap_members_without_deciding_dynamic_names() {
+        for (expression, anchor) in [
+            ("root.a", "root.a"),
+            ("(root.a)", "root.a"),
+            ("(root as any).a", "(root as any).a"),
+            ("(root!.a satisfies unknown)", "root!.a"),
+            ("root['a']", "root['a']"),
+            ("root[('a' as const)]", "root[('a' as const)]"),
+        ] {
+            let source = format!("() => {expression}");
+            let (parsed, node) = arrow_body(&source);
+            assert_eq!(parsed.parse_errors, 0);
+            let tree = &parsed.tree;
+            let link = callee_link(tree, node).unwrap();
+            assert_eq!(link.kind, CalleeLinkKind::Member(Some("a")));
+            let span = tree.span(link.node);
+            assert_eq!(&source[span.start as usize..span.end as usize], anchor);
+            assert_eq!(tree.text(tree.inner(link.input), "name"), Some("root"));
+        }
+        for expression in ["root[key]", "root[1]", "root[`a`]"] {
+            let (parsed, node) = arrow_body(&format!("() => {expression}"));
+            let link = callee_link(&parsed.tree, node).unwrap();
+            assert_eq!(link.kind, CalleeLinkKind::Member(None));
+            assert_eq!(parsed.tree.text(link.input, "name"), Some("root"));
+        }
+        for expression in ["root", "flag ? root : other", "new root()"] {
+            let (parsed, node) = arrow_body(&format!("() => {expression}"));
+            assert!(callee_link(&parsed.tree, node).is_none(), "{expression}");
+        }
     }
 
     #[test]
