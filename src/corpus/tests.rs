@@ -114,6 +114,43 @@ fn by_title(source: &str) -> HashMap<String, TestCase> {
 const HEADER: &str =
     "import { test, describe, beforeEach, aroundEach, expect, vi } from 'vitest'\n";
 
+/// Owned hook-only and rewritten-binding inputs retain their distinct final eligibility.
+#[test]
+fn inventory_record_controls_keep_owned_binding_eligibility() {
+    let closed = include_str!("../../fixtures/oracle/binding-stability/annotated-binding.test.ts");
+    let annotated = include_str!("../../fixtures/oracle/binding-stability/annotated-binding.ts");
+    let open = include_str!("../../fixtures/oracle/binding-stability/reassigned-hook.test.ts");
+    let reassigned = include_str!("../../fixtures/oracle/binding-stability/reassigned-hook.ts");
+    let support = include_str!("../../fixtures/oracle/binding-stability/support.ts");
+    let cases = corpora(
+        &[
+            ("closed.test.ts", closed),
+            ("annotated-binding.ts", annotated),
+            ("open.test.ts", open),
+            ("reassigned-hook.ts", reassigned),
+            ("support.ts", support),
+        ],
+        &["closed.test.ts", "open.test.ts"],
+    );
+    assert_eq!(cases.len(), 2);
+    assert_eq!(cases[0].tests.len(), 1);
+    // The open input also retains a module-load placeholder through its support import.
+    assert_eq!(cases[1].tests.len(), 3);
+    assert_eq!(cases[0].tests[0].title.as_deref(), Some("stays comparable"));
+    assert_eq!(cases[0].tests[0].exclusion, None);
+    assert_eq!(
+        cases[1].exclusions().get(&Exclusion::RegisteredElsewhere),
+        Some(&2)
+    );
+    let named: Vec<_> = cases[1]
+        .tests
+        .iter()
+        .filter(|case| case.title.as_deref() == Some("stays comparable"))
+        .collect();
+    assert_eq!(named.len(), 1);
+    assert_eq!(named[0].exclusion, Some(Exclusion::UnprovedRunner));
+}
+
 /// Counts extracted and excluded cases from an owned source before any finding assertion.
 fn counted_corpus(source: &str, path: &str, tests: usize, excluded: usize) -> FileCorpus {
     let corpus = corpora(&[(path, source)], &[path]).remove(0);

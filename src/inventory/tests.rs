@@ -8,9 +8,20 @@ use std::path::Path;
 mod export_identity;
 mod import_limits;
 mod reach_scaling;
+mod records;
 
 /// The inventory of `main` (`a.test.ts`) in a project holding `files` besides it.
 fn inventory_of(main: &str, files: &[(&str, &str)], globals: bool) -> (Inventory, String) {
+    let (found, _) = inventory_with_tree(main, files, globals);
+    (found, main.to_owned())
+}
+
+/// The inventory and the exact parsed tree its node identities belong to.
+fn inventory_with_tree(
+    main: &str,
+    files: &[(&str, &str)],
+    globals: bool,
+) -> (Inventory, crate::lang::Parsed) {
     let dir = tempfile::tempdir().unwrap();
     for (path, content) in files {
         let path = dir.path().join(path);
@@ -27,7 +38,7 @@ fn inventory_of(main: &str, files: &[(&str, &str)], globals: bool) -> (Inventory
         major: crate::framework::Formatting::Unknown,
     };
     let found = inventory(&path, main, &parsed, setting, &mut Modules::default());
-    (found, main.to_owned())
+    (found, parsed)
 }
 
 /// Each site as `kind@line:column chain provenance`.
