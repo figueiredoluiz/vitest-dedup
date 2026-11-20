@@ -7,8 +7,8 @@ use super::{
 };
 use crate::framework::{Chain, Mocking, Registers};
 use crate::lang::{
-    bound_symbols, export_name, member_name, property_name, Declaration, Imported, Name, NodeId,
-    Parsed, Span, SymbolId, Tree,
+    bound_symbols, callee_link, export_name, member_name, property_name, CalleeLinkKind,
+    Declaration, Imported, Name, NodeId, Parsed, Span, SymbolId, Tree,
 };
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -846,41 +846,35 @@ impl<'s> Module<'s> {
                     steps.reverse();
                     return Some((Origin::Api(registers), Provenance::Direct, steps));
                 }
-                "MemberExpression" => {
-                    // `cases['with organization']` reads as `cases.name` does.
-                    steps.push(Step::Member(member_name(tree, node)?));
-                    node = tree.child(node, "object")?;
-                }
-                // `filterable(it)`: what a call handed a registration function returns may
-                // register.
-                "CallExpression"
-                    if tree
-                        .list(node, "arguments")
-                        .into_iter()
-                        .flatten()
-                        .any(|argument| {
-                            self.value_origin(argument)
-                                .is_some_and(|origin| origin != Origin::Namespace)
-                        }) =>
-                {
-                    steps.reverse();
-                    // What it returns is not read: it may register anything.
-                    return Some((Origin::Wrapper(Reach::Tasks), Provenance::Wrapper, steps));
-                }
-                "CallExpression" => {
-                    steps.push(Step::Call);
-                    node = tree.child(node, "callee")?;
-                }
                 // What awaiting a registration function resolves to is not read: it may register.
                 "AwaitExpression" if self.holds_api(tree.child(node, "argument")?) => {
                     steps.reverse();
                     return Some((Origin::Wrapper(Reach::Tasks), Provenance::Wrapper, steps));
                 }
-                "TaggedTemplateExpression" => {
-                    steps.push(Step::Call);
-                    node = tree.child(node, "tag")?;
+                _ => {
+                    let link = callee_link(tree, node)?;
+                    match link.kind {
+                        CalleeLinkKind::Member(name) => steps.push(Step::Member(name?)),
+                        // What a call handed a registration function returns may register.
+                        CalleeLinkKind::Call
+                            if tree.list(link.node, "arguments").into_iter().flatten().any(
+                                |argument| {
+                                    self.value_origin(argument)
+                                        .is_some_and(|origin| origin != Origin::Namespace)
+                                },
+                            ) =>
+                        {
+                            steps.reverse();
+                            return Some((
+                                Origin::Wrapper(Reach::Tasks),
+                                Provenance::Wrapper,
+                                steps,
+                            ));
+                        }
+                        CalleeLinkKind::Call | CalleeLinkKind::Tagged => steps.push(Step::Call),
+                    }
+                    node = link.input;
                 }
-                _ => return None,
             }
         }
     }
@@ -972,13 +966,7 @@ impl<'s> Module<'s> {
         let tree = self.tree;
         let mut node = tree.inner(node);
         for _ in 0..outer {
-            let next = match tree.kind(node) {
-                "MemberExpression" => tree.child(node, "object"),
-                "CallExpression" => tree.child(node, "callee"),
-                "TaggedTemplateExpression" => tree.child(node, "tag"),
-                _ => None,
-            };
-            node = tree.inner(next?);
+            node = tree.inner(callee_link(tree, node)?.input);
         }
         Some(node)
     }

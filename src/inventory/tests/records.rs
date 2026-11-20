@@ -5,6 +5,58 @@ use crate::lang::{Parsed, Span};
 
 const TEST: SiteKind = SiteKind::Registers(Registers::Test);
 
+/// Equivalent spellings preserve the superseding member's exact anchor and the applied chain.
+#[test]
+fn structural_chain_spellings_keep_registration_records() {
+    for prefix in [
+        "test.skip.describe",
+        "test.skip['describe']",
+        "(test.skip as any).describe",
+        "((test.skip)!).describe",
+    ] {
+        for (suffix, chain) in [
+            ("", &[][..]),
+            (".each([[1]])", &["each", "()"] as &[_]),
+            (".each`n\n${1}`", &["each", "()"] as &[_]),
+        ] {
+            let call = format!("{prefix}{suffix}('case', () => {{}})");
+            let source = format!("import {{ test }} from 'vitest'\n{call}");
+            let (found, parsed) = inventory_with_tree(&source, &[], false);
+            assert_eq!(found.sites.len(), 1, "{source}: {found:?}");
+            let site = &found.sites[0];
+            assert_eq!(site.kind, SiteKind::Registers(Registers::Suite), "{source}");
+            assert_eq!(site.chain, chain, "{source}");
+            assert_eq!(site.provenance, Provenance::Direct, "{source}");
+            assert_eq!(site.title.as_deref(), Some("case"), "{source}");
+            assert_eq!(site.span, span(&source, &call), "{source}");
+            assert_eq!(
+                site.member.map(|id| parsed.tree.span(id)),
+                Some(span(&source, prefix)),
+                "{source}"
+            );
+            assert!(site.labels.is_empty());
+            assert!(found.escapes.is_empty(), "{source}");
+            assert!(found.registration_values.is_empty(), "{source}");
+        }
+    }
+    let (evaluated, _) = inventory_with_tree(
+        "import { test } from 'vitest'; test['skip'].describe('case', () => {})",
+        &[],
+        false,
+    );
+    assert_eq!(evaluated.sites.len(), 1);
+    assert_eq!(evaluated.sites[0].kind, SiteKind::Wrapper(Reach::Tasks));
+    assert_eq!(evaluated.sites[0].provenance, Provenance::Wrapper);
+    assert_eq!(evaluated.sites[0].chain, ["skip", "describe"]);
+    assert!(evaluated.sites[0].member.is_none());
+    let (unknown, _) = inventory_with_tree(
+        "import { test } from 'vitest'; test[key]('case', () => {})",
+        &[],
+        false,
+    );
+    assert!(unknown.sites.is_empty(), "{unknown:?}");
+}
+
 /// The written call and every public field downstream consumers read.
 struct Record<'a> {
     call: &'a str,
