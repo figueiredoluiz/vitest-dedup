@@ -11,6 +11,7 @@ use std::sync::{Arc, Mutex};
 /// Resolver plus the first refused manifest from its current lookup, and what to do with one.
 pub(crate) struct ManifestResolver {
     resolver: ResolverGeneric<ManifestFileSystem>,
+    fs: ManifestFileSystem,
     refused: Arc<Mutex<Option<PathBuf>>>,
     on_refusal: fn(&Path),
 }
@@ -25,7 +26,8 @@ impl ManifestResolver {
             refused: Arc::clone(&refused),
         };
         Self {
-            resolver: ResolverGeneric::new_with_file_system(fs, options),
+            resolver: ResolverGeneric::new_with_file_system(fs.clone(), options),
+            fs,
             refused,
             on_refusal,
         }
@@ -36,8 +38,9 @@ impl ManifestResolver {
         &self,
         file: &Path,
         specifier: &str,
+        root: &Path,
     ) -> Result<Resolution, ResolveError> {
-        let result = self.resolver.resolve_file(file, specifier);
+        let result = super::nuxt::resolve_file(&self.resolver, &self.fs, file, specifier, root);
         let refused = self
             .refused
             .lock()
@@ -55,6 +58,7 @@ impl ManifestResolver {
 }
 
 /// Delegates path handling to Oxc while retaining any rejected manifest read.
+#[derive(Clone)]
 struct ManifestFileSystem {
     inner: FileSystemOs,
     refused: Arc<Mutex<Option<PathBuf>>>,

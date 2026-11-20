@@ -51,7 +51,7 @@ pub fn resolve_file(from: &Path, specifier: &str, root: &Path) -> Option<PathBuf
         let _lookup = LOOKUP
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        RESOLVER.resolve_file(from, specifier)
+        RESOLVER.resolve_file(from, specifier, root)
     };
     if let Err(error) = &resolved {
         record_gap(from, specifier, error);

@@ -3,6 +3,86 @@
 
 use super::*;
 
+/// The permanent Nuxt corpus input shared by valid and unreadable-configuration controls.
+fn owned_nuxt_files() -> [(&'static str, &'static str); 4] {
+    [
+        (
+            "nuxt.config.ts",
+            include_str!("../../../fixtures/recall/nuxt-generated-tsconfig/nuxt.config.ts"),
+        ),
+        (
+            ".nuxt/tsconfig.json",
+            include_str!("../../../fixtures/recall/nuxt-generated-tsconfig/.nuxt/tsconfig.json"),
+        ),
+        (
+            "app/runner.ts",
+            include_str!("../../../fixtures/recall/nuxt-generated-tsconfig/app/runner.ts"),
+        ),
+        (
+            "run.test.ts",
+            include_str!("../../../fixtures/recall/nuxt-generated-tsconfig/run.test.ts"),
+        ),
+    ]
+}
+
+/// Generated Nuxt aliases enable runner extraction without erasing argument differences.
+#[test]
+fn nuxt_generated_tsconfig_retains_duplicate_and_distinct_runner_inputs() {
+    let results = corpora(&owned_nuxt_files(), &["run.test.ts"]);
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].tests.len(), 3);
+    assert!(
+        results[0].tests.iter().all(|test| test.exclusion.is_none()),
+        "{:?}",
+        results[0]
+    );
+    let outcome = owned_outcome(vec![("run.test.ts", results[0].clone())]);
+    let duplicates: Vec<_> = outcome
+        .findings
+        .iter()
+        .filter(|finding| finding.rule == crate::model::Rule::DuplicateTest)
+        .collect();
+    assert_eq!(duplicates.len(), 1, "{:?}", outcome.findings);
+    assert_eq!(duplicates[0].titles, ["alias first", "alias second"]);
+}
+
+/// An unreadable generated config blocks relative runner expansion and retains a valid control.
+#[test]
+fn nuxt_unreadable_generated_config_cannot_expand_relative_runners() {
+    for unreadable in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        for (name, source) in owned_nuxt_files() {
+            let path = dir.path().join(name);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, source).unwrap();
+        }
+        let path = dir.path().join("run.test.ts");
+        let source = fs::read_to_string(&path)
+            .unwrap()
+            .replace("'~/runner'", "'./app/runner'");
+        fs::write(&path, &source).unwrap();
+        if unreadable {
+            fs::write(dir.path().join(".nuxt/tsconfig.json"), [0xff]).unwrap();
+        }
+        let setting = Setting::vitest5(dir.path());
+        let corpus = file(&path, &source, setting, &mut Run::default()).unwrap();
+        assert_eq!(
+            corpus.tests.len(),
+            if unreadable { 0 } else { 3 },
+            "{corpus:?}"
+        );
+        let outcome = owned_outcome(vec![("run.test.ts", corpus)]);
+        assert_eq!(
+            outcome
+                .findings
+                .iter()
+                .filter(|finding| finding.rule == crate::model::Rule::DuplicateTest)
+                .count(),
+            usize::from(!unreadable)
+        );
+    }
+}
+
 /// The test's same-file key and module key in `source`, read beside `recipes.ts` and `setup.css`
 /// in a fresh root.
 fn keys_in_fresh_root(source: &str) -> (u64, u64) {

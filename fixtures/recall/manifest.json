@@ -6,6 +6,25 @@
   "recallDestination": 1,
   "cases": [
     {
+      "name": "nuxt-generated-tsconfig",
+      "path": "nuxt-generated-tsconfig",
+      "arguments": ["--rule", "parameterization-candidate=off"],
+      "rule": "duplicate-test",
+      "role": "positive",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-20",
+      "expectedTests": 3,
+      "expectedIncomplete": false,
+      "expectedUnresolved": 0,
+      "expectedFindings": [
+        { "rule": "duplicate-test", "severity": "error", "titles": ["alias first", "alias second"] }
+      ],
+      "expectedAbsent": [
+        { "rule": "duplicate-test", "titles": ["alias first", "different input"] }
+      ]
+    },
+    {
       "name": "registration-read-not-the-value",
       "path": "registration-read-not-the-value",
       "rule": "duplicate-test",

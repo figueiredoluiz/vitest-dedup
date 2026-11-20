@@ -2,6 +2,66 @@
 use super::*;
 use std::sync::Mutex;
 
+/// Nuxt metadata and generated aliases come from the pinned catalog despite conflicting host files.
+#[test]
+fn nuxt_generated_config_never_borrows_working_tree_metadata() {
+    let dir = crate::modes::tests::repository_with(&[
+        ("nuxt.config.ts", b"export default {}"),
+        (
+            ".nuxt/tsconfig.json",
+            br#"{"compilerOptions":{"paths":{"~/*":["../committed/*"]}},"include":["../**/*"]}"#,
+        ),
+        ("run.test.ts", b""),
+        ("committed/helper.ts", b"export const value = 1"),
+        ("present/helper.ts", b"export const value = 2"),
+    ]);
+    let root = dir.path().canonicalize().unwrap();
+    let catalog = Arc::new(crate::modes::RevisionFiles::load(&root, "HEAD", None).unwrap());
+    std::fs::write(
+        root.join(".nuxt/tsconfig.json"),
+        r#"{"compilerOptions":{"paths":{"~/*":["../present/*"]}},"include":["../**/*"]}"#,
+    )
+    .unwrap();
+    let sources = Sources::committed(catalog.clone());
+    let committed = sources
+        .resolve_file(&root.join("run.test.ts"), "~/helper", &root)
+        .unwrap();
+    assert_eq!(
+        sources.relative(&committed, &root),
+        Some(PathBuf::from("committed").join("helper.ts"))
+    );
+    let working = Sources::default();
+    let present = working
+        .resolve_file(&root.join("run.test.ts"), "~/helper", &root)
+        .unwrap();
+    assert_eq!(
+        working.relative(&present, &root),
+        Some(PathBuf::from("present").join("helper.ts"))
+    );
+    catalog.ensure_readable().unwrap();
+
+    let dir = crate::modes::tests::repository_with(&[
+        ("nuxt.config.ts", b"export default {}"),
+        ("run.test.ts", b""),
+        ("present/helper.ts", b""),
+    ]);
+    let root = dir.path().canonicalize().unwrap();
+    let catalog = Arc::new(crate::modes::RevisionFiles::load(&root, "HEAD", None).unwrap());
+    std::fs::create_dir(root.join(".nuxt")).unwrap();
+    std::fs::write(
+        root.join(".nuxt/tsconfig.json"),
+        r#"{"compilerOptions":{"paths":{"~/*":["../present/*"]}},"include":["../**/*"]}"#,
+    )
+    .unwrap();
+    assert!(Sources::committed(catalog.clone())
+        .resolve_file(&root.join("run.test.ts"), "~/helper", &root)
+        .is_none());
+    assert!(
+        catalog.ensure_readable().is_err(),
+        "missing committed generation cannot use the working copy"
+    );
+}
+
 /// A virtual source intentionally disagrees with any real file at its path.
 #[derive(Debug)]
 struct Tree {

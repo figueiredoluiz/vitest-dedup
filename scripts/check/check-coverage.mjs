@@ -228,6 +228,8 @@ const RUST_MODULES = {
   'src/lang/build.rs': 97,
   'src/lang/limits.rs': 96,
   'src/lang/resolve.rs': 96,
+  // Nuxt generated-config discovery: first measured at 90.54% (134/148 lines).
+  'src/lang/nuxt.rs': 90,
   // Committed filesystem adapter: every instrumented line must remain covered.
   'src/lang/sources.rs': 100,
   'src/lang/scopes.rs': 96,

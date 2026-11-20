@@ -140,6 +140,8 @@ and follows a tsconfig `references` entry wherever it points.
 A tsconfig `extends` target that does not exist (typically a generated file) or cannot be read, and a
 missing `node_modules` when imports of listed dependencies fail, make the run incomplete and are
 named with a fix; see [Missing prerequisites](incomplete-runs.md#missing-prerequisites).
+Nuxt projects without a user tsconfig can use their generated `.nuxt` configuration automatically;
+see [Nuxt projects](imported-runners.md#nuxt-projects) for discovery and project-boundary rules.
 
 ### Globals
 

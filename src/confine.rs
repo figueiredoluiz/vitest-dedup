@@ -6,7 +6,37 @@
 //! through it, so `..` segments, absolute paths and symlinks cannot reach files outside the tree
 //! being analyzed.
 
+use std::borrow::Cow;
 use std::path::{Component, Path, PathBuf};
+
+/// Express Windows verbatim disk and UNC paths in their ordinary absolute spelling.
+pub(crate) fn ordinary_path(path: &Path) -> Cow<'_, Path> {
+    #[cfg(not(windows))]
+    {
+        Cow::Borrowed(path)
+    }
+    #[cfg(windows)]
+    {
+        use std::path::Prefix;
+        let mut components = path.components();
+        let Some(Component::Prefix(prefix)) = components.next() else {
+            return Cow::Borrowed(path);
+        };
+        let mut ordinary = match prefix.kind() {
+            Prefix::VerbatimDisk(drive) => PathBuf::from(format!("{}:", char::from(drive))),
+            Prefix::VerbatimUNC(server, share) => {
+                let mut prefix = std::ffi::OsString::from(r"\\");
+                prefix.push(server);
+                prefix.push(r"\");
+                prefix.push(share);
+                PathBuf::from(prefix)
+            }
+            _ => return Cow::Borrowed(path),
+        };
+        ordinary.extend(components);
+        Cow::Owned(ordinary)
+    }
+}
 
 /// Where a path lies relative to the analysis root.
 #[derive(Debug, Clone, PartialEq, Eq)]
