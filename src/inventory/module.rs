@@ -64,10 +64,22 @@ struct Applied {
     /// How many leading steps a test function's registration member (`test.skip.describe`)
     /// supersedes.
     start: usize,
-    /// Whether what precedes that member may run code (`test.skipIf(setup()).describe`,
-    /// `(setup() ? test : it).describe`) its registration does not record: the site may depend on
-    /// it, so it is not admitted.
-    evaluated: bool,
+}
+
+/// The value, registration and source identity derived from one callee-chain application.
+struct ResolvedCallee<'t> {
+    /// What the expression holds, including an uncalled builder.
+    value: Origin,
+    /// What calling it registers, when admitted.
+    registration: Option<SiteKind>,
+    /// The provenance attached to an admitted registration.
+    provenance: Provenance,
+    /// The complete chain, including any superseded prefix.
+    steps: Vec<Step<'t>>,
+    /// The first step retained in the registration record.
+    start: usize,
+    /// The superseding registration member, unless its prefix may run project code.
+    member: Option<NodeId>,
 }
 
 /// The analysis of one module.
@@ -944,21 +956,78 @@ impl<'s> Module<'s> {
             registers,
             pending,
             start,
-            evaluated: false,
         })
     }
 
-    /// [`Self::apply`] for the callee chain at `node`, with [`Applied::evaluated`] set when what
-    /// precedes a test function's registration member may run code.
-    fn apply_at(&self, node: NodeId, origin: Origin, steps: &[Step]) -> Option<Applied> {
-        let mut applied = self.apply(origin, steps)?;
-        if applied.start > 0 {
-            applied.evaluated = !self
-                .member_at(node, steps.len() - applied.start)
+    /// Resolve a callee's value and admitted registration from the same application and anchor.
+    fn resolve(&self, node: NodeId) -> Option<ResolvedCallee<'s>> {
+        let (origin, provenance, steps) = self.chain(node)?;
+        if let Some(reach) = origin.reach() {
+            // Only a bare wrapper retains its reach; anything derived from it may register tasks.
+            let bare = steps.is_empty();
+            let reach = if bare { reach } else { Reach::Tasks };
+            let derived = matches!(origin, Origin::Derived(_));
+            return Some(ResolvedCallee {
+                value: if derived && bare {
+                    origin
+                } else {
+                    Origin::Wrapper(reach)
+                },
+                registration: Some(SiteKind::Wrapper(reach)),
+                provenance: if derived && !bare {
+                    Provenance::Wrapper
+                } else {
+                    provenance
+                },
+                steps,
+                start: 0,
+                member: None,
+            });
+        }
+        let Applied {
+            registers,
+            pending,
+            start,
+        } = self.apply(origin, &steps)?;
+        let member = (start > 0)
+            .then(|| self.member_at(node, steps.len() - start))
+            .flatten();
+        let evaluated = start > 0
+            && !member
                 .and_then(|member| self.tree.child(member, "object"))
                 .is_some_and(|object| self.reads_only(object));
-        }
-        Some(applied)
+        let value = if evaluated {
+            Origin::Wrapper(Reach::Tasks)
+        } else {
+            registers.map_or(Origin::Namespace, Origin::Api)
+        };
+        let registration = if pending
+            || steps
+                .last()
+                .is_some_and(|step| matches!(step, Step::Member(name) if self.inert(name)))
+        {
+            None
+        } else {
+            registers.map(|registers| {
+                if evaluated {
+                    SiteKind::Wrapper(Reach::Tasks)
+                } else {
+                    SiteKind::Registers(registers)
+                }
+            })
+        };
+        Some(ResolvedCallee {
+            value,
+            registration,
+            provenance: if evaluated {
+                Provenance::Wrapper
+            } else {
+                provenance
+            },
+            steps,
+            start: if evaluated { 0 } else { start },
+            member: if evaluated { None } else { member },
+        })
     }
 
     /// The expression `outer` member or call steps into the callee chain at `node`.
@@ -988,89 +1057,27 @@ impl<'s> Module<'s> {
     /// The registration function an expression's value is (`test`, `test.skip`,
     /// `test.extend({...})`, `v.describe`), or the namespace.
     fn value_origin(&self, node: NodeId) -> Option<Origin> {
-        let (origin, _, steps) = self.chain(node)?;
-        self.chained_origin(node, origin, &steps)
-    }
-
-    /// [`Self::value_origin`] of `node` from its walked [`Self::chain`].
-    fn chained_origin(&self, node: NodeId, origin: Origin, steps: &[Step]) -> Option<Origin> {
-        if let Some(reach) = origin.reach() {
-            if matches!(origin, Origin::Derived(_)) && steps.is_empty() {
-                return Some(origin);
-            }
-            // An alias of the wrapper keeps its reach; anything derived from it may register tests.
-            let reach = if steps.is_empty() {
-                reach
-            } else {
-                Reach::Tasks
-            };
-            return Some(Origin::Wrapper(reach));
-        }
-        let applied = self.apply_at(node, origin, steps)?;
-        if applied.evaluated {
-            return Some(Origin::Wrapper(Reach::Tasks));
-        }
-        Some(applied.registers.map_or(Origin::Namespace, Origin::Api))
+        self.resolve(node).map(|callee| callee.value)
     }
 
     /// The member expression of a test function `callee` registers through (`test.skip.describe`
     /// for `test.skip.describe.each(rows)`), if it registers through one.
     fn registration_member(&self, callee: NodeId) -> Option<NodeId> {
-        let (origin, _, steps) = self.chain(callee)?;
-        if origin.reach().is_some() {
-            return None;
-        }
-        let Applied {
-            start, evaluated, ..
-        } = self.apply_at(callee, origin, &steps)?;
-        if evaluated || start == 0 {
-            return None;
-        }
-        self.member_at(callee, steps.len() - start)
+        self.resolve(callee)?.member
     }
 
     /// What calling `callee` registers, if anything.
     fn registration(&self, callee: NodeId) -> Option<(SiteKind, Vec<String>, Provenance)> {
-        let (origin, provenance, steps) = self.chain(callee)?;
-        let mut chain: Vec<String> = steps
+        let resolved = self.resolve(callee)?;
+        let kind = resolved.registration?;
+        let chain = resolved.steps[resolved.start..]
             .iter()
             .map(|step| match step {
                 Step::Member(name) => (*name).to_owned(),
                 Step::Call => "()".to_owned(),
             })
             .collect();
-        if let Some(reach) = origin.reach() {
-            // A wrapper, or a value derived from one: calling it may register. Only the call of
-            // the wrapper itself is known to reach what its body does; a member or a call of its
-            // result is any value.
-            let reach = if steps.is_empty() {
-                reach
-            } else {
-                Reach::Tasks
-            };
-            let provenance = if matches!(origin, Origin::Derived(_)) && !steps.is_empty() {
-                Provenance::Wrapper
-            } else {
-                provenance
-            };
-            return Some((SiteKind::Wrapper(reach), chain, provenance));
-        }
-        let Applied {
-            registers,
-            pending,
-            start,
-            evaluated,
-        } = self.apply_at(callee, origin, &steps)?;
-        let registers = registers?;
-        if pending || chain.last().is_some_and(|last| self.inert(last)) {
-            return None;
-        }
-        if evaluated {
-            return Some((SiteKind::Wrapper(Reach::Tasks), chain, Provenance::Wrapper));
-        }
-        // What was chained before a registration member does not apply to the call.
-        chain.drain(..start);
-        Some((SiteKind::Registers(registers), chain, provenance))
+        Some((kind, chain, resolved.provenance))
     }
 
     /// Records which imported bindings are the API, its namespace, or a wrapper another module
@@ -1361,23 +1368,16 @@ impl<'s> Module<'s> {
             };
             root = tree.inner(argument);
         }
-        while let Some(next) = match tree.kind(root) {
-            "MemberExpression" => tree.child(root, "object"),
-            "CallExpression" => tree.child(root, "callee"),
-            "TaggedTemplateExpression" => tree.child(root, "tag"),
-            _ => None,
-        } {
-            root = tree.inner(next);
+        while let Some(link) = callee_link(tree, root) {
+            root = tree.inner(link.input);
         }
         if tree.kind(root) != "Identifier" {
             return false;
         }
         let symbol = self.read(root);
         // One walk: each `await` in the chain asks this again, so walking twice doubles per level.
-        let chained = self.chain(node);
-        let value = chained
-            .as_ref()
-            .and_then(|(origin, _, steps)| self.chained_origin(node, *origin, steps));
+        let resolved = self.resolve(node);
+        let value = resolved.as_ref().map(|callee| callee.value);
         if !matches!(value, Some(Origin::Api(_) | Origin::Namespace)) {
             // Only the call itself: `make.name` and `make().name` are not what `make` returns.
             let mut value = tree.inner(node);
@@ -1399,8 +1399,8 @@ impl<'s> Module<'s> {
                 )
         });
         let dialect = &self.setting.dialect;
-        own && chained.is_some_and(|(_, _, steps)| {
-            steps.iter().all(|step| match step {
+        own && resolved.is_some_and(|callee| {
+            callee.steps.iter().all(|step| match step {
                 Step::Member(name) => {
                     dialect.registration(name).is_some()
                         || dialect.test_member(name).is_some()
