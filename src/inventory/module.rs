@@ -7,8 +7,8 @@ use super::{
 };
 use crate::framework::{Chain, Mocking, Registers};
 use crate::lang::{
-    bound_symbols, callee_link, export_name, member_name, property_name, CalleeLinkKind,
-    Declaration, Imported, Name, NodeId, Parsed, Span, SymbolId, Tree,
+    bound_symbols, callee_link, export_name, member_name, property_name, value_role,
+    CalleeLinkKind, Declaration, Imported, Name, NodeId, Parsed, Span, SymbolId, Tree, ValueRole,
 };
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -1420,19 +1420,13 @@ impl<'s> Module<'s> {
         for read in self.registration_reads() {
             let mut value = read;
             while let Some(parent) = tree.parent(value) {
-                let holds = |key| tree.child(parent, key) == Some(value);
-                match tree.kind(parent) {
-                    "MemberExpression" if holds("object") => value = parent,
-                    "CallExpression" if holds("callee") => value = parent,
-                    "TaggedTemplateExpression" if holds("tag") => value = parent,
-                    "ParenthesizedExpression"
-                    | "TSAsExpression"
-                    | "TSSatisfiesExpression"
-                    | "TSNonNullExpression"
-                    | "TSTypeAssertion"
-                    | "TSInstantiationExpression" => value = parent,
-                    _ => break,
+                if !matches!(
+                    value_role(tree, parent, value),
+                    ValueRole::Transparent | ValueRole::Callee
+                ) {
+                    break;
                 }
+                value = parent;
             }
             let mut inner = value;
             let function = tree.ancestors(value).find_map(|outer| {
@@ -1470,36 +1464,13 @@ impl<'s> Module<'s> {
     /// Whether `outer`'s value may be, or hold, its child `inner`'s value. Operators that consume a
     /// value (`typeof`, comparison, a call argument, a template, `+=`) and type positions do not.
     fn may_evaluate_to(&self, outer: NodeId, inner: NodeId) -> bool {
-        let tree = self.tree;
-        let holds = |key| tree.child(outer, key) == Some(inner);
-        match tree.kind(outer) {
-            "ParenthesizedExpression"
-            | "TSAsExpression"
-            | "TSSatisfiesExpression"
-            | "TSNonNullExpression"
-            | "TSTypeAssertion"
-            | "TSInstantiationExpression"
-            | "AwaitExpression"
-            | "ArrayExpression"
-            | "ObjectExpression"
-            | "SpreadElement" => true,
-            "ConditionalExpression" => holds("consequent") || holds("alternate"),
-            "LogicalExpression" => {
-                holds("right")
-                    || (holds("left") && matches!(tree.text(outer, "operator"), Some("||" | "??")))
-            }
-            "SequenceExpression" => tree.list(outer, "expressions").last() == Some(&Some(inner)),
-            "Property" => holds("value"),
-            // `+=` and the other compound assignments compute a new value.
-            "AssignmentExpression" => {
-                holds("right")
-                    && matches!(
-                        tree.text(outer, "operator"),
-                        Some("=" | "||=" | "&&=" | "??=")
-                    )
-            }
-            _ => false,
-        }
+        matches!(
+            value_role(self.tree, outer, inner),
+            ValueRole::Transparent
+                | ValueRole::Result
+                | ValueRole::Contained
+                | ValueRole::LogicalLeft("||" | "??")
+        )
     }
 
     /// Whether `symbol` may hold anything but what it was declared with: it is declared more than

@@ -33,7 +33,7 @@ pub use scopes::{Declaration, Imported, Name, Reference, Scopes, Symbol, SymbolI
 pub(crate) use sources::query;
 pub use sources::{SourceKind, SourceTree, Sources};
 pub use syntax::{bound_symbols, export_name, member_name, property_name, uses_receiver};
-pub(crate) use syntax::{callee_link, CalleeLinkKind};
+pub(crate) use syntax::{callee_link, value_role, CalleeLinkKind, ValueRole};
 pub use tree::{Field, NodeId, Span, Tree};
 
 use std::path::Path;
