@@ -261,3 +261,33 @@ fn repeated_source_refusal_recovers_owned_findings() {
         }
     }
 }
+
+/// A repeated ancestor of an unreadable dependency preserves both eligible and distinct tests.
+#[test]
+fn unreadable_diamond_preserves_comparison_outcomes() {
+    let catalog = format!("export const entries = '{}';\n", ":".repeat(40_000));
+    let source = concat!(
+        "import './left';\n",
+        "import './right';\n",
+        "import { expect, test } from 'vitest';\n",
+        "test('first', () => expect(42).toBe(42));\n",
+        "test('second', () => expect(42).toBe(42));\n",
+        "test('distinct', () => expect(42).not.toBe(0));\n",
+    );
+    let files = [
+        ("catalog.ts", catalog.as_str()),
+        (
+            "shared.ts",
+            "import './catalog';\nexport const value = 42;\n",
+        ),
+        ("left.ts", "import './shared';\n"),
+        ("right.ts", "export { value } from './shared';\n"),
+        ("diamond.test.ts", source),
+    ];
+    let corpus = corpora(&files, &["diamond.test.ts"]).remove(0);
+    assert_eq!(corpus.tests.len(), 3);
+    assert_eq!(corpus.context_refusals, [Exclusion::UnreadableImport]);
+    assert!(corpus.import_limit.is_none());
+    assert!(corpus.tests.iter().all(|test| test.exclusion.is_none()));
+    assert_duplicate("diamond.test.ts", corpus, ["first", "second"]);
+}
