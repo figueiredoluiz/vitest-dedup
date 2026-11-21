@@ -291,3 +291,83 @@ fn unreadable_diamond_preserves_comparison_outcomes() {
     assert!(corpus.tests.iter().all(|test| test.exclusion.is_none()));
     assert_duplicate("diamond.test.ts", corpus, ["first", "second"]);
 }
+
+/// The acyclic import graph used by the recall and collection gates.
+const DIAMOND: [(&str, &str); 5] = [
+    (
+        "catalog.ts",
+        include_str!("../../../fixtures/recall/import-diamond-recovery/catalog.ts"),
+    ),
+    (
+        "shared.ts",
+        include_str!("../../../fixtures/recall/import-diamond-recovery/shared.ts"),
+    ),
+    (
+        "left.ts",
+        include_str!("../../../fixtures/recall/import-diamond-recovery/left.ts"),
+    ),
+    (
+        "right.ts",
+        include_str!("../../../fixtures/recall/import-diamond-recovery/right.ts"),
+    ),
+    (
+        "diamond.test.ts",
+        include_str!("../../../fixtures/recall/import-diamond-recovery/diamond.test.ts"),
+    ),
+];
+
+/// A dense acyclic import graph recovers a comparison while retaining its diagnostic.
+#[test]
+fn source_refusal_diamond_recovers_comparisons() {
+    for corpus in corpora(&DIAMOND, &["diamond.test.ts", "diamond.test.ts"]) {
+        assert_eq!(corpus.tests.len(), 3);
+        assert!(corpus
+            .context_refusals
+            .contains(&Exclusion::UnreadableImport));
+        assert!(corpus.import_limit.is_none(), "{:?}", corpus.import_limit);
+        assert_eq!(corpus.context_refusals, [Exclusion::UnreadableImport]);
+        assert!(corpus.tests.iter().all(|test| test.exclusion.is_none()));
+        assert_duplicate("diamond.test.ts", corpus, ["first", "second"]);
+    }
+}
+
+/// A replay at the depth limit must still refuse its child one level farther down.
+#[test]
+fn source_refusal_diamond_preserves_the_child_depth_boundary() {
+    let mut sources = DIAMOND
+        .map(|(path, source)| (path.to_owned(), source.to_owned()))
+        .to_vec();
+    let (_, root) = sources
+        .iter_mut()
+        .find(|(path, _)| path == "diamond.test.ts")
+        .unwrap();
+    *root = root.replace("import './left'\nimport './right'", "import './relay0'");
+    for depth in 0..31 {
+        let next = if depth == 30 {
+            "shared".to_owned()
+        } else {
+            format!("relay{}", depth + 1)
+        };
+        sources.push((format!("relay{depth}.ts"), format!("import './{next}';")));
+    }
+    let files: Vec<_> = sources
+        .iter()
+        .map(|(path, source)| (path.as_str(), source.as_str()))
+        .collect();
+    let corpus = corpora(&files, &["diamond.test.ts"]).remove(0);
+    assert_eq!(corpus.tests.len(), 3);
+    assert!(corpus
+        .context_refusals
+        .contains(&Exclusion::UnreadableImport));
+    let limit = corpus.import_limit.as_ref().unwrap();
+    assert_eq!(limit.kind, crate::inventory::ImportLimitKind::Depth);
+    assert_eq!(limit.module, Path::new("catalog.ts"));
+    assert_eq!(limit.depth, 33);
+    assert!(corpus
+        .tests
+        .iter()
+        .all(|test| test.exclusion == Some(Exclusion::ImportLimit)));
+    assert!(owned_findings("diamond.test.ts", corpus)
+        .findings
+        .is_empty());
+}

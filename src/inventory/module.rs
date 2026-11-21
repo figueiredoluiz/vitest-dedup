@@ -2,8 +2,8 @@
 
 use super::reach::ReachIndex;
 use super::{
-    Escape, Export, InPlaceMock, Inventory, Label, Modules, Provenance, Reach, Setting, Site,
-    SiteKind, ON_LOAD, UNREADABLE_FIXTURE,
+    Escape, Export, InPlaceMock, Inventory, Label, Modules, ProjectImports, Provenance, Reach,
+    Setting, Site, SiteKind, ON_LOAD, UNREADABLE_FIXTURE,
 };
 use crate::framework::{Chain, Mocking, Registers};
 use crate::lang::{
@@ -140,6 +140,7 @@ pub(super) fn analyse(
     setting: Setting,
     modules: &mut Modules,
     depth: usize,
+    imports: &mut ProjectImports,
 ) -> (Inventory, HashMap<String, Export>) {
     let mut module = Module {
         path,
@@ -164,10 +165,10 @@ pub(super) fn analyse(
     module.redeclared = module.redeclarations();
     module.evaluates = super::direct_eval(parsed);
     module.rewritten_globals = module.global_writes();
-    module.collect_origins(modules, depth);
+    module.collect_origins(modules, depth, imports);
     module.api_aliases_settled = true;
     let found = module.registrations();
-    let mut exports = module.exports(modules, depth, &found);
+    let mut exports = module.exports(modules, depth, &found, imports);
     // A registration outside every wrapper may run while the module loads: at top level, in a
     // getter or an initializer, or in a function this analysis does not see called.
     let bodies = module.wrapper_bodies();
@@ -1125,7 +1126,12 @@ impl<'s> Module<'s> {
 
     /// Records which imported bindings are the API, its namespace, or a wrapper another module
     /// exports, then the aliases derived from them.
-    fn collect_origins(&mut self, modules: &mut Modules, depth: usize) {
+    fn collect_origins(
+        &mut self,
+        modules: &mut Modules,
+        depth: usize,
+        imports: &mut ProjectImports,
+    ) {
         let tree = self.tree;
         for statement in tree.list(tree.root(), "body").into_iter().flatten() {
             if tree.kind(statement) != "ImportDeclaration"
@@ -1143,10 +1149,7 @@ impl<'s> Module<'s> {
             let wrapper_exports = if api {
                 None
             } else {
-                modules
-                    .sources
-                    .resolve(self.path, source, self.setting.root)
-                    .map(|file| modules.exports(&file, self.setting, depth + 1))
+                modules.project_exports(self.path, source, self.setting, depth + 1, imports)
             };
             if wrapper_exports
                 .as_ref()
@@ -2214,6 +2217,7 @@ impl<'s> Module<'s> {
         modules: &mut Modules,
         depth: usize,
         found: &[Found],
+        imports: &mut ProjectImports,
     ) -> HashMap<String, Export> {
         let tree = self.tree;
         let reaches = ReachIndex::new(found.iter().map(|(_, span, kind, ..)| (*span, *kind)));
@@ -2275,14 +2279,15 @@ impl<'s> Module<'s> {
                             }
                             continue;
                         }
-                        let Some(file) =
-                            modules
-                                .sources
-                                .resolve(self.path, source, self.setting.root)
-                        else {
+                        let Some(theirs) = modules.project_exports(
+                            self.path,
+                            source,
+                            self.setting,
+                            depth + 1,
+                            imports,
+                        ) else {
                             continue;
                         };
-                        let theirs = modules.exports(&file, self.setting, depth + 1);
                         // Re-exporting any name loads the module, and whatever it registers then.
                         if theirs.contains_key(ON_LOAD) {
                             add(ON_LOAD.to_owned(), Export::Wrapper(Reach::Tasks));
@@ -2393,14 +2398,10 @@ impl<'s> Module<'s> {
                                 )
                             })
                             .collect()
-                    } else if let Some(file) =
-                        modules
-                            .sources
-                            .resolve(self.path, source, self.setting.root)
-                    {
-                        modules.exports(&file, self.setting, depth + 1)
                     } else {
-                        HashMap::new()
+                        modules
+                            .project_exports(self.path, source, self.setting, depth + 1, imports)
+                            .unwrap_or_default()
                     };
                     for (name, export) in theirs {
                         if name != "default" && name != unreadable_fixture_export("default") {

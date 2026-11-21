@@ -81,6 +81,25 @@
       ]
     },
     {
+      "name": "import-diamond-recovery",
+      "path": "import-diamond-recovery",
+      "rule": "duplicate-test",
+      "role": "positive",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-22",
+      "expectedTests": 3,
+      "expectedIncomplete": true,
+      "expectedUnresolved": 0,
+      "expectedFindings": [
+        { "rule": "duplicate-test", "severity": "error", "titles": ["first", "second"] }
+      ],
+      "expectedAbsent": [
+        { "rule": "duplicate-test", "titles": ["first", "distinct"] },
+        { "rule": "duplicate-test", "titles": ["second", "distinct"] }
+      ]
+    },
+    {
       "name": "import-depth-cut",
       "path": "import-depth-cut",
       "rule": "duplicate-test",
