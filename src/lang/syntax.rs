@@ -324,15 +324,23 @@ mod tests {
                 .collect();
             assert_eq!(names, expected, "{expression}");
         }
-        let (parsed, body) = arrow_body(&format!("() => {}last", "first || ".repeat(1_000)));
-        assert_eq!(parsed.parse_errors, 0);
-        assert_eq!(logical_results(&parsed.tree, body).count(), 1_001);
-        let (parsed, body) = arrow_body(&format!(
-            "() => {}last",
-            "(flag ? left : right) || ".repeat(1_000)
-        ));
-        assert_eq!(parsed.parse_errors, 0);
-        assert_eq!(logical_results(&parsed.tree, body).count(), 2_001);
+        std::thread::Builder::new()
+            .stack_size(1 << 20)
+            .spawn(|| {
+                let (parsed, body) =
+                    arrow_body(&format!("() => {}last", "first || ".repeat(1_000)));
+                assert_eq!(parsed.parse_errors, 0);
+                assert_eq!(logical_results(&parsed.tree, body).count(), 1_001);
+                let (parsed, body) = arrow_body(&format!(
+                    "() => {}last",
+                    "(flag ? left : right) || ".repeat(1_000)
+                ));
+                assert_eq!(parsed.parse_errors, 0);
+                assert_eq!(logical_results(&parsed.tree, body).count(), 2_001);
+            })
+            .unwrap()
+            .join()
+            .unwrap();
     }
 
     /// Call type arguments and a separate instantiation expression have different owned edges.
