@@ -195,3 +195,69 @@ fn bounded_import_retry_recovers_same_file_findings() {
         ["recovered first", "recovered second"],
     );
 }
+
+/// Repeated parser refusals leave an unreadable import without spending the source ceiling again.
+#[test]
+fn repeated_source_refusal_recovers_owned_findings() {
+    let payload = format!(
+        "import {{ test }} from 'vitest'; test('hidden registration', () => {{}});\n\
+         export const value = '{}{}';",
+        ":".repeat(40_000),
+        "x".repeat(1_500_000),
+    );
+    let control = include_str!("../../../fixtures/recall/import-depth-cut/control.test.ts");
+    for reexport in [false, true] {
+        for distinct in [false, true] {
+            let mut sources = Vec::new();
+            let mut root = String::new();
+            for index in 0..6 {
+                let module = if distinct { index } else { 0 };
+                if distinct || index == 0 {
+                    sources.push((format!("large{module}.ts"), payload.clone()));
+                }
+                let relay = if reexport {
+                    format!("export {{ value }} from './large{module}';")
+                } else {
+                    format!("import './large{module}';")
+                };
+                sources.push((format!("relay{index}.ts"), relay));
+                root.push_str(&format!("import './relay{index}';\n"));
+            }
+            root.push_str(control);
+            sources.push(("root.test.ts".to_owned(), root));
+            let files: Vec<_> = sources
+                .iter()
+                .map(|(path, source)| (path.as_str(), source.as_str()))
+                .collect();
+            for corpus in corpora(&files, &["root.test.ts", "root.test.ts"]) {
+                assert_eq!(
+                    corpus.tests.len(),
+                    2,
+                    "reexport={reexport}, distinct={distinct}"
+                );
+                assert!(corpus
+                    .context_refusals
+                    .contains(&Exclusion::UnreadableImport));
+                if distinct {
+                    let limit = corpus.import_limit.as_ref().unwrap();
+                    assert_eq!(limit.kind, crate::inventory::ImportLimitKind::SourceBytes);
+                    assert_eq!(limit.module, Path::new("large5.ts"));
+                    assert!(corpus
+                        .tests
+                        .iter()
+                        .all(|test| test.exclusion == Some(Exclusion::ImportLimit)));
+                    assert!(owned_findings("root.test.ts", corpus).findings.is_empty());
+                } else {
+                    assert_eq!(corpus.context_refusals, [Exclusion::UnreadableImport]);
+                    assert!(corpus.import_limit.is_none());
+                    assert!(corpus.tests.iter().all(|test| test.exclusion.is_none()));
+                    assert_duplicate(
+                        "root.test.ts",
+                        corpus,
+                        ["independent first", "independent second"],
+                    );
+                }
+            }
+        }
+    }
+}

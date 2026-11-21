@@ -324,6 +324,57 @@ fn import_retry_does_not_reset_source_byte_work() {
     assert_eq!(modules.work.analyses, 1);
 }
 
+/// Keep the cutoff when an already unreadable source is later reached past the depth bound.
+#[test]
+fn repeated_source_refusal_preserves_the_depth_bound() {
+    let dir = tempfile::tempdir().unwrap();
+    let unreadable = format!("export const value = '{}';", ":".repeat(40_000));
+    fs::write(dir.path().join("large.ts"), &unreadable).unwrap();
+    let mut bytes = unreadable.len();
+    for index in 0..MAX_DEPTH {
+        let target = if index + 1 == MAX_DEPTH {
+            "large".to_owned()
+        } else {
+            format!("m{}", index + 1)
+        };
+        let source = format!("import './{target}';");
+        bytes += source.len();
+        fs::write(dir.path().join(format!("m{index}.ts")), source).unwrap();
+    }
+    let mut modules = Modules::default();
+    let found = read(dir.path(), "import './large'; import './m0';", &mut modules);
+    assert_limit(
+        &found,
+        ImportLimitKind::Depth,
+        "large.ts",
+        MAX_DEPTH + 1,
+        MAX_DEPTH + 1,
+        bytes,
+    );
+    assert!(crate::inventory::take_unread_imports());
+}
+
+/// A later root can observe the same file after its source is repaired.
+#[test]
+fn source_limit_refusal_does_not_hide_a_later_readable_export() {
+    let dir = tempfile::tempdir().unwrap();
+    let module = dir.path().join("helper.ts");
+    let unreadable = format!("export const value = '{}';", ":".repeat(40_000));
+    fs::write(&module, unreadable).unwrap();
+    let source = "import { run } from './helper'; run('visible', () => {});";
+    let mut modules = Modules::default();
+    let refused = read(dir.path(), source, &mut modules);
+    assert!(refused.sites.is_empty());
+    assert!(refused.import_limit.is_none());
+    assert!(crate::inventory::take_unread_imports());
+
+    fs::write(&module, "export { test as run } from 'vitest';").unwrap();
+    let recovered = read(dir.path(), source, &mut modules);
+    assert_eq!(recovered.sites.len(), 1);
+    assert!(recovered.import_limit.is_none());
+    assert!(!crate::inventory::take_unread_imports());
+}
+
 /// A cycle consumes no additional analysis attempt and does not itself trigger a new refusal.
 #[test]
 fn import_cycle_retains_existing_within_bound_handling() {

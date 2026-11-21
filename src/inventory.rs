@@ -352,6 +352,8 @@ struct ImportWork {
     /// Aggregate imported source bytes admitted by every pass over this root.
     bytes: usize,
     refusal: Option<ImportLimit>,
+    /// Source paths the parser refused on a source limit in this pass.
+    source_limit_refusals: HashSet<PathBuf>,
     /// Whether completed cache entries are the only lasting effects of this pass.
     retry_safe: bool,
 }
@@ -363,6 +365,7 @@ impl Default for ImportWork {
             analyses: 0,
             bytes: 0,
             refusal: None,
+            source_limit_refusals: HashSet::new(),
             retry_safe: true,
         }
     }
@@ -428,6 +431,12 @@ impl Modules {
         }
     }
 
+    /// Preserve the diagnostic and retry restriction for a fresh or replayed parser refusal.
+    fn record_unread_import(&mut self) {
+        self.work.retry_safe = false;
+        UNREAD_IMPORTS.with(|count| count.set(count.get() + 1));
+    }
+
     /// The registering exports of the module at `path`, with what each may register, analysed
     /// once unless a bound cut the analysis short. An empty map after a cutoff is partial:
     /// the root's inventory records the refusal and cannot license comparison claims.
@@ -443,6 +452,10 @@ impl Modules {
             self.refuse(ImportLimitKind::Depth, path, setting, depth);
             return HashMap::new();
         }
+        if self.work.source_limit_refusals.contains(path) {
+            self.record_unread_import();
+            return HashMap::new();
+        }
         if !self.active.insert(path.to_path_buf()) {
             return HashMap::new();
         }
@@ -455,7 +468,7 @@ impl Modules {
         let confined_before = crate::lang::confinement_refusals();
         let refused_before = crate::lang::manifest_refusals();
         let unread_before = UNREAD_IMPORTS.with(std::cell::Cell::get);
-        let mut unparsed = false;
+        let mut unparsed = None;
         let exports = self
             .sources
             .read(path)
@@ -469,18 +482,19 @@ impl Modules {
                     Ok(parsed) => {
                         Some(module::analyse(path, &source, &parsed, setting, self, depth).1)
                     }
-                    Err(_) => {
-                        unparsed = true;
+                    Err(refusal) => {
+                        unparsed = Some(refusal);
                         None
                     }
                 }
             })
             .unwrap_or_default();
         self.active.remove(path);
-        // Each importer records the refusal itself, so the module is read again, not cached.
-        if unparsed {
-            self.work.retry_safe = false;
-            UNREAD_IMPORTS.with(|count| count.set(count.get() + 1));
+        if let Some(refusal) = unparsed {
+            if refusal == crate::lang::Refusal::SourceLimit {
+                self.work.source_limit_refusals.insert(key.0);
+            }
+            self.record_unread_import();
             return exports;
         }
         // A module whose analysis saw a confinement refusal, a refused package manifest or a module
@@ -540,6 +554,7 @@ pub fn inventory(
             || !modules.work.retry_safe
             || pass == MAX_IMPORT_ANALYSIS_PASSES
         {
+            modules.work.source_limit_refusals = HashSet::new();
             return found;
         }
         prior_analyses = prior_analyses.saturating_add(modules.work.analyses);
