@@ -1,5 +1,20 @@
 {
   "files": {
+    "oracle/sequence-registration/default.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [],
+      "testsExcluded": 1
+    },
+    "oracle/sequence-registration/named.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [],
+      "testsExcluded": 1
+    },
+    "oracle/sequence-registration/prefix.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": ["helper-effects-unproved"],
+      "testsExcluded": 3
+    },
     "oracle/logical-registration/case.test.ts": {
       "reason": "registered-elsewhere",
       "otherReasons": ["helper-effects-unproved"],
@@ -490,8 +505,8 @@
     },
     "oracle/collection-scope-calls/sequence-callee.test.ts": {
       "reason": "registered-elsewhere",
-      "otherReasons": [],
-      "testsExcluded": 2
+      "otherReasons": ["helper-effects-unproved"],
+      "testsExcluded": 3
     },
     "oracle/collection-scope-calls/static-method.test.ts": {
       "reason": "registered-elsewhere",

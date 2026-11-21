@@ -179,8 +179,14 @@ pub(super) fn analyse(
     {
         exports.insert(ON_LOAD.to_owned(), Export::Wrapper(Reach::Tasks));
     }
-    let escapes = module.escapes();
-    let calls: HashSet<NodeId> = found.iter().map(|(node, ..)| *node).collect();
+    let calls: HashMap<NodeId, SiteKind> = found
+        .iter()
+        .map(|(node, _, kind, ..)| (*node, *kind))
+        .collect();
+    let escapes = module.escapes(
+        &calls,
+        matches!(exports.get("default"), Some(Export::Wrapper(_))),
+    );
     let sites = found
         .into_iter()
         .map(|(node, span, kind, chain, provenance)| {
@@ -849,6 +855,17 @@ impl<'s> Module<'s> {
             if let Some((origin, provenance)) = self.root_origin(node) {
                 steps.reverse();
                 return Some((origin, provenance, steps));
+            }
+            if let Some(mut result) = tree.sequence_result(node) {
+                result = tree.inner(result);
+                while let Some(next) = tree.sequence_result(result) {
+                    result = tree.inner(next);
+                }
+                let Origin::Wrapper(reach) = self.resolve(result)?.value else {
+                    return None;
+                };
+                steps.reverse();
+                return Some((Origin::Wrapper(reach), Provenance::Wrapper, steps));
             }
             match tree.kind(node) {
                 // Join resolved result capabilities; missing proof does not make an arm inert.
@@ -2132,8 +2149,47 @@ impl<'s> Module<'s> {
         .then(|| self.tree.span(callee).start)
     }
 
+    /// Whether a selected sequence value reaches an already recorded wrapper destination.
+    /// Selection does not discharge member reads, assignments or awaiting their result.
+    fn accounted_sequence_read(
+        &self,
+        read: NodeId,
+        calls: &HashMap<NodeId, SiteKind>,
+        default_wrapper: bool,
+    ) -> bool {
+        let tree = self.tree;
+        let mut current = read;
+        let mut sequence = false;
+        while let Some(parent) = tree.parent(current) {
+            if tree.selects_value(parent, current) {
+                sequence |= tree.sequence_result(parent).is_some();
+                current = parent;
+            } else if value_role(tree, parent, current) == ValueRole::Transparent {
+                current = parent;
+            } else {
+                if !sequence {
+                    return false;
+                }
+                return match value_role(tree, parent, current) {
+                    ValueRole::Callee(CalleeLinkKind::Call | CalleeLinkKind::Tagged) => {
+                        matches!(calls.get(&parent), Some(SiteKind::Wrapper(_)))
+                    }
+                    ValueRole::Initializer => tree
+                        .child(parent, "id")
+                        .filter(|&id| tree.kind(id) == "Identifier")
+                        .and_then(|id| self.declares(id))
+                        .and_then(|symbol| self.origins.get(&symbol))
+                        .is_some_and(|origin| matches!(origin, Origin::Wrapper(_))),
+                    ValueRole::Exported => default_wrapper,
+                    _ => false,
+                };
+            }
+        }
+        false
+    }
+
     /// Registration functions read as values rather than called.
-    fn escapes(&self) -> Vec<Escape> {
+    fn escapes(&self, calls: &HashMap<NodeId, SiteKind>, default_wrapper: bool) -> Vec<Escape> {
         let tree = self.tree;
         let mut escapes = Vec::new();
         for read in self.registration_reads() {
@@ -2153,7 +2209,7 @@ impl<'s> Module<'s> {
                     _ => break true,
                 }
             };
-            if escaped {
+            if escaped && !self.accounted_sequence_read(read, calls, default_wrapper) {
                 let span = tree.span(current);
                 escapes.push(Escape {
                     offset: span.start,
@@ -2426,7 +2482,7 @@ impl<'s> Module<'s> {
     }
 
     /// The lexical facts around a site, innermost first.
-    fn labels(&self, node: NodeId, calls: &HashSet<NodeId>) -> Vec<Label> {
+    fn labels(&self, node: NodeId, calls: &HashMap<NodeId, SiteKind>) -> Vec<Label> {
         let tree = self.tree;
         let mut labels = Vec::new();
         for ancestor in tree.ancestors(node) {
@@ -2439,7 +2495,9 @@ impl<'s> Module<'s> {
                 | "SwitchStatement" => Label::Conditional,
                 "TryStatement" => Label::Try,
                 _ if tree.is_function(ancestor) => match tree.outer_parent(ancestor) {
-                    Some(call) if tree.kind(call) == "CallExpression" && calls.contains(&call) => {
+                    Some(call)
+                        if tree.kind(call) == "CallExpression" && calls.contains_key(&call) =>
+                    {
                         Label::RegistrationBody
                     }
                     Some(call) if tree.kind(call) == "CallExpression" => Label::Callback,
