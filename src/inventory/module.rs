@@ -7,8 +7,9 @@ use super::{
 };
 use crate::framework::{Chain, Mocking, Registers};
 use crate::lang::{
-    bound_symbols, callee_link, export_name, member_name, property_name, value_role,
-    CalleeLinkKind, Declaration, Imported, Name, NodeId, Parsed, Span, SymbolId, Tree, ValueRole,
+    bound_symbols, callee_link, export_name, logical_results, member_name, property_name,
+    value_role, CalleeLinkKind, Declaration, Imported, Name, NodeId, Parsed, Span, SymbolId, Tree,
+    ValueRole,
 };
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -849,12 +850,10 @@ impl<'s> Module<'s> {
                         (Some(Origin::Api(left)), Some(Origin::Api(right))) if left == right => {
                             left
                         }
-                        _ if origins.into_iter().flatten().any(|origin| {
-                            matches!(origin, Origin::Wrapper(_) | Origin::Derived(_))
-                        }) || (self.api_aliases_settled
-                            && arms.into_iter().zip(origins).any(|(arm, origin)| {
-                                matches!(origin, Some(Origin::Api(_))) && self.holds_api(arm)
-                            })) =>
+                        _ if arms
+                            .into_iter()
+                            .zip(origins)
+                            .any(|(arm, origin)| self.registration_candidate(arm, origin)) =>
                         {
                             steps.reverse();
                             return Some((
@@ -867,6 +866,15 @@ impl<'s> Module<'s> {
                     };
                     steps.reverse();
                     return Some((Origin::Api(registers), Provenance::Direct, steps));
+                }
+                "LogicalExpression" => {
+                    if !logical_results(tree, node).any(|operand| {
+                        self.registration_candidate(operand, self.value_origin(operand))
+                    }) {
+                        return None;
+                    }
+                    steps.reverse();
+                    return Some((Origin::Wrapper(Reach::Tasks), Provenance::Wrapper, steps));
                 }
                 // What awaiting a registration function resolves to is not read: it may register.
                 "AwaitExpression" if self.holds_api(tree.child(node, "argument")?) => {
@@ -898,6 +906,16 @@ impl<'s> Module<'s> {
                     node = link.input;
                 }
             }
+        }
+    }
+
+    /// A result candidate may register; a coarse API origin alone does not prove callability.
+    /// Read the recorded origin once, retaining the alias-settlement boundary of the resolver.
+    fn registration_candidate(&self, node: NodeId, origin: Option<Origin>) -> bool {
+        match origin {
+            Some(Origin::Wrapper(_) | Origin::Derived(_)) => true,
+            Some(Origin::Api(_)) => self.api_aliases_settled && self.holds_api(node),
+            _ => false,
         }
     }
 

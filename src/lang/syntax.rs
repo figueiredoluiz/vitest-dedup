@@ -221,6 +221,33 @@ pub(crate) fn value_role(tree: &Tree, outer: NodeId, inner: NodeId) -> ValueRole
     }
 }
 
+/// Logical operands that could supply a callable value, without proving guard reachability.
+/// A callable is truthy and non-null: an AND-left value cannot be its result, whereas OR and
+/// coalescing can yield either operand. Flatten logical chains without adding recursive frames.
+pub(crate) fn logical_results(tree: &Tree, node: NodeId) -> impl Iterator<Item = NodeId> + '_ {
+    let mut pending = vec![node];
+    std::iter::from_fn(move || {
+        while let Some(node) = pending.pop() {
+            let node = tree.inner(node);
+            if tree.kind(node) != "LogicalExpression" {
+                return Some(node);
+            }
+            for child in [tree.child(node, "right"), tree.child(node, "left")]
+                .into_iter()
+                .flatten()
+            {
+                if matches!(
+                    value_role(tree, node, child),
+                    ValueRole::Result | ValueRole::LogicalLeft("||" | "??")
+                ) {
+                    pending.push(child);
+                }
+            }
+        }
+        None
+    })
+}
+
 /// Every symbol a binding pattern declares, in source order.
 pub fn bound_symbols(tree: &Tree, scopes: &Scopes, pattern: NodeId) -> Vec<SymbolId> {
     let mut symbols = Vec::new();
@@ -265,6 +292,32 @@ mod tests {
     fn body_reads(source: &str) -> bool {
         let (parsed, body) = arrow_body(source);
         uses_receiver(&parsed.tree, &parsed.scopes, body)
+    }
+
+    /// Callable result positions depend on selection, not merely a reference in either operand.
+    #[test]
+    fn logical_results_follow_owned_value_roles() {
+        for (expression, expected) in [
+            ("left && right", vec!["right"]),
+            ("left || right", vec!["left", "right"]),
+            ("left ?? right", vec!["left", "right"]),
+            ("(left && middle) || right", vec!["middle", "right"]),
+            ("(left || middle) && right", vec!["right"]),
+            (
+                "left && ((middle ?? right) as any)",
+                vec!["middle", "right"],
+            ),
+        ] {
+            let (parsed, body) = arrow_body(&format!("() => ({expression})"));
+            assert_eq!(parsed.parse_errors, 0);
+            let names: Vec<_> = logical_results(&parsed.tree, body)
+                .map(|node| parsed.tree.text(node, "name").unwrap())
+                .collect();
+            assert_eq!(names, expected, "{expression}");
+        }
+        let (parsed, body) = arrow_body(&format!("() => {}last", "first || ".repeat(1_000)));
+        assert_eq!(parsed.parse_errors, 0);
+        assert_eq!(logical_results(&parsed.tree, body).count(), 1_001);
     }
 
     /// Call type arguments and a separate instantiation expression have different owned edges.

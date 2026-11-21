@@ -183,7 +183,7 @@ fn conditional_exact_aliases_do_not_depend_on_declaration_order() {
 
 /// An unproved result arm cannot erase a registration capability at any supported binding route.
 #[test]
-fn conditional_capabilities_survive_binding_and_export_routes() {
+fn branch_capabilities_survive_binding_and_export_routes() {
     let mut variants = 0;
     for expression in [
         "flag ? api : noop",
@@ -195,12 +195,30 @@ fn conditional_capabilities_survive_binding_and_export_routes() {
         "flag ? noop : (flag ? api : noop)",
         "flag ? api : suite",
         "flag ? hook : noop",
+        "flag && api",
+        "false || api",
+        "undefined ?? api",
+        "api || noop",
+        "api ?? noop",
+        "(flag && api) || noop",
+        "api && api",
+        "flag && api.skip",
+        "flag && api.extend({})",
+        "flag && hook",
+        "flag && (flag ? api : noop)",
+        "(flag && api) as any",
+        "(null ?? api) satisfies unknown",
+        "(api || noop)!",
     ] {
         let header =
             "import { test as api, describe as suite, beforeEach as hook } from 'vitest';\n\
                       const flag = true; const noop = () => {};";
-        for route in 0..6 {
-            let helper = format!("{header}\nconst chosen = {expression};\nexport {{ chosen }}; export default chosen;");
+        for route in 0..7 {
+            let helper = if route == 6 {
+                format!("{header}\nexport default ({expression});")
+            } else {
+                format!("{header}\nconst chosen = {expression};\nexport {{ chosen }}; export default chosen;")
+            };
             let barrel = "export { chosen as forwarded } from './values';";
             let (setup, callee) = match route {
                 0 => (header.to_owned(), format!("({expression})")),
@@ -212,7 +230,7 @@ fn conditional_capabilities_survive_binding_and_export_routes() {
                     "import { chosen as held } from './values';".to_owned(),
                     "held".to_owned(),
                 ),
-                3 => ("import held from './values';".to_owned(), "held".to_owned()),
+                3 | 6 => ("import held from './values';".to_owned(), "held".to_owned()),
                 4 => (
                     "import { forwarded as held } from './barrel';".to_owned(),
                     "held".to_owned(),
@@ -276,7 +294,52 @@ fn conditional_capabilities_survive_binding_and_export_routes() {
             }
         }
     }
-    assert_eq!(variants, 108);
+    assert_eq!(variants, 322);
+}
+
+/// A consumed AND-left value, scalar alias or namespace supplies no callable result proof.
+#[test]
+fn logical_non_callable_candidates_preserve_direct_controls() {
+    for expression in [
+        "api && noop",
+        "api && 0",
+        "api && api.name",
+        "api && namespace",
+        "false || api.name",
+        "null ?? api.length",
+        "flag && scalar",
+        "scalar || noop",
+        "scalar ?? noop",
+        "flag && namespace",
+        "flag && api.unknownMember",
+        "flag && unknown",
+        "flag && noop",
+    ] {
+        let helper = format!("import {{ test as api }} from 'vitest'; import * as namespace from 'vitest';\nconst flag = true; const noop = () => {{}}; const scalar = api.name;\nexport default ({expression});");
+        let (found, parsed) = inventory_with_tree(
+            "import chosen from './values'; import { test } from 'vitest'; chosen('absent', () => {}); test('retained', () => {});",
+            &[("values.ts", &helper)], false,
+        );
+        assert_eq!(parsed.parse_errors, 0);
+        assert_eq!(found.sites.len(), 1, "{helper}: {found:?}");
+        assert_eq!(found.sites[0].kind, TEST);
+        assert_eq!(found.sites[0].title.as_deref(), Some("retained"));
+        assert!(found.loads.is_empty());
+    }
+    for header in [
+        "import type { test as api } from 'vitest';",
+        "declare const api: any;",
+        "const api = () => {};",
+    ] {
+        let helper = format!("{header} export const chosen = true && api;");
+        let (found, _) = inventory_with_tree(
+            "import { chosen } from './values'; chosen('absent', () => {});",
+            &[("values.ts", &helper)],
+            false,
+        );
+        assert!(found.sites.is_empty(), "{helper}: {found:?}");
+        assert!(found.loads.is_empty());
+    }
 }
 
 /// Equal API arms remain exact; non-result references and unrelated values establish no root.
