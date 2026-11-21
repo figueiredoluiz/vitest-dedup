@@ -5,6 +5,61 @@ use crate::lang::{Parsed, Span};
 
 const TEST: SiteKind = SiteKind::Registers(Registers::Test);
 
+/// Exact API joins survive every insertion point in a dependency-ordered alias chain.
+#[test]
+fn conditional_exact_aliases_do_not_depend_on_declaration_order() {
+    let mut variants = 0;
+    for depth in 1..=3 {
+        let declarations: Vec<_> = (0..depth)
+            .map(|index| {
+                let value = if index == 0 {
+                    "api".to_owned()
+                } else {
+                    format!("arm{}", index - 1)
+                };
+                format!("const arm{index} = {value};")
+            })
+            .collect();
+        for position in 0..=depth {
+            for reverse in [false, true] {
+                for nested in [false, true] {
+                    for callee in ["chosen", "held"] {
+                        let later = format!("arm{}", depth - 1);
+                        let (left, right) = if reverse {
+                            (later, "api".to_owned())
+                        } else {
+                            ("api".to_owned(), later)
+                        };
+                        let expression = format!("flag ? {left} : {right}");
+                        let expression = if nested {
+                            format!("flag ? ({expression}) : ({expression})")
+                        } else {
+                            expression
+                        };
+                        let mut statements = declarations.clone();
+                        statements.insert(position, format!("const chosen = {expression};"));
+                        let source = format!(
+                            "import {{ test as api }} from 'vitest';\nconst flag = {};\n{}\n\
+                             const held = chosen; {callee}('kept', () => {{}});",
+                            !reverse,
+                            statements.join("\n")
+                        );
+                        let (found, parsed) = inventory_with_tree(&source, &[], false);
+                        assert_eq!(parsed.parse_errors, 0);
+                        assert_eq!(found.sites.len(), 1, "{source}: {found:?}");
+                        assert_eq!(found.sites[0].kind, TEST, "{source}");
+                        assert_eq!(found.sites[0].provenance, Provenance::Direct, "{source}");
+                        assert_eq!(found.sites[0].title.as_deref(), Some("kept"));
+                        assert!(found.loads.is_empty());
+                        variants += 1;
+                    }
+                }
+            }
+        }
+    }
+    assert_eq!(variants, 72);
+}
+
 /// An unproved result arm cannot erase a registration capability at any supported binding route.
 #[test]
 fn conditional_capabilities_survive_binding_and_export_routes() {

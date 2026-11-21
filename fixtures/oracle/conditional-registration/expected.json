@@ -8,7 +8,12 @@
         "testsExcluded": 4
       }
     },
-    "control.test.ts": { "tasks": 2, "wrapperSites": [], "next": {} }
+    "control.test.ts": { "tasks": 2, "wrapperSites": [], "next": {} },
+    "order.test.ts": {
+      "tasks": 2,
+      "wrapperSites": [],
+      "next": { "reasons": ["registered-elsewhere"], "testsExcluded": 2 }
+    }
   },
   "blindUnderCurrent": ["case.test.ts"]
 }

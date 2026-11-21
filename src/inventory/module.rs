@@ -90,6 +90,8 @@ struct Module<'s> {
     parsed: &'s Parsed,
     setting: Setting<'s>,
     origins: HashMap<SymbolId, Origin>,
+    /// Exact API aliases have reached their fixpoint before uncertain conditional results join.
+    api_aliases_settled: bool,
     /// Functions of this module whose body holds a registration, by the symbol naming them, with
     /// what calling them may register.
     wrappers: HashMap<SymbolId, Reach>,
@@ -134,6 +136,7 @@ pub(super) fn analyse(
         parsed,
         setting,
         origins: HashMap::new(),
+        api_aliases_settled: false,
         wrappers: HashMap::new(),
         returners: HashSet::new(),
         aliased: HashSet::new(),
@@ -150,6 +153,7 @@ pub(super) fn analyse(
     module.evaluates = super::direct_eval(parsed);
     module.rewritten_globals = module.global_writes();
     module.collect_origins(modules, depth);
+    module.api_aliases_settled = true;
     let found = module.registrations();
     let mut exports = module.exports(modules, depth, &found);
     // A registration outside every wrapper may run while the module loads: at top level, in a
@@ -847,9 +851,10 @@ impl<'s> Module<'s> {
                         }
                         _ if origins.into_iter().flatten().any(|origin| {
                             matches!(origin, Origin::Wrapper(_) | Origin::Derived(_))
-                        }) || arms.into_iter().zip(origins).any(|(arm, origin)| {
-                            matches!(origin, Some(Origin::Api(_))) && self.holds_api(arm)
-                        }) =>
+                        }) || (self.api_aliases_settled
+                            && arms.into_iter().zip(origins).any(|(arm, origin)| {
+                                matches!(origin, Some(Origin::Api(_))) && self.holds_api(arm)
+                            })) =>
                         {
                             steps.reverse();
                             return Some((

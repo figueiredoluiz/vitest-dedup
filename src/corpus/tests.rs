@@ -33,12 +33,21 @@ fn conditional_registration_keeps_owned_exclusions_and_positive_findings() {
             "values.ts",
             include_str!("../../fixtures/oracle/conditional-registration/values.ts"),
         ),
+        (
+            "order.test.ts",
+            include_str!("../../fixtures/oracle/conditional-registration/order.test.ts"),
+        ),
     ];
     let results = runs(
         &files,
         &[
-            &["case.test.ts", "control.test.ts"],
-            &["control.test.ts", "case.test.ts", "case.test.ts"],
+            &["case.test.ts", "control.test.ts", "order.test.ts"],
+            &[
+                "order.test.ts",
+                "control.test.ts",
+                "case.test.ts",
+                "order.test.ts",
+            ],
         ],
     );
     for batch in &results {
@@ -51,6 +60,24 @@ fn conditional_registration_keeps_owned_exclusions_and_positive_findings() {
             {
                 assert_eq!(corpus.tests.len(), 2);
                 assert!(corpus.tests.iter().all(|case| case.exclusion.is_none()));
+            } else if corpus
+                .tests
+                .iter()
+                .any(|case| case.title.as_deref() == Some("ordered left"))
+            {
+                assert_eq!(corpus.tests.len(), 4);
+                assert_eq!(
+                    corpus.exclusions().get(&Exclusion::RegisteredElsewhere),
+                    Some(&2)
+                );
+                assert_eq!(
+                    corpus
+                        .tests
+                        .iter()
+                        .filter(|case| case.exclusion.is_none())
+                        .count(),
+                    2
+                );
             } else {
                 assert_eq!(corpus.tests.len(), 4, "{corpus:?}");
                 assert_eq!(
@@ -74,9 +101,13 @@ fn conditional_registration_keeps_owned_exclusions_and_positive_findings() {
     let outcome = owned_outcome(vec![
         ("case.test.ts", results[0][0].clone()),
         ("control.test.ts", results[0][1].clone()),
+        ("order.test.ts", results[0][2].clone()),
     ]);
-    assert_eq!(outcome.findings.len(), 1, "{:?}", outcome.findings);
-    assert_eq!(outcome.findings[0].rule, crate::model::Rule::DuplicateTest);
+    assert_eq!(outcome.findings.len(), 2, "{:?}", outcome.findings);
+    assert!(outcome
+        .findings
+        .iter()
+        .all(|finding| finding.rule == crate::model::Rule::DuplicateTest));
 }
 
 /// Escape uncertainty retains its exact placeholder while ordinary duplicate tests stay comparable.
