@@ -1,6 +1,6 @@
 //! ESTree shapes several layers read: specifier names, property keys, pattern bindings.
 
-use super::{NodeId, Scopes, SymbolId, Tree};
+use super::{Field, NodeId, Scopes, SymbolId, Tree};
 
 /// Whether a subtree reads its surrounding invocation's receiver or implicit arguments.
 /// Arrow functions and computed class keys inherit them; ordinary functions, field initializers
@@ -124,10 +124,20 @@ pub(crate) fn callee_link(tree: &Tree, node: NodeId) -> Option<CalleeLink<'_>> {
 /// A direct child's structural role in its parent's value, without interpreting an API.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ValueRole<'t> {
-    /// Parentheses or erased TypeScript syntax around the expression.
+    /// Parentheses, `as`, `satisfies` or non-null syntax around the expression.
     Transparent,
+    /// An angle-bracket TypeScript assertion around its expression.
+    TypeAssertion,
+    /// Type arguments applied to a value separately from a call's own type arguments.
+    Instantiation,
     /// The input of a member, call or tagged invocation; its result still needs interpretation.
-    Callee,
+    Callee(CalleeLinkKind<'t>),
+    /// The initial value of a binding, without claiming what that binding later does.
+    Initializer,
+    /// A local/default export operand, without claiming the exported value is inert.
+    Exported,
+    /// An operand consumed by a unary operation, distinct from other consuming positions.
+    UnaryOperand,
     /// An operand whose value can supply the result when that operand is evaluated.
     Result,
     /// A value held in an array, object, property or spread.
@@ -150,15 +160,18 @@ pub(crate) fn value_role(tree: &Tree, outer: NodeId, inner: NodeId) -> ValueRole
         "ParenthesizedExpression"
         | "TSAsExpression"
         | "TSSatisfiesExpression"
-        | "TSNonNullExpression"
-        | "TSTypeAssertion"
-        | "TSInstantiationExpression" => {
+        | "TSNonNullExpression" => {
             if holds("expression") {
                 ValueRole::Transparent
             } else {
                 ValueRole::Other
             }
         }
+        "TSTypeAssertion" if holds("expression") => ValueRole::TypeAssertion,
+        "TSInstantiationExpression" if holds("expression") => ValueRole::Instantiation,
+        "VariableDeclarator" if holds("init") => ValueRole::Initializer,
+        "ExportSpecifier" | "ExportDefaultDeclaration" => ValueRole::Exported,
+        "UnaryExpression" => ValueRole::UnaryOperand,
         "AwaitExpression" if holds("argument") => ValueRole::Result,
         "ArrayExpression" | "ObjectExpression" | "SpreadElement" => ValueRole::Contained,
         "Property" => {
@@ -180,7 +193,9 @@ pub(crate) fn value_role(tree: &Tree, outer: NodeId, inner: NodeId) -> ValueRole
             .text(outer, "operator")
             .map_or(ValueRole::Other, ValueRole::LogicalLeft),
         "SequenceExpression" => {
-            if tree.list(outer, "expressions").last() == Some(&Some(inner)) {
+            if matches!(tree.field_of(outer, "expressions"), Field::List(items)
+                if matches!(items.last(), Some(Field::Node(last)) if *last == inner))
+            {
                 ValueRole::Result
             } else {
                 ValueRole::Consumed
@@ -198,13 +213,11 @@ pub(crate) fn value_role(tree: &Tree, outer: NodeId, inner: NodeId) -> ValueRole
                 ValueRole::Consumed
             }
         }
-        "UnaryExpression" | "BinaryExpression" | "TemplateLiteral" => ValueRole::Consumed,
-        _ if callee_link(tree, outer)
-            .is_some_and(|link| link.node == outer && link.input == inner) =>
-        {
-            ValueRole::Callee
-        }
-        _ => ValueRole::Other,
+        "BinaryExpression" | "TemplateLiteral" => ValueRole::Consumed,
+        _ => match callee_link(tree, outer) {
+            Some(link) if link.node == outer && link.input == inner => ValueRole::Callee(link.kind),
+            _ => ValueRole::Other,
+        },
     }
 }
 
@@ -254,17 +267,46 @@ mod tests {
         uses_receiver(&parsed.tree, &parsed.scopes, body)
     }
 
+    /// Call type arguments and a separate instantiation expression have different owned edges.
+    #[test]
+    fn type_arguments_keep_their_actual_parent_edges() {
+        for (expression, kind) in [
+            ("held<any>()", "CallExpression"),
+            ("(held<any>)()", "TSInstantiationExpression"),
+        ] {
+            let (parsed, _) = arrow_body(&format!("() => {expression}"));
+            assert_eq!(parsed.parse_errors, 0);
+            let tree = &parsed.tree;
+            let held = tree
+                .nodes()
+                .find(|&node| {
+                    tree.kind(node) == "Identifier" && tree.text(node, "name") == Some("held")
+                })
+                .unwrap();
+            assert_eq!(tree.kind(tree.parent(held).unwrap()), kind, "{expression}");
+        }
+    }
+
     /// Roles distinguish the actual result operand from conditions, keys and other inputs.
     #[test]
     fn value_roles_distinguish_result_positions() {
-        use ValueRole::{Callee, Consumed, Contained, LogicalLeft, Other, Result, Transparent};
+        use ValueRole::{
+            Callee, Consumed, Contained, Exported, Initializer, Instantiation, LogicalLeft, Other,
+            Result, Transparent, TypeAssertion, UnaryOperand,
+        };
         for (expression, expected) in [
             ("(held as any)", Transparent),
             ("held!", Transparent),
-            ("held<number>", Transparent),
-            ("held.member", Callee),
-            ("held()", Callee),
-            ("held`text`", Callee),
+            ("<any>held", TypeAssertion),
+            ("held<number>", Instantiation),
+            (
+                "held.member",
+                Callee(CalleeLinkKind::Member(Some("member"))),
+            ),
+            ("held[key]", Callee(CalleeLinkKind::Member(None))),
+            ("held()", Callee(CalleeLinkKind::Call)),
+            ("held<any>()", Callee(CalleeLinkKind::Call)),
+            ("held`text`", Callee(CalleeLinkKind::Tagged)),
             ("await held", Result),
             ("flag ? held : 0", Result),
             ("flag ? 0 : held", Result),
@@ -283,11 +325,14 @@ mod tests {
             ("target += held", Consumed),
             ("held = 0", Other),
             ("held ||= 0", Other),
-            ("typeof held", Consumed),
+            ("typeof held", UnaryOperand),
             ("held === 0", Consumed),
             ("`${held}`", Consumed),
             ("consume(held)", Other),
             ("() => held", Other),
+            ("{ const binding = held; }", Initializer),
+            ("{}; export default held", Exported),
+            ("{}; export { held }", Exported),
         ] {
             let (parsed, _) = arrow_body(&format!("async () => {expression}"));
             assert_eq!(parsed.parse_errors, 0, "{expression}");

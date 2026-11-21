@@ -1,6 +1,6 @@
 use super::{file, Engine, Exclusion, Failure, FileCorpus, Run, Setting, TestCase};
 use crate::framework::vitest::DIALECT;
-use crate::model::ExclusionReason;
+use crate::model::{ExclusionReason, Position};
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
@@ -16,6 +16,97 @@ mod nc64;
 mod nc65;
 mod normal_properties;
 mod runners;
+
+/// Escape uncertainty retains its exact placeholder while ordinary duplicate tests stay comparable.
+#[test]
+fn escape_roles_keep_final_exclusions_and_positive_findings() {
+    for (statement, escaped) in [
+        ("api;", true),
+        ("api.skip;", true),
+        ("typeof api;", false),
+        ("const held = api;", false),
+        ("export default api;", false),
+    ] {
+        for controls in [false, true] {
+            let source = format!(
+                "import {{ test as api, expect }} from 'vitest';\n{statement}\n{}",
+                if controls {
+                    "api('left', () => { expect(1).toBe(1) });\napi('right', () => { expect(1).toBe(1) });"
+                } else {
+                    ""
+                }
+            );
+            let result = corpora(&[("case.test.ts", &source)], &["case.test.ts"]).remove(0);
+            assert_eq!(result.parse_errors, 0);
+            assert_eq!(
+                result.tests.len(),
+                2 * usize::from(controls) + usize::from(escaped),
+                "{source}: {result:?}"
+            );
+            let uncertain: Vec<_> = result
+                .tests
+                .iter()
+                .filter(|test| test.exclusion == Some(Exclusion::RegisteredElsewhere))
+                .collect();
+            assert_eq!(uncertain.len(), usize::from(escaped), "{source}");
+            if escaped {
+                assert_eq!(uncertain[0].span.start, Position { line: 2, column: 1 });
+                assert!(uncertain[0].title.is_none());
+                assert!(!uncertain[0].trace_complete);
+            }
+            assert_eq!(
+                result
+                    .tests
+                    .iter()
+                    .filter(|test| test.exclusion.is_none())
+                    .count(),
+                2 * usize::from(controls),
+                "{source}"
+            );
+            let outcome = owned_outcome(vec![("case.test.ts", result)]);
+            assert_eq!(
+                outcome
+                    .findings
+                    .iter()
+                    .filter(|finding| finding.rule == crate::model::Rule::DuplicateTest)
+                    .count(),
+                usize::from(controls),
+                "{source}: {:?}",
+                outcome.findings
+            );
+        }
+    }
+}
+
+/// The same owned value-escaping helper source is run by the paired Vitest probe.
+#[test]
+fn owned_escape_source_keeps_both_refusal_reasons() {
+    let source = include_str!("../../fixtures/oracle/hooks-only-reach/escape-callee.test.ts")
+        .replace("\r\n", "\n");
+    let setup =
+        include_str!("../../fixtures/oracle/hooks-only-reach/setup.ts").replace("\r\n", "\n");
+    let cases =
+        include_str!("../../fixtures/oracle/hooks-only-reach/cases.ts").replace("\r\n", "\n");
+    let result = corpora(
+        &[
+            ("case.test.ts", &source),
+            ("setup.ts", &setup),
+            ("cases.ts", &cases),
+        ],
+        &["case.test.ts"],
+    )
+    .remove(0);
+    assert_eq!(result.parse_errors, 0);
+    assert_eq!(result.tests.len(), 2);
+    assert_eq!(
+        result.exclusions().get(&Exclusion::RegisteredElsewhere),
+        Some(&1)
+    );
+    assert_eq!(
+        result.exclusions().get(&Exclusion::UnprovedRunner),
+        Some(&1)
+    );
+}
 
 /// Require the requested rule to stay silent while retaining diagnostics on failure.
 fn assert_rule_absent(outcome: crate::rules::Outcome, rule: crate::model::Rule) {

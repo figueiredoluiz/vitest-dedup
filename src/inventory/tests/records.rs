@@ -5,6 +5,84 @@ use crate::lang::{Parsed, Span};
 
 const TEST: SiteKind = SiteKind::Registers(Registers::Test);
 
+/// Escape policy keeps exact anchors across API bindings, syntax and direct retention controls.
+#[test]
+fn escape_roles_preserve_records_and_direct_controls() {
+    for (statement, escaped, calls) in [
+        ("VALUE;", Some("VALUE"), 0),
+        ("VALUE.skip;", Some("VALUE.skip"), 0),
+        ("VALUE[key];", Some("VALUE[key]"), 0),
+        ("sink(VALUE.skip);", Some("VALUE.skip"), 0),
+        ("sink(VALUE as any);", Some("VALUE as any"), 0),
+        ("VALUE satisfies any;", Some("VALUE satisfies any"), 0),
+        ("[VALUE];", Some("VALUE"), 0),
+        ("({ value: VALUE });", Some("VALUE"), 0),
+        ("true ? VALUE : 0;", Some("VALUE"), 0),
+        ("VALUE === 0;", Some("VALUE"), 0),
+        ("`${VALUE}`;", Some("VALUE"), 0),
+        ("target = VALUE;", Some("VALUE"), 0),
+        ("(VALUE, 0);", Some("VALUE"), 0),
+        ("(0, VALUE)('case', () => {});", Some("VALUE"), 0),
+        ("(<any>VALUE)('case', () => {});", Some("VALUE"), 1),
+        ("(VALUE<any>)('case', () => {});", Some("VALUE"), 1),
+        ("VALUE<any>('case', () => {});", None, 1),
+        ("typeof VALUE;", None, 0),
+        ("const held = VALUE;", None, 0),
+        ("export default VALUE;", None, 0),
+        ("VALUE('case', () => {});", None, 1),
+        ("(VALUE)('case', () => {});", None, 1),
+        ("(VALUE as any)('case', () => {});", None, 1),
+        ("VALUE!('case', () => {});", None, 1),
+        ("VALUE.each`n\n${1}`('case', () => {});", None, 1),
+    ] {
+        for (import, value) in [
+            ("import { test as api } from 'vitest';", "api"),
+            ("import * as v from 'vitest';", "v.test"),
+        ] {
+            for control in [false, true] {
+                let statement = statement.replace("VALUE", value);
+                let source = format!(
+                    "{import}\nimport {{ test as direct }} from 'vitest';\nlet target;\n{statement}\n{}",
+                    if control { "direct('kept', () => {});" } else { "" }
+                );
+                let (found, parsed) = inventory_with_tree(&source, &[], false);
+                assert_eq!(parsed.parse_errors, 0, "{source}");
+                assert_eq!(
+                    found.sites.len(),
+                    calls + usize::from(control),
+                    "{source}: {found:?}"
+                );
+                assert!(found.sites.iter().all(|site| site.kind == TEST), "{source}");
+                if control {
+                    assert_eq!(found.sites.last().unwrap().title.as_deref(), Some("kept"));
+                }
+                assert_eq!(
+                    found.escapes.len(),
+                    usize::from(escaped.is_some()),
+                    "{source}: {found:?}"
+                );
+                if let Some(anchor) = escaped {
+                    let anchor = anchor.replace("VALUE", value);
+                    let escape = &found.escapes[0];
+                    assert_eq!(escape.text, anchor, "{source}");
+                    assert_eq!(
+                        escape.offset as usize,
+                        source.find(&statement).unwrap() + statement.find(&anchor).unwrap(),
+                        "{source}"
+                    );
+                }
+            }
+        }
+    }
+    for statement in ["export { api };", "export type { api };"] {
+        let source = format!("import {{ test as api }} from 'vitest';\n{statement}");
+        let (found, parsed) = inventory_with_tree(&source, &[], false);
+        assert_eq!(parsed.parse_errors, 0);
+        assert!(found.sites.is_empty());
+        assert!(found.escapes.is_empty(), "{source}: {found:?}");
+    }
+}
+
 /// Result positions keep factory accounting across declaration forms and module boundaries.
 #[test]
 fn return_positions_preserve_factory_records_and_direct_controls() {
@@ -13,6 +91,8 @@ fn return_positions_preserve_factory_records_and_direct_controls() {
         ("base.skip", true),
         ("base.extend({})", true),
         ("(base as any)", true),
+        ("<any>base", true),
+        ("base<any>", true),
         ("flag ? base : 0", true),
         ("base ? 1 : 0", false),
         ("0 && base", true),
