@@ -5,6 +5,127 @@ use crate::lang::{Parsed, Span};
 
 const TEST: SiteKind = SiteKind::Registers(Registers::Test);
 
+/// A resolved wrapper keeps its reach through a default expression just as through a binding.
+#[test]
+fn default_expression_wrappers_match_binding_exports() {
+    let mut variants = 0;
+    for expression in [
+        "flag ? api : noop",
+        "flag ? noop : api",
+        "flag ? api.skip : noop",
+        "flag ? api.extend({}) : noop",
+        "flag ? noop : (flag ? api : noop)",
+        "flag ? api : suite",
+        "flag ? hook : noop",
+    ] {
+        for wrapped in [
+            expression.to_owned(),
+            format!("({expression}) as any"),
+            format!("({expression}) satisfies unknown"),
+        ] {
+            for binding in [true, false] {
+                let export = if binding {
+                    format!("const chosen = {wrapped}; export default chosen;")
+                } else {
+                    format!("export default ({wrapped});")
+                };
+                let helper = format!("import {{ test as api, describe as suite, beforeEach as hook }} from 'vitest';\nconst flag = true; const noop = () => {{}};\n{export}");
+                for import in [
+                    "import held from './values';",
+                    "import held from './default-barrel';",
+                    "import { forwarded as held } from './named-barrel';",
+                ] {
+                    for controls in [false, true] {
+                        let call = if expression.contains("hook") {
+                            "held(() => {})"
+                        } else {
+                            "held('uncertain', () => {})"
+                        };
+                        let source = format!(
+                            "{import}\nimport {{ test as direct }} from 'vitest';\n{call};\n{}",
+                            if controls {
+                                "direct('retained', () => {});"
+                            } else {
+                                ""
+                            }
+                        );
+                        let (found, parsed) = inventory_with_tree(
+                            &source,
+                            &[
+                                ("values.ts", &helper),
+                                ("default-barrel.ts", "export { default } from './values';"),
+                                (
+                                    "named-barrel.ts",
+                                    "export { default as forwarded } from './values';",
+                                ),
+                            ],
+                            false,
+                        );
+                        assert_eq!(parsed.parse_errors, 0);
+                        assert_eq!(
+                            found.sites.len(),
+                            1 + usize::from(controls),
+                            "{helper}\n{source}: {found:?}"
+                        );
+                        assert_eq!(found.sites[0].kind, SiteKind::Wrapper(Reach::Tasks));
+                        assert_eq!(found.sites[0].provenance, Provenance::Wrapper);
+                        assert!(
+                            found.loads.is_empty(),
+                            "exporting the value must not call it"
+                        );
+                        if controls {
+                            assert_eq!(found.sites[1].kind, TEST);
+                        }
+                        variants += 1;
+                    }
+                }
+            }
+        }
+    }
+    assert_eq!(variants, 252);
+}
+
+/// Scalar API properties, namespace values and unrelated expressions gain no wrapper export.
+#[test]
+fn default_expression_controls_preserve_absent_and_existing_results() {
+    for expression in [
+        "flag ? noop : noop",
+        "flag ? api.name : noop",
+        "flag ? api.name : api.name",
+        "flag ? api.length : api.length",
+        "flag ? scalar : noop",
+        "flag ? namespace : noop",
+        "flag ? api.unknownMember : noop",
+        "flag ? unknown : noop",
+        "api.name",
+        "api.length",
+    ] {
+        let helper = format!("import {{ test as api }} from 'vitest'; import * as namespace from 'vitest';\nconst flag = true; const noop = () => {{}}; const scalar = api.name;\nexport default ({expression});");
+        let (found, parsed) = inventory_with_tree(
+            "import held from './values'; held('absent', () => {});",
+            &[("values.ts", &helper)],
+            false,
+        );
+        assert_eq!(parsed.parse_errors, 0);
+        assert_eq!(found.sites.len(), 0, "{helper}");
+        assert!(found.loads.is_empty());
+    }
+    for declaration in [
+        "export default api;",
+        "const held = api; export default held;",
+        "export default function () { api('inside', () => {}); }",
+    ] {
+        let helper = format!("import {{ test as api }} from 'vitest'; {declaration}");
+        let (found, _) = inventory_with_tree(
+            "import held from './values'; held('kept', () => {});",
+            &[("values.ts", &helper)],
+            false,
+        );
+        assert_eq!(found.sites.len(), 1, "{helper}");
+        assert_eq!(found.sites[0].kind, SiteKind::Wrapper(Reach::Tasks));
+    }
+}
+
 /// Exact API joins survive every insertion point in a dependency-ordered alias chain.
 #[test]
 fn conditional_exact_aliases_do_not_depend_on_declaration_order() {
