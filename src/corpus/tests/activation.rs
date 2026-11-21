@@ -105,6 +105,90 @@ fn options_are_read_as_their_last_write() {
     }
 }
 
+/// A focus on the same registration overrides its skip or todo, by chain or option, so the
+/// registration is never inert from it; a skip on another registration still wins. Rows follow the
+/// runtime table Vitest 3, 4 and 5 agree on, except where they differ or the option skips anyway
+/// (`describe.only(s, { skip: true })`, `describe.skip(s, { only: true })`), which stay unproved.
+#[test]
+fn a_focus_overrides_the_skip_on_its_own_registration() {
+    let body = "() => { expect(1).toBe(1) }";
+    // (registration around a `test(TITLE, body)`, inert, may_skip)
+    let rows = [
+        ("describe.skip.only('s', () => { TEST })", false, true),
+        ("describe.only.skip('s', () => { TEST })", false, true),
+        ("describe.todo.only('s', () => { TEST })", false, true),
+        (
+            "describe('s', { skip: true, only: true }, () => { TEST })",
+            false,
+            true,
+        ),
+        (
+            "describe('s', { todo: true, only: true }, () => { TEST })",
+            false,
+            true,
+        ),
+        (
+            "describe.only('s', { skip: true }, () => { TEST })",
+            false,
+            true,
+        ),
+        (
+            "describe.skip('s', { only: true }, () => { TEST })",
+            false,
+            true,
+        ),
+        (
+            "describe.skip('s', { only: flag }, () => { TEST })",
+            false,
+            true,
+        ),
+        (
+            "describe.skip.only.each([[1]])('s %s', () => { TEST })",
+            false,
+            true,
+        ),
+        (
+            "describe.skip('s', () => { describe.only('t', () => { TEST }) })",
+            true,
+            true,
+        ),
+        (
+            "describe.only('s', () => { describe.skip('t', () => { TEST }) })",
+            true,
+            true,
+        ),
+        (
+            "describe('s', { skip: true, only: false }, () => { TEST })",
+            true,
+            true,
+        ),
+        ("describe.only('s', () => { TEST })", false, false),
+    ];
+    let mut source = format!("{IMPORTS}const flag = true;\n");
+    for (index, (suite, _, _)) in rows.iter().enumerate() {
+        let test = format!("test('in {index}', {body})");
+        source.push_str(&suite.replace("TEST", &test));
+        source.push('\n');
+    }
+    source.push_str(&format!(
+        "test.skip.only('own chain', {body});\n\
+         test('own options', {{ skip: true, only: true }}, {body});\n\
+         test.skip.only.each([[1]])('own table', {body});\n\
+         test.skip('own control', {body});\n"
+    ));
+    let tests = by_title(&source);
+    assert_eq!(tests.len(), rows.len() + 4, "{:?}", tests.keys());
+    for (index, (suite, inert, may_skip)) in rows.into_iter().enumerate() {
+        let test = &tests[format!("in {index}").as_str()];
+        assert!(test.exclusion.is_none(), "{suite}");
+        assert_eq!((test.inert, test.may_skip), (inert, may_skip), "{suite}");
+    }
+    for title in ["own chain", "own options", "own table#0"] {
+        assert!(!tests[title].inert && tests[title].may_skip, "{title}");
+    }
+    assert!(tests["own control"].inert);
+}
+
 /// A duplicate whose copy sits in a skipped suite is still reported, and that copy is marked.
 #[test]
 fn a_duplicate_inside_a_skipped_suite_is_an_inert_participant() {
@@ -113,6 +197,7 @@ fn a_duplicate_inside_a_skipped_suite_is_an_inert_participant() {
         ("describe.skip('s', () => { TEST })", true),
         ("describe.todo('s', () => { TEST })", true),
         ("describe('s', { todo: true }, () => { TEST })", true),
+        ("describe.skip.only('s', () => { TEST })", false),
         ("describe('s', () => { TEST })", false),
         ("describe('s', { skip: off }, () => { TEST })", false),
     ] {

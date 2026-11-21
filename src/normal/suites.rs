@@ -9,11 +9,13 @@ use serde_json::Value;
 /// and those of every suite around it.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Activation {
-    /// A `skip`/`todo` chain member, or an option whose last write is a literal `true`: Vitest
-    /// skips or todos the registration and everything declared inside it.
+    /// A `skip`/`todo` chain member, or an option whose last write is a literal `true`, on a
+    /// registration that nothing may focus: Vitest skips or todos it and everything declared
+    /// inside it.
     pub inert: bool,
-    /// [`Self::inert`], or a `skip`/`todo` option whose last write is not a literal `false`
-    /// (`{ skip: flag }`, `{ ...options }`): the registration is not proved to run.
+    /// A `skip`/`todo` that `inert` would count, focused or not, or a `skip`/`todo` option whose
+    /// last write is not a literal `false` (`{ skip: flag }`, `{ ...options }`): the registration
+    /// is not proved to run.
     pub may_skip: bool,
 }
 
@@ -29,11 +31,15 @@ impl Activation {
 
 impl Normalizer<'_> {
     /// What a registration's own chain (`modifiers`) and `arguments` say about whether it runs.
+    /// A focus (`only`) on the same registration overrides its skip or todo in most spellings but
+    /// not all (`describe.only(name, { skip: true })` stays skipped), so it leaves the registration
+    /// unproved rather than inert. Focus never reaches a skip on another registration.
     pub fn activation(&self, modifiers: &Modifiers, arguments: &[NodeId]) -> Activation {
-        let inert = modifiers.inert || self.inert_options(arguments);
+        let skipped = modifiers.inert || self.inert_options(arguments);
+        let focused = modifiers.focus || self.may_focus_options(arguments);
         Activation {
-            inert,
-            may_skip: inert || self.may_skip_options(arguments),
+            inert: skipped && !focused,
+            may_skip: skipped || self.may_skip_options(arguments),
         }
     }
 
