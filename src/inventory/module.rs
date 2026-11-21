@@ -834,18 +834,23 @@ impl<'s> Module<'s> {
                 return Some((origin, provenance, steps));
             }
             match tree.kind(node) {
-                // `only ? it.only : it`: both branches the same kind of registration function.
+                // Join resolved result capabilities; missing proof does not make an arm inert.
                 "ConditionalExpression" => {
-                    let branch = |key| {
-                        tree.child(node, key)
-                            .and_then(|branch| self.value_origin(branch))
-                    };
-                    let registers = match (branch("consequent"), branch("alternate")) {
+                    let arms = [
+                        tree.child(node, "consequent")?,
+                        tree.child(node, "alternate")?,
+                    ];
+                    let origins = arms.map(|arm| self.value_origin(arm));
+                    let registers = match (origins[0], origins[1]) {
                         (Some(Origin::Api(left)), Some(Origin::Api(right))) if left == right => {
                             left
                         }
-                        (Some(Origin::Wrapper(_) | Origin::Derived(_)), _)
-                        | (_, Some(Origin::Wrapper(_) | Origin::Derived(_))) => {
+                        _ if origins.into_iter().flatten().any(|origin| {
+                            matches!(origin, Origin::Wrapper(_) | Origin::Derived(_))
+                        }) || arms.into_iter().zip(origins).any(|(arm, origin)| {
+                            matches!(origin, Some(Origin::Api(_))) && self.holds_api(arm)
+                        }) =>
+                        {
                             steps.reverse();
                             return Some((
                                 Origin::Wrapper(Reach::Tasks),
