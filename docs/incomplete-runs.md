@@ -18,6 +18,12 @@ How each reporter says so:
 `--fail-on-incomplete` turns the flag into a non-zero exit. A file in which every test was excluded
 is a blind spot; see [Blind spots](#blind-spots).
 
+Calls through logical expressions with a recognized registration result are counted as unresolved.
+Conditional result arms nested inside those expressions are followed, without evaluating guards.
+Logical guards are not evaluated, so even an inactive branch can conservatively make a run
+incomplete. A registration value used only as the left operand of `&&` does not supply its result.
+Some logical results, including local aliases of framework functions, are not yet recognized.
+
 ### Choosing which causes count
 
 `--fail-on-incomplete` or `--fail-on-incomplete=any` counts every cause, because the classes call

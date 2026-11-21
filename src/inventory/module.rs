@@ -7,11 +7,23 @@ use super::{
 };
 use crate::framework::{Chain, Mocking, Registers};
 use crate::lang::{
-    bound_symbols, callee_link, export_name, member_name, property_name, value_role,
-    CalleeLinkKind, Declaration, Imported, Name, NodeId, Parsed, Span, SymbolId, Tree, ValueRole,
+    bound_symbols, callee_link, export_name, logical_results, member_name, property_name,
+    value_role, CalleeLinkKind, Declaration, Imported, Name, NodeId, Parsed, Span, SymbolId, Tree,
+    ValueRole,
 };
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
+
+#[cfg(test)]
+thread_local! {
+    static RESOLUTIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Reset and return this thread's resolver entries for deterministic work regressions.
+#[cfg(test)]
+pub(super) fn take_resolutions() -> usize {
+    RESOLUTIONS.with(|resolutions| resolutions.replace(0))
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Origin {
@@ -844,17 +856,17 @@ impl<'s> Module<'s> {
                         tree.child(node, "consequent")?,
                         tree.child(node, "alternate")?,
                     ];
-                    let origins = arms.map(|arm| self.value_origin(arm));
+                    let resolved = arms.map(|arm| self.resolve(arm));
+                    let origins = resolved
+                        .each_ref()
+                        .map(|arm| arm.as_ref().map(|callee| callee.value));
                     let registers = match (origins[0], origins[1]) {
                         (Some(Origin::Api(left)), Some(Origin::Api(right))) if left == right => {
                             left
                         }
-                        _ if origins.into_iter().flatten().any(|origin| {
-                            matches!(origin, Origin::Wrapper(_) | Origin::Derived(_))
-                        }) || (self.api_aliases_settled
-                            && arms.into_iter().zip(origins).any(|(arm, origin)| {
-                                matches!(origin, Some(Origin::Api(_))) && self.holds_api(arm)
-                            })) =>
+                        _ if arms.into_iter().zip(resolved.each_ref()).any(
+                            |(arm, resolved)| self.registration_candidate(arm, resolved.as_ref()),
+                        ) =>
                         {
                             steps.reverse();
                             return Some((
@@ -867,6 +879,15 @@ impl<'s> Module<'s> {
                     };
                     steps.reverse();
                     return Some((Origin::Api(registers), Provenance::Direct, steps));
+                }
+                "LogicalExpression" => {
+                    if !logical_results(tree, node).any(|operand| {
+                        self.registration_candidate(operand, self.resolve(operand).as_ref())
+                    }) {
+                        return None;
+                    }
+                    steps.reverse();
+                    return Some((Origin::Wrapper(Reach::Tasks), Provenance::Wrapper, steps));
                 }
                 // What awaiting a registration function resolves to is not read: it may register.
                 "AwaitExpression" if self.holds_api(tree.child(node, "argument")?) => {
@@ -898,6 +919,16 @@ impl<'s> Module<'s> {
                     node = link.input;
                 }
             }
+        }
+    }
+
+    /// A result candidate may register; a coarse API origin alone does not prove callability.
+    /// Reuse the resolved callee, retaining the alias-settlement boundary of the resolver.
+    fn registration_candidate(&self, node: NodeId, resolved: Option<&ResolvedCallee<'s>>) -> bool {
+        match resolved.map(|callee| callee.value) {
+            Some(Origin::Wrapper(_) | Origin::Derived(_)) => true,
+            Some(Origin::Api(_)) => self.api_aliases_settled && self.holds_api_with(node, resolved),
+            _ => false,
         }
     }
 
@@ -971,6 +1002,8 @@ impl<'s> Module<'s> {
 
     /// Resolve a callee's value and admitted registration from the same application and anchor.
     fn resolve(&self, node: NodeId) -> Option<ResolvedCallee<'s>> {
+        #[cfg(test)]
+        RESOLUTIONS.with(|resolutions| resolutions.set(resolutions.get() + 1));
         let (origin, provenance, steps) = self.chain(node)?;
         if let Some(reach) = origin.reach() {
             // Only a bare wrapper retains its reach; anything derived from it may register tasks.
@@ -1368,6 +1401,11 @@ impl<'s> Module<'s> {
     /// dialect knows: through a local alias, a conditional or another module's export the value is
     /// not read here, and `test.name` is a string.
     fn holds_api(&self, node: NodeId) -> bool {
+        self.holds_api_with(node, None)
+    }
+
+    /// Check callability using an existing resolution, or resolve after rejecting non-chain roots.
+    fn holds_api_with(&self, node: NodeId, resolved: Option<&ResolvedCallee<'s>>) -> bool {
         let tree = self.tree;
         let mut root = tree.inner(node);
         // Only `await make()` holds the API through an `await`: a chain through one is a wrapper
@@ -1378,16 +1416,32 @@ impl<'s> Module<'s> {
             };
             root = tree.inner(argument);
         }
+        // A resolved join candidate can use the namespace root already proved by the resolver.
+        // Other callers retain the identifier and returner boundary below.
+        let namespace = |root| {
+            resolved.is_some() && matches!(self.root_origin(root), Some((Origin::Namespace, _)))
+        };
         while let Some(link) = callee_link(tree, root) {
+            if namespace(root) {
+                break;
+            }
             root = tree.inner(link.input);
         }
-        if tree.kind(root) != "Identifier" {
+        let symbol = if tree.kind(root) == "Identifier" {
+            self.read(root)
+        } else if namespace(root) {
+            None
+        } else {
             return false;
-        }
-        let symbol = self.read(root);
+        };
         // One walk: each `await` in the chain asks this again, so walking twice doubles per level.
-        let resolved = self.resolve(node);
-        let value = resolved.as_ref().map(|callee| callee.value);
+        let owned = if resolved.is_none() {
+            self.resolve(node)
+        } else {
+            None
+        };
+        let resolved = resolved.or(owned.as_ref());
+        let value = resolved.map(|callee| callee.value);
         if !matches!(value, Some(Origin::Api(_) | Origin::Namespace)) {
             // Only the call itself: `make.name` and `make().name` are not what `make` returns.
             let mut value = tree.inner(node);

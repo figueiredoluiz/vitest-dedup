@@ -5,6 +5,37 @@ use crate::lang::{Parsed, Span};
 
 const TEST: SiteKind = SiteKind::Registers(Registers::Test);
 
+/// Scalar builder arguments cannot multiply resolution work, or erase known registration sites.
+#[test]
+fn logical_builder_arguments_have_bounded_resolution_work() {
+    for member in ["name", "length"] {
+        for guard in ["false ||", "null ??", "true &&"] {
+            for depth in [4, 8, 12, 16] {
+                let mut expression = "0".to_owned();
+                for _ in 0..depth {
+                    expression = format!("{guard} api.skipIf({expression}).{member}");
+                }
+                let source = format!(
+                    "import {{test as api}} from 'vitest'; const scalar = {expression};\n\
+                     const chosen = true && api; chosen('uncertain', () => {{}});\n\
+                     api('retained', () => {{}});"
+                );
+                super::super::module::take_resolutions();
+                let (found, parsed) = inventory_with_tree(&source, &[], false);
+                let work = super::super::module::take_resolutions();
+                assert_eq!(parsed.parse_errors, 0);
+                assert_eq!(found.sites.len(), 2, "{found:?}");
+                assert_eq!(found.sites[0].kind, SiteKind::Wrapper(Reach::Tasks));
+                assert_eq!(found.sites[1].kind, TEST);
+                assert_eq!(found.sites[1].title.as_deref(), Some("retained"));
+                let nodes = parsed.tree.nodes().count();
+                let bound = 32 * nodes * nodes;
+                assert!(work > 0 && work <= bound, "{guard} {member} depth{depth}: {work} resolutions exceed {bound} for {nodes} nodes");
+            }
+        }
+    }
+}
+
 /// A resolved wrapper keeps its reach through a default expression just as through a binding.
 #[test]
 fn default_expression_wrappers_match_binding_exports() {
@@ -183,7 +214,7 @@ fn conditional_exact_aliases_do_not_depend_on_declaration_order() {
 
 /// An unproved result arm cannot erase a registration capability at any supported binding route.
 #[test]
-fn conditional_capabilities_survive_binding_and_export_routes() {
+fn branch_capabilities_survive_binding_and_export_routes() {
     let mut variants = 0;
     for expression in [
         "flag ? api : noop",
@@ -195,12 +226,42 @@ fn conditional_capabilities_survive_binding_and_export_routes() {
         "flag ? noop : (flag ? api : noop)",
         "flag ? api : suite",
         "flag ? hook : noop",
+        "flag && api",
+        "false || api",
+        "undefined ?? api",
+        "api || noop",
+        "api ?? noop",
+        "(flag && api) || noop",
+        "api && api",
+        "flag && api.skip",
+        "flag && api.extend({})",
+        "flag && hook",
+        "flag && (flag ? api : noop)",
+        "flag && (flag ? api : api)",
+        "(flag ? api : api) || noop",
+        "(flag ? api : api) ?? noop",
+        "flag && (flag ? api.name : api)",
+        "flag && (flag ? noop : (flag ? api : api))",
+        "flag && ((flag ? api : api) as any)",
+        "(flag && api) as any",
+        "(null ?? api) satisfies unknown",
+        "(api || noop)!",
+        "flag && import.meta.vitest.test",
+        "false || import.meta.vitest.it",
+        "null ?? import.meta.vitest.test.skipIf(false)",
+        "flag && (flag ? import.meta.vitest.test : import.meta.vitest.test)",
+        "flag ? import.meta.vitest.test : noop",
+        "flag ? noop : import.meta.vitest.test",
     ] {
         let header =
             "import { test as api, describe as suite, beforeEach as hook } from 'vitest';\n\
                       const flag = true; const noop = () => {};";
-        for route in 0..6 {
-            let helper = format!("{header}\nconst chosen = {expression};\nexport {{ chosen }}; export default chosen;");
+        for route in 0..7 {
+            let helper = if route == 6 {
+                format!("{header}\nexport default ({expression});")
+            } else {
+                format!("{header}\nconst chosen = {expression};\nexport {{ chosen }}; export default chosen;")
+            };
             let barrel = "export { chosen as forwarded } from './values';";
             let (setup, callee) = match route {
                 0 => (header.to_owned(), format!("({expression})")),
@@ -212,7 +273,7 @@ fn conditional_capabilities_survive_binding_and_export_routes() {
                     "import { chosen as held } from './values';".to_owned(),
                     "held".to_owned(),
                 ),
-                3 => ("import held from './values';".to_owned(), "held".to_owned()),
+                3 | 6 => ("import held from './values';".to_owned(), "held".to_owned()),
                 4 => (
                     "import { forwarded as held } from './barrel';".to_owned(),
                     "held".to_owned(),
@@ -276,7 +337,66 @@ fn conditional_capabilities_survive_binding_and_export_routes() {
             }
         }
     }
-    assert_eq!(variants, 108);
+    assert_eq!(variants, 490);
+}
+
+/// A consumed AND-left value, scalar alias or namespace supplies no callable result proof.
+#[test]
+fn logical_non_callable_candidates_preserve_direct_controls() {
+    for expression in [
+        "flag && import.meta.vitest",
+        "false || import.meta.vitest.name",
+        "null ?? import.meta.vitest.test.name",
+        "flag && import.meta.vitest.test.length",
+        "flag && import.meta.vitest.test.unknownMember",
+        "import.meta.vitest.test && noop",
+        "flag && import.meta.unrelated.test",
+        "flag ? import.meta.vitest.test.name : noop",
+        "api && noop",
+        "api && 0",
+        "api && api.name",
+        "api && namespace",
+        "false || api.name",
+        "null ?? api.length",
+        "flag && scalar",
+        "scalar || noop",
+        "scalar ?? noop",
+        "flag && namespace",
+        "flag && api.unknownMember",
+        "flag && unknown",
+        "flag && noop",
+        "flag && (flag ? api.name : api.length)",
+        "(flag ? api.name : api.length) || noop",
+        "(flag ? api.name : api.length) ?? noop",
+        "(flag ? api : api) && noop",
+        "flag && (flag ? namespace : namespace)",
+        "flag && (flag ? unknown : unknown)",
+    ] {
+        let helper = format!("import {{ test as api }} from 'vitest'; import * as namespace from 'vitest';\nconst flag = true; const noop = () => {{}}; const scalar = api.name;\nexport default ({expression});");
+        let (found, parsed) = inventory_with_tree(
+            "import chosen from './values'; import { test } from 'vitest'; chosen('absent', () => {}); test('retained', () => {});",
+            &[("values.ts", &helper)], false,
+        );
+        assert_eq!(parsed.parse_errors, 0);
+        assert_eq!(found.sites.len(), 1, "{helper}: {found:?}");
+        assert_eq!(found.sites[0].kind, TEST);
+        assert_eq!(found.sites[0].title.as_deref(), Some("retained"));
+        assert!(found.loads.is_empty());
+    }
+    for header in [
+        "import type { test as api } from 'vitest';",
+        "declare const api: any;",
+        "const api = () => {};",
+    ] {
+        let helper = format!("{header} export const chosen = true && api;");
+        let (found, _) = inventory_with_tree(
+            "import { chosen } from './values'; chosen('absent', () => {});",
+            &[("values.ts", &helper)],
+            false,
+        );
+        assert!(found.sites.is_empty(), "{helper}: {found:?}");
+        assert!(found.loads.is_empty());
+    }
 }
 
 /// Equal API arms remain exact; non-result references and unrelated values establish no root.

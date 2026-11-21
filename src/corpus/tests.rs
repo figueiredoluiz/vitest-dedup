@@ -18,11 +18,11 @@ mod normal_properties;
 mod runners;
 
 /// An uncertain imported registration excludes its calls and their direct neighbors.
-fn assert_unproved_registration_corpus(corpus: &FileCorpus) {
-    assert_eq!(corpus.tests.len(), 4, "{corpus:?}");
+fn assert_unproved_registration_corpus(corpus: &FileCorpus, wrappers: usize) {
+    assert_eq!(corpus.tests.len(), wrappers + 2, "{corpus:?}");
     assert_eq!(
         corpus.exclusions().get(&Exclusion::RegisteredElsewhere),
-        Some(&2)
+        Some(&wrappers)
     );
     assert_eq!(
         corpus.exclusions().get(&Exclusion::UnprovedRunner),
@@ -34,7 +34,7 @@ fn assert_unproved_registration_corpus(corpus: &FileCorpus) {
         .filter(|case| case.exclusion == Some(Exclusion::RegisteredElsewhere))
         .map(|case| case.span.start.line)
         .collect();
-    assert_eq!(positions, [3, 4]);
+    assert_eq!(positions, (3..3 + wrappers as u32).collect::<Vec<_>>());
 }
 
 /// The same owned default expression is accounted without dropping an independent duplicate.
@@ -54,11 +54,36 @@ fn default_expression_keeps_owned_exclusions_and_positive_findings() {
             include_str!("../../fixtures/oracle/default-registration/values.ts"),
         ),
     ];
+    assert_owned_registration_values(&files, 2);
+}
+
+/// Logical result operands use the same source in the runtime oracle and eligibility checks.
+#[test]
+fn logical_registration_keeps_owned_exclusions_and_positive_findings() {
+    let files = [
+        (
+            "case.test.ts",
+            include_str!("../../fixtures/oracle/logical-registration/case.test.ts"),
+        ),
+        (
+            "control.test.ts",
+            include_str!("../../fixtures/oracle/logical-registration/control.test.ts"),
+        ),
+        (
+            "values.ts",
+            include_str!("../../fixtures/oracle/logical-registration/values.ts"),
+        ),
+    ];
+    assert_owned_registration_values(&files, 10);
+}
+
+/// Transport uncertainty without changing independent comparison eligibility or load order.
+fn assert_owned_registration_values(files: &[(&str, &str)], wrappers: usize) {
     let orders: &[&[&str]] = &[
         &["case.test.ts", "control.test.ts"],
         &["control.test.ts", "case.test.ts", "case.test.ts"],
     ];
-    let results = runs(&files, orders);
+    let results = runs(files, orders);
     for (order, batch) in orders.iter().zip(&results) {
         assert_eq!(batch.len(), order.len());
         for (path, corpus) in order.iter().zip(batch) {
@@ -67,7 +92,7 @@ fn default_expression_keeps_owned_exclusions_and_positive_findings() {
                 assert_eq!(corpus.tests.len(), 2);
                 assert!(corpus.tests.iter().all(|case| case.exclusion.is_none()));
             } else {
-                assert_unproved_registration_corpus(corpus);
+                assert_unproved_registration_corpus(corpus, wrappers);
             }
         }
     }
@@ -141,7 +166,7 @@ fn conditional_registration_keeps_owned_exclusions_and_positive_findings() {
                     2
                 );
             } else {
-                assert_unproved_registration_corpus(corpus);
+                assert_unproved_registration_corpus(corpus, 2);
             }
         }
     }
