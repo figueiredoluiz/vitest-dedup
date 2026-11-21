@@ -5,6 +5,192 @@ use crate::lang::{Parsed, Span};
 
 const TEST: SiteKind = SiteKind::Registers(Registers::Test);
 
+/// Exact API joins survive every insertion point in a dependency-ordered alias chain.
+#[test]
+fn conditional_exact_aliases_do_not_depend_on_declaration_order() {
+    let mut variants = 0;
+    for depth in 1..=3 {
+        let declarations: Vec<_> = (0..depth)
+            .map(|index| {
+                let value = if index == 0 {
+                    "api".to_owned()
+                } else {
+                    format!("arm{}", index - 1)
+                };
+                format!("const arm{index} = {value};")
+            })
+            .collect();
+        for position in 0..=depth {
+            for reverse in [false, true] {
+                for nested in [false, true] {
+                    for callee in ["chosen", "held"] {
+                        let later = format!("arm{}", depth - 1);
+                        let (left, right) = if reverse {
+                            (later, "api".to_owned())
+                        } else {
+                            ("api".to_owned(), later)
+                        };
+                        let expression = format!("flag ? {left} : {right}");
+                        let expression = if nested {
+                            format!("flag ? ({expression}) : ({expression})")
+                        } else {
+                            expression
+                        };
+                        let mut statements = declarations.clone();
+                        statements.insert(position, format!("const chosen = {expression};"));
+                        let source = format!(
+                            "import {{ test as api }} from 'vitest';\nconst flag = {};\n{}\n\
+                             const held = chosen; {callee}('kept', () => {{}});",
+                            !reverse,
+                            statements.join("\n")
+                        );
+                        let (found, parsed) = inventory_with_tree(&source, &[], false);
+                        assert_eq!(parsed.parse_errors, 0);
+                        assert_eq!(found.sites.len(), 1, "{source}: {found:?}");
+                        assert_eq!(found.sites[0].kind, TEST, "{source}");
+                        assert_eq!(found.sites[0].provenance, Provenance::Direct, "{source}");
+                        assert_eq!(found.sites[0].title.as_deref(), Some("kept"));
+                        assert!(found.loads.is_empty());
+                        variants += 1;
+                    }
+                }
+            }
+        }
+    }
+    assert_eq!(variants, 72);
+}
+
+/// An unproved result arm cannot erase a registration capability at any supported binding route.
+#[test]
+fn conditional_capabilities_survive_binding_and_export_routes() {
+    let mut variants = 0;
+    for expression in [
+        "flag ? api : noop",
+        "flag ? noop : api",
+        "flag ? api : undefined",
+        "flag ? 0 : api",
+        "flag ? api.skip : noop",
+        "flag ? api.extend({}) : noop",
+        "flag ? noop : (flag ? api : noop)",
+        "flag ? api : suite",
+        "flag ? hook : noop",
+    ] {
+        let header =
+            "import { test as api, describe as suite, beforeEach as hook } from 'vitest';\n\
+                      const flag = true; const noop = () => {};";
+        for route in 0..6 {
+            let helper = format!("{header}\nconst chosen = {expression};\nexport {{ chosen }}; export default chosen;");
+            let barrel = "export { chosen as forwarded } from './values';";
+            let (setup, callee) = match route {
+                0 => (header.to_owned(), format!("({expression})")),
+                1 => (
+                    format!("{header}\nconst chosen = {expression}; const held = chosen;"),
+                    "held".to_owned(),
+                ),
+                2 => (
+                    "import { chosen as held } from './values';".to_owned(),
+                    "held".to_owned(),
+                ),
+                3 => ("import held from './values';".to_owned(), "held".to_owned()),
+                4 => (
+                    "import { forwarded as held } from './barrel';".to_owned(),
+                    "held".to_owned(),
+                ),
+                _ => (
+                    "import { chosen as held } from './star';".to_owned(),
+                    "held".to_owned(),
+                ),
+            };
+            for controls in [false, true] {
+                let hook = expression.contains("hook");
+                let call = if hook {
+                    format!("{callee}(() => {{}})")
+                } else {
+                    format!("{callee}('uncertain', () => {{}})")
+                };
+                let source = format!(
+                    "{setup}\nimport {{ test as direct }} from 'vitest';\n{call};\n{}",
+                    if controls {
+                        "direct('kept', () => {});"
+                    } else {
+                        ""
+                    }
+                );
+                let (found, parsed) = inventory_with_tree(
+                    &source,
+                    &[
+                        ("values.ts", &helper),
+                        ("barrel.ts", barrel),
+                        ("star.ts", "export * from './values';"),
+                    ],
+                    false,
+                );
+                assert_eq!(parsed.parse_errors, 0, "{source}");
+                assert_eq!(
+                    found.sites.len(),
+                    1 + usize::from(controls),
+                    "{source}: {found:?}"
+                );
+                let site = &found.sites[0];
+                assert_eq!(site.kind, SiteKind::Wrapper(Reach::Tasks), "{source}");
+                assert_eq!(site.provenance, Provenance::Wrapper, "{source}");
+                assert_eq!(
+                    &source[site.span.start as usize..site.span.end as usize],
+                    call
+                );
+                assert_eq!(
+                    site.title.as_deref(),
+                    if hook { None } else { Some("uncertain") }
+                );
+                assert!(site.member.is_none());
+                assert!(
+                    found.loads.is_empty(),
+                    "exporting a capability must not register: {source}"
+                );
+                if controls {
+                    assert_eq!(found.sites[1].kind, TEST);
+                    assert_eq!(found.sites[1].title.as_deref(), Some("kept"));
+                }
+                variants += 1;
+            }
+        }
+    }
+    assert_eq!(variants, 108);
+}
+
+/// Equal API arms remain exact; non-result references and unrelated values establish no root.
+#[test]
+fn conditional_capability_controls_keep_exact_and_absent_results() {
+    for (expression, expected) in [
+        ("flag ? api : api.skip", Some(TEST)),
+        ("flag ? noop : noop", None),
+        ("api ? noop : noop", None),
+        ("flag ? api.name : noop", None),
+        ("flag ? api.length : 0", None),
+        ("flag ? scalar : noop", None),
+        ("flag ? namespace : noop", None),
+        ("flag ? api.unknownMember : noop", None),
+        ("flag ? unknown : noop", None),
+    ] {
+        let source = format!(
+            "import {{ test as api }} from 'vitest'; import * as namespace from 'vitest';\n\
+            const flag = true; const noop = () => {{}}; const scalar = api.name;\n\
+            const chosen = {expression};\nchosen('case', () => {{}});"
+        );
+        let (found, parsed) = inventory_with_tree(&source, &[], false);
+        assert_eq!(parsed.parse_errors, 0);
+        assert_eq!(
+            found.sites.len(),
+            usize::from(expected.is_some()),
+            "{source}"
+        );
+        if let Some(kind) = expected {
+            assert_eq!(found.sites[0].kind, kind);
+            assert_eq!(found.sites[0].provenance, Provenance::Direct);
+        }
+    }
+}
+
 /// Escape policy keeps exact anchors across API bindings, syntax and direct retention controls.
 #[test]
 fn escape_roles_preserve_records_and_direct_controls() {

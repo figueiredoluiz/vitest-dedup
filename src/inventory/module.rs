@@ -90,6 +90,8 @@ struct Module<'s> {
     parsed: &'s Parsed,
     setting: Setting<'s>,
     origins: HashMap<SymbolId, Origin>,
+    /// Exact API aliases have reached their fixpoint before uncertain conditional results join.
+    api_aliases_settled: bool,
     /// Functions of this module whose body holds a registration, by the symbol naming them, with
     /// what calling them may register.
     wrappers: HashMap<SymbolId, Reach>,
@@ -134,6 +136,7 @@ pub(super) fn analyse(
         parsed,
         setting,
         origins: HashMap::new(),
+        api_aliases_settled: false,
         wrappers: HashMap::new(),
         returners: HashSet::new(),
         aliased: HashSet::new(),
@@ -150,6 +153,7 @@ pub(super) fn analyse(
     module.evaluates = super::direct_eval(parsed);
     module.rewritten_globals = module.global_writes();
     module.collect_origins(modules, depth);
+    module.api_aliases_settled = true;
     let found = module.registrations();
     let mut exports = module.exports(modules, depth, &found);
     // A registration outside every wrapper may run while the module loads: at top level, in a
@@ -834,18 +838,24 @@ impl<'s> Module<'s> {
                 return Some((origin, provenance, steps));
             }
             match tree.kind(node) {
-                // `only ? it.only : it`: both branches the same kind of registration function.
+                // Join resolved result capabilities; missing proof does not make an arm inert.
                 "ConditionalExpression" => {
-                    let branch = |key| {
-                        tree.child(node, key)
-                            .and_then(|branch| self.value_origin(branch))
-                    };
-                    let registers = match (branch("consequent"), branch("alternate")) {
+                    let arms = [
+                        tree.child(node, "consequent")?,
+                        tree.child(node, "alternate")?,
+                    ];
+                    let origins = arms.map(|arm| self.value_origin(arm));
+                    let registers = match (origins[0], origins[1]) {
                         (Some(Origin::Api(left)), Some(Origin::Api(right))) if left == right => {
                             left
                         }
-                        (Some(Origin::Wrapper(_) | Origin::Derived(_)), _)
-                        | (_, Some(Origin::Wrapper(_) | Origin::Derived(_))) => {
+                        _ if origins.into_iter().flatten().any(|origin| {
+                            matches!(origin, Origin::Wrapper(_) | Origin::Derived(_))
+                        }) || (self.api_aliases_settled
+                            && arms.into_iter().zip(origins).any(|(arm, origin)| {
+                                matches!(origin, Some(Origin::Api(_))) && self.holds_api(arm)
+                            })) =>
+                        {
                             steps.reverse();
                             return Some((
                                 Origin::Wrapper(Reach::Tasks),
