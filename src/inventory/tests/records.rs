@@ -246,6 +246,12 @@ fn branch_capabilities_survive_binding_and_export_routes() {
         "(flag && api) as any",
         "(null ?? api) satisfies unknown",
         "(api || noop)!",
+        "flag && import.meta.vitest.test",
+        "false || import.meta.vitest.it",
+        "null ?? import.meta.vitest.test.skipIf(false)",
+        "flag && (flag ? import.meta.vitest.test : import.meta.vitest.test)",
+        "flag ? import.meta.vitest.test : noop",
+        "flag ? noop : import.meta.vitest.test",
     ] {
         let header =
             "import { test as api, describe as suite, beforeEach as hook } from 'vitest';\n\
@@ -331,13 +337,21 @@ fn branch_capabilities_survive_binding_and_export_routes() {
             }
         }
     }
-    assert_eq!(variants, 406);
+    assert_eq!(variants, 490);
 }
 
 /// A consumed AND-left value, scalar alias or namespace supplies no callable result proof.
 #[test]
 fn logical_non_callable_candidates_preserve_direct_controls() {
     for expression in [
+        "flag && import.meta.vitest",
+        "false || import.meta.vitest.name",
+        "null ?? import.meta.vitest.test.name",
+        "flag && import.meta.vitest.test.length",
+        "flag && import.meta.vitest.test.unknownMember",
+        "import.meta.vitest.test && noop",
+        "flag && import.meta.unrelated.test",
+        "flag ? import.meta.vitest.test.name : noop",
         "api && noop",
         "api && 0",
         "api && api.name",

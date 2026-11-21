@@ -1416,13 +1416,24 @@ impl<'s> Module<'s> {
             };
             root = tree.inner(argument);
         }
+        // A resolved join candidate can use the namespace root already proved by the resolver.
+        // Other callers retain the identifier and returner boundary below.
+        let namespace = |root| {
+            resolved.is_some() && matches!(self.root_origin(root), Some((Origin::Namespace, _)))
+        };
         while let Some(link) = callee_link(tree, root) {
+            if namespace(root) {
+                break;
+            }
             root = tree.inner(link.input);
         }
-        if tree.kind(root) != "Identifier" {
+        let symbol = if tree.kind(root) == "Identifier" {
+            self.read(root)
+        } else if namespace(root) {
+            None
+        } else {
             return false;
-        }
-        let symbol = self.read(root);
+        };
         // One walk: each `await` in the chain asks this again, so walking twice doubles per level.
         let owned = if resolved.is_none() {
             self.resolve(node)
