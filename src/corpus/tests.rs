@@ -17,6 +17,68 @@ mod nc65;
 mod normal_properties;
 mod runners;
 
+/// An uncertain imported registration excludes its calls and their direct neighbors.
+fn assert_unproved_registration_corpus(corpus: &FileCorpus) {
+    assert_eq!(corpus.tests.len(), 4, "{corpus:?}");
+    assert_eq!(
+        corpus.exclusions().get(&Exclusion::RegisteredElsewhere),
+        Some(&2)
+    );
+    assert_eq!(
+        corpus.exclusions().get(&Exclusion::UnprovedRunner),
+        Some(&2)
+    );
+    let positions: Vec<_> = corpus
+        .tests
+        .iter()
+        .filter(|case| case.exclusion == Some(Exclusion::RegisteredElsewhere))
+        .map(|case| case.span.start.line)
+        .collect();
+    assert_eq!(positions, [3, 4]);
+}
+
+/// The same owned default expression is accounted without dropping an independent duplicate.
+#[test]
+fn default_expression_keeps_owned_exclusions_and_positive_findings() {
+    let files = [
+        (
+            "case.test.ts",
+            include_str!("../../fixtures/oracle/default-registration/case.test.ts"),
+        ),
+        (
+            "control.test.ts",
+            include_str!("../../fixtures/oracle/default-registration/control.test.ts"),
+        ),
+        (
+            "values.ts",
+            include_str!("../../fixtures/oracle/default-registration/values.ts"),
+        ),
+    ];
+    let orders: &[&[&str]] = &[
+        &["case.test.ts", "control.test.ts"],
+        &["control.test.ts", "case.test.ts", "case.test.ts"],
+    ];
+    let results = runs(&files, orders);
+    for (order, batch) in orders.iter().zip(&results) {
+        assert_eq!(batch.len(), order.len());
+        for (path, corpus) in order.iter().zip(batch) {
+            assert_eq!(corpus.parse_errors, 0);
+            if *path == "control.test.ts" {
+                assert_eq!(corpus.tests.len(), 2);
+                assert!(corpus.tests.iter().all(|case| case.exclusion.is_none()));
+            } else {
+                assert_unproved_registration_corpus(corpus);
+            }
+        }
+    }
+    let outcome = owned_outcome(vec![
+        ("case.test.ts", results[0][0].clone()),
+        ("control.test.ts", results[0][1].clone()),
+    ]);
+    assert_eq!(outcome.findings.len(), 1, "{:?}", outcome.findings);
+    assert_eq!(outcome.findings[0].rule, crate::model::Rule::DuplicateTest);
+}
+
 /// The oracle's mixed exported value is accounted while an independent duplicate pair survives.
 #[test]
 fn conditional_registration_keeps_owned_exclusions_and_positive_findings() {
@@ -79,22 +141,7 @@ fn conditional_registration_keeps_owned_exclusions_and_positive_findings() {
                     2
                 );
             } else {
-                assert_eq!(corpus.tests.len(), 4, "{corpus:?}");
-                assert_eq!(
-                    corpus.exclusions().get(&Exclusion::RegisteredElsewhere),
-                    Some(&2)
-                );
-                assert_eq!(
-                    corpus.exclusions().get(&Exclusion::UnprovedRunner),
-                    Some(&2)
-                );
-                let positions: Vec<_> = corpus
-                    .tests
-                    .iter()
-                    .filter(|case| case.exclusion == Some(Exclusion::RegisteredElsewhere))
-                    .map(|case| case.span.start.line)
-                    .collect();
-                assert_eq!(positions, [3, 4]);
+                assert_unproved_registration_corpus(corpus);
             }
         }
     }

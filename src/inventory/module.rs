@@ -2298,7 +2298,13 @@ impl<'s> Module<'s> {
                         })
                     })
                     .flatten();
-                    if let Some(export) = registers(symbol).or(anonymous.map(Export::Wrapper)) {
+                    let export = registers(symbol)
+                        .or(anonymous.map(Export::Wrapper))
+                        .or_else(|| match self.value_origin(declaration) {
+                            Some(Origin::Wrapper(reach)) => Some(Export::Wrapper(reach)),
+                            _ => None,
+                        });
+                    if let Some(export) = export {
                         add("default".to_owned(), export);
                     }
                 }
