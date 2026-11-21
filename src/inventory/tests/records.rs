@@ -5,6 +5,37 @@ use crate::lang::{Parsed, Span};
 
 const TEST: SiteKind = SiteKind::Registers(Registers::Test);
 
+/// Scalar builder arguments cannot multiply resolution work, or erase known registration sites.
+#[test]
+fn logical_builder_arguments_have_bounded_resolution_work() {
+    for member in ["name", "length"] {
+        for guard in ["false ||", "null ??", "true &&"] {
+            for depth in [4, 8, 12, 16] {
+                let mut expression = "0".to_owned();
+                for _ in 0..depth {
+                    expression = format!("{guard} api.skipIf({expression}).{member}");
+                }
+                let source = format!(
+                    "import {{test as api}} from 'vitest'; const scalar = {expression};\n\
+                     const chosen = true && api; chosen('uncertain', () => {{}});\n\
+                     api('retained', () => {{}});"
+                );
+                super::super::module::take_resolutions();
+                let (found, parsed) = inventory_with_tree(&source, &[], false);
+                let work = super::super::module::take_resolutions();
+                assert_eq!(parsed.parse_errors, 0);
+                assert_eq!(found.sites.len(), 2, "{found:?}");
+                assert_eq!(found.sites[0].kind, SiteKind::Wrapper(Reach::Tasks));
+                assert_eq!(found.sites[1].kind, TEST);
+                assert_eq!(found.sites[1].title.as_deref(), Some("retained"));
+                let nodes = parsed.tree.nodes().count();
+                let bound = 32 * nodes * nodes;
+                assert!(work > 0 && work <= bound, "{guard} {member} depth{depth}: {work} resolutions exceed {bound} for {nodes} nodes");
+            }
+        }
+    }
+}
+
 /// A resolved wrapper keeps its reach through a default expression just as through a binding.
 #[test]
 fn default_expression_wrappers_match_binding_exports() {
@@ -206,6 +237,12 @@ fn branch_capabilities_survive_binding_and_export_routes() {
         "flag && api.extend({})",
         "flag && hook",
         "flag && (flag ? api : noop)",
+        "flag && (flag ? api : api)",
+        "(flag ? api : api) || noop",
+        "(flag ? api : api) ?? noop",
+        "flag && (flag ? api.name : api)",
+        "flag && (flag ? noop : (flag ? api : api))",
+        "flag && ((flag ? api : api) as any)",
         "(flag && api) as any",
         "(null ?? api) satisfies unknown",
         "(api || noop)!",
@@ -294,7 +331,7 @@ fn branch_capabilities_survive_binding_and_export_routes() {
             }
         }
     }
-    assert_eq!(variants, 322);
+    assert_eq!(variants, 406);
 }
 
 /// A consumed AND-left value, scalar alias or namespace supplies no callable result proof.
@@ -314,6 +351,12 @@ fn logical_non_callable_candidates_preserve_direct_controls() {
         "flag && api.unknownMember",
         "flag && unknown",
         "flag && noop",
+        "flag && (flag ? api.name : api.length)",
+        "(flag ? api.name : api.length) || noop",
+        "(flag ? api.name : api.length) ?? noop",
+        "(flag ? api : api) && noop",
+        "flag && (flag ? namespace : namespace)",
+        "flag && (flag ? unknown : unknown)",
     ] {
         let helper = format!("import {{ test as api }} from 'vitest'; import * as namespace from 'vitest';\nconst flag = true; const noop = () => {{}}; const scalar = api.name;\nexport default ({expression});");
         let (found, parsed) = inventory_with_tree(

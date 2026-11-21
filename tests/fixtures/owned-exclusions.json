@@ -3,7 +3,7 @@
     "oracle/logical-registration/case.test.ts": {
       "reason": "registered-elsewhere",
       "otherReasons": ["helper-effects-unproved"],
-      "testsExcluded": 8
+      "testsExcluded": 10
     },
     "oracle/default-registration/case.test.ts": {
       "reason": "registered-elsewhere",

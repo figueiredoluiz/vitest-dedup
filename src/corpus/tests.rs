@@ -74,7 +74,7 @@ fn logical_registration_keeps_owned_exclusions_and_positive_findings() {
             include_str!("../../fixtures/oracle/logical-registration/values.ts"),
         ),
     ];
-    assert_owned_registration_values(&files, 6);
+    assert_owned_registration_values(&files, 8);
 }
 
 /// Transport uncertainty without changing independent comparison eligibility or load order.

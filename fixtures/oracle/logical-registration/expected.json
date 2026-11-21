@@ -1,11 +1,11 @@
 {
   "files": {
     "case.test.ts": {
-      "tasks": 8,
-      "wrapperSites": ["wrapper@3", "wrapper@4", "wrapper@5", "wrapper@6", "wrapper@7", "wrapper@8"],
+      "tasks": 10,
+      "wrapperSites": ["wrapper@3", "wrapper@4", "wrapper@5", "wrapper@6", "wrapper@7", "wrapper@8", "wrapper@9", "wrapper@10"],
       "next": {
         "reasons": ["registered-elsewhere", "helper-effects-unproved"],
-        "testsExcluded": 8
+        "testsExcluded": 10
       }
     },
     "control.test.ts": { "tasks": 2, "wrapperSites": [], "next": {} }

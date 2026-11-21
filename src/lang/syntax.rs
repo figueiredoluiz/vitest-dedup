@@ -223,18 +223,21 @@ pub(crate) fn value_role(tree: &Tree, outer: NodeId, inner: NodeId) -> ValueRole
 
 /// Logical operands that could supply a callable value, without proving guard reachability.
 /// A callable is truthy and non-null: an AND-left value cannot be its result, whereas OR and
-/// coalescing can yield either operand. Flatten logical chains without adding recursive frames.
+/// coalescing can yield either operand. Flatten logical and conditional selection without adding
+/// recursive frames; a conditional's guard never supplies its result.
 pub(crate) fn logical_results(tree: &Tree, node: NodeId) -> impl Iterator<Item = NodeId> + '_ {
     let mut pending = vec![node];
     std::iter::from_fn(move || {
         while let Some(node) = pending.pop() {
             let node = tree.inner(node);
-            if tree.kind(node) != "LogicalExpression" {
-                return Some(node);
-            }
-            for child in [tree.child(node, "right"), tree.child(node, "left")]
+            let fields = match tree.kind(node) {
+                "LogicalExpression" => ["right", "left"],
+                "ConditionalExpression" => ["alternate", "consequent"],
+                _ => return Some(node),
+            };
+            for child in fields
                 .into_iter()
-                .flatten()
+                .filter_map(|field| tree.child(node, field))
             {
                 if matches!(
                     value_role(tree, node, child),
@@ -303,6 +306,12 @@ mod tests {
             ("left ?? right", vec!["left", "right"]),
             ("(left && middle) || right", vec!["middle", "right"]),
             ("(left || middle) && right", vec!["right"]),
+            ("left && (flag ? middle : right)", vec!["middle", "right"]),
+            (
+                "(flag ? left : middle) || right",
+                vec!["left", "middle", "right"],
+            ),
+            ("(flag ? left : middle) && right", vec!["right"]),
             (
                 "left && ((middle ?? right) as any)",
                 vec!["middle", "right"],
@@ -318,6 +327,12 @@ mod tests {
         let (parsed, body) = arrow_body(&format!("() => {}last", "first || ".repeat(1_000)));
         assert_eq!(parsed.parse_errors, 0);
         assert_eq!(logical_results(&parsed.tree, body).count(), 1_001);
+        let (parsed, body) = arrow_body(&format!(
+            "() => {}last",
+            "(flag ? left : right) || ".repeat(1_000)
+        ));
+        assert_eq!(parsed.parse_errors, 0);
+        assert_eq!(logical_results(&parsed.tree, body).count(), 2_001);
     }
 
     /// Call type arguments and a separate instantiation expression have different owned edges.
