@@ -21,6 +21,7 @@ pub(crate) mod titles;
 pub(crate) use hooks::primitive;
 pub use population::Population;
 pub use rows::{Expected, Modifiers, RepeatCount, Row, TableRow};
+pub use suites::Activation;
 
 use crate::framework::{Dialect, HookTiming};
 use crate::inventory::Inventory;

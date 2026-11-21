@@ -352,19 +352,23 @@ impl Normalizer<'_> {
     }
 
     /// Whether an options object among `arguments` keeps the test from running, the way
-    /// [`Modifiers::inert`] records it for a chain (`{ skip: true }`, `{ todo: true }`).
-    pub fn inert_options(&self, arguments: &[NodeId]) -> bool {
+    /// [`Modifiers::inert`] records it for a chain (`{ skip: true }`, `{ todo: true }`). Read it
+    /// through [`Normalizer::activation`].
+    pub(super) fn inert_options(&self, arguments: &[NodeId]) -> bool {
         self.skip_options(arguments, |written| written == Some(true))
     }
 
     /// Whether an options object among `arguments` may keep the test from running: a `skip` or
-    /// `todo` whose value is anything but literal `false` (`{ skip: flag }`, `{ todo }`).
-    pub fn may_skip_options(&self, arguments: &[NodeId]) -> bool {
+    /// `todo` whose last write is anything but literal `false` (`{ skip: flag }`,
+    /// `{ ...options }`). Read it through [`Normalizer::activation`].
+    pub(super) fn may_skip_options(&self, arguments: &[NodeId]) -> bool {
         self.skip_options(arguments, |written| written != Some(false))
     }
 
-    /// Whether an options object among `arguments` has a `skip` or `todo` property whose
-    /// boolean-literal value (`None` when it is not one) satisfies `counts`.
+    /// Whether an options object among `arguments` ends with a `skip` or `todo` value that
+    /// satisfies `counts`. Each key takes its last write in property order: a boolean literal is
+    /// `Some`, any other value `None`. A spread or a key with no static name may write either key,
+    /// so it leaves both `None`.
     fn skip_options(&self, arguments: &[NodeId], counts: impl Fn(Option<bool>) -> bool) -> bool {
         let tree = self.tree;
         let dialect = self.setting.dialect;
@@ -373,15 +377,21 @@ impl Normalizer<'_> {
             .skip(1)
             .map(|&argument| tree.inner(argument))
             .filter(|&argument| tree.kind(argument) == "ObjectExpression")
-            .flat_map(|argument| tree.list(argument, "properties").into_iter().flatten())
-            .any(|property| {
-                let name = (tree.kind(property) == "Property")
-                    .then(|| property_name(tree, property))
-                    .flatten();
-                matches!(
-                    name.and_then(|name| dialect.chain_member(name)),
-                    Some(Chain::Skip | Chain::Todo)
-                ) && counts(self.literal_bool(property))
+            .any(|object| {
+                // The last write to `skip` and to `todo`; the outer `None` is no write at all.
+                let mut written: [Option<Option<bool>>; 2] = [None, None];
+                for property in tree.list(object, "properties").into_iter().flatten() {
+                    let name = (tree.kind(property) == "Property")
+                        .then(|| property_name(tree, property))
+                        .flatten();
+                    match name.map(|name| dialect.chain_member(name)) {
+                        Some(Some(Chain::Skip)) => written[0] = Some(self.literal_bool(property)),
+                        Some(Some(Chain::Todo)) => written[1] = Some(self.literal_bool(property)),
+                        Some(_) => {}
+                        None => written = [Some(None), Some(None)],
+                    }
+                }
+                written.into_iter().flatten().any(&counts)
             })
     }
 

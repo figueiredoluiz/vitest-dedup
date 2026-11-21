@@ -239,6 +239,21 @@ pub(super) fn table_rows(
         };
         let mut normalizer = Normalizer::new(path, parsed, setting, structure);
         let modifiers = normalizer.modifiers(callee, site.member);
+        let arguments: Vec<NodeId> = tree
+            .list(site.node, "arguments")
+            .into_iter()
+            .flatten()
+            .collect();
+        let activation =
+            normalizer
+                .activation(&modifiers, &arguments)
+                .within(normalizer.enclosing_activation(site.node, |call| {
+                    found
+                        .sites
+                        .iter()
+                        .find(|site| site.node == call)
+                        .and_then(|site| site.member)
+                }));
         let Some(rows) = modifiers.rows else {
             continue;
         };
@@ -350,7 +365,7 @@ pub(super) fn table_rows(
                 case.row_class = Some(digest(&row_class));
                 case.body = digest(&normal);
                 case.key = digest(&format!("{}|{}", modifiers.untabled, normal));
-                case.inert = modifiers.inert || frame.inert;
+                case.inert = activation.inert;
                 cases.push(case);
             }
         }

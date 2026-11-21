@@ -1030,7 +1030,8 @@ pub struct Finding {
     pub registration_files: Vec<Vec<PathBuf>>,
     /// Full titles in [`crate::lang::text`]'s lossless encoding, parallel to `locations`.
     pub titles: Vec<String>,
-    /// Whether each participating test is inert (`.skip`/`.todo`), parallel to `locations`.
+    /// Whether each participating test is inert (`.skip`/`.todo` on it or an enclosing suite),
+    /// parallel to `locations`.
     ///
     /// A structured field rather than a phrase inside [`Finding::message`]. A reporter that
     /// recovered this by matching text in the message would break silently the first time the

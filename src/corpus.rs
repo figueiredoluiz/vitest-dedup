@@ -284,7 +284,8 @@ pub struct TestCase {
     /// Whether the callback's arrow and `function` forms act on the same object, and which was
     /// written when they do not.
     pub callback_form: normal::CallbackForm,
-    /// Whether the chain keeps the test from running (`skip`, `todo`).
+    /// Whether a `skip`/`todo` chain or literal option, on the test or an enclosing suite, keeps it
+    /// from running ([`normal::Activation::inert`]).
     pub inert: bool,
     /// Whether it is not proved to run: [`Self::inert`], or a `skip`/`todo` chain or option, read
     /// or not (`{ skip: flag }`), on the test or an enclosing suite.
@@ -1000,9 +1001,14 @@ fn read_parsed(
                 .into_iter()
                 .flatten()
                 .collect();
-            record.inert = modifiers.as_ref().is_some_and(|modifiers| modifiers.inert)
-                || normalizer.inert_options(&arguments)
-                || suite_frame.inert;
+            // A suite's `skip`/`todo` reaches every test declared inside it, table or not.
+            let unmodified = normal::Modifiers::default();
+            let activation = normalizer
+                .activation(modifiers.as_ref().unwrap_or(&unmodified), &arguments)
+                .within(
+                    normalizer.enclosing_activation(site.node, |call| members.get(&call).copied()),
+                );
+            record.inert = activation.inert;
             let row_stride = modifiers
                 .as_ref()
                 .and_then(|m| m.rows.as_ref())
@@ -1179,8 +1185,6 @@ fn read_parsed(
             let mut repeat_count = normal::RepeatCount::ProjectDefault;
             // A suite's options that may make it an expected failure without spelling it.
             let mut suite_outcome_unknown = false;
-            // A suite that is, or may be, skipped or a todo.
-            let mut suite_may_skip = false;
             for scope in &suites {
                 // An enclosing suite's run condition, table or expected failure applies to the test
                 // as well. How deep the suites nest changes nothing; only what each one adds does.
@@ -1203,7 +1207,6 @@ fn read_parsed(
                     let fails = suite.fails || suite_expected == normal::Expected::Failure;
                     suite_expects_failure |= fails;
                     suite_outcome_unknown |= suite_expected == normal::Expected::Unknown;
-                    suite_may_skip |= suite.inert || normalizer.may_skip_options(&suite_arguments);
                     if suite.chain.contains('.') || fails || !suite_options.is_empty() {
                         context.push('|');
                         context.push_str(&suite.chain);
@@ -1219,8 +1222,7 @@ fn read_parsed(
                 }
             }
             let (options, expected) = normalizer.options(&arguments, body, &mut repeat_count);
-            let may_skip =
-                record.inert || suite_may_skip || normalizer.may_skip_options(&arguments);
+            let may_skip = activation.may_skip;
             match repeat_count {
                 normal::RepeatCount::ProjectDefault => {}
                 normal::RepeatCount::Fixed(count) => {
