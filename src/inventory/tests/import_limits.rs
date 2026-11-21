@@ -1,9 +1,47 @@
 use super::*;
 use crate::inventory::{
-    ImportLimit, ImportLimitKind, MAX_DEPTH, MAX_IMPORT_ANALYSES, MAX_IMPORT_ANALYSIS_PASSES,
-    MAX_IMPORT_SOURCE_BYTES,
+    take_unread_imports, ImportLimit, ImportLimitKind, MAX_DEPTH, MAX_IMPORT_ANALYSES,
+    MAX_IMPORT_ANALYSIS_PASSES, MAX_IMPORT_SOURCE_BYTES,
 };
 use std::path::PathBuf;
+
+/// A retained parse belongs to an exact path and source and is discarded when the pass ends.
+#[test]
+fn retained_import_syntax_uses_current_source() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    fs::write(
+        root.join("catalog.ts"),
+        format!("export const entries = '{}';", ":".repeat(40_000)),
+    )
+    .unwrap();
+    let source = "import './catalog'; export { test as first } from 'vitest';";
+    let shared = root.join("shared.ts");
+    let other = root.join("other.ts");
+    fs::write(&shared, source).unwrap();
+    fs::write(&other, source).unwrap();
+    let setting = Setting {
+        dialect: &DIALECT,
+        globals: false,
+        root,
+        major: crate::framework::Formatting::Unknown,
+    };
+    let mut modules = Modules::default();
+    for path in [&shared, &other] {
+        assert!(modules.exports(path, setting, 1).contains_key("first"));
+        assert!(take_unread_imports());
+    }
+    assert_eq!(modules.work.parsed_imports.len(), 2);
+    fs::write(&shared, source.replace("first", "later")).unwrap();
+    let exports = modules.exports(&shared, setting, 1);
+    assert!(exports.contains_key("later"));
+    assert!(!exports.contains_key("first"));
+    assert!(take_unread_imports());
+    let _ = read(root, "import './shared';", &mut modules);
+    assert!(take_unread_imports());
+    assert!(modules.work.parsed_imports.is_empty());
+    assert_eq!(modules.work.parsed_import_bytes, 0);
+}
 
 /// Assert the first refusal and every counter that explains it.
 fn assert_limit(

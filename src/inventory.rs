@@ -299,6 +299,8 @@ const MAX_IMPORT_ANALYSES: usize = 64;
 const MAX_IMPORT_ANALYSIS_PASSES: usize = 3;
 /// Source bytes admitted to uncached import analysis by one root inventory reading.
 const MAX_IMPORT_SOURCE_BYTES: usize = 8 * 1024 * 1024;
+/// Estimated syntax, text and entry bytes retained for repeated imports in one pass.
+const MAX_IMPORT_PARSED_BYTES: usize = 8 * 1024 * 1024;
 
 /// Which bounded import resource stopped one root's inventory.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -342,6 +344,14 @@ impl ImportLimit {
     }
 }
 
+/// A successful parse whose incomplete export analysis may be repeated in this pass.
+#[derive(Debug)]
+struct ParsedImport {
+    source: String,
+    parsed: Parsed,
+    bytes: usize,
+}
+
 /// Work already spent by one root reading; a refusal stops its remaining import analyses.
 #[derive(Debug)]
 struct ImportWork {
@@ -354,6 +364,10 @@ struct ImportWork {
     refusal: Option<ImportLimit>,
     /// Source paths the parser refused on a source limit in this pass.
     source_limit_refusals: HashSet<PathBuf>,
+    /// Owned syntax for successfully parsed ancestors of unreadable imports.
+    parsed_imports: HashMap<PathBuf, ParsedImport>,
+    /// Estimated bytes retained for these entries, including any in use by an active analysis.
+    parsed_import_bytes: usize,
     /// Whether completed cache entries are the only lasting effects of this pass.
     retry_safe: bool,
 }
@@ -366,6 +380,8 @@ impl Default for ImportWork {
             bytes: 0,
             refusal: None,
             source_limit_refusals: HashSet::new(),
+            parsed_imports: HashMap::new(),
+            parsed_import_bytes: 0,
             retry_safe: true,
         }
     }
@@ -437,6 +453,49 @@ impl Modules {
         UNREAD_IMPORTS.with(|count| count.set(count.get() + 1));
     }
 
+    /// Reuse only the owned parse of unchanged source, then analyze exports in the current frame.
+    fn parsed_exports(
+        &mut self,
+        path: &Path,
+        source: String,
+        setting: Setting,
+        depth: usize,
+    ) -> Result<HashMap<String, Export>, crate::lang::Refusal> {
+        if let Some((key, entry)) = self.work.parsed_imports.remove_entry(path) {
+            if entry.source == source {
+                // The caller's active-path guard prevents re-entry while the parse is borrowed.
+                let exports = module::analyse(path, &source, &entry.parsed, setting, self, depth).1;
+                self.work.parsed_imports.insert(key, entry);
+                return Ok(exports);
+            }
+            self.work.parsed_import_bytes -= entry.bytes;
+        }
+        let parsed = crate::lang::parse(path, &source)?;
+        let unread_before = UNREAD_IMPORTS.with(std::cell::Cell::get);
+        let exports = module::analyse(path, &source, &parsed, setting, self, depth).1;
+        if self.work.refusal.is_none() && UNREAD_IMPORTS.with(std::cell::Cell::get) != unread_before
+        {
+            let key = path.to_path_buf();
+            let bytes = parsed
+                .proof_bytes()
+                .saturating_add(source.capacity())
+                .saturating_add(key.capacity())
+                .saturating_add(std::mem::size_of::<(PathBuf, ParsedImport)>());
+            if bytes <= MAX_IMPORT_PARSED_BYTES - self.work.parsed_import_bytes {
+                self.work.parsed_imports.insert(
+                    key,
+                    ParsedImport {
+                        source,
+                        parsed,
+                        bytes,
+                    },
+                );
+                self.work.parsed_import_bytes += bytes;
+            }
+        }
+        Ok(exports)
+    }
+
     /// The registering exports of the module at `path`, with what each may register, analysed
     /// once unless a bound cut the analysis short. An empty map after a cutoff is partial:
     /// the root's inventory records the refusal and cannot license comparison claims.
@@ -478,10 +537,8 @@ impl Modules {
                     return None;
                 }
                 self.work.bytes += source.len();
-                match crate::lang::parse(path, &source) {
-                    Ok(parsed) => {
-                        Some(module::analyse(path, &source, &parsed, setting, self, depth).1)
-                    }
+                match self.parsed_exports(path, source, setting, depth) {
+                    Ok(exports) => Some(exports),
                     Err(refusal) => {
                         unparsed = Some(refusal);
                         None
@@ -555,6 +612,8 @@ pub fn inventory(
             || pass == MAX_IMPORT_ANALYSIS_PASSES
         {
             modules.work.source_limit_refusals = HashSet::new();
+            modules.work.parsed_imports = HashMap::new();
+            modules.work.parsed_import_bytes = 0;
             return found;
         }
         prior_analyses = prior_analyses.saturating_add(modules.work.analyses);
