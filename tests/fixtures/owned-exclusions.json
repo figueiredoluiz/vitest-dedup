@@ -1230,6 +1230,11 @@
       "otherReasons": [],
       "testsExcluded": 2
     },
+    "recall/import-diamond-recovery/diamond.test.ts": {
+      "reason": "helper-export-unreadable",
+      "otherReasons": [],
+      "testsExcluded": 0
+    },
     "recall/local-helper-async-await/run.test.ts": {
       "reason": "registered-elsewhere",
       "otherReasons": [

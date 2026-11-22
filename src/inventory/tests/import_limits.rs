@@ -43,6 +43,38 @@ fn retained_import_syntax_uses_current_source() {
     assert_eq!(modules.work.parsed_import_bytes, 0);
 }
 
+/// A retained export result stops replaying when its child no longer resolves.
+#[test]
+fn retained_import_exports_recheck_the_dependency() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let original = root.join("catalog.ts");
+    fs::write(
+        &original,
+        format!("export const entries = '{}';", ":".repeat(40_000)),
+    )
+    .unwrap();
+    let shared = root.join("shared.ts");
+    fs::write(&shared, "export { check } from './catalog';").unwrap();
+    let setting = Setting {
+        dialect: &DIALECT,
+        globals: false,
+        root,
+        major: crate::framework::Formatting::Unknown,
+    };
+    let mut modules = Modules::default();
+    assert!(modules.exports(&shared, setting, 1).is_empty());
+    assert!(take_unread_imports());
+    assert!(modules.exports(&shared, setting, 1).is_empty());
+    assert!(take_unread_imports());
+    assert_eq!(modules.work.analyses, 2);
+    fs::remove_file(original).unwrap();
+    assert!(modules.exports(&shared, setting, 1).is_empty());
+    assert!(!take_unread_imports());
+    assert_eq!(modules.work.analyses, 3);
+    assert_eq!(modules.work.replay_checks, 2);
+}
+
 /// Assert the first refusal and every counter that explains it.
 fn assert_limit(
     found: &Inventory,

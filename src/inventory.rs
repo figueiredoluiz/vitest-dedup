@@ -16,6 +16,7 @@ pub mod runners;
 
 use crate::framework::{Dialect, Formatting, Registers};
 use crate::lang::{NodeId, Parsed, Span};
+use crate::memory::HeapBytes;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
@@ -349,7 +350,31 @@ impl ImportLimit {
 struct ParsedImport {
     source: String,
     parsed: Parsed,
+    refused_exports: Option<RefusedExports>,
     bytes: usize,
+}
+
+/// The only project lookup in the normal analysis of the retained export map.
+#[derive(Debug)]
+struct SourceLimitEdge {
+    specifier: String,
+    dependency: PathBuf,
+}
+
+/// Exports computed with one direct parser-limited child and no other project lookups.
+#[derive(Debug)]
+struct RefusedExports {
+    edge: SourceLimitEdge,
+    exports: HashMap<String, Export>,
+}
+
+/// The project lookups that the owned AST's import and re-export routes actually make.
+#[derive(Default)]
+struct ProjectImports {
+    seen: bool,
+    sole_source_limit: Option<SourceLimitEdge>,
+    /// The first lookup already performed while validating a replay that missed.
+    resolved_first: Option<Option<PathBuf>>,
 }
 
 /// Work already spent by one root reading; a refusal stops its remaining import analyses.
@@ -368,6 +393,8 @@ struct ImportWork {
     parsed_imports: HashMap<PathBuf, ParsedImport>,
     /// Estimated bytes retained for these entries, including any in use by an active analysis.
     parsed_import_bytes: usize,
+    /// Export replay validations attempted in this pass, separately bounded by the analysis cap.
+    replay_checks: usize,
     /// Whether completed cache entries are the only lasting effects of this pass.
     retry_safe: bool,
 }
@@ -382,6 +409,7 @@ impl Default for ImportWork {
             source_limit_refusals: HashSet::new(),
             parsed_imports: HashMap::new(),
             parsed_import_bytes: 0,
+            replay_checks: 0,
             retry_safe: true,
         }
     }
@@ -453,7 +481,73 @@ impl Modules {
         UNREAD_IMPORTS.with(|count| count.set(count.get() + 1));
     }
 
-    /// Reuse only the owned parse of unchanged source, then analyze exports in the current frame.
+    /// Follow a project import and observe whether it was the only lookup and hit a source limit.
+    fn project_exports(
+        &mut self,
+        from: &Path,
+        specifier: &str,
+        setting: Setting,
+        depth: usize,
+        imports: &mut ProjectImports,
+    ) -> Option<HashMap<String, Export>> {
+        let resolved = imports
+            .resolved_first
+            .take()
+            .unwrap_or_else(|| self.sources.resolve(from, specifier, setting.root));
+        let exports = resolved
+            .as_ref()
+            .map(|path| self.exports(path, setting, depth));
+        imports.sole_source_limit = if imports.seen {
+            None
+        } else {
+            resolved
+                .filter(|path| self.work.source_limit_refusals.contains(path))
+                .map(|dependency| SourceLimitEdge {
+                    specifier: specifier.to_owned(),
+                    dependency,
+                })
+        };
+        imports.seen = true;
+        exports
+    }
+
+    /// Replay one direct source refusal after rechecking its resolution and depth.
+    fn replay_refused_exports(
+        &mut self,
+        path: &Path,
+        setting: Setting,
+        depth: usize,
+        proof: &RefusedExports,
+        imports: &mut ProjectImports,
+    ) -> Option<HashMap<String, Export>> {
+        if depth >= MAX_DEPTH || self.work.replay_checks >= MAX_IMPORT_ANALYSES {
+            return None;
+        }
+        self.work.replay_checks += 1;
+        let confined_before = crate::lang::confinement_refusals();
+        let refused_before = crate::lang::manifest_refusals();
+        let resolved = self
+            .sources
+            .resolve(path, &proof.edge.specifier, setting.root);
+        if resolved.as_ref() != Some(&proof.edge.dependency)
+            || !self
+                .work
+                .source_limit_refusals
+                .contains(&proof.edge.dependency)
+            || crate::lang::confinement_refusals() != confined_before
+            || crate::lang::manifest_refusals() != refused_before
+        {
+            // The source matched exactly, so the normal analysis will make this same first lookup.
+            imports.resolved_first = Some(resolved);
+            return None;
+        }
+        // The source read still counts against the byte limit. No full export analysis ran.
+        self.work.analyses -= 1;
+        self.record_unread_import();
+        Some(proof.exports.clone())
+    }
+
+    /// Reuse the owned parse of unchanged text, and reuse exports only with a rechecked source proof.
     fn parsed_exports(
         &mut self,
         path: &Path,
@@ -461,32 +555,71 @@ impl Modules {
         setting: Setting,
         depth: usize,
     ) -> Result<HashMap<String, Export>, crate::lang::Refusal> {
+        let mut imports = ProjectImports::default();
         if let Some((key, entry)) = self.work.parsed_imports.remove_entry(path) {
             if entry.source == source {
-                // The caller's active-path guard prevents re-entry while the parse is borrowed.
-                let exports = module::analyse(path, &source, &entry.parsed, setting, self, depth).1;
+                // The caller's active-path guard prevents re-entry while the entry is borrowed.
+                let replayed = entry.refused_exports.as_ref().and_then(|proof| {
+                    self.replay_refused_exports(path, setting, depth, proof, &mut imports)
+                });
+                let exports = replayed.unwrap_or_else(|| {
+                    module::analyse(
+                        path,
+                        &source,
+                        &entry.parsed,
+                        setting,
+                        self,
+                        depth,
+                        &mut imports,
+                    )
+                    .1
+                });
                 self.work.parsed_imports.insert(key, entry);
                 return Ok(exports);
             }
             self.work.parsed_import_bytes -= entry.bytes;
         }
         let parsed = crate::lang::parse(path, &source)?;
+        let confined_before = crate::lang::confinement_refusals();
+        let refused_before = crate::lang::manifest_refusals();
         let unread_before = UNREAD_IMPORTS.with(std::cell::Cell::get);
-        let exports = module::analyse(path, &source, &parsed, setting, self, depth).1;
-        if self.work.refusal.is_none() && UNREAD_IMPORTS.with(std::cell::Cell::get) != unread_before
-        {
+        let exports = module::analyse(path, &source, &parsed, setting, self, depth, &mut imports).1;
+        let unread = UNREAD_IMPORTS.with(std::cell::Cell::get) - unread_before;
+        if self.work.refusal.is_none() && unread > 0 {
             let key = path.to_path_buf();
-            let bytes = parsed
+            let mut bytes = parsed
                 .proof_bytes()
                 .saturating_add(source.capacity())
                 .saturating_add(key.capacity())
                 .saturating_add(std::mem::size_of::<(PathBuf, ParsedImport)>());
-            if bytes <= MAX_IMPORT_PARSED_BYTES - self.work.parsed_import_bytes {
+            let remaining = MAX_IMPORT_PARSED_BYTES - self.work.parsed_import_bytes;
+            if bytes <= remaining {
+                let refused_exports = imports.sole_source_limit.and_then(|edge| {
+                    let retained = edge
+                        .specifier
+                        .capacity()
+                        .saturating_add(edge.dependency.capacity())
+                        .saturating_add(exports.heap_bytes());
+                    if unread == 1
+                        && crate::lang::confinement_refusals() == confined_before
+                        && crate::lang::manifest_refusals() == refused_before
+                        && retained <= remaining - bytes
+                    {
+                        bytes += retained;
+                        Some(RefusedExports {
+                            edge,
+                            exports: exports.clone(),
+                        })
+                    } else {
+                        None
+                    }
+                });
                 self.work.parsed_imports.insert(
                     key,
                     ParsedImport {
                         source,
                         parsed,
+                        refused_exports,
                         bytes,
                     },
                 );
@@ -600,7 +733,16 @@ pub fn inventory(
             bytes,
             ..ImportWork::default()
         };
-        let found = module::analyse(path, source, parsed, setting, modules, 0).0;
+        let found = module::analyse(
+            path,
+            source,
+            parsed,
+            setting,
+            modules,
+            0,
+            &mut ProjectImports::default(),
+        )
+        .0;
         let analysis_refusal = matches!(
             modules.work.refusal.as_ref().map(|limit| limit.kind),
             Some(ImportLimitKind::Analyses)
