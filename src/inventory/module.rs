@@ -851,21 +851,33 @@ impl<'s> Module<'s> {
             if self.dead_chains.borrow().contains(&node) {
                 return None;
             }
-            visited.push(node);
-            if let Some((origin, provenance)) = self.root_origin(node) {
-                steps.reverse();
-                return Some((origin, provenance, steps));
-            }
             if let Some(mut result) = tree.sequence_result(node) {
+                // A failed bare sequence rules out a root. A longer chain can fail even
+                // when calling the sequence itself registers.
+                if steps.is_empty() {
+                    visited.push(node);
+                }
                 result = tree.inner(result);
                 while let Some(next) = tree.sequence_result(result) {
                     result = tree.inner(next);
                 }
-                let Origin::Wrapper(reach) = self.resolve(result)?.value else {
-                    return None;
+                let selected = self.resolve(result)?;
+                let reach = match selected.value {
+                    Origin::Wrapper(reach) => reach,
+                    _ if steps.is_empty()
+                        && self.invokes_sequence_fixture(node, result, &selected) =>
+                    {
+                        Reach::Tasks
+                    }
+                    _ => return None,
                 };
                 steps.reverse();
                 return Some((Origin::Wrapper(reach), Provenance::Wrapper, steps));
+            }
+            visited.push(node);
+            if let Some((origin, provenance)) = self.root_origin(node) {
+                steps.reverse();
+                return Some((origin, provenance, steps));
             }
             match tree.kind(node) {
                 // Join resolved result capabilities; missing proof does not make an arm inert.
@@ -938,6 +950,29 @@ impl<'s> Module<'s> {
                 }
             }
         }
+    }
+
+    /// An immediate call of a sequence-selected fixture extension may register tasks.
+    fn invokes_sequence_fixture(
+        &self,
+        sequence: NodeId,
+        result: NodeId,
+        selected: &ResolvedCallee<'s>,
+    ) -> bool {
+        let tree = self.tree;
+        selected.registration == Some(SiteKind::Registers(Registers::Test))
+            && matches!(
+                selected.steps.as_slice(),
+                [Step::Member(member), Step::Call]
+                    if self.setting.dialect.chain_member(member) == Some(Chain::FixtureExtension)
+            )
+            && tree
+                .outer_parent(sequence)
+                .and_then(|parent| callee_link(tree, parent))
+                .is_some_and(|link| {
+                    link.kind == CalleeLinkKind::Call && tree.inner(link.input) == sequence
+                })
+            && self.holds_api_with(result, Some(selected))
     }
 
     /// A result candidate may register; a coarse API origin alone does not prove callability.

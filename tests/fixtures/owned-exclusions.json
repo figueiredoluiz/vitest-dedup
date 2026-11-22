@@ -1,5 +1,10 @@
 {
   "files": {
+    "oracle/sequence-registration/builder.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [],
+      "testsExcluded": 1
+    },
     "oracle/sequence-registration/default.test.ts": {
       "reason": "registered-elsewhere",
       "otherReasons": [],

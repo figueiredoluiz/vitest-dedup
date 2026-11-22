@@ -1,6 +1,11 @@
 {
-  "blindUnderCurrent": ["default.test.ts", "named.test.ts", "prefix.test.ts"],
+  "blindUnderCurrent": ["builder.test.ts", "default.test.ts", "named.test.ts", "prefix.test.ts"],
   "files": {
+    "builder.test.ts": {
+      "tasks": 1,
+      "wrapperSites": ["wrapper@3"],
+      "next": {"reasons": ["registered-elsewhere"], "testsExcluded": 1}
+    },
     "named.test.ts": {
       "tasks": 1,
       "wrapperSites": ["wrapper@3"],

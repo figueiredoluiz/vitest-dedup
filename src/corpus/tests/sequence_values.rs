@@ -59,3 +59,29 @@ fn sequence_wrapper_corpus_retains_calls_and_prefixes() {
         .iter()
         .all(|location| location.path.as_path() == Path::new("control.test.ts")));
 }
+
+/// A sequence-selected fixture builder cannot leave a clean report on the direct tests alone.
+#[test]
+fn sequence_fixture_builder_keeps_the_independent_duplicate() {
+    let files = [fixture!("builder.test.ts"), fixture!("control.test.ts")];
+    let paths = ["builder.test.ts", "control.test.ts"];
+    let results = corpora(&files, &paths);
+    assert_eq!(results.len(), 2);
+    assert_eq!(results[0].parse_errors, 0);
+    assert_eq!(results[0].tests.len(), 1);
+    assert_eq!(
+        results[0].tests[0].exclusion,
+        Some(Exclusion::RegisteredElsewhere)
+    );
+    assert_eq!(results[1].tests.len(), 2);
+    assert!(results[1].tests.iter().all(|case| case.exclusion.is_none()));
+    let outcome = owned_outcome(paths.into_iter().zip(results).collect());
+    assert_eq!(outcome.findings.len(), 1, "{:?}", outcome.findings);
+    let finding = &outcome.findings[0];
+    assert_eq!(finding.rule, crate::model::Rule::DuplicateTest);
+    assert_eq!(finding.locations.len(), 2);
+    assert!(finding
+        .locations
+        .iter()
+        .all(|location| location.path.as_path() == Path::new("control.test.ts")));
+}
