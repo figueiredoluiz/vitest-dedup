@@ -133,10 +133,10 @@ states how many findings were suppressed this way.
 ## GitHub Action
 
 ```yaml
-- uses: figueiredoluiz/vitest-dedup@v0.10.0
+- uses: figueiredoluiz/vitest-dedup@v0.11.0
   with:
     path: .
-    version: 0.10.0
+    version: 0.11.0
     threshold: "5"
 ```
 
