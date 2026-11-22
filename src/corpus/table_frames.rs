@@ -13,8 +13,6 @@ pub(super) struct Frame {
     pub proven: bool,
     /// A readonly literal array is opaque and can compare only within this invocation.
     pub isolated: bool,
-    /// A parent skip/todo applies to each generated child.
-    pub inert: bool,
     /// Primitive bindings shared by this invocation's children.
     pub values: HashMap<SymbolId, Scalar>,
     /// Comparison titles, by suite registering call.
@@ -34,7 +32,6 @@ impl Default for Frame {
             table: false,
             proven: true,
             isolated: false,
-            inert: false,
             values: HashMap::new(),
             names: HashMap::new(),
             display: HashMap::new(),
@@ -117,7 +114,6 @@ pub(super) fn around(
                     .into_iter()
                     .flatten()
                     .collect::<Vec<_>>();
-                frame.inert |= modifiers.inert || normalizer.inert_options(&arguments);
                 frame.proven &= normalizer.active_suite(callee, &arguments);
                 if is_table {
                     frame.table = true;
@@ -162,7 +158,6 @@ pub(super) fn around(
                 };
                 child.rows.push((tree.span(call).start, invocation));
                 child.proven &= registration_body;
-                child.inert |= modifiers.inert || normalizer.inert_options(&arguments);
                 let values = callback.and_then(|f| normalizer.suite_row_values(f, &row.value));
                 child.proven &= active && values.is_some();
                 if let Some((values, isolated)) = values {

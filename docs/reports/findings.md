@@ -26,7 +26,10 @@ participants, not file positions, so it survives reformatting and line moves. Ba
 Structured fields are provided rather than asking a consumer to parse `message`.
 
 - `inert` carries a per-participant `.skip`/`.todo` flag parallel to `locations` and `titles`, so an
-  integration can tell which side of a duplicate is dead code.
+  integration can tell which side of a duplicate is dead code. A test is inert when it or any suite
+  around it is skipped or a todo, by chain or by an option whose last write is a literal `true`
+  (`{ skip: true }`, `{ todo: true }`). A skip or todo on a registration that is also focused
+  (`describe.skip.only`, `{ skip: true, only: true }`) does not make it inert.
 - `registrationFiles` is optional. Declaration locations identify source text, and file-scoped rules
   use the file registering each test. When those differ, a finding may carry `registrationFiles`,
   an array parallel to `locations`. Each entry lists the sorted caller paths represented by that

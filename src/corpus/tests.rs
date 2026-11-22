@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
+mod activation;
 mod completion;
 mod dynamic_import;
 mod export_identity;
@@ -634,8 +635,21 @@ fn may_skip_follows_skip_and_todo_through_options_and_suites() {
     for title in ["chained", "runs", "plain", "in open"] {
         assert!(!may_skip(title), "{title}");
     }
-    // Only a skip the test itself writes is `inert`; the suite routes do not change it.
-    assert!(!tests["in pending"].inert && !tests["bound"].inert);
+    // A literal skip or todo is `inert` on the test or any suite around it; one read from a value
+    // is not.
+    for title in ["literal", "chain", "in pending", "in skipped"] {
+        assert!(tests[title].inert, "{title}");
+    }
+    for title in [
+        "bound",
+        "bound todo",
+        "shorthand",
+        "in held",
+        "in open",
+        "plain",
+    ] {
+        assert!(!tests[title].inert, "{title}");
+    }
 }
 
 /// A scoped mock changes dynamic imports at runtime, so no test in its file is comparable.
