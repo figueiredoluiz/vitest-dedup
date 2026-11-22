@@ -121,13 +121,24 @@ pub fn immutable(scopes: &Scopes, symbol: SymbolId, declared: Declared) -> Optio
 }
 
 /// Proves [`Initialized`] from position alone: `read` starts after `declarator` ends, lies inside
-/// the declaration's parent (its statement list or `for` head, so not in a later `switch` case,
+/// the declaration's statement list or `for` head (so not in a later `switch` case,
 /// which control can enter past the declaration, nor a `for…of`/`for…in` iterable, which runs
 /// before the binding exists), and no function declaration, which hoisting
 /// can call before the declaration runs, lies between them. A read inside a function declaration
 /// is never proved here; a caller that proves when that function runs owns that case.
+/// A top-level named export wraps a runtime `const` without introducing a statement list.
 pub fn initialized(tree: &Tree, declarator: NodeId, read: NodeId) -> Option<Initialized> {
-    let enclosing = tree.parent(tree.parent(declarator)?)?;
+    let declaration = tree.parent(declarator)?;
+    let mut enclosing = tree.parent(declaration)?;
+    if tree.kind(enclosing) == "ExportNamedDeclaration"
+        && tree.text(declaration, "kind") == Some("const")
+        && !tree.erased_declaration(enclosing)
+    {
+        enclosing = tree
+            .parent(enclosing)
+            .filter(|&parent| tree.kind(parent) == "Program")
+            .unwrap_or(enclosing);
+    }
     if tree.span(read).start < tree.span(declarator).end {
         return None;
     }

@@ -4,7 +4,12 @@ use super::*;
 /// A callable can cross initialized lexical bindings before becoming a mixed result.
 #[test]
 fn registration_value_aliases_reach_result_arms() {
-    for api in ["test", "it"] {
+    for (api, modifier) in [
+        ("test", ""),
+        ("it", ""),
+        ("test", "export "),
+        ("it", "export "),
+    ] {
         for value in ["held", "renamed", "(renamed as typeof base)"] {
             for result in [
                 format!("true ? {value} : noop"),
@@ -18,7 +23,8 @@ fn registration_value_aliases_reach_result_arms() {
                 ] {
                     let helper = format!(
                         "import {{ {api} as base }} from 'vitest';\
-                         const held = base; const renamed = held; const noop = () => {{}};\
+                         {modifier}const held = base; {modifier}const renamed = held;\
+                         const noop = () => {{}};\
                          {export} ({result});"
                     );
                     let source = format!("{import} from './helper'; run('case', () => {{}});");
@@ -47,9 +53,12 @@ fn registration_value_aliases_require_an_initialized_callable_result() {
     for definitions in [
         "const held = base.name; export const run = false ? held : noop;",
         "const held = base.length; export default (false ? held : noop);",
+        "export const held = base.name; export default (false ? held : noop);",
         "const held = base; const label = held.name; export default (false ? label : noop);",
         "declare const held: typeof base; export const run = false ? held : noop;",
+        "export declare const held: typeof base; export const run = false ? held : noop;",
         "export const run = false ? held : noop; const held = base;",
+        "export default (false ? held : noop); export const held = base;",
         "const held = base; export const run = held && noop;",
         "const held = base; { const held = noop; const run = false ? held : noop; run(); }",
     ] {
