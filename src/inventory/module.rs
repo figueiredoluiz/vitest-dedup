@@ -49,6 +49,26 @@ impl Origin {
     }
 }
 
+/// What binding analysis proves about a bare registration value.
+#[derive(Clone, Copy)]
+enum RegistrationBinding {
+    /// An unwritten, named framework registration import.
+    FrameworkImport,
+    /// A value with registration provenance, and its declarator when it holds the callable.
+    Alias(Option<NodeId>),
+}
+
+/// Which registration results may participate while alias origins settle.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum AliasPhase {
+    /// Settle exact API origins before joining uncertain arms.
+    Exact,
+    /// Collect mixed results that read proved bare aliases.
+    Proved,
+    /// All alias collection is complete, so the remaining API shapes may join.
+    Settled,
+}
+
 /// When a call of the framework's mocking namespace changes module state.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum MockCall {
@@ -104,16 +124,16 @@ struct Module<'s> {
     parsed: &'s Parsed,
     setting: Setting<'s>,
     origins: HashMap<SymbolId, Origin>,
-    /// Exact API aliases have reached their fixpoint before uncertain conditional results join.
-    api_aliases_settled: bool,
+    /// The alias pass in progress, or its completed state.
+    alias_phase: AliasPhase,
     /// Functions of this module whose body holds a registration, by the symbol naming them, with
     /// what calling them may register.
     wrappers: HashMap<SymbolId, Reach>,
     /// Functions of this module whose returned value may be a registration function: calling
     /// what one returns may register tests.
     returners: HashSet<SymbolId>,
-    /// Bindings a declarator gave a registration value: what they hold is read elsewhere.
-    aliased: HashSet<SymbolId>,
+    /// Direct framework bindings and local aliases, with any proof of the value they hold.
+    registration_bindings: HashMap<SymbolId, RegistrationBinding>,
     loads: Vec<u32>,
     values: HashSet<NodeId>,
     /// Bindings declared more than once, replacing their value.
@@ -151,10 +171,10 @@ pub(super) fn analyse(
         parsed,
         setting,
         origins: HashMap::new(),
-        api_aliases_settled: false,
+        alias_phase: AliasPhase::Exact,
         wrappers: HashMap::new(),
         returners: HashSet::new(),
-        aliased: HashSet::new(),
+        registration_bindings: HashMap::new(),
         loads: Vec::new(),
         values: HashSet::new(),
         redeclared: HashSet::new(),
@@ -168,7 +188,7 @@ pub(super) fn analyse(
     module.evaluates = super::direct_eval(parsed);
     module.rewritten_globals = module.global_writes();
     module.collect_origins(modules, depth, imports);
-    module.api_aliases_settled = true;
+    module.alias_phase = AliasPhase::Settled;
     let found = module.registrations();
     let mut exports = module.exports(modules, depth, &found, imports);
     // A registration outside every wrapper may run while the module loads: at top level, in a
@@ -979,12 +999,35 @@ impl<'s> Module<'s> {
     }
 
     /// A result candidate may register; a coarse API origin alone does not prove callability.
-    /// Reuse the resolved callee, retaining the alias-settlement boundary of the resolver.
+    /// Settle exact origins before admitting mixed results from proved bare aliases.
     fn registration_candidate(&self, node: NodeId, resolved: Option<&ResolvedCallee<'s>>) -> bool {
         match resolved.map(|callee| callee.value) {
             Some(Origin::Wrapper(_) | Origin::Derived(_)) => true,
-            Some(Origin::Api(_)) => self.api_aliases_settled && self.holds_api_with(node, resolved),
+            Some(Origin::Api(_)) if self.alias_phase != AliasPhase::Exact => {
+                matches!(
+                    self.proved_registration_binding(node),
+                    Some(RegistrationBinding::Alias(Some(_)))
+                ) || (self.alias_phase == AliasPhase::Settled
+                    && self.holds_api_with(node, resolved))
+            }
             _ => false,
+        }
+    }
+
+    /// The proof that a bare identifier reads a callable registration, after initialization.
+    fn proved_registration_binding(&self, node: NodeId) -> Option<RegistrationBinding> {
+        let node = self.tree.inner(node);
+        if self.tree.kind(node) != "Identifier" {
+            return None;
+        }
+        let binding = *self.registration_bindings.get(&self.read(node)?)?;
+        match binding {
+            RegistrationBinding::FrameworkImport => Some(binding),
+            RegistrationBinding::Alias(Some(declarator)) => {
+                crate::lang::proof::initialized(self.tree, declarator, node)?;
+                Some(binding)
+            }
+            RegistrationBinding::Alias(None) => None,
         }
     }
 
@@ -1247,6 +1290,11 @@ impl<'s> Module<'s> {
                     None => {
                         if let Some(registers) = self.api(&name) {
                             self.origins.insert(symbol, Origin::Api(registers));
+                            if tree.kind(specifier) == "ImportSpecifier" && !self.reassigned(symbol)
+                            {
+                                self.registration_bindings
+                                    .insert(symbol, RegistrationBinding::FrameworkImport);
+                            }
                         }
                     }
                     Some(exports) => match exports.get(&name) {
@@ -1268,6 +1316,14 @@ impl<'s> Module<'s> {
             }
         }
         self.collect_aliases();
+        if self
+            .registration_bindings
+            .values()
+            .any(|binding| matches!(binding, RegistrationBinding::Alias(Some(_))))
+        {
+            self.alias_phase = AliasPhase::Proved;
+            self.collect_aliases();
+        }
     }
 
     /// `const t = test`, `const myTest = test.extend({...})`, `const { test } = import.meta.vitest`.
@@ -1275,6 +1331,7 @@ impl<'s> Module<'s> {
         let tree = self.tree;
         loop {
             let before = self.origins.clone();
+            let mut learned_callable_alias = false;
             for node in tree.nodes() {
                 if tree.kind(node) != "VariableDeclarator" {
                     continue;
@@ -1293,8 +1350,21 @@ impl<'s> Module<'s> {
                             continue;
                         };
                         if let Some(origin) = origin {
-                            self.alias(symbol, origin);
-                            self.aliased.insert(symbol);
+                            let origin = self.alias(symbol, origin);
+                            let callable = matches!(origin, Origin::Api(_))
+                                && self.parsed.scopes.symbol(symbol).declaration
+                                    == Declaration::Variable(node)
+                                && tree.parent(node).is_some_and(|declaration| {
+                                    tree.text(declaration, "kind") == Some("const")
+                                        && !tree.flag(declaration, "declare")
+                                })
+                                && self.proved_registration_binding(init).is_some();
+                            let previous = self.registration_bindings.insert(
+                                symbol,
+                                RegistrationBinding::Alias(callable.then_some(node)),
+                            );
+                            learned_callable_alias |= callable
+                                && !matches!(previous, Some(RegistrationBinding::Alias(Some(_))));
                         }
                     }
                     // A destructured binding holds a member of the wrapper, which may register
@@ -1326,15 +1396,16 @@ impl<'s> Module<'s> {
                     _ => {}
                 }
             }
-            if self.origins == before {
+            if self.origins == before && !learned_callable_alias {
                 break;
             }
         }
     }
 
     /// Records that `symbol` holds `origin`. A wrapper alias takes the widest reach seen, since a
-    /// wrapper's reach only grows while the fixpoint runs; any other origin is set once.
-    fn alias(&mut self, symbol: SymbolId, origin: Origin) {
+    /// wrapper's reach only grows while the fixpoint runs. Return the incoming origin after
+    /// accounting for writes to the binding.
+    fn alias(&mut self, symbol: SymbolId, origin: Origin) -> Origin {
         let origin = match origin {
             _ if self.reassigned(symbol) => Origin::Wrapper(Reach::Tasks),
             origin => origin,
@@ -1343,6 +1414,7 @@ impl<'s> Module<'s> {
         if let (Origin::Wrapper(held), Origin::Wrapper(reach)) = (*entry, origin) {
             *entry = Origin::Wrapper(held.max(reach));
         }
+        origin
     }
 
     /// Every registering call, with wrappers found to a fixpoint: a function whose body holds a
@@ -1516,11 +1588,13 @@ impl<'s> Module<'s> {
                 && symbol.is_some_and(|symbol| self.returners.contains(&symbol));
         }
         let own = symbol.is_none_or(|symbol| {
-            !self.aliased.contains(&symbol)
-                && matches!(
-                    self.origins.get(&symbol),
-                    Some(Origin::Api(_) | Origin::Namespace)
-                )
+            !matches!(
+                self.registration_bindings.get(&symbol),
+                Some(RegistrationBinding::Alias(_))
+            ) && matches!(
+                self.origins.get(&symbol),
+                Some(Origin::Api(_) | Origin::Namespace)
+            )
         });
         let dialect = &self.setting.dialect;
         own && resolved.is_some_and(|callee| {

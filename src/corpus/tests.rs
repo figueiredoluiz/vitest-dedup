@@ -79,6 +79,26 @@ fn logical_registration_keeps_owned_exclusions_and_positive_findings() {
     assert_owned_registration_values(&files, 10);
 }
 
+/// The oracle's callable aliases reach their invocations and leave the independent pair eligible.
+#[test]
+fn registration_value_aliases_keep_owned_exclusions_and_positive_findings() {
+    let files = [
+        (
+            "case.test.ts",
+            include_str!("../../fixtures/oracle/registration-value-aliases/case.test.ts"),
+        ),
+        (
+            "control.test.ts",
+            include_str!("../../fixtures/oracle/registration-value-aliases/control.test.ts"),
+        ),
+        (
+            "values.ts",
+            include_str!("../../fixtures/oracle/registration-value-aliases/values.ts"),
+        ),
+    ];
+    assert_owned_registration_values(&files, 4);
+}
+
 /// Transport uncertainty without changing independent comparison eligibility or load order.
 fn assert_owned_registration_values(files: &[(&str, &str)], wrappers: usize) {
     let orders: &[&[&str]] = &[
