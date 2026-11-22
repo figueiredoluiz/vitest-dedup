@@ -30,6 +30,11 @@
       "otherReasons": ["helper-effects-unproved"],
       "testsExcluded": 12
     },
+    "oracle/registration-value-aliases/case.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": ["helper-effects-unproved"],
+      "testsExcluded": 6
+    },
     "oracle/default-registration/case.test.ts": {
       "reason": "registered-elsewhere",
       "otherReasons": ["helper-effects-unproved"],
