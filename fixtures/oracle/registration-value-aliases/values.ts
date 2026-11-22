@@ -2,7 +2,7 @@ import { test as base } from 'vitest'
 
 const enabled = true
 const noop = (..._args: unknown[]) => {}
-const held = base
+export const held = base
 const renamed = held as typeof base
 const name = base.name
 const length = base.length

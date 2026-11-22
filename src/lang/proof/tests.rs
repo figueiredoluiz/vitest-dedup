@@ -93,11 +93,18 @@ fn a_symbol_without_a_runtime_binding_is_not_single() {
     assert!(immutable(&parsed.scopes, a, none).is_none());
 }
 
+/// Later reads prove initialization only when control cannot bypass the declaration.
 #[test]
 fn initialization_is_proved_from_position_only() {
     for (source, expected) in [
         ("const a = 1; a;", true),
         ("const a = 1, b = a;", true),
+        ("export const a = 1, b = a;", true),
+        ("export const a = 1; export default a;", true),
+        ("export default a; export const a = 1;", false),
+        ("export const a = [a];", false),
+        ("export declare const a: number; export default a;", false),
+        ("namespace N { export const a = 1; a; }", false),
         ("const a = [a];", false),
         ("a; const a = 1;", false),
         ("{ const a = 1; { a; } }", true),
@@ -115,6 +122,7 @@ fn initialization_is_proved_from_position_only() {
         ("switch (0) { case 0: const a = 1; a; }", true),
         // Hoisting can call a function declaration before the declaration runs.
         ("const a = 1; function f() { return a; }", false),
+        ("export const a = 1; function f() { return a; }", false),
         ("function f() { const a = 1; return a; }", true),
     ] {
         let parsed = parsed("a.ts", source);
