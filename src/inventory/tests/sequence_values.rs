@@ -152,6 +152,13 @@ fn sequence_excluded_final_categories_add_no_invocation() {
 fn sequence_fixture_builder_accounts_for_the_invocation() {
     for (expression, direct_tests, wrappers) in [
         ("(0, api.extend({}))('selected', () => {})", 1, 1),
+        ("(0, v.test.extend({}))('selected', () => {})", 1, 1),
+        ("(0, v['test']['extend']({}))('selected', () => {})", 1, 1),
+        (
+            "(control('prefix', () => {}), v.test.extend({}))('selected', () => {})",
+            2,
+            1,
+        ),
         ("(0, (false, api.extend({})))('selected', () => {})", 1, 1),
         ("(0, api['extend']({}))('selected', () => {})", 1, 1),
         ("((0, api.extend({})) as any)('selected', () => {})", 1, 1),
@@ -166,6 +173,13 @@ fn sequence_fixture_builder_accounts_for_the_invocation() {
             1,
         ),
         ("(0, api.extend({}))", 1, 0),
+        ("(0, v.test.extend({}))", 1, 0),
+        ("(0, api.test.extend({}))('other', () => {})", 1, 0),
+        (
+            "{const v = {test: {extend: () => () => {}}}; (0, v.test.extend({}))()}",
+            1,
+            0,
+        ),
         ("(api.extend({}), () => {})('inert', () => {})", 1, 0),
         ("(0, api.extend)", 1, 0),
         ("(0, api.name)", 1, 0),
@@ -186,7 +200,7 @@ fn sequence_fixture_builder_accounts_for_the_invocation() {
             0,
         ),
     ] {
-        let source = format!("import {{test as api, test as control}} from 'vitest'; {expression}; control('retained', () => {{}});");
+        let source = format!("import {{test as api, test as control}} from 'vitest'; import * as v from 'vitest'; {expression}; control('retained', () => {{}});");
         let (found, parsed) = inventory_with_tree(&source, &[], false);
         assert_eq!(parsed.parse_errors, 0, "{source}");
         assert_eq!(

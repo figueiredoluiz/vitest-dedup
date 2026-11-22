@@ -88,6 +88,8 @@ struct ResolvedCallee<'t> {
     provenance: Provenance,
     /// The complete chain, including any superseded prefix.
     steps: Vec<Step<'t>>,
+    /// Whether the first member selects the registration API from a namespace.
+    namespace_root: bool,
     /// The first step retained in the registration record.
     start: usize,
     /// The superseding registration member, unless its prefix may run project code.
@@ -960,10 +962,11 @@ impl<'s> Module<'s> {
         selected: &ResolvedCallee<'s>,
     ) -> bool {
         let tree = self.tree;
+        let api_steps = selected.steps.get(usize::from(selected.namespace_root)..);
         selected.registration == Some(SiteKind::Registers(Registers::Test))
             && matches!(
-                selected.steps.as_slice(),
-                [Step::Member(member), Step::Call]
+                api_steps,
+                Some([Step::Member(member), Step::Call])
                     if self.setting.dialect.chain_member(member) == Some(Chain::FixtureExtension)
             )
             && tree
@@ -1076,6 +1079,7 @@ impl<'s> Module<'s> {
                     provenance
                 },
                 steps,
+                namespace_root: false,
                 start: 0,
                 member: None,
             });
@@ -1121,6 +1125,7 @@ impl<'s> Module<'s> {
                 provenance
             },
             steps,
+            namespace_root: origin == Origin::Namespace,
             start: if evaluated { 0 } else { start },
             member: if evaluated { None } else { member },
         })

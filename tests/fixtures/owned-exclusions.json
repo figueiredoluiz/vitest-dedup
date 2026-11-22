@@ -15,6 +15,11 @@
       "otherReasons": [],
       "testsExcluded": 1
     },
+    "oracle/sequence-registration/namespace-builder.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [],
+      "testsExcluded": 1
+    },
     "oracle/sequence-registration/prefix.test.ts": {
       "reason": "registered-elsewhere",
       "otherReasons": ["helper-effects-unproved"],
