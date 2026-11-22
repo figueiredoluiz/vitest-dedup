@@ -147,6 +147,83 @@ fn sequence_excluded_final_categories_add_no_invocation() {
     }
 }
 
+/// Only the directly invoked fixture-extension result adds a conservative registration.
+#[test]
+fn sequence_fixture_builder_accounts_for_the_invocation() {
+    for (expression, direct_tests, wrappers) in [
+        ("(0, api.extend({}))('selected', () => {})", 1, 1),
+        ("(0, v.test.extend({}))('selected', () => {})", 1, 1),
+        ("(0, v['test']['extend']({}))('selected', () => {})", 1, 1),
+        (
+            "(control('prefix', () => {}), v.test.extend({}))('selected', () => {})",
+            2,
+            1,
+        ),
+        ("(0, (false, api.extend({})))('selected', () => {})", 1, 1),
+        ("(0, api['extend']({}))('selected', () => {})", 1, 1),
+        ("((0, api.extend({})) as any)('selected', () => {})", 1, 1),
+        (
+            "(control('prefix', () => {}), api.extend({}))('selected', () => {})",
+            2,
+            1,
+        ),
+        (
+            "((0, api.extend({}))('selected', () => {}))?.('ignored', () => {})",
+            1,
+            1,
+        ),
+        ("(0, api.extend({}))", 1, 0),
+        ("(0, v.test.extend({}))", 1, 0),
+        ("(0, api.test.extend({}))('other', () => {})", 1, 0),
+        (
+            "{const v = {test: {extend: () => () => {}}}; (0, v.test.extend({}))()}",
+            1,
+            0,
+        ),
+        ("(api.extend({}), () => {})('inert', () => {})", 1, 0),
+        ("(0, api.extend)", 1, 0),
+        ("(0, api.name)", 1, 0),
+        (
+            "const alias = api; (0, alias.extend({}))('other', () => {})",
+            1,
+            0,
+        ),
+        (
+            "{const api = {extend: () => () => {}}; (0, api.extend({}))()}",
+            1,
+            0,
+        ),
+        ("{const api = {extend: () => 0}; (0, api.extend({}))}", 1, 0),
+        (
+            "const held = (0, api.extend({})); held('stored', () => {})",
+            1,
+            0,
+        ),
+    ] {
+        let source = format!("import {{test as api, test as control}} from 'vitest'; import * as v from 'vitest'; {expression}; control('retained', () => {{}});");
+        let (found, parsed) = inventory_with_tree(&source, &[], false);
+        assert_eq!(parsed.parse_errors, 0, "{source}");
+        assert_eq!(
+            found.sites.len(),
+            direct_tests + wrappers,
+            "{source}: {found:?}"
+        );
+        assert!(retained(&found), "{source}: {found:?}");
+        assert_eq!(
+            found
+                .sites
+                .iter()
+                .filter(|site| site.kind == SiteKind::Wrapper(Reach::Tasks))
+                .count(),
+            wrappers,
+            "{source}: {found:?}"
+        );
+        if wrappers > 0 {
+            assert!(found.escapes.is_empty(), "{source}: {found:?}");
+        }
+    }
+}
+
 /// Await assimilation and property handoffs retain uncertainty independently of the final call.
 #[test]
 fn sequence_effect_boundaries_keep_their_escape() {
@@ -198,6 +275,48 @@ fn balanced_sequence_resolution_adds_linear_work() {
         assert!(
             extra <= 8 * leaves,
             "leaves{leaves}: direct{direct}, sequence{sequence}, extra{extra}"
+        );
+    }
+}
+
+/// A repeatedly inspected inert sequence argument reuses its failed resolution.
+#[test]
+fn failed_sequence_arguments_reuse_scan_results() {
+    let mut observations = Vec::new();
+    for calls in [8, 16, 32, 48] {
+        let mut entries = Vec::new();
+        for argument in ["undefined", "(0, undefined)"] {
+            let tail = "()".repeat(calls - 1);
+            let source = format!(
+                "import {{test}} from 'vitest';
+                 function run() {{ test('inner', () => {{}}); return run; }}
+                 run({argument}){tail};
+                 test('retained', () => {{}});"
+            );
+            crate::inventory::module::take_resolutions();
+            let (found, parsed) = inventory_with_tree(&source, &[], false);
+            entries.push(crate::inventory::module::take_resolutions());
+            assert_eq!(parsed.parse_errors, 0);
+            assert_eq!(found.sites.len(), calls + 2, "{source}: {found:?}");
+            assert_eq!(
+                found
+                    .sites
+                    .iter()
+                    .filter(|site| site.kind == SiteKind::Wrapper(Reach::Tasks))
+                    .count(),
+                calls,
+                "{source}: {found:?}"
+            );
+            assert!(retained(&found));
+        }
+        observations.push((calls, entries[0], entries[1]));
+    }
+    eprintln!("failed sequence argument work (calls, direct, sequence): {observations:?}");
+    for (calls, direct, sequence) in observations {
+        assert!(direct > 0 && sequence > 0);
+        assert!(
+            sequence <= direct + 12,
+            "calls{calls}: direct{direct}, sequence{sequence}"
         );
     }
 }
