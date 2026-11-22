@@ -17,6 +17,7 @@ mod nc64;
 mod nc65;
 mod normal_properties;
 mod runners;
+mod sequence_values;
 
 /// An uncertain imported registration excludes its calls and their direct neighbors.
 fn assert_unproved_registration_corpus(corpus: &FileCorpus, wrappers: usize) {

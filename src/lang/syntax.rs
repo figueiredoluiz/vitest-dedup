@@ -150,10 +150,43 @@ pub(crate) enum ValueRole<'t> {
     Other,
 }
 
+impl Tree {
+    /// The operand supplying a sequence's value; preceding operands still evaluate.
+    pub(crate) fn sequence_result(&self, node: NodeId) -> Option<NodeId> {
+        if self.kind(node) != "SequenceExpression" {
+            return None;
+        }
+        match self.field_of(node, "expressions") {
+            Field::List(items) => match items.last() {
+                Some(Field::Node(last)) => Some(*last),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    /// An edge selecting the child's existing value, without proving guards or prefixes inert.
+    /// Awaiting and assignments can perform additional operations and establish no such fact.
+    pub(crate) fn selects_value(&self, outer: NodeId, inner: NodeId) -> bool {
+        self.parent(inner) == Some(outer)
+            && match self.kind(outer) {
+                "ConditionalExpression" => {
+                    self.child(outer, "consequent") == Some(inner)
+                        || self.child(outer, "alternate") == Some(inner)
+                }
+                "LogicalExpression" => self.child(outer, "right") == Some(inner),
+                _ => self.sequence_result(outer) == Some(inner),
+            }
+    }
+}
+
 /// The role of one actual parent/child edge. Unknown positions establish no result flow.
 pub(crate) fn value_role(tree: &Tree, outer: NodeId, inner: NodeId) -> ValueRole<'_> {
     if tree.parent(inner) != Some(outer) {
         return ValueRole::Other;
+    }
+    if tree.selects_value(outer, inner) {
+        return ValueRole::Result;
     }
     let holds = |field| tree.child(outer, field) == Some(inner);
     match tree.kind(outer) {
@@ -181,26 +214,11 @@ pub(crate) fn value_role(tree: &Tree, outer: NodeId, inner: NodeId) -> ValueRole
                 ValueRole::Consumed
             }
         }
-        "ConditionalExpression" => {
-            if holds("consequent") || holds("alternate") {
-                ValueRole::Result
-            } else {
-                ValueRole::Consumed
-            }
-        }
-        "LogicalExpression" if holds("right") => ValueRole::Result,
+        "ConditionalExpression" => ValueRole::Consumed,
         "LogicalExpression" if holds("left") => tree
             .text(outer, "operator")
             .map_or(ValueRole::Other, ValueRole::LogicalLeft),
-        "SequenceExpression" => {
-            if matches!(tree.field_of(outer, "expressions"), Field::List(items)
-                if matches!(items.last(), Some(Field::Node(last)) if *last == inner))
-            {
-                ValueRole::Result
-            } else {
-                ValueRole::Consumed
-            }
-        }
+        "SequenceExpression" => ValueRole::Consumed,
         "AssignmentExpression" => {
             if !holds("right") {
                 ValueRole::Other
@@ -295,6 +313,46 @@ mod tests {
     fn body_reads(source: &str) -> bool {
         let (parsed, body) = arrow_body(source);
         uses_receiver(&parsed.tree, &parsed.scopes, body)
+    }
+
+    /// Selection forwards existing values; await and assignment result edges stay distinct.
+    #[test]
+    fn selection_results_keep_operation_boundaries() {
+        for (expression, selected) in [
+            ("condition ? yes : no", &["consequent", "alternate"][..]),
+            ("condition && value", &["right"][..]),
+            ("await value", &[][..]),
+            ("target = value", &[][..]),
+        ] {
+            let (parsed, body) = arrow_body(&format!("async () => ({expression})"));
+            let tree = &parsed.tree;
+            let node = tree.inner(body);
+            for (field, value) in tree.fields(node) {
+                let Field::Node(child) = *value else {
+                    continue;
+                };
+                let field = field.as_ref();
+                let selects = selected.contains(&field);
+                assert_eq!(
+                    tree.selects_value(node, child),
+                    selects,
+                    "{expression} {field}"
+                );
+                if selects
+                    || field == "argument"
+                    || expression == "target = value" && field == "right"
+                {
+                    assert_eq!(value_role(tree, node, child), ValueRole::Result);
+                }
+            }
+        }
+        let (parsed, body) = arrow_body("() => (first, finalValue)");
+        let tree = &parsed.tree;
+        let node = tree.inner(body);
+        let result = tree.sequence_result(node).unwrap();
+        assert_eq!(tree.text(result, "name"), Some("finalValue"));
+        assert!(tree.selects_value(node, result));
+        assert!(!tree.selects_value(node, tree.list(node, "expressions")[0].unwrap()));
     }
 
     /// Callable result positions depend on selection, not merely a reference in either operand.

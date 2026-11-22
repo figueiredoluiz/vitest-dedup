@@ -149,12 +149,11 @@
       ],
       "next": {
         "reasons": [
-          "registered-elsewhere"
+          "registered-elsewhere",
+          "helper-effects-unproved"
         ],
-        "testsExcluded": 2
-      },
-      "wrapperSitesToday": [],
-      "waitsOn": "collection-scope calls the inventory cannot resolve"
+        "testsExcluded": 3
+      }
     },
     "static-method.test.ts": {
       "tasks": 3,
@@ -186,6 +185,7 @@
     }
   },
   "blindUnderCurrent": [
+    "sequence-callee.test.ts",
     "control-call.test.ts",
     "control-named.test.ts",
     "describe-title.test.ts"
@@ -238,13 +238,6 @@
       "kind": "missing-site",
       "item": "test@6",
       "reason": "A member of an imported object is not resolved.",
-      "waitsOn": "collection-scope calls the inventory cannot resolve"
-    },
-    {
-      "path": "sequence-callee.test.ts",
-      "kind": "missing-site",
-      "item": "test@6",
-      "reason": "A sequence expression hides the callee.",
       "waitsOn": "collection-scope calls the inventory cannot resolve"
     },
     {
