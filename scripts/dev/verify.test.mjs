@@ -1248,12 +1248,11 @@ test('the binary, the shared roots and integration targets select their own test
 
 test('the crate layout is read from this checkout', () => {
   const layout = crateLayout(resolve('.'))
-  for (const path of ['src/main.rs', 'src/diagnostics.rs', 'src/rss.rs', 'src/stdout.rs', 'src/memory_roof_tests.rs', 'src/cli/tests/imported_delivery.rs']) assert.ok(layout.bin.includes(path), path)
+  for (const path of ['src/main.rs', 'src/diagnostics.rs', 'src/rss.rs', 'src/stdout.rs', 'src/memory_roof_tests.rs']) assert.ok(layout.bin.includes(path), path)
   assert.equal(layout.bin.includes('src/tests.rs'), false, 'an inline module has no file to change')
   for (const module of ['cli', 'lang', 'rules', 'testing', 'confine']) assert.ok(layout.lib.some(entry => entry.module === module), module)
-  assert.ok(layout.bin.includes('src/cli/tests/'))
-  assert.ok(quickRustTests(['src/cli/tests/imported_delivery.rs'], layout).some(step => step.join(' ') === 'node scripts/dev/cargo-tests.mjs bin'))
-  for (const target of ['cli_ux', 'docs_contract', 'next_modes']) assert.ok(layout.testTargets.includes(target), target)
+  for (const target of ['cli_process', 'cli_ux', 'docs_contract', 'imported_delivery', 'next_modes']) assert.ok(layout.testTargets.includes(target), target)
+  assert.deepEqual(quickRustTests(['tests/cli_process.rs', 'tests/imported_delivery.rs'], layout), [['node', 'scripts/dev/cargo-tests.mjs', 'test', 'cli_process', 'imported_delivery']])
   assert.equal(layout.testTargets.includes('support'), false)
 })
 
