@@ -249,6 +249,7 @@ const CLIPPY = ['cargo', 'clippy', '--all-targets', '--all-features', '--locked'
 const RUSTDOC = ['cargo', 'doc', '--no-deps', '--document-private-items', '--locked']
 const WINDOWS_CHECK = ['cargo', 'check', '--all-targets', '--all-features', '--locked', '--target', 'x86_64-pc-windows-gnu']
 const CARGO_TESTS = ['node', 'scripts/dev/cargo-tests.mjs']
+const CLI_PROCESS_TESTS = ['cli_process', 'imported_delivery']
 const RUST_INVENTORY = ['node', 'scripts/check/check-coverage.mjs', '--rust-inventory']
 const EXCLUSION_PINS = 'tests/fixtures/owned-exclusions.json'
 const OWNED_EXCLUSIONS = [...CARGO_TESTS, 'test', 'excluded_files', '--', 'the_analyzer_reads_the_owned_fixtures', '--exact']
@@ -278,7 +279,7 @@ export function windowsSensitive(paths, diff) {
 
 /**
  * Select the Rust tests of what changed: the unit tests of each changed library module, the binary's
- * tests for its own modules, and the changed integration targets. Dependents are not selected.
+ * unit and subprocess tests for its own modules, and the changed integration targets.
  * @param {string[]|null} paths Changed paths, or null when the scope is unknown.
  * @param {ReturnType<typeof crateLayout>} layout Which root owns each source file, and the
  *   integration target names.
@@ -310,7 +311,10 @@ export function quickRustTests(paths, { bin, lib, testTargets }, wholeLibrary = 
   const steps = []
   if (wholeLibrary) steps.push([...CARGO_TESTS, 'lib'])
   else if (modules.size) steps.push([...CARGO_TESTS, 'lib', ...[...modules].sort()])
-  if (binary) steps.push([...CARGO_TESTS, 'bin'])
+  if (binary) {
+    steps.push([...CARGO_TESTS, 'bin'])
+    for (const target of CLI_PROCESS_TESTS) if (testTargets.includes(target)) targets.add(target)
+  }
   if (targets.size) steps.push([...CARGO_TESTS, 'test', ...[...targets].sort()])
   return steps
 }

@@ -1253,6 +1253,12 @@ test('the crate layout is read from this checkout', () => {
   for (const module of ['cli', 'lang', 'rules', 'testing', 'confine']) assert.ok(layout.lib.some(entry => entry.module === module), module)
   for (const target of ['cli_process', 'cli_ux', 'docs_contract', 'imported_delivery', 'next_modes']) assert.ok(layout.testTargets.includes(target), target)
   assert.deepEqual(quickRustTests(['tests/cli_process.rs', 'tests/imported_delivery.rs'], layout), [['node', 'scripts/dev/cargo-tests.mjs', 'test', 'cli_process', 'imported_delivery']])
+  for (const path of ['src/main.rs', 'src/stdout.rs']) {
+    assert.deepEqual(quickRustTests([path], layout), [
+      ['node', 'scripts/dev/cargo-tests.mjs', 'bin'],
+      ['node', 'scripts/dev/cargo-tests.mjs', 'test', 'cli_process', 'imported_delivery'],
+    ], path)
+  }
   assert.equal(layout.testTargets.includes('support'), false)
 })
 
