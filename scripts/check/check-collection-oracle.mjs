@@ -37,14 +37,13 @@ import { existsSync, readFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { isDeepStrictEqual } from 'node:util'
-import { collectAnalyzer, collectBenchmarks, collectWithVitest, compareDirectory, compareSites, declaredMajor, installedMajor, matchKnown, oracleBinary } from './lib/collection-oracle.mjs'
+import { collectAnalyzer, collectBenchmarks, collectFreshWithVitest, collectWithVitest, compareDirectory, compareSites, declaredMajor, installedMajor, matchKnown, oracleBinary } from './lib/collection-oracle.mjs'
 import { judgeCase, readCases } from './lib/oracle-cases.mjs'
 import { cachedCollector } from './lib/oracle-vitest-cache.mjs'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
 // What Vitest collected is reused while nothing it reads has changed; see `lib/oracle-vitest-cache.mjs`.
 const vitestCache = cachedCollector(ROOT, collectWithVitest)
-const collectVitest = vitestCache.collect
 const KNOWN = join(ROOT, 'scripts', 'check', 'collection-oracle-known.json')
 // The fixture directories the corpus gates analyze, plus `lookalikes` (Vitest must collect no
 // test from them either). Every recall case is added from its manifest.
@@ -102,31 +101,38 @@ const SHARED_SELF_CHECK = {
   },
 }
 
-/** The probe's report on the self-check directories, as failure messages (none when it matches). */
-function selfCheck() {
+/**
+ * The probe's report on the self-check directories, as failure messages (none when it matches).
+ * @param {(dir: string) => Promise<Map<string, object>>} collectVitest Collection in gate order.
+ * @returns {Promise<string[]>} Mismatches against the self-check expectations.
+ */
+async function selfCheck(collectVitest) {
   const checks = [
     ...Object.entries(SELF_CHECK).map(([dir, want]) => [dir, want, (file) => ({ tests: file.tests, hooks: file.hooks, stubReads: file.stubReads })]),
     ...Object.entries(SHARED_SELF_CHECK).map(([dir, want]) => [dir, want, (file) => ({ tests: file.tests, hooks: file.hooks, readsStub: file.stubReads.length > 0 })]),
   ]
-  return checks.flatMap(([dir, want, view]) => {
-    const actual = Object.fromEntries([...collectVitest(ROOT, dir)].map(([path, file]) => [path, view(file)]))
-    return isDeepStrictEqual(actual, want)
-      ? []
-      : [`probe self-check ${dir}: expected ${JSON.stringify(want)}\n    got ${JSON.stringify(actual)}`]
-  })
+  const failures = []
+  for (const [dir, want, view] of checks) {
+    const records = await collectVitest(dir)
+    const actual = Object.fromEntries([...records].map(([path, file]) => [path, view(file)]))
+    if (!isDeepStrictEqual(actual, want)) failures.push(`probe self-check ${dir}: expected ${JSON.stringify(want)}\n    got ${JSON.stringify(actual)}`)
+  }
+  return failures
 }
 
 /**
  * Runs the owned cases under `fixtures/oracle/`, each against its own `expected.json`.
  *
- * @returns {{failures: string[], held: string[], dirs: number, files: number}}
+ * @param {string} binary The analyzer binary.
+ * @param {ReturnType<typeof readCases>} owned Cases and manifest validation results.
+ * @param {(dir: string) => Promise<Map<string, object>>} collectVitest Collection in gate order.
+ * @returns {Promise<{failures: string[], held: string[], dirs: number, files: number}>} Case outcomes.
  */
-function runCases(binary) {
-  const { cases, problems } = readCases(ROOT)
+async function runCases(binary, { cases, problems }, collectVitest) {
   const totals = { failures: [...problems], held: [], dirs: cases.length, files: 0 }
   for (const oracleCase of cases) {
     const { dir } = oracleCase
-    const vitest = collectVitest(ROOT, dir)
+    const vitest = await collectVitest(dir)
     const pinTestExclusions = Object.values(oracleCase.expected.files).some((entry) => entry.testExclusions !== undefined)
     const { titles, sites, exclusions, testExclusions } = collectAnalyzer(binary, ROOT, dir, { pinTestExclusions })
     const judged = judgeCase(oracleCase, {
@@ -146,11 +152,38 @@ function runCases(binary) {
 }
 
 /** Collects every directory with Vitest and the analyzer, compares them, and returns the exit code. */
-function main() {
+async function main() {
   const binary = oracleBinary(ROOT, process.argv[2])
   if (binary === null) return 2
   const manifest = JSON.parse(readFileSync(join(ROOT, 'fixtures', 'recall', 'manifest.json'), 'utf8'))
   const dirs = [...FIXTURE_DIRS, ...manifest.cases.map((c) => `fixtures/recall/${c.path}`)]
+  const owned = readCases(ROOT)
+  const fresh = vitestCache.stats.enabled ? null : collectFreshWithVitest(ROOT, [
+    ...dirs, ...Object.keys(SELF_CHECK), ...Object.keys(SHARED_SELF_CHECK), ...owned.cases.map(({ dir }) => dir),
+  ])
+  /** Read the next directory's Vitest records through the cache or the fresh collection schedule. */
+  const collectVitest = async dir => {
+    if (!fresh) return vitestCache.collect(ROOT, dir)
+    const { value } = await fresh.next()
+    if (value?.[0] !== dir) throw new Error(`Missing Vitest collection for ${dir}`)
+    return value[1]
+  }
+  try {
+    return await compareCollections(binary, dirs, owned, collectVitest)
+  } finally {
+    await fresh?.return()
+  }
+}
+
+/**
+ * Compare all measured inputs and enforce the oracle's known lists and floors.
+ * @param {string} binary The analyzer binary.
+ * @param {string[]} dirs Fixture and recall directories.
+ * @param {ReturnType<typeof readCases>} owned Owned cases and manifest validation results.
+ * @param {(dir: string) => Promise<Map<string, object>>} collectVitest Collection in gate order.
+ * @returns {Promise<number>} Gate exit status.
+ */
+async function compareCollections(binary, dirs, owned, collectVitest) {
   const known = JSON.parse(readFileSync(KNOWN, 'utf8')).disagreements
 
   const totals = { files: 0, tests: 0, unproven: 0, hooks: 0, benchmarks: 0, siteFiles: 0, tasks: 0, sites: 0, unexecuted: 0 }
@@ -163,7 +196,7 @@ function main() {
   const probeErrors = []
   const found = []
   for (const dir of dirs) {
-    const vitest = collectVitest(ROOT, dir)
+    const vitest = await collectVitest(dir)
     const analyzer = collectAnalyzer(binary, ROOT, dir)
     const located = compareSites(vitest, analyzer.sites)
     totals.siteFiles += located.compared.length
@@ -187,8 +220,8 @@ function main() {
     found.push(...result.disagreements.map((d) => ({ dir, ...d })))
   }
 
-  const selfCheckFailures = selfCheck()
-  const cases = runCases(binary)
+  const selfCheckFailures = await selfCheck(collectVitest)
+  const cases = await runCases(binary, owned, collectVitest)
   const { unlisted, stale } = matchKnown(found, known)
   const sitesMatched = matchKnown(foundSites, knownSites)
 
@@ -237,4 +270,4 @@ function main() {
   return failures.length === 0 ? 0 : 1
 }
 
-process.exitCode = main()
+process.exitCode = await main()

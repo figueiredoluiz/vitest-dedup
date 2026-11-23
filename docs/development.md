@@ -88,7 +88,8 @@ collections it reused. The cache is off under `CI`, with `VITEST_DEDUP_ORACLE_CA
 git checkout, when any file the key covers is a symlink, and when `node_modules`, at any depth,
 holds a link other than the repository's own workspaces and `.bin` executables (`npm link` changes
 nothing npm records). A storage error loses only the cache, never the gate. Key
-directories unused for a week are removed.
+directories unused for a week are removed. When the cache is off, the oracle collects at
+most two directories at once and compares their results in the original order.
 
 ### Generated title check
 

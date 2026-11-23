@@ -7,7 +7,7 @@ import test from 'node:test'
 import { fileURLToPath } from 'node:url'
 
 import { missingModuleStubs, wholeModuleImports } from './collection-oracle-stubs.mjs'
-import { analyzerRecordsOf, analyzerView, collectWithVitest, compareDirectory, declaredMajor, declaresVitest4, compareSites, installedMajor, configSource, exclusionView, oracleEnvironment, hookSite, matchKnown, minus, oracleBinary, oracleSetupError, ownConfig, siteView, testExclusionView, vitestInstallError, vitestView } from './collection-oracle.mjs'
+import { analyzerRecordsOf, analyzerView, collectFreshWithVitest, collectWithVitest, compareDirectory, declaredMajor, declaresVitest4, compareSites, installedMajor, configSource, exclusionView, oracleEnvironment, hookSite, matchKnown, minus, oracleBinary, oracleSetupError, ownConfig, siteView, testExclusionView, vitestInstallError, vitestView } from './collection-oracle.mjs'
 
 /** A file the probe collected cleanly, with `over` replacing any field. */
 const collected = (over = {}) => ({
@@ -726,6 +726,32 @@ function inScratchProject(prefix, body) {
 }
 
 const CHECKOUT = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
+
+test('fresh collection retains source order and the serial Vitest records', async () => {
+  const dirs = [
+    'fixtures/recall/suite-conditional-registration',
+    'scripts/check/collection-oracle-self-check-shared',
+    'scripts/check/collection-oracle-self-check-shared-named',
+  ]
+  const expected = dirs.map(dir => [dir, collectWithVitest(CHECKOUT, dir)])
+  assert.ok(expected.every(([, files]) => files.size > 0))
+  assert.deepEqual(await Array.fromAsync(collectFreshWithVitest(CHECKOUT, dirs)), expected)
+})
+
+test('fresh collection reports a failed read-ahead in its original order', async () => {
+  const first = 'fixtures/recall/suite-conditional-registration'
+  const absent = join(tmpdir(), 'vite-collection-absent-' + process.pid)
+  const results = collectFreshWithVitest(CHECKOUT, [first, absent])
+  try {
+    const { value, done } = await results.next()
+    assert.equal(done, false)
+    assert.equal(value[0], first)
+    assert.ok(value[1].size > 0)
+    await assert.rejects(results.next(), /ENOENT/)
+  } finally {
+    await results.return()
+  }
+})
 
 /** A project config under `pkg/` whose own `projects` list holds `pkg/inner`. */
 function writeNestedProjects(write) {
