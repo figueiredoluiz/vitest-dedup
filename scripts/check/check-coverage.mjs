@@ -69,12 +69,13 @@
 //   - no production source file is unaccounted for -- every file matched by the scope globs must
 //     either carry a floor or be named in `JS_NOT_MEASURED` with a reason. A new file cannot
 //     arrive uncovered and unnoticed.
-import { execFileSync, spawnSync } from 'node:child_process'
+import { spawnSync } from 'node:child_process'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import * as fs from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { stripVTControlCharacters } from 'node:util'
 import { coverageOnHost, missingTestTargets, rustInventoryCandidates, targetReportingEnv } from './lib/coverage-platform.mjs'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
@@ -706,6 +707,12 @@ function checkJs(failures) {
   const work = mkdtempSync(join(tmpdir(), 'vitest-dedup-cov-js-'))
   const lcovPath = join(work, 'js-cov.lcov')
   const testLogPath = join(work, 'js-test.log')
+  const childLogPath = join(work, 'js-child.log')
+  const initialFailures = failures.length
+  let passed = false
+  let testLog = ''
+  let childResult = ''
+  let childOutput = ''
   try {
     const argv = [
       '--test',
@@ -725,21 +732,18 @@ function checkJs(failures) {
       `--test-reporter-destination=${lcovPath}`,
       ...JS_TEST_FILES,
     ]
-    let status = 0
-    try {
-      execFileSync(process.execPath, argv, {
-        cwd: ROOT,
-        encoding: 'utf8',
-        stdio: ['ignore', 'pipe', 'pipe'],
-        maxBuffer: 64 * 1024 * 1024,
-      })
-    } catch (error) {
-      status = error.status ?? 1
-    }
+    const run = spawnSync(process.execPath, argv, {
+      cwd: ROOT,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+      maxBuffer: 64 * 1024 * 1024,
+    })
+    childResult = run.error?.message ?? (run.signal ? `signal ${run.signal}` : `exit ${run.status}`)
+    childOutput = [run.stdout, run.stderr].filter(Boolean).join('\n')
+    writeFileSync(childLogPath, `${childResult}\n${childOutput}`)
 
-    let testLog = ''
     try {
-      testLog = readFileSync(testLogPath, 'utf8')
+      testLog = stripVTControlCharacters(readFileSync(testLogPath, 'utf8'))
     } catch {
       throw new Error(`the JS test run produced no report at ${testLogPath}`)
     }
@@ -750,9 +754,9 @@ function checkJs(failures) {
     if (!Number.isFinite(pass) || !Number.isFinite(fail)) {
       throw new Error('could not read a pass/fail summary from the JS coverage run')
     }
-    if (status !== 0 || fail > 0) {
+    if (run.error || run.status !== 0 || fail > 0) {
       failures.push(
-        `js: ${fail} test(s) failed during the coverage run (exit ${status}). Coverage measured ` +
+        `js: ${fail} test(s) failed during the coverage run (${childResult}). Coverage measured ` +
           'against a failing suite is not a measurement.',
       )
     }
@@ -840,8 +844,17 @@ function checkJs(failures) {
     for (const [module, floor] of Object.entries(deferred)) {
       console.log(`  ${module}: native coverage deferred to macOS CI (floor ${floor}%)`)
     }
+    passed = failures.length === initialFailures
   } finally {
-    keepOrRemove(work, `node --test output at ${testLogPath}, lcov at ${lcovPath}`)
+    if (passed) {
+      keepOrRemove(work, `JS coverage diagnostics in ${work}`)
+    } else {
+      console.error(`JS coverage diagnostics kept in ${work}`)
+      if (childResult) console.error(`Node test process: ${childResult}`)
+      const failureSummary = /^✖ failing tests:/m.exec(testLog)
+      if (failureSummary) console.error(testLog.slice(failureSummary.index, failureSummary.index + 4000).trim())
+      else if (childOutput) console.error(stripVTControlCharacters(childOutput.slice(-4000)).trim())
+    }
   }
 }
 
