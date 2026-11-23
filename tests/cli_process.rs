@@ -6,7 +6,7 @@ mod tests {
 
     // -- End-to-end: carrying an `includeSource` project's `globals` through to analysis -----
     //
-    // Regression coverage for the defect this file was changed for: `discovery::discover`
+    // Regression coverage for project-specific globals: `discovery::discover`
     // resolves in-source-testing candidates (`test.includeSource`) against a project's globs,
     // but until this fix that governing project was never carried forward, so `main.rs` resolved
     // `globals` for such a file from path globs alone (`ProjectSet::globals_for`), found no
@@ -35,12 +35,9 @@ mod tests {
     "#;
 
     /// An ordinary, always-recognized Vitest test (explicit import, no ambient binding). Every
-    /// fixture also gets this file so `tests` is never empty on its own: `run()`'s "discovered a
-    /// test file but extracted nothing" guard (see the comment above its `incomplete = true`,
-    /// a few hundred lines up in this file) would otherwise mark *every* run below incomplete
-    /// regardless of `globals`, on the sole strength of a one-file, zero-test corpus -- which
-    /// would make these tests unable to tell that guard apart from the specific
-    /// `project_globals` behavior they exist to check.
+    /// fixture also gets this file so `run()`'s zero-extraction guard does not mark the whole
+    /// run incomplete when the in-source file yields no tests. This isolates the
+    /// `project_globals` behavior each fixture exercises.
     const ORDINARY_TEST: &str = r#"
         import { test, expect } from 'vitest';
 
