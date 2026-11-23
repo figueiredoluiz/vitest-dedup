@@ -18,6 +18,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'no
 import { tmpdir } from 'node:os'
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
+import { isMainThread, parentPort, Worker, workerData } from 'node:worker_threads'
 import { validateOwnedRecord } from './owned-records.mjs'
 import { defaultBinary, parseJsonl, runAnalyzerJsonl } from './run-analyzer.mjs'
 
@@ -225,6 +226,59 @@ export function collectWithVitest(root, dir) {
     return vitestView(lines.map((line) => JSON.parse(line)), listedFiles, absoluteDir)
   } finally {
     rmSync(work, { recursive: true, force: true })
+  }
+}
+
+/**
+ * Collect one directory in a worker and settle after its cleanup and exit.
+ * @param {string} root Checkout root containing the pinned Vitest.
+ * @param {string} dir Directory to collect, relative to the root or absolute.
+ * @returns {Promise<{files?: Map<string, object>, error?: Error}>} Files or a collection error.
+ */
+function collectInWorker(root, dir) {
+  return new Promise(resolve => {
+    const worker = new Worker(new URL(import.meta.url), { workerData: { oracleCollection: { root, dir } } })
+    let result
+    worker.once('message', message => { result = message })
+    worker.once('error', error => { result = { error } })
+    worker.once('exit', code => {
+      if (result?.error || (code === 0 && result)) resolve(result)
+      else resolve({ error: new Error(`Vitest collection worker exited with code ${code} for ${dir}`) })
+    })
+  }).catch(error => ({ error }))
+}
+
+/**
+ * Read ahead by one directory while the current directory collects, then yield in input order.
+ * Wait for the outstanding collection to clean up if the consumer stops early.
+ * @param {string} root Checkout root containing the pinned Vitest.
+ * @param {string[]} directories Ordered input directories.
+ * @returns {AsyncGenerator<[string, Map<string, object>]>} Directory and its Vitest records.
+ */
+export async function* collectFreshWithVitest(root, directories) {
+  for (let index = 0; index < directories.length; index += 2) {
+    const dir = directories[index]
+    const next = directories[index + 1]
+    const ahead = next === undefined ? null : collectInWorker(root, next)
+    try {
+      yield [dir, collectWithVitest(root, dir)]
+      if (ahead) {
+        const { files, error } = await ahead
+        if (error) throw error
+        yield [next, files]
+      }
+    } finally {
+      await ahead
+    }
+  }
+}
+
+if (!isMainThread && workerData?.oracleCollection) {
+  const { root, dir } = workerData.oracleCollection
+  try {
+    parentPort.postMessage({ files: collectWithVitest(root, dir) })
+  } catch (error) {
+    parentPort.postMessage({ error })
   }
 }
 
