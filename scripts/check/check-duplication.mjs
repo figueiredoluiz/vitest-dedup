@@ -189,7 +189,8 @@ const SCOPES = [
 
 // Globs are relative to the repository root. `fixtures/` and `examples/` appear nowhere on
 // purpose -- see the header.
-const RUST_SOURCES = 'src/**/*.rs'
+// Keep measuring the CLI suites after their move from src/ to integration targets.
+const RUST_SOURCES = ['src/**/*.rs', 'tests/cli_process.rs', 'tests/imported_delivery.rs']
 const JS_PRODUCTION = [
   'npm/bin/**/*.js',
   'npm/lib/**/*.mjs',

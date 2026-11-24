@@ -129,7 +129,7 @@ const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'))
 //
 // Matching on prose is the thing `AnalysisResult::unresolved_tests`' doc comment warns against --
 // rewording a human-readable sentence must not silently break a gate. The mitigation is
-// `globals_true_announcement_matches_the_string_the_corpus_gate_greps_for` in `src/main.rs`,
+// `globals_true_announcement_matches_the_string_the_corpus_gate_greps_for` in `tests/cli_process.rs`,
 // which pins this exact substring in both directions (present under `globals: true`, absent under
 // `globals: false`). Change the message and that test fails loudly, here in the repository, rather
 // than this gate quietly deciding every project derives `globals: false`.
