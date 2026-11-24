@@ -1,5 +1,30 @@
 {
   "files": {
+    "oracle/registration-routes/closed.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": ["helper-effects-unproved"],
+      "testsExcluded": 3
+    },
+    "oracle/registration-routes/exported-alias.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [],
+      "testsExcluded": 2
+    },
+    "oracle/registration-routes/nested-result.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [],
+      "testsExcluded": 2
+    },
+    "oracle/registration-routes/opaque.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [],
+      "testsExcluded": 2
+    },
+    "oracle/registration-routes/plain-alias.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [],
+      "testsExcluded": 2
+    },
     "oracle/sequence-registration/builder.test.ts": {
       "reason": "registered-elsewhere",
       "otherReasons": [],

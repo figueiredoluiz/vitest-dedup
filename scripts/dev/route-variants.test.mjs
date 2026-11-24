@@ -1,4 +1,4 @@
-// The committed loop-route oracle case is what the generator writes, and every variant is pinned.
+// The committed route cases are what the generator writes, and every variant is pinned.
 import assert from 'node:assert/strict'
 import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -6,15 +6,35 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import test from 'node:test'
 
-import { CASE_DIR, variants, write } from './route-variants.mjs'
+import { expectedProblems } from '../check/lib/oracle-cases.mjs'
+import { CASE_DIR, REGISTRATION_CASE_DIR, registrationVariants, variants, write } from './route-variants.mjs'
 
-const dir = join(resolve(dirname(fileURLToPath(import.meta.url)), '..', '..'), CASE_DIR)
+const root = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
+const dir = join(root, CASE_DIR)
+
+/** Checks the exact set and source of generated test files in one owned oracle case. */
+function assertGenerated(caseDir, generated) {
+  const committed = readdirSync(caseDir).filter((name) => name.endsWith('.test.ts')).sort()
+  assert.deepEqual(committed, Object.keys(generated).sort(), caseDir)
+  for (const name of committed) {
+    const source = readFileSync(join(caseDir, name), 'utf8').replaceAll('\r\n', '\n')
+    assert.equal(source, generated[name], name)
+  }
+}
 
 test('the committed variants are the generated ones', () => {
-  const generated = variants()
-  const committed = readdirSync(dir).filter((name) => name.endsWith('.test.ts')).sort()
-  assert.deepEqual(committed, Object.keys(generated).sort(), 'run node scripts/dev/route-variants.mjs')
-  for (const name of committed) assert.equal(readFileSync(join(dir, name), 'utf8'), generated[name], name)
+  assertGenerated(dir, variants())
+})
+
+test('generated registration forms have exact oracle pins and a directly comparable control', () => {
+  const caseDir = join(root, REGISTRATION_CASE_DIR)
+  const generated = registrationVariants()
+  assertGenerated(caseDir, generated)
+  const expected = JSON.parse(readFileSync(join(caseDir, 'expected.json'), 'utf8'))
+  assert.deepEqual(expectedProblems(expected, REGISTRATION_CASE_DIR), [])
+  const { files } = expected
+  assert.deepEqual(Object.keys(files).sort(), Object.keys(generated).sort())
+  assert.deepEqual(files['direct.test.ts'], { tasks: 2, wrapperSites: [], next: {} })
 })
 
 test('every variant is declared in expected.json, and each control is compared unrefused', () => {
