@@ -33,6 +33,8 @@
       "wrapperSites": [
         "hook-wrapper@7",
         "wrapper@8",
+        "wrapper@8",
+        "wrapper@9",
         "wrapper@9"
       ],
       "next": {
@@ -40,7 +42,7 @@
           "registered-elsewhere",
           "helper-effects-unproved"
         ],
-        "testsExcluded": 5
+        "testsExcluded": 7
       }
     },
     "conditional.test.ts": {

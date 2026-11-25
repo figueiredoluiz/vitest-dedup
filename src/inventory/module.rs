@@ -134,6 +134,8 @@ struct Module<'s> {
     returners: HashSet<SymbolId>,
     /// Direct framework bindings and local aliases, with any proof of the value they hold.
     registration_bindings: HashMap<SymbolId, RegistrationBinding>,
+    /// Direct calls of a task wrapper selected from an imported project namespace.
+    namespace_task_calls: HashSet<NodeId>,
     loads: Vec<u32>,
     values: HashSet<NodeId>,
     /// Bindings declared more than once, replacing their value.
@@ -175,6 +177,7 @@ pub(super) fn analyse(
         wrappers: HashMap::new(),
         returners: HashSet::new(),
         registration_bindings: HashMap::new(),
+        namespace_task_calls: HashSet::new(),
         loads: Vec::new(),
         values: HashSet::new(),
         redeclared: HashSet::new(),
@@ -1210,9 +1213,16 @@ impl<'s> Module<'s> {
         self.resolve(callee)?.member
     }
 
-    /// What calling `callee` registers, if anything.
-    fn registration(&self, callee: NodeId) -> Option<(SiteKind, Vec<String>, Provenance)> {
-        let resolved = self.resolve(callee)?;
+    /// What this call registers, reading the namespace proof or resolving its callee.
+    fn registration(&self, call: NodeId) -> Option<(SiteKind, Vec<String>, Provenance)> {
+        if self.namespace_task_calls.contains(&call) {
+            return Some((
+                SiteKind::Wrapper(Reach::Tasks),
+                Vec::new(),
+                Provenance::Wrapper,
+            ));
+        }
+        let resolved = self.resolve(callee_link(self.tree, call)?.input)?;
         let kind = resolved.registration?;
         let chain = resolved.steps[resolved.start..]
             .iter()
@@ -1276,12 +1286,15 @@ impl<'s> Module<'s> {
                         None => continue,
                     },
                     "ImportDefaultSpecifier" => "default".to_owned(),
-                    _ => {
+                    "ImportNamespaceSpecifier" => {
                         if api {
                             self.origins.insert(symbol, Origin::Namespace);
+                        } else if let Some(exports) = &wrapper_exports {
+                            self.collect_namespace_task_calls(symbol, exports);
                         }
                         continue;
                     }
+                    _ => continue,
                 };
                 self.imported_unreadable_fixture |= wrapper_exports
                     .as_ref()
@@ -1324,6 +1337,40 @@ impl<'s> Module<'s> {
             self.alias_phase = AliasPhase::Proved;
             self.collect_aliases();
         }
+    }
+
+    /// Match direct invocations against the same export summaries named imports use. A read of a
+    /// member as a value supplies no proof about what a later call of that value would do.
+    fn collect_namespace_task_calls(
+        &mut self,
+        symbol: SymbolId,
+        exports: &HashMap<String, Export>,
+    ) {
+        if self.reassigned(symbol) {
+            return;
+        }
+        let tree = self.tree;
+        let binding = self.parsed.scopes.symbol(symbol);
+        self.namespace_task_calls
+            .extend(binding.references.iter().filter_map(|reference| {
+                let read = reference.node?;
+                let member = callee_link(tree, tree.outer_parent(read)?)?;
+                let CalleeLinkKind::Member(Some(name)) = member.kind else {
+                    return None;
+                };
+                if tree.inner(member.input) != read
+                    || tree.flag(member.node, "optional")
+                    || name.starts_with('\0')
+                    || exports.get(name) != Some(&Export::Wrapper(Reach::Tasks))
+                {
+                    return None;
+                }
+                let call = callee_link(tree, tree.outer_parent(member.node)?)?;
+                (call.kind == CalleeLinkKind::Call
+                    && tree.inner(call.input) == member.node
+                    && !tree.flag(call.node, "optional"))
+                .then_some(call.node)
+            }));
     }
 
     /// `const t = test`, `const myTest = test.extend({...})`, `const { test } = import.meta.vitest`.
@@ -1859,7 +1906,7 @@ impl<'s> Module<'s> {
         if tree.kind(call) != "CallExpression" || !self.plain_callee(self.callee(call)) {
             return false;
         }
-        match self.registration(self.callee(call)) {
+        match self.registration(call) {
             Some((
                 SiteKind::Registers(Registers::Hook(_)) | SiteKind::Wrapper(Reach::Hook),
                 ..,
@@ -2160,12 +2207,13 @@ impl<'s> Module<'s> {
         let tree = self.tree;
         tree.nodes()
             .filter_map(|node| {
-                let callee = match tree.kind(node) {
-                    "CallExpression" => tree.child(node, "callee")?,
-                    "TaggedTemplateExpression" => tree.child(node, "tag")?,
-                    _ => return None,
-                };
-                let (mut kind, chain, provenance) = self.registration(callee)?;
+                if !matches!(
+                    tree.kind(node),
+                    "CallExpression" | "TaggedTemplateExpression"
+                ) {
+                    return None;
+                }
+                let (mut kind, chain, provenance) = self.registration(node)?;
                 if self.unreachable(node) {
                     return None;
                 }

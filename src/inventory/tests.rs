@@ -1279,10 +1279,8 @@ fn a_hooks_only_wrapper_runs_nothing_but_hooks() {
         ["hook-wrapper@5"]
     );
     for open in [
-        "function setup() { beforeEach(() => {}); helpers.cases() }",
         "function setup() { beforeEach(() => {}); local.cases() }",
         "function setup(run) { beforeEach(() => {}); run() }",
-        "function setup(n = helpers.cases()) { beforeEach(() => {}) }",
         "function setup({ n }) { beforeEach(() => {}) }",
         "function setup() { beforeEach(() => {}); local.read }",
         "function setup() { const n = local.read; beforeEach(() => {}) }",
@@ -1293,7 +1291,6 @@ fn a_hooks_only_wrapper_runs_nothing_but_hooks() {
         "function setup() { beforeEach(() => {}); for (const n of [0]) {} }",
         "let setup = () => { beforeEach(() => {}) }; setup = helpers.cases",
         "function hooks() { beforeEach(() => {}) }; let setup = hooks; setup = helpers.cases",
-        "function setup() { (helpers.cases() ? beforeEach : beforeEach)(() => {}) }",
         "async function setup() { beforeEach(() => {}); return local }",
         "const setup = async (n) => beforeEach(() => {}, n)",
         "function setup() { const config = globalConfig; beforeEach(() => {}, config) }",
@@ -1303,6 +1300,17 @@ fn a_hooks_only_wrapper_runs_nothing_but_hooks() {
         assert_eq!(
             wrapper_calls(&format!("{header}{open}\nsetup()"), &files),
             ["wrapper@5"],
+            "{open}"
+        );
+    }
+    for open in [
+        "function setup() { beforeEach(() => {}); helpers.cases() }",
+        "function setup(n = helpers.cases()) { beforeEach(() => {}) }",
+        "function setup() { (helpers.cases() ? beforeEach : beforeEach)(() => {}) }",
+    ] {
+        assert_eq!(
+            wrapper_calls(&format!("{header}{open}\nsetup()"), &files),
+            ["wrapper@4", "wrapper@5"],
             "{open}"
         );
     }
@@ -1953,7 +1961,13 @@ fn an_imported_wrapper_keeps_its_reach_through_re_exports() {
              setupServer('a', () => {})\nsetupServer(h.cases())\nsetupServer`${h.cases()}`",
             &files
         ),
-        ["hook-wrapper@3", "wrapper@4", "wrapper@5"]
+        [
+            "hook-wrapper@3",
+            "wrapper@4",
+            "wrapper@4",
+            "wrapper@5",
+            "wrapper@5"
+        ]
     );
     assert_eq!(
         wrapper_calls(

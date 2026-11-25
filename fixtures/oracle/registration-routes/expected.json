@@ -11,7 +11,11 @@
       "wrapperSites": ["wrapper@5", "wrapper@6"],
       "next": { "reasons": ["registered-elsewhere"], "testsExcluded": 2 }
     },
-    "namespace.test.ts": { "tasks": 2, "wrapperSites": [], "next": {} },
+    "namespace.test.ts": {
+      "tasks": 2,
+      "wrapperSites": ["wrapper@5", "wrapper@6"],
+      "next": { "reasons": ["registered-elsewhere"], "testsExcluded": 2 }
+    },
     "nested-result.test.ts": {
       "tasks": 2,
       "wrapperSites": ["wrapper@5", "wrapper@6"],
@@ -31,40 +35,9 @@
   "blindUnderCurrent": [
     "closed.test.ts",
     "exported-alias.test.ts",
+    "namespace.test.ts",
     "nested-result.test.ts",
     "opaque.test.ts",
     "plain-alias.test.ts"
-  ],
-  "knownSites": [
-    {
-      "path": "namespace.test.ts",
-      "kind": "missing-site",
-      "item": "test@5",
-      "reason": "Vitest calls the exported registration value through a namespace member.",
-      "waitsOn": "resolution of registration values through imported namespace members"
-    },
-    {
-      "path": "namespace.test.ts",
-      "kind": "missing-site",
-      "item": "test@6",
-      "reason": "Vitest calls the exported registration value through a namespace member.",
-      "waitsOn": "resolution of registration values through imported namespace members"
-    }
-  ],
-  "knownTitles": [
-    {
-      "path": "namespace.test.ts",
-      "kind": "missing-test",
-      "item": "namespace left",
-      "reason": "Vitest collects this call through the imported namespace member.",
-      "waitsOn": "resolution of registration values through imported namespace members"
-    },
-    {
-      "path": "namespace.test.ts",
-      "kind": "missing-test",
-      "item": "namespace right",
-      "reason": "Vitest collects this call through the imported namespace member.",
-      "waitsOn": "resolution of registration values through imported namespace members"
-    }
   ]
 }
