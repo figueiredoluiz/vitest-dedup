@@ -84,6 +84,51 @@ pub fn member_name(tree: &Tree, member: NodeId) -> Option<&str> {
     }
 }
 
+/// The element defined at a literal index on a freshly constructed array.
+/// Holes do not define properties, and an earlier spread makes the index unknown.
+pub(crate) fn fresh_array_own_slot(tree: &Tree, member: NodeId) -> Option<NodeId> {
+    let member = tree.inner(member);
+    if tree.kind(member) != "MemberExpression" || !tree.flag(member, "computed") {
+        return None;
+    }
+    let array = tree.inner(tree.child(member, "object")?);
+    if tree.kind(array) != "ArrayExpression" {
+        return None;
+    }
+    let key = tree.inner(tree.child(member, "property")?);
+    if tree.kind(key) != "Literal" {
+        return None;
+    }
+    let index = match tree.field_of(key, "value") {
+        Field::Value(serde_json::Value::Number(value)) => {
+            let number = value.as_f64()?;
+            if number.fract() != 0.0 || !(0.0..f64::from(u32::MAX)).contains(&number) {
+                return None;
+            }
+            number as u32
+        }
+        Field::Value(serde_json::Value::String(key)) => {
+            let index = key.parse::<u32>().ok()?;
+            if index == u32::MAX || index.to_string() != *key {
+                return None;
+            }
+            index
+        }
+        _ => return None,
+    };
+    let index = usize::try_from(index).ok()?;
+    let Field::List(elements) = tree.field_of(array, "elements") else {
+        return None;
+    };
+    let Field::Node(element) = *elements.get(index)? else {
+        return None;
+    };
+    (!elements[..=index]
+        .iter()
+        .any(|field| matches!(field, Field::Node(node) if tree.kind(*node) == "SpreadElement")))
+    .then_some(element)
+}
+
 /// The structural operation between a callee expression and its immediate input.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum CalleeLinkKind<'t> {
@@ -313,6 +358,52 @@ mod tests {
     fn body_reads(source: &str) -> bool {
         let (parsed, body) = arrow_body(source);
         uses_receiver(&parsed.tree, &parsed.scopes, body)
+    }
+
+    /// Only literal numeric or canonical string indexes can select a known own slot.
+    #[test]
+    fn fresh_array_slots_require_a_supported_own_index() {
+        for (expression, expected) in [
+            ("([chosen] as const)[0 as number]", Some("chosen")),
+            ("[first, , chosen, ...tail]['2']", Some("chosen")),
+            ("[chosen][true]", None),
+            ("[chosen][null]", None),
+            ("[chosen][0n]", None),
+            ("[chosen][/0/]", None),
+            ("[chosen][4294967295]", None),
+            ("[chosen]['4294967295']", None),
+            ("[chosen]['4294967296']", None),
+        ] {
+            let (parsed, body) = arrow_body(&format!("() => ({expression})"));
+            assert_eq!(parsed.parse_errors, 0, "{expression}");
+            let tree = &parsed.tree;
+            let name =
+                fresh_array_own_slot(tree, body).and_then(|element| tree.text(element, "name"));
+            assert_eq!(name, expected, "{expression}");
+        }
+    }
+
+    /// An incomplete owned member or array carries no proof of its selected value.
+    #[test]
+    fn incomplete_array_members_leave_the_slot_unknown() {
+        use serde_json::{json, Value};
+
+        let member = json!({
+            "type": "MemberExpression", "start": 0, "end": 6, "computed": true,
+            "object": {
+                "type": "ArrayExpression", "start": 0, "end": 3,
+                "elements": [{ "type": "Identifier", "start": 1, "end": 2, "name": "x" }]
+            },
+            "property": { "type": "Literal", "start": 4, "end": 5, "value": 0 }
+        });
+        let complete = Tree::from_json(member.clone()).unwrap();
+        assert!(fresh_array_own_slot(&complete, complete.root()).is_some());
+        for pointer in ["/object", "/property", "/object/elements"] {
+            let mut incomplete = member.clone();
+            *incomplete.pointer_mut(pointer).unwrap() = Value::Null;
+            let tree = Tree::from_json(incomplete).unwrap();
+            assert_eq!(fresh_array_own_slot(&tree, tree.root()), None, "{pointer}");
+        }
     }
 
     /// Selection forwards existing values; await and assignment result edges stay distinct.

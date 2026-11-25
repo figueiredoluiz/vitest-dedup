@@ -1,5 +1,15 @@
 {
   "files": {
+    "oracle/array-slot-registration/prefix.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": ["helper-effects-unproved"],
+      "testsExcluded": 2
+    },
+    "oracle/array-slot-registration/slot.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [],
+      "testsExcluded": 2
+    },
     "oracle/registration-routes/closed.test.ts": {
       "reason": "registered-elsewhere",
       "otherReasons": ["helper-effects-unproved"],
