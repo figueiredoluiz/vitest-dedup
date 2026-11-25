@@ -8,7 +8,15 @@
         "testsExcluded": 4
       }
     },
-    "control.test.ts": { "tasks": 2, "wrapperSites": [], "next": {} }
+    "control.test.ts": { "tasks": 2, "wrapperSites": [], "next": {} },
+    "exact.test.ts": {
+      "tasks": 4,
+      "wrapperSites": ["wrapper@4", "wrapper@5"],
+      "next": {
+        "reasons": ["registered-elsewhere"],
+        "testsExcluded": 2
+      }
+    }
   },
   "blindUnderCurrent": ["case.test.ts"]
 }

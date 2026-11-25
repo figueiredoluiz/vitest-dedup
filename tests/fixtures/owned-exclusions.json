@@ -70,6 +70,11 @@
       "otherReasons": ["helper-effects-unproved"],
       "testsExcluded": 4
     },
+    "oracle/default-registration/exact.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [],
+      "testsExcluded": 2
+    },
     "oracle/conditional-registration/order.test.ts": {
       "reason": "registered-elsewhere",
       "otherReasons": [],

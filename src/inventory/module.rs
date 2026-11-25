@@ -1034,6 +1034,20 @@ impl<'s> Module<'s> {
         }
     }
 
+    /// Both result arms read the same proved callable, independent of the guard's value.
+    fn conditional_registration_binding(&self, node: NodeId) -> Option<SymbolId> {
+        let tree = self.tree;
+        if tree.kind(node) != "ConditionalExpression" {
+            return None;
+        }
+        let consequent = tree.inner(tree.child(node, "consequent")?);
+        let alternate = tree.inner(tree.child(node, "alternate")?);
+        self.proved_registration_binding(consequent)?;
+        self.proved_registration_binding(alternate)?;
+        let symbol = self.read(consequent)?;
+        (self.read(alternate) == Some(symbol)).then_some(symbol)
+    }
+
     /// Whether chaining `member` builds another registration function rather than registering.
     fn builds(&self, member: &str) -> bool {
         matches!(
@@ -2577,6 +2591,7 @@ impl<'s> Module<'s> {
                     .flatten();
                     let export = registers(symbol)
                         .or(anonymous.map(Export::Wrapper))
+                        .or_else(|| registers(self.conditional_registration_binding(declaration)))
                         .or_else(|| match self.value_origin(declaration) {
                             Some(Origin::Wrapper(reach)) => Some(Export::Wrapper(reach)),
                             _ => None,

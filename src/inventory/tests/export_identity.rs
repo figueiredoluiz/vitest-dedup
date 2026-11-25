@@ -1,6 +1,74 @@
 //! Registration-site controls for terminal API binding identity and explicit precedence.
 use super::*;
 
+/// A default conditional can transport the same proved callable read on either arm.
+#[test]
+fn default_conditional_preserves_the_same_registration_binding() {
+    for framework_name in ["test", "it"] {
+        for (declaration, binding) in [
+            ("", "base"),
+            ("const alias = base;", "alias"),
+            ("export const alias = base;", "alias"),
+        ] {
+            for guard in [true, false] {
+                for right in [binding.to_owned(), format!("({binding} as typeof base)")] {
+                    let helper = format!(
+                        "import {{ {framework_name} as base }} from 'vitest'; {declaration}\n\
+                         export default {guard} ? {binding} : {right};"
+                    );
+                    let (inventory, parsed) = inventory_with_tree(
+                        "import chosen from './helper'; chosen('case', () => {});",
+                        &[("helper.ts", &helper)],
+                        false,
+                    );
+                    assert_eq!(parsed.parse_errors, 0);
+                    assert_eq!(inventory.sites.len(), 1, "{helper}");
+                    assert_eq!(
+                        inventory.sites[0].kind,
+                        SiteKind::Wrapper(Reach::Tasks),
+                        "{helper}"
+                    );
+                    assert_eq!(
+                        inventory.sites[0].provenance,
+                        Provenance::Derived,
+                        "{helper}"
+                    );
+                    assert!(inventory.loads.is_empty(), "{helper}");
+                }
+            }
+        }
+    }
+}
+
+/// Matching coarse API origins do not establish the same initialized callable value.
+#[test]
+fn default_conditional_requires_a_proved_registration_binding() {
+    for expression in [
+        "true ? base.name : base.name",
+        "true ? base.length : base.length",
+        "true ? base.extend : base.extend",
+        "true ? base : other",
+        "true ? label : label",
+        "true ? erased : erased",
+        "true ? later : later",
+    ] {
+        let helper = format!(
+            "import {{ test as base, it as other }} from 'vitest';\n\
+             const label = base.name; declare const erased: typeof base;\n\
+             export default {expression}; const later = base;"
+        );
+        let (inventory, _) = inventory_of(
+            "import chosen from './helper'; chosen('case', () => {});",
+            &[("helper.ts", &helper)],
+            false,
+        );
+        assert!(
+            inventory.sites.is_empty() && inventory.loads.is_empty(),
+            "{helper}: {inventory:?}"
+        );
+    }
+}
+
 /// A callable can cross initialized lexical bindings before becoming a mixed result.
 #[test]
 fn registration_value_aliases_reach_result_arms() {
