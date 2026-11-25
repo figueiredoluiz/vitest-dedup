@@ -1,0 +1,16 @@
+{
+  "blindUnderCurrent": ["prefix.test.ts", "slot.test.ts"],
+  "files": {
+    "control.test.ts": { "tasks": 2, "wrapperSites": [], "next": {} },
+    "prefix.test.ts": {
+      "tasks": 2,
+      "wrapperSites": ["wrapper@4"],
+      "next": { "reasons": ["registered-elsewhere", "helper-effects-unproved"], "testsExcluded": 2 }
+    },
+    "slot.test.ts": {
+      "tasks": 2,
+      "wrapperSites": ["wrapper@3", "wrapper@4"],
+      "next": { "reasons": ["registered-elsewhere"], "testsExcluded": 2 }
+    }
+  }
+}

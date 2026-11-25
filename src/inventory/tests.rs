@@ -5,6 +5,7 @@ use crate::lang::{parse, Lines};
 use std::fs;
 use std::path::Path;
 
+mod array_slots;
 mod export_identity;
 mod import_limits;
 mod reach_scaling;

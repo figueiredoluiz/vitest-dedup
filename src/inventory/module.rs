@@ -7,9 +7,9 @@ use super::{
 };
 use crate::framework::{Chain, Mocking, Registers};
 use crate::lang::{
-    bound_symbols, callee_link, export_name, logical_results, member_name, property_name,
-    value_role, CalleeLinkKind, Declaration, Imported, Name, NodeId, Parsed, Span, SymbolId, Tree,
-    ValueRole,
+    bound_symbols, callee_link, export_name, fresh_array_own_slot, logical_results, member_name,
+    property_name, value_role, CalleeLinkKind, Declaration, Imported, Name, NodeId, Parsed, Span,
+    SymbolId, Tree, ValueRole,
 };
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -985,6 +985,16 @@ impl<'s> Module<'s> {
         selected: &ResolvedCallee<'s>,
     ) -> bool {
         let tree = self.tree;
+        tree.outer_parent(sequence)
+            .and_then(|parent| callee_link(tree, parent))
+            .is_some_and(|link| {
+                link.kind == CalleeLinkKind::Call && tree.inner(link.input) == sequence
+            })
+            && self.fixture_extension_result(result, selected)
+    }
+
+    /// The resolved value is the result of the framework's own fixture-extension call.
+    fn fixture_extension_result(&self, result: NodeId, selected: &ResolvedCallee<'s>) -> bool {
         let api_steps = selected.steps.get(usize::from(selected.namespace_root)..);
         selected.registration == Some(SiteKind::Registers(Registers::Test))
             && matches!(
@@ -992,12 +1002,6 @@ impl<'s> Module<'s> {
                 Some([Step::Member(member), Step::Call])
                     if self.setting.dialect.chain_member(member) == Some(Chain::FixtureExtension)
             )
-            && tree
-                .outer_parent(sequence)
-                .and_then(|parent| callee_link(tree, parent))
-                .is_some_and(|link| {
-                    link.kind == CalleeLinkKind::Call && tree.inner(link.input) == sequence
-                })
             && self.holds_api_with(result, Some(selected))
     }
 
@@ -1229,14 +1233,17 @@ impl<'s> Module<'s> {
 
     /// What this call registers, reading the namespace proof or resolving its callee.
     fn registration(&self, call: NodeId) -> Option<(SiteKind, Vec<String>, Provenance)> {
-        if self.namespace_task_calls.contains(&call) {
+        let link = callee_link(self.tree, call)?;
+        if self.namespace_task_calls.contains(&call)
+            || (link.kind == CalleeLinkKind::Call && self.array_fixture(link.input))
+        {
             return Some((
                 SiteKind::Wrapper(Reach::Tasks),
                 Vec::new(),
                 Provenance::Wrapper,
             ));
         }
-        let resolved = self.resolve(callee_link(self.tree, call)?.input)?;
+        let resolved = self.resolve(link.input)?;
         let kind = resolved.registration?;
         let chain = resolved.steps[resolved.start..]
             .iter()
@@ -1246,6 +1253,17 @@ impl<'s> Module<'s> {
             })
             .collect();
         Some((kind, chain, resolved.provenance))
+    }
+
+    /// A call through a fresh array's own slot may register through the selected fixture builder.
+    fn array_fixture(&self, callee: NodeId) -> bool {
+        let Some(result) = fresh_array_own_slot(self.tree, callee) else {
+            return false;
+        };
+        self.member_call(self.tree.inner(result)).is_some()
+            && self
+                .resolve(result)
+                .is_some_and(|selected| self.fixture_extension_result(result, &selected))
     }
 
     /// Records which imported bindings are the API, its namespace, or a wrapper another module
