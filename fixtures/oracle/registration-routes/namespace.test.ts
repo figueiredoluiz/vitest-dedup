@@ -3,4 +3,4 @@ import { expect } from 'vitest'
 import * as values from './values'
 
 values.exported('namespace left', () => expect('namespace').toBe('namespace'))
-values.exported('namespace right', () => expect('namespace').toBe('namespace'))
+values['exported']('namespace right', () => expect('namespace').toBe('namespace'))

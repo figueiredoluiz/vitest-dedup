@@ -10,6 +10,11 @@
       "otherReasons": [],
       "testsExcluded": 2
     },
+    "oracle/registration-routes/namespace.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [],
+      "testsExcluded": 2
+    },
     "oracle/registration-routes/nested-result.test.ts": {
       "reason": "registered-elsewhere",
       "otherReasons": [],
@@ -528,8 +533,10 @@
     },
     "oracle/collection-scope-calls/namespace-member.test.ts": {
       "reason": "registered-elsewhere",
-      "otherReasons": [],
-      "testsExcluded": 1
+      "otherReasons": [
+        "helper-effects-unproved"
+      ],
+      "testsExcluded": 3
     },
     "oracle/collection-scope-calls/object-member.test.ts": {
       "reason": "registered-elsewhere",
@@ -720,7 +727,7 @@
       "otherReasons": [
         "helper-effects-unproved"
       ],
-      "testsExcluded": 5
+      "testsExcluded": 7
     },
     "oracle/hooks-only-evaluation/conditional.test.ts": {
       "reason": "registered-elsewhere",

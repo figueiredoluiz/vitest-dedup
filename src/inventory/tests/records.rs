@@ -5,6 +5,106 @@ use crate::lang::{Parsed, Span};
 
 const TEST: SiteKind = SiteKind::Registers(Registers::Test);
 
+const REGISTRATION_VALUES: &str =
+    include_str!("../../../fixtures/oracle/registration-routes/values.ts");
+
+/// The same exported value registers through a named import and either static namespace spelling.
+#[test]
+fn direct_project_namespace_calls_match_named_task_wrappers() {
+    for (form, source) in [
+        (
+            "exported-alias",
+            include_str!("../../../fixtures/oracle/registration-routes/exported-alias.test.ts"),
+        ),
+        (
+            "namespace",
+            include_str!("../../../fixtures/oracle/registration-routes/namespace.test.ts"),
+        ),
+    ] {
+        let (found, parsed) =
+            inventory_with_tree(source, &[("values.ts", REGISTRATION_VALUES)], false);
+        assert_eq!(parsed.parse_errors, 0);
+        assert_eq!(found.sites.len(), 2, "{form}: {found:?}");
+        assert!(found.loads.is_empty(), "{form}");
+        for (site, side) in found.sites.iter().zip(["left", "right"]) {
+            assert_eq!(site.kind, SiteKind::Wrapper(Reach::Tasks));
+            assert_eq!(site.provenance, Provenance::Wrapper);
+            assert!(site.chain.is_empty());
+            assert_eq!(site.title, Some(format!("{form} {side}")));
+        }
+    }
+}
+
+/// A project namespace contributes sites only for direct calls with a known task-wrapper export.
+#[test]
+fn project_namespace_unknown_or_indirect_calls_keep_the_direct_control() {
+    let helper = format!(
+        "{REGISTRATION_VALUES}\nexport {{ noop }}; export const scalar = 1;\n\
+         export declare const erased: typeof base; export type Alias = typeof base;\n\
+         export const exact = base;"
+    );
+    for (module, import_kind, invocation) in [
+        (
+            "values",
+            "",
+            "values[process.argv[2]]('dynamic', () => {});",
+        ),
+        ("values", "", "values.exported.name('nested', () => {});"),
+        ("values", "", "values.exported?.('optional', () => {});"),
+        ("values", "", "values?.exported('optional', () => {});"),
+        ("values", "", "values.exported`tag`;"),
+        ("values", "", "const saved = values.exported; saved();"),
+        ("values", "", "values('namespace', () => {});"),
+        (
+            "values",
+            "",
+            "values.noop(); values.scalar(); values.missing();",
+        ),
+        (
+            "values",
+            "",
+            "values.erased(); values.Alias(); values.exact();",
+        ),
+        (
+            "values",
+            "type ",
+            "values.exported('erased import', () => {});",
+        ),
+        (
+            "values",
+            "",
+            "function nested(values) { values.exported('shadowed', () => {}); }",
+        ),
+        ("load", "", r"values['\0load']('metadata', () => {});"),
+    ] {
+        let source = format!(
+            "import {import_kind}* as values from './{module}';\n\
+             import {{ test as direct }} from 'vitest';\n\
+             {invocation}\n\
+             direct('retained', () => {{}});"
+        );
+        let (found, parsed) = inventory_with_tree(
+            &source,
+            &[
+                ("values.ts", &helper),
+                (
+                    "load.ts",
+                    "import { test } from 'vitest'; test('load', () => {});",
+                ),
+            ],
+            false,
+        );
+        assert_eq!(parsed.parse_errors, 0, "{source}");
+        assert_eq!(found.sites.len(), 1, "{source}: {found:?}");
+        assert_eq!(found.sites[0].kind, TEST, "{source}");
+        assert_eq!(
+            found.sites[0].title.as_deref(),
+            Some("retained"),
+            "{source}"
+        );
+    }
+}
+
 /// Scalar builder arguments cannot multiply resolution work, or erase known registration sites.
 #[test]
 fn logical_builder_arguments_have_bounded_resolution_work() {

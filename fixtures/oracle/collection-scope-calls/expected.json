@@ -108,12 +108,11 @@
       ],
       "next": {
         "reasons": [
-          "registered-elsewhere"
+          "registered-elsewhere",
+          "helper-effects-unproved"
         ],
-        "testsExcluded": 1
-      },
-      "wrapperSitesToday": [],
-      "waitsOn": "collection-scope calls the inventory cannot resolve"
+        "testsExcluded": 3
+      }
     },
     "object-member.test.ts": {
       "tasks": 3,
@@ -188,7 +187,8 @@
     "sequence-callee.test.ts",
     "control-call.test.ts",
     "control-named.test.ts",
-    "describe-title.test.ts"
+    "describe-title.test.ts",
+    "namespace-member.test.ts"
   ],
   "knownSites": [
     {
@@ -224,13 +224,6 @@
       "kind": "missing-site",
       "item": "test@6",
       "reason": "`export * as ns` is not followed to its members.",
-      "waitsOn": "collection-scope calls the inventory cannot resolve"
-    },
-    {
-      "path": "namespace-member.test.ts",
-      "kind": "missing-site",
-      "item": "test@6",
-      "reason": "A member of a project namespace is not resolved.",
       "waitsOn": "collection-scope calls the inventory cannot resolve"
     },
     {
