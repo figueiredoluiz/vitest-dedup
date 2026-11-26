@@ -929,6 +929,11 @@
       "otherReasons": [],
       "testsExcluded": 4
     },
+    "oracle/runner-constructor-refusal/constructor.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [],
+      "testsExcluded": 1
+    },
     "oracle/truncated-body/truncated.test.ts": {
       "reason": "unresolved-context",
       "otherReasons": [],
