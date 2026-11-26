@@ -11,6 +11,7 @@ mod import_limits;
 mod reach_scaling;
 mod records;
 mod sequence_values;
+mod stored_sequence;
 
 /// The inventory of `main` (`a.test.ts`) in a project holding `files` besides it.
 fn inventory_of(main: &str, files: &[(&str, &str)], globals: bool) -> (Inventory, String) {

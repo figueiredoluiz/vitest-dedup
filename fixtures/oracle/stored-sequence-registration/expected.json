@@ -1,0 +1,51 @@
+{
+  "blindUnderCurrent": ["namespace-expect.test.ts", "prefix.test.ts", "replaced.test.ts", "stored.test.ts"],
+  "files": {
+    "control.test.ts": { "tasks": 2, "wrapperSites": [], "next": {} },
+    "mutated-getter.test.ts": { "tasks": 2, "wrapperSites": [], "next": {} },
+    "mutated-import.test.ts": { "tasks": 2, "wrapperSites": [], "next": {} },
+    "mutated-in-source.test.ts": { "tasks": 2, "wrapperSites": [], "next": {} },
+    "mutated-loader-pattern.test.ts": { "tasks": 2, "wrapperSites": [], "next": {} },
+    "mutated-project-namespace.test.ts": { "tasks": 2, "wrapperSites": [], "next": {} },
+    "mutated-setup-import.test.ts": { "tasks": 2, "wrapperSites": [], "next": {} },
+    "mutated-statement.test.ts": {
+      "tasks": 2,
+      "wrapperSites": [],
+      "next": { "reasons": ["registered-elsewhere"], "testsExcluded": 3 }
+    },
+    "mutated.test.ts": {
+      "tasks": 2,
+      "wrapperSites": [],
+      "next": { "reasons": ["registered-elsewhere"], "testsExcluded": 3 }
+    },
+    "namespace-expect.test.ts": {
+      "tasks": 1,
+      "wrapperSites": ["wrapper@4"],
+      "next": { "reasons": ["registered-elsewhere"], "testsExcluded": 1 }
+    },
+    "prefix.test.ts": {
+      "tasks": 2,
+      "wrapperSites": ["wrapper@5"],
+      "next": { "reasons": ["registered-elsewhere", "helper-effects-unproved"], "testsExcluded": 2 }
+    },
+    "replaced.test.ts": {
+      "tasks": 1,
+      "wrapperSites": ["wrapper@13"],
+      "next": { "reasons": ["registered-elsewhere"], "testsExcluded": 1 }
+    },
+    "stored.test.ts": {
+      "tasks": 1,
+      "wrapperSites": ["wrapper@4"],
+      "next": { "reasons": ["registered-elsewhere"], "testsExcluded": 1 }
+    }
+  },
+  "knownTitles": [
+    {
+      "path": "mutated-getter.test.ts",
+      "kind": "extra-test",
+      "item": "extend",
+      "reason": "The direct registration inventory treats the inherited getter-definition method as a test call.",
+      "waitsOn": "distinguishing known registration members from arbitrary receiver methods"
+    }
+  ]
+}

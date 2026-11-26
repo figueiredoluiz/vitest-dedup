@@ -65,6 +65,36 @@
       "otherReasons": ["helper-effects-unproved"],
       "testsExcluded": 3
     },
+    "oracle/stored-sequence-registration/mutated-statement.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [],
+      "testsExcluded": 3
+    },
+    "oracle/stored-sequence-registration/mutated.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [],
+      "testsExcluded": 3
+    },
+    "oracle/stored-sequence-registration/namespace-expect.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [],
+      "testsExcluded": 1
+    },
+    "oracle/stored-sequence-registration/prefix.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": ["helper-effects-unproved"],
+      "testsExcluded": 2
+    },
+    "oracle/stored-sequence-registration/replaced.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [],
+      "testsExcluded": 1
+    },
+    "oracle/stored-sequence-registration/stored.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [],
+      "testsExcluded": 1
+    },
     "oracle/logical-registration/case.test.ts": {
       "reason": "registered-elsewhere",
       "otherReasons": ["helper-effects-unproved"],

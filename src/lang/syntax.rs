@@ -198,16 +198,39 @@ pub(crate) enum ValueRole<'t> {
 impl Tree {
     /// The operand supplying a sequence's value; preceding operands still evaluate.
     pub(crate) fn sequence_result(&self, node: NodeId) -> Option<NodeId> {
+        self.sequence_parts(node).map(|(result, _)| result)
+    }
+
+    /// A sequence's selected operand and its preceding operands in evaluation order.
+    pub(crate) fn sequence_parts(
+        &self,
+        node: NodeId,
+    ) -> Option<(NodeId, impl Iterator<Item = Option<NodeId>> + '_)> {
         if self.kind(node) != "SequenceExpression" {
             return None;
         }
-        match self.field_of(node, "expressions") {
-            Field::List(items) => match items.last() {
-                Some(Field::Node(last)) => Some(*last),
+        let Field::List(items) = self.field_of(node, "expressions") else {
+            return None;
+        };
+        let (Field::Node(last), prefix) = items.split_last()? else {
+            return None;
+        };
+        Some((
+            *last,
+            prefix.iter().map(|operand| match operand {
+                Field::Node(node) => Some(*node),
                 _ => None,
-            },
-            _ => None,
+            }),
+        ))
+    }
+
+    /// The final selected value across nested sequences and transparent expression wrappers.
+    pub(crate) fn final_sequence_result(&self, node: NodeId) -> Option<NodeId> {
+        let mut result = self.inner(self.sequence_result(self.inner(node))?);
+        while let Some(next) = self.sequence_result(result) {
+            result = self.inner(next);
         }
+        Some(result)
     }
 
     /// An edge selecting the child's existing value, without proving guards or prefixes inert.
