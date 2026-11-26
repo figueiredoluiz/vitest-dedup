@@ -926,7 +926,7 @@ fn run_with_engine(
     causes.pair_budget_exhausted |= outcome.budget_exhausted;
     causes.hook_scan_exhausted |= outcome.hook_scan_exhausted;
     causes.unresolved_contexts = engine.unresolved;
-    let finished = analysis::finish_findings(
+    let mut finished = analysis::finish_findings(
         outcome.findings,
         causes,
         analysis::RunModes {
@@ -937,6 +937,7 @@ fn run_with_engine(
             suppressions: &inline_suppressions,
         },
     );
+    finished.modes.suppressions_applied += outcome.inline_suppressed;
     let (excluded_files, exclusions) = excluded.finish();
     let mut result = AnalysisResult {
         had_error_finding: finished.had_error_finding,
