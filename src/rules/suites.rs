@@ -40,25 +40,28 @@ pub(super) struct Twins(Vec<Vec<Location>>);
 struct SuppressionPlan {
     removed: BTreeSet<usize>,
     covers: Vec<(usize, Covers)>,
+    inline_suppressed: usize,
 }
 
 impl Twins {
     /// Removes a child test/name claim only when one reported suite finding names every copy it
     /// spans: that finding stands for the relationship and carries it to the gate, so baselining
-    /// or suppressing either one acts on both. An unfinished plan leaves the claims intact.
+    /// or suppressing either one acts on both. Returns the number of removed claims covered by
+    /// inline directives, or `None` if the plan ran out of work and left all claims intact.
     pub(super) fn suppress(
         &self,
         findings: &mut Vec<Finding>,
         suppressions: &InlineSuppressionIndex<'_>,
         work: &mut PairBudget,
-    ) -> bool {
+    ) -> Option<usize> {
         if self.0.is_empty() {
-            return true;
+            return Some(0);
         }
-        let Ok(SuppressionPlan { removed, covers }) = self.plan(findings, suppressions, work)
-        else {
-            return false;
-        };
+        let SuppressionPlan {
+            removed,
+            covers,
+            inline_suppressed,
+        } = self.plan(findings, suppressions, work).ok()?;
         for (index, coverage) in covers {
             findings[index].covers = Some(coverage);
         }
@@ -67,7 +70,7 @@ impl Twins {
             index += 1;
             !removed.contains(&(index - 1))
         });
-        true
+        Some(inline_suppressed)
     }
 
     /// Plans child replacement and propagation before changing any finding or gate coverage.
@@ -97,6 +100,7 @@ impl Twins {
             by_copy.entry(copy).or_default().push(index);
         }
         let mut removed = BTreeSet::new();
+        let mut inline_suppressed = 0;
         let mut direct = BTreeMap::<_, Coverage<'_>>::new();
         for (index, child) in findings.iter().enumerate().filter(|(_, child)| {
             matches!(child.rule, Rule::DuplicateTest | Rule::DuplicateTestName)
@@ -112,8 +116,10 @@ impl Twins {
             for &suite in *first {
                 work.charge(copies.len() as u64).then_some(()).ok_or(())?;
                 if copies.iter().all(|ids| ids.binary_search(&suite).is_ok()) {
-                    removed.insert(index);
-                    if !suppressed {
+                    let first_removal = removed.insert(index);
+                    if suppressed {
+                        inline_suppressed += usize::from(first_removal);
+                    } else {
                         direct
                             .entry(suite)
                             .or_default()
@@ -141,6 +147,7 @@ impl Twins {
         }
         Ok(SuppressionPlan {
             removed,
+            inline_suppressed,
             covers: direct
                 .into_iter()
                 .map(|(suite, coverage)| (suite, coverage.finish()))

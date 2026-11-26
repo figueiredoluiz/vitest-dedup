@@ -105,9 +105,15 @@ fn suite_coverage_finishes_within_the_indexed_work_budget() {
     );
     assert!(!exhausted);
     let original = findings.clone();
-    assert!(!twins.suppress(&mut findings, &suppressions, &mut PairBudget::new(20)));
+    assert_eq!(
+        twins.suppress(&mut findings, &suppressions, &mut PairBudget::new(20)),
+        None
+    );
     assert_eq!(findings, original);
-    assert!(twins.suppress(&mut findings, &suppressions, &mut PairBudget::new(8_000)));
+    assert_eq!(
+        twins.suppress(&mut findings, &suppressions, &mut PairBudget::new(8_000)),
+        Some(0)
+    );
     assert_eq!(findings.len(), 64 * 3);
     assert_eq!(
         findings
@@ -360,7 +366,10 @@ fn nested_copies_count_each_test_once() {
     // Refuse atomically at every budget boundary, including while carrying the inner coverage.
     for limit in 0..64 {
         let mut candidate = findings.clone();
-        if twins.suppress(&mut candidate, &suppressions, &mut PairBudget::new(limit)) {
+        if let Some(count) =
+            twins.suppress(&mut candidate, &suppressions, &mut PairBudget::new(limit))
+        {
+            assert_eq!(count, 0);
             crate::analysis::sort_findings(&mut candidate);
             finished = Some(candidate);
             break;
@@ -409,7 +418,10 @@ fn suite_replacement_requires_child_locations_and_a_representative() {
             remaining[0].locations.truncate(1);
         }
         let original = remaining.clone();
-        assert!(twins.suppress(&mut remaining, &suppressions, &mut PairBudget::new(64)));
+        assert_eq!(
+            twins.suppress(&mut remaining, &suppressions, &mut PairBudget::new(64)),
+            Some(0)
+        );
         assert_eq!(remaining, original);
     }
 }

@@ -503,6 +503,67 @@ fn a_suite_at_error_counts_its_tests_whatever_its_children_report() {
     }
 }
 
+/// Count each inline-suppressed child finding once even when a suite stands for the child.
+#[test]
+fn represented_suites_count_inline_suppressed_children() {
+    const AUDIT: &str =
+        include_str!("../fixtures/recall/suite-inline-suppression-count/audit.test.ts");
+    const CONTROL_A: &str =
+        include_str!("../fixtures/recall/suite-inline-suppression-count/control-a.test.ts");
+    const CONTROL_B: &str =
+        include_str!("../fixtures/recall/suite-inline-suppression-count/control-b.test.ts");
+    let without_directives = AUDIT.replace("\r\n", "\n").replace(
+        "  // vitest-dedup-disable-next-line separate audit context\n",
+        "",
+    );
+    for (source, suppressed) in [(AUDIT, true), (&without_directives, false)] {
+        for (suite, child) in [("warning", "error"), ("error", "warning")] {
+            let run = run(
+                &[
+                    ("audit.test.ts", source),
+                    ("control-a.test.ts", CONTROL_A),
+                    ("control-b.test.ts", CONTROL_B),
+                ],
+                &[
+                    "--rule",
+                    &format!("duplicate-suite={suite}"),
+                    "--rule",
+                    &format!("duplicate-test={child}"),
+                    "--rule",
+                    "duplicate-test-name=off",
+                    "--rule",
+                    "parameterization-candidate=off",
+                    "--rule",
+                    "cross-file-duplicate=warning",
+                    "--threshold",
+                    "0",
+                ],
+            );
+            assert_eq!(run.json["testsAnalyzed"], 6);
+            assert_eq!(run.json["incomplete"], false);
+            let findings = run.json["findings"].as_array().unwrap();
+            assert_eq!(findings.len(), 2);
+            assert!(findings.iter().any(|f| f["rule"] == "cross-file-duplicate"));
+            let reported = findings
+                .iter()
+                .find(|f| f["rule"] == "duplicate-suite")
+                .unwrap();
+            assert_eq!(reported["severity"], suite);
+            if suppressed {
+                assert!(reported.get("covers").is_none());
+            } else {
+                assert_eq!(reported["covers"]["severity"], child);
+                assert_eq!(reported["covers"]["locations"].as_array().unwrap().len(), 4);
+            }
+            assert_eq!(gate(&run).0, if suppressed { 0 } else { 4 });
+            assert_eq!(run.code, Some(i32::from(!suppressed || suite == "error")));
+            let count = run.json["modes"]["suppressionsApplied"].as_u64().unwrap();
+            assert_eq!(run.jsonl_summary["modes"]["suppressionsApplied"], count);
+            assert_eq!(count, if suppressed { 2 } else { 0 });
+        }
+    }
+}
+
 /// A suppressed test is not charged when the finding that stands for it lists another
 /// declaration in its place.
 #[test]

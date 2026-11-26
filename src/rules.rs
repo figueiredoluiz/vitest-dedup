@@ -34,6 +34,8 @@ pub struct Outcome {
     pub findings: Vec<Finding>,
     /// A rule comparison or coverage budget ran out before all work was processed.
     pub budget_exhausted: bool,
+    /// Findings removed under inline directives during suite coverage planning.
+    pub inline_suppressed: usize,
 }
 
 /// One compared case, as a rule sees it: the file that spells it and what the corpus keyed.
@@ -260,7 +262,8 @@ fn run_all(
     budget_exhausted |= !subsumed::run(files, config, &mut budget, &mut trace_work, &mut findings);
 
     let mut suite_work = PairBudget::new(crate::analysis::MAX_RULE_WORK);
-    budget_exhausted |= !twins.suppress(&mut findings, &suppressions, &mut suite_work);
+    let inline_suppressed = twins.suppress(&mut findings, &suppressions, &mut suite_work);
+    budget_exhausted |= inline_suppressed.is_none();
     let (hook_scan_exhausted, hook_pairs_exhausted) =
         hooks::run(hooks, config, max_hook_scans, &mut budget, &mut findings);
     budget_exhausted |= hook_pairs_exhausted;
@@ -269,6 +272,7 @@ fn run_all(
         hook_scan_exhausted,
         findings,
         budget_exhausted,
+        inline_suppressed: inline_suppressed.unwrap_or_default(),
     }
 }
 
