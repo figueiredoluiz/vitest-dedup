@@ -194,11 +194,6 @@ fn sequence_fixture_builder_accounts_for_the_invocation() {
             0,
         ),
         ("{const api = {extend: () => 0}; (0, api.extend({}))}", 1, 0),
-        (
-            "const held = (0, api.extend({})); held('stored', () => {})",
-            1,
-            0,
-        ),
     ] {
         let source = format!("import {{test as api, test as control}} from 'vitest'; import * as v from 'vitest'; {expression}; control('retained', () => {{}});");
         let (found, parsed) = inventory_with_tree(&source, &[], false);

@@ -86,22 +86,27 @@ pub static DIALECT: Dialect = Dialect {
         Namespace {
             name: "vi",
             canonical: "vi",
+            assertion: false,
         },
         Namespace {
             name: "vitest",
             canonical: "vi",
+            assertion: false,
         },
         Namespace {
             name: "expect",
             canonical: "expect",
+            assertion: true,
         },
         Namespace {
             name: "expectTypeOf",
             canonical: "expectTypeOf",
+            assertion: true,
         },
         Namespace {
             name: "assertType",
             canonical: "assertType",
+            assertion: true,
         },
     ],
     mocking_namespace: Some("vi"),
@@ -123,6 +128,8 @@ pub static DIALECT: Dialect = Dialect {
             mocking: Mocking::Dynamic,
         },
     ],
+    actual_module_loader: Some("importActual"),
+    global_stub: Some("stubGlobal"),
     hoisting_objects: &["vi", "vitest"],
     hoisted_helpers: &["hoisted"],
     assertions: &[AssertionEntry {

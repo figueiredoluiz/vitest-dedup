@@ -19,6 +19,31 @@
         ],
         "testsExcluded": 2
       }
+    },
+    "stored-builder-global-alias.test.ts": {
+      "tasks": 2,
+      "wrapperSites": [],
+      "next": {}
+    },
+    "stored-builder-global-getter.test.ts": {
+      "tasks": 2,
+      "wrapperSites": [],
+      "next": {}
+    },
+    "stored-builder-global-stub.test.ts": {
+      "tasks": 2,
+      "wrapperSites": [],
+      "next": {}
+    },
+    "stored-builder-mock-method.test.ts": {
+      "tasks": 2,
+      "wrapperSites": [],
+      "next": {}
+    },
+    "stored-builder-stub-reexport.test.ts": {
+      "tasks": 2,
+      "wrapperSites": [],
+      "next": {}
     }
   },
   "knownTitles": [

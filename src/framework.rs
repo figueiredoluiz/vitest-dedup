@@ -125,6 +125,8 @@ pub struct Namespace {
     pub name: &'static str,
     /// The alias-free spelling every alias shares.
     pub canonical: &'static str,
+    /// Whether this is an assertion entry exposed by the namespace.
+    pub assertion: bool,
 }
 
 /// A framework's rendering of literal row-title arguments, with unknown cells retained.
@@ -329,6 +331,10 @@ pub struct Dialect {
     pub mocking_namespace: Option<&'static str>,
     /// Members of [`Self::mocking_namespace`] that affect module context.
     pub mocking_members: &'static [MockMember],
+    /// The mocking member that loads an actual module without its mock.
+    pub actual_module_loader: Option<&'static str>,
+    /// The mocking member that stubs a named global binding.
+    pub global_stub: Option<&'static str>,
     /// Identifier spellings whose [`Mocking::Hoisted`] member calls the framework hoists; the
     /// same member reached through any other spelling runs where it is written.
     pub hoisting_objects: &'static [&'static str],
@@ -459,6 +465,13 @@ impl Dialect {
             .map(|namespace| namespace.canonical)
     }
 
+    /// Whether the framework exposes this name as an assertion.
+    pub fn is_assertion_namespace(&self, name: &str) -> bool {
+        self.namespaces
+            .iter()
+            .any(|namespace| namespace.name == name && namespace.assertion)
+    }
+
     /// What a member of the mocking namespace does.
     pub fn mocking_member(&self, name: &str) -> Option<Mocking> {
         self.mocking_members
@@ -500,6 +513,8 @@ impl Dialect {
             .chain(registrations.iter().map(|registration| registration.name))
             .chain(namespaces.iter().map(|namespace| namespace.name))
             .chain(self.mocking_members.iter().map(|member| member.name))
+            .chain(self.actual_module_loader)
+            .chain(self.global_stub)
             .chain(self.hoisting_objects.iter().copied())
             .chain(self.hoisted_helpers.iter().copied())
             .chain(chain.iter().map(|member| member.name))

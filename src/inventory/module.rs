@@ -134,8 +134,8 @@ struct Module<'s> {
     returners: HashSet<SymbolId>,
     /// Direct framework bindings and local aliases, with any proof of the value they hold.
     registration_bindings: HashMap<SymbolId, RegistrationBinding>,
-    /// Direct calls of a task wrapper selected from an imported project namespace.
-    namespace_task_calls: HashSet<NodeId>,
+    /// Direct invocations whose selected value may register tasks.
+    direct_task_calls: HashSet<NodeId>,
     loads: Vec<u32>,
     values: HashSet<NodeId>,
     /// Bindings declared more than once, replacing their value.
@@ -177,7 +177,7 @@ pub(super) fn analyse(
         wrappers: HashMap::new(),
         returners: HashSet::new(),
         registration_bindings: HashMap::new(),
-        namespace_task_calls: HashSet::new(),
+        direct_task_calls: HashSet::new(),
         loads: Vec::new(),
         values: HashSet::new(),
         redeclared: HashSet::new(),
@@ -192,6 +192,7 @@ pub(super) fn analyse(
     module.rewritten_globals = module.global_writes();
     module.collect_origins(modules, depth, imports);
     module.alias_phase = AliasPhase::Settled;
+    module.collect_stored_sequence_task_calls();
     let found = module.registrations();
     let mut exports = module.exports(modules, depth, &found, imports);
     // A registration outside every wrapper may run while the module loads: at top level, in a
@@ -443,18 +444,22 @@ impl<'s> Module<'s> {
                     && tree
                         .child(test, "object")
                         .map(|object| tree.inner(object))
-                        .is_some_and(|object| {
-                            tree.kind(object) == "MetaProperty"
-                                && tree
-                                    .child(object, "meta")
-                                    .and_then(|meta| tree.text(meta, "name"))
-                                    == Some("import")
-                                && tree
-                                    .child(object, "property")
-                                    .and_then(|property| tree.text(property, "name"))
-                                    == Some("meta")
-                        })
+                        .is_some_and(|object| self.is_import_meta(object))
             })
+    }
+
+    /// Whether this owned node reads the current module's metadata object.
+    fn is_import_meta(&self, node: NodeId) -> bool {
+        let tree = self.tree;
+        tree.kind(node) == "MetaProperty"
+            && tree
+                .child(node, "meta")
+                .and_then(|meta| tree.text(meta, "name"))
+                == Some("import")
+            && tree
+                .child(node, "property")
+                .and_then(|property| tree.text(property, "name"))
+                == Some("meta")
     }
 
     /// Whether a `vi.mock`, hoisted or in place, has a factory whose behavior is not written
@@ -730,11 +735,7 @@ impl<'s> Module<'s> {
                 import,
                 specifier,
                 imported: Imported::Named(name),
-            } => {
-                self.runtime_api_import(*import, *specifier)
-                    && self.setting.dialect.namespace(name)
-                        == self.setting.dialect.mocking_namespace
-            }
+            } => self.runtime_mocking_import(*import, *specifier, name),
             Declaration::Variable(declarator)
                 if tree
                     .outer_parent(*declarator)
@@ -783,6 +784,12 @@ impl<'s> Module<'s> {
                 .is_some_and(|source| self.setting.dialect.is_api_module(source))
     }
 
+    /// Whether a named runtime import is the framework's mocking namespace.
+    fn runtime_mocking_import(&self, import: NodeId, specifier: NodeId, name: &str) -> bool {
+        self.runtime_api_import(import, specifier)
+            && self.setting.dialect.namespace(name) == self.setting.dialect.mocking_namespace
+    }
+
     /// Whether a write through the global object may have replaced this free global.
     fn global_was_rewritten(&self, name: &str) -> bool {
         self.rewritten_globals.contains(&None)
@@ -812,11 +819,7 @@ impl<'s> Module<'s> {
             "MemberExpression" if !tree.flag(node, "computed") => {
                 let object = tree.child(node, "object")?;
                 let property = tree.child(node, "property")?;
-                let in_source = tree.kind(object) == "MetaProperty"
-                    && tree
-                        .child(object, "meta")
-                        .and_then(|meta| tree.text(meta, "name"))
-                        == Some("import")
+                let in_source = self.is_import_meta(object)
                     && self.setting.dialect.in_source_member.is_some()
                     && tree.text(property, "name") == self.setting.dialect.in_source_member;
                 in_source.then_some((Origin::Namespace, Provenance::Direct))
@@ -876,15 +879,11 @@ impl<'s> Module<'s> {
             if self.dead_chains.borrow().contains(&node) {
                 return None;
             }
-            if let Some(mut result) = tree.sequence_result(node) {
+            if let Some(result) = tree.final_sequence_result(node) {
                 // A failed bare sequence rules out a root. A longer chain can fail even
                 // when calling the sequence itself registers.
                 if steps.is_empty() {
                     visited.push(node);
-                }
-                result = tree.inner(result);
-                while let Some(next) = tree.sequence_result(result) {
-                    result = tree.inner(next);
                 }
                 let selected = self.resolve(result)?;
                 let reach = match selected.value {
@@ -1231,10 +1230,10 @@ impl<'s> Module<'s> {
         self.resolve(callee)?.member
     }
 
-    /// What this call registers, reading the namespace proof or resolving its callee.
+    /// What this call registers, reading a recorded invocation or resolving its callee.
     fn registration(&self, call: NodeId) -> Option<(SiteKind, Vec<String>, Provenance)> {
         let link = callee_link(self.tree, call)?;
-        if self.namespace_task_calls.contains(&call)
+        if self.direct_task_calls.contains(&call)
             || (link.kind == CalleeLinkKind::Call && self.array_fixture(link.input))
         {
             return Some((
@@ -1383,7 +1382,7 @@ impl<'s> Module<'s> {
         }
         let tree = self.tree;
         let binding = self.parsed.scopes.symbol(symbol);
-        self.namespace_task_calls
+        self.direct_task_calls
             .extend(binding.references.iter().filter_map(|reference| {
                 let read = reference.node?;
                 let member = callee_link(tree, tree.outer_parent(read)?)?;
@@ -1403,6 +1402,343 @@ impl<'s> Module<'s> {
                     && !tree.flag(call.node, "optional"))
                 .then_some(call.node)
             }));
+    }
+
+    /// Prove a stored builder once per declaration, then record its initialized direct calls.
+    fn collect_stored_sequence_task_calls(&mut self) {
+        let tree = self.tree;
+        let mut checked_uses = false;
+        for declarator in tree.nodes() {
+            let Some(symbol) = self.stored_sequence_builder_binding(declarator) else {
+                continue;
+            };
+            if !checked_uses && !self.registration_receivers_have_tracked_uses() {
+                return;
+            }
+            checked_uses = true;
+            let binding = self.parsed.scopes.symbol(symbol);
+            self.direct_task_calls
+                .extend(binding.references.iter().filter_map(|reference| {
+                    let read = reference.node?;
+                    let call = callee_link(tree, tree.outer_parent(read)?)?;
+                    (call.kind == CalleeLinkKind::Call
+                        && tree.inner(call.input) == read
+                        && !tree.flag(call.node, "optional")
+                        && crate::lang::proof::initialized(tree, declarator, read).is_some())
+                    .then_some(call.node)
+                }));
+        }
+    }
+
+    /// A registration receiver may be changed when it is written or passed to untracked code.
+    fn registration_receivers_have_tracked_uses(&self) -> bool {
+        let tree = self.tree;
+        if !self.mocking_receivers_have_tracked_uses()
+            || tree
+                .nodes()
+                .any(|node| self.untracked_framework_access(node))
+        {
+            return false;
+        }
+        let metadata_reads = tree.nodes().filter(|&read| {
+            self.setting.dialect.in_source_member.is_some() && self.is_import_meta(read)
+        });
+        self.registration_reads().chain(metadata_reads).all(|read| {
+            let (value, role) = self.registration_read_use(read);
+            let Some(use_site) = tree.parent(value) else {
+                return false;
+            };
+            match role {
+                ValueRole::Callee(CalleeLinkKind::Call | CalleeLinkKind::Tagged) => {
+                    tree.inner(value) == read || self.registration_member_path_is_known(value)
+                }
+                ValueRole::Initializer => tree
+                    .child(use_site, "id")
+                    .filter(|&id| tree.kind(id) == "Identifier")
+                    .and_then(|id| self.declares(id))
+                    .is_some_and(|symbol| self.origins.contains_key(&symbol)),
+                ValueRole::UnaryOperand => {
+                    matches!(
+                        tree.text(use_site, "operator"),
+                        Some("typeof" | "void" | "!")
+                    )
+                }
+                ValueRole::Other if tree.kind(use_site) == "IfStatement" => {
+                    self.is_import_meta(read)
+                        && tree.child(use_site, "test") == Some(value)
+                        && matches!(
+                            self.root_origin(tree.inner(value)),
+                            Some((Origin::Namespace, _))
+                        )
+                }
+                _ => false,
+            }
+        })
+    }
+
+    /// A call must use a known registration path or select an assertion from the namespace.
+    fn registration_member_path_is_known(&self, value: NodeId) -> bool {
+        let Some((origin, _, steps)) = self.chain(value) else {
+            return false;
+        };
+        let dialect = self.setting.dialect;
+        let steps = match origin {
+            Origin::Api(_) => steps.as_slice(),
+            Origin::Namespace => match steps.split_first() {
+                Some((Step::Member(name), _)) if dialect.is_assertion_namespace(name) => {
+                    return true
+                }
+                Some((Step::Member(name), rest)) if dialect.registration(name).is_some() => rest,
+                _ => return false,
+            },
+            _ => return false,
+        };
+        steps.iter().all(|step| {
+            matches!(step, Step::Member(name)
+                if dialect.chain_member(name).is_some() || dialect.test_member(name).is_some())
+        })
+    }
+
+    /// Check uses of known mocking receivers and their immutable aliases once per binding.
+    fn mocking_receivers_have_tracked_uses(&self) -> bool {
+        let Some(mocking) = self.setting.dialect.mocking_namespace else {
+            return true;
+        };
+        let scopes = &self.parsed.scopes;
+        let tree = self.tree;
+        let mut pending: Vec<_> = scopes
+            .symbols()
+            .filter(|&symbol| {
+                matches!(
+                    &scopes.symbol(symbol).declaration,
+                    Declaration::Import { import, specifier, imported: Imported::Named(name) }
+                        if self.runtime_mocking_import(*import, *specifier, name)
+                )
+            })
+            .collect();
+        if self.setting.globals {
+            let free = tree.nodes().filter(|&node| {
+                tree.kind(node) == "Identifier"
+                    && scopes.is_global_at(tree.span(node).start)
+                    && tree
+                        .text(node, "name")
+                        .is_some_and(|name| self.setting.dialect.namespace(name) == Some(mocking))
+            });
+            for read in free {
+                if !self.track_mocking_receiver_read(read, &mut pending) {
+                    return false;
+                }
+            }
+        }
+        let mut seen = HashSet::new();
+        while let Some(symbol) = pending.pop() {
+            if seen.insert(symbol)
+                && scopes
+                    .symbol(symbol)
+                    .references
+                    .iter()
+                    .filter_map(|reference| reference.node)
+                    .any(|read| !self.track_mocking_receiver_read(read, &mut pending))
+            {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// Follow a stable local alias, or check how this receiver is used.
+    fn track_mocking_receiver_read(&self, read: NodeId, pending: &mut Vec<SymbolId>) -> bool {
+        let tree = self.tree;
+        let Some(parent) = tree.outer_parent(read) else {
+            return false;
+        };
+        let member = callee_link(tree, parent).and_then(|link| match link.kind {
+            CalleeLinkKind::Member(name) if tree.inner(link.input) == read => {
+                Some((link.node, name))
+            }
+            _ => None,
+        });
+        if let Some((member, name)) = member {
+            return self.mocking_member_use_is_tracked(member, name);
+        }
+        if tree.kind(parent) == "VariableDeclarator"
+            && tree
+                .child(parent, "init")
+                .is_some_and(|init| tree.inner(init) == read)
+            && tree.parent(parent).and_then(|decl| tree.text(decl, "kind")) == Some("const")
+        {
+            let Some(symbol) = tree
+                .child(parent, "id")
+                .filter(|&id| tree.kind(id) == "Identifier")
+                .and_then(|id| self.declares(id))
+                .filter(|&symbol| !self.reassigned(symbol))
+            else {
+                return false;
+            };
+            pending.push(symbol);
+            return true;
+        }
+        tree.kind(parent) == "UnaryExpression"
+            && matches!(tree.text(parent, "operator"), Some("typeof" | "void" | "!"))
+    }
+
+    /// Accept only tracked loader and global stub calls with discarded results.
+    fn mocking_member_use_is_tracked(&self, member: NodeId, name: Option<&str>) -> bool {
+        let tree = self.tree;
+        let Some(call) = tree
+            .outer_parent(member)
+            .and_then(|parent| callee_link(tree, parent))
+            .filter(|call| {
+                call.kind == CalleeLinkKind::Call
+                    && tree.inner(call.input) == member
+                    && self.result_is_discarded(call.node)
+            })
+        else {
+            return false;
+        };
+        let argument = tree.list(call.node, "arguments").first().copied().flatten();
+        let dialect = self.setting.dialect;
+        match name {
+            Some(name) if self.setting.globals && dialect.global_stub == Some(name) => argument
+                .map(|key| tree.inner(key))
+                .filter(|&key| tree.kind(key) == "Literal")
+                .and_then(|key| tree.text(key, "value"))
+                .is_some_and(|key| {
+                    dialect.registration(key).is_none()
+                        && dialect.namespace(key) != dialect.mocking_namespace
+                }),
+            Some(name) if dialect.actual_module_loader == Some(name) => {
+                argument.is_some_and(|source| self.literal_framework_module(source))
+            }
+            _ => false,
+        }
+    }
+
+    /// Whether a module link or local access may replace the framework receiver.
+    fn untracked_framework_access(&self, node: NodeId) -> bool {
+        let tree = self.tree;
+        match tree.kind(node) {
+            "ImportDeclaration" | "ExportNamedDeclaration" | "ExportAllDeclaration" => {
+                !tree.erased_declaration(node)
+                    && tree
+                        .child(node, "source")
+                        .is_some_and(|source| !self.literal_framework_module(source))
+            }
+            "ImportExpression" => {
+                !tree
+                    .child(node, "source")
+                    .is_some_and(|source| self.literal_framework_module(source))
+                    || !self.result_is_discarded(node)
+            }
+            "TSImportEqualsDeclaration" => tree.text(node, "importKind") != Some("type"),
+            "Identifier" if tree.text(node, "name") == Some("require") => {
+                self.parsed.scopes.is_global_at(tree.span(node).start)
+            }
+            "Identifier" if self.setting.globals && self.global_object(node) => {
+                self.parsed.scopes.is_global_at(tree.span(node).start)
+            }
+            _ => false,
+        }
+    }
+
+    /// A literal module reference to the dialect's own framework package.
+    fn literal_framework_module(&self, source: NodeId) -> bool {
+        let tree = self.tree;
+        let source = tree.inner(source);
+        tree.kind(source) == "Literal"
+            && tree
+                .text(source, "value")
+                .is_some_and(|value| self.setting.dialect.is_api_module(value))
+    }
+
+    /// A discarded bare or awaited result cannot supply a local receiver alias.
+    fn result_is_discarded(&self, node: NodeId) -> bool {
+        let tree = self.tree;
+        tree.outer_parent(node)
+            .and_then(|parent| {
+                if tree.kind(parent) == "AwaitExpression" {
+                    tree.outer_parent(parent)
+                } else {
+                    Some(parent)
+                }
+            })
+            .is_some_and(|statement| tree.kind(statement) == "ExpressionStatement")
+    }
+
+    /// A local const whose sequence initializer selects the framework's fixture builder.
+    fn stored_sequence_builder_binding(&self, declarator: NodeId) -> Option<SymbolId> {
+        let tree = self.tree;
+        if tree.kind(declarator) != "VariableDeclarator" {
+            return None;
+        }
+        let declaration = tree.parent(declarator)?;
+        if tree.text(declaration, "kind") != Some("const")
+            || tree.erased_declaration(declaration)
+            || !matches!(
+                tree.kind(tree.parent(declaration)?),
+                "Program" | "BlockStatement" | "SwitchCase"
+            )
+        {
+            return None;
+        }
+        let binding = tree.child(declarator, "id")?;
+        if tree.kind(binding) != "Identifier" {
+            return None;
+        }
+        let initializer = tree.inner(tree.child(declarator, "init")?);
+        let result = tree.final_sequence_result(initializer)?;
+        self.member_call(result)?;
+        let symbol = self.declares(binding)?;
+        if self.reassigned(symbol) {
+            return None;
+        }
+        let selected = self.resolve(result)?;
+        (self.fixture_extension_result(result, &selected)
+            && self.sequence_prefix_preserves_builder(initializer))
+        .then_some(symbol)
+    }
+
+    /// Every discarded operand evaluated on the way to the selected builder preserves it.
+    fn sequence_prefix_preserves_builder(&self, mut sequence: NodeId) -> bool {
+        let tree = self.tree;
+        while let Some((next, mut prefix)) = tree.sequence_parts(sequence) {
+            if !prefix.all(|operand| {
+                operand.is_some_and(|operand| self.builder_prefix_preserves_extension(operand))
+            }) {
+                return false;
+            }
+            sequence = tree.inner(next);
+        }
+        true
+    }
+
+    /// A primitive read or a plain test declaration with an inline, deferred body.
+    fn builder_prefix_preserves_extension(&self, operand: NodeId) -> bool {
+        let tree = self.tree;
+        let operand = tree.inner(operand);
+        if crate::lang::primitive(tree, operand) {
+            return true;
+        }
+        if tree.kind(operand) != "CallExpression" || tree.flag(operand, "optional") {
+            return false;
+        }
+        let callee = tree.inner(self.callee(operand));
+        let arguments = tree.list(operand, "arguments");
+        let [Some(title), Some(body)] = arguments.as_slice() else {
+            return false;
+        };
+        let title = tree.inner(*title);
+        tree.kind(title) == "Literal"
+            && tree.text(title, "value").is_some()
+            && tree.is_function(tree.inner(*body))
+            && matches!(
+                self.proved_registration_binding(callee),
+                Some(RegistrationBinding::FrameworkImport)
+            )
+            && matches!(
+                self.root_origin(callee),
+                Some((Origin::Api(Registers::Test), _))
+            )
     }
 
     /// `const t = test`, `const myTest = test.extend({...})`, `const { test } = import.meta.vitest`.
@@ -1823,15 +2159,19 @@ impl<'s> Module<'s> {
         let tree = self.tree;
         let node = tree.inner(node);
         tree.kind(node) == "MemberExpression"
-            && tree.child(node, "object").is_some_and(|object| {
-                let object = tree.inner(object);
-                tree.kind(object) == "Identifier"
-                    && matches!(
-                        tree.text(object, "name"),
-                        Some("globalThis" | "global" | "window" | "self")
-                    )
-                    && self.read(object).is_none()
-            })
+            && tree
+                .child(node, "object")
+                .is_some_and(|object| self.global_object(tree.inner(object)))
+    }
+
+    /// A global-object spelling without a local binding.
+    fn global_object(&self, node: NodeId) -> bool {
+        self.tree.kind(node) == "Identifier"
+            && matches!(
+                self.tree.text(node, "name"),
+                Some("globalThis" | "global" | "window" | "self")
+            )
+            && self.read(node).is_none()
     }
 
     /// Whether `symbol` is only declared to the type checker: `declare` gives it no value.
@@ -2382,27 +2722,36 @@ impl<'s> Module<'s> {
         false
     }
 
+    /// The use of a registration read after following transparent wrappers and callee members.
+    fn registration_read_use(&self, read: NodeId) -> (NodeId, ValueRole<'s>) {
+        let tree = self.tree;
+        let mut current = read;
+        while let Some(parent) = tree.parent(current) {
+            let role = value_role(tree, parent, current);
+            if !matches!(
+                role,
+                ValueRole::Transparent | ValueRole::Callee(CalleeLinkKind::Member(_))
+            ) {
+                return (current, role);
+            }
+            current = parent;
+        }
+        (current, ValueRole::Other)
+    }
+
     /// Registration functions read as values rather than called.
     fn escapes(&self, calls: &HashMap<NodeId, SiteKind>, default_wrapper: bool) -> Vec<Escape> {
         let tree = self.tree;
         let mut escapes = Vec::new();
         for read in self.registration_reads() {
-            let mut current = read;
-            let escaped = loop {
-                let Some(parent) = tree.parent(current) else {
-                    break true;
-                };
-                match value_role(tree, parent, current) {
-                    ValueRole::Transparent | ValueRole::Callee(CalleeLinkKind::Member(_)) => {
-                        current = parent
-                    }
-                    ValueRole::Callee(CalleeLinkKind::Call | CalleeLinkKind::Tagged)
+            let (current, role) = self.registration_read_use(read);
+            let escaped = !matches!(
+                role,
+                ValueRole::Callee(CalleeLinkKind::Call | CalleeLinkKind::Tagged)
                     | ValueRole::Initializer
                     | ValueRole::Exported
-                    | ValueRole::UnaryOperand => break false,
-                    _ => break true,
-                }
-            };
+                    | ValueRole::UnaryOperand
+            );
             if escaped && !self.accounted_sequence_read(read, calls, default_wrapper) {
                 let span = tree.span(current);
                 escapes.push(Escape {
