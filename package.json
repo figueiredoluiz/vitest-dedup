@@ -114,8 +114,8 @@
     "vitest-dedup-windows-x64-msvc": "0.11.0"
   },
   "devDependencies": {
-    "@babel/parser": "8.1.2",
-    "vitest": "5.1.1",
+    "@babel/parser": "8.1.3",
+    "vitest": "5.1.2",
     "vitest4": "npm:vitest@4.1.12",
     "yaml": "2.9.1"
   }
