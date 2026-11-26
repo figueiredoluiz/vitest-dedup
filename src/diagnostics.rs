@@ -213,22 +213,14 @@ pub fn write_run(writer: &mut dyn Write, context: &RunDiagnostics<'_>) -> io::Re
         )?;
     }
 
-    // Named, where the corpus-wide count above is only counted. A partially excluded file still
-    // appears in the report and its findings carry the qualification with them; a wholly excluded
-    // one produces nothing and so appears NOWHERE, which is indistinguishable from a file that was
-    // compared and came back clean. The count cannot surface that -- 620 of 24,147 reads as a
-    // rounding error until one notices it is every test in 35 particular files.
-    //
-    // Bounded like every other list this binary prints, and sorted worst-first by `analyze`, so a
-    // truncated list still names the files that cost the most coverage.
+    // The worst-first list identifies where exclusions left no comparable bodies.
     if !result.blind_files.is_empty() {
         const MAX_LISTED: usize = 10;
         let total_blind: usize = result.blind_files.iter().map(|file| file.tests).sum();
         writeln!(
             writer,
-            "\nvitest-dedup: {} file(s) had EVERY test excluded ({total_blind} test(s) in \
-             total). They produced no findings, so they appear nowhere above -- this report has \
-             not cleared them:",
+            "\nvitest-dedup: no comparable test bodies in {} file(s) with excluded tests \
+             ({total_blind} test(s) excluded):",
             result.blind_files.len()
         )?;
         for file in result.blind_files.iter().take(MAX_LISTED) {
@@ -490,7 +482,7 @@ mod tests {
             );
             if count > 0 {
                 assert!(text.contains(&format!(
-                    "{count} file(s) had EVERY test excluded ({} test(s)",
+                    "no comparable test bodies in {count} file(s) with excluded tests ({} test(s) excluded)",
                     count * 2
                 )));
                 assert!(text.contains(&format!("{count} diagnostic(s) across 2 file(s)")));

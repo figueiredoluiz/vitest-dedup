@@ -10,7 +10,8 @@
 
 use crate::memory::HeapBytes;
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::cmp::Reverse;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 /// Serializes an `Arc<str>` field exactly as the `String` it replaced.
@@ -2271,7 +2272,7 @@ impl IncompleteCauses {
     }
 }
 
-/// One file in which **every** executable test was excluded from comparison.
+/// One file with counted exclusions and no test bodies available for comparison.
 ///
 /// Carries the test count as well as the path because a bounded list has to show the files that
 /// matter most, and "this file contributed 129 tests' worth of nothing" is a different problem
@@ -2280,8 +2281,15 @@ impl IncompleteCauses {
 pub struct BlindFile {
     /// Path relative to the analysis root, as every other reported path is.
     pub path: PathBuf,
-    /// How many executable tests the file declared, all of them excluded.
+    /// How many test records were excluded with an unresolved reason.
     pub tests: usize,
+}
+
+impl BlindFile {
+    /// Sort by decreasing unresolved count, then by raw relative path.
+    pub(crate) fn rank(&self) -> (Reverse<usize>, &Path) {
+        (Reverse(self.tests), &self.path)
+    }
 }
 
 /// Why a file was excluded from comparison, in whole or in part.
@@ -2424,12 +2432,13 @@ pub struct ExcludedFile {
     pub detail: String,
     /// Executable tests of the file excluded from comparison.
     pub tests_excluded: usize,
-    /// Executable tests the file declared; `0` when the file was not parsed.
+    /// Test records for the file, including empty bodies and todos; `0` without a known count.
     pub tests_total: usize,
 }
 
 impl ExcludedFile {
-    /// Whether every executable test of the file was excluded (membership in `blind_files`).
+    /// Whether every recorded test of the file contributes to `tests_excluded`.
+    /// Use [`AnalysisResult::blind_files`] to inspect files with no comparable bodies.
     pub fn every_test_excluded(&self) -> bool {
         self.tests_total > 0 && self.tests_excluded == self.tests_total
     }
@@ -2482,17 +2491,9 @@ pub struct AnalysisResult {
     /// this says *how much*, which is the difference between a run worth trusting and one that
     /// analyzed almost nothing.
     pub unresolved_tests: usize,
-    /// Files in which **every** executable test was excluded from comparison, sorted.
-    ///
-    /// Distinct from [`AnalysisResult::unresolved_tests`] because the two mislead in different
-    /// ways. A partially excluded file still appears in the report, and its excluded tests qualify
-    /// findings the reader can see. A wholly excluded file produces no findings at all, so it never
-    /// appears anywhere in the output -- and a report that never mentions a file cannot be told
-    /// apart from one that examined it and found nothing.
-    ///
-    /// This is the `not-compared` verdict presenting as `distinct` at the file level. The corpus
-    /// count alone cannot surface it: 620 excluded tests read as a small fraction of 24,147 right
-    /// up until one notices they are all of the tests in 35 particular files.
+    /// Files with counted exclusions and no comparable test bodies, in decreasing order of the
+    /// excluded count and then by path. Empty tests and tests without callbacks still contribute
+    /// to the reported test totals. Findings that only need names can still mention a blind file.
     pub blind_files: Vec<BlindFile>,
     /// Every file excluded from comparison in whole or in part, sorted by path and capped at
     /// `exclusions::MAX_EXCLUDED_FILES`; [`AnalysisResult::exclusions`] counts past the cap.

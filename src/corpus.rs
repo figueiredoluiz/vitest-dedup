@@ -1960,10 +1960,13 @@ impl Engine {
             ));
         }
         let mut unresolved = 0;
+        let mut nothing_to_compare = 0;
         for (exclusion, count) in corpus.exclusions() {
             if let Some((reason, detail)) = exclusion.reason() {
                 unresolved += count;
                 reasons.push((reason, detail.to_owned()));
+            } else {
+                nothing_to_compare += count;
             }
         }
         // A file's own refusals, before the shell's reasons (an undetermined `globals` is no part of
@@ -2025,7 +2028,7 @@ impl Engine {
         }
         self.tests += case_count;
         self.unresolved += unresolved;
-        if unresolved > 0 && unresolved == case_count {
+        if unresolved > 0 && unresolved + nothing_to_compare == case_count {
             let blind = BlindFile {
                 path: relative.to_path_buf(),
                 tests: unresolved,
@@ -2050,10 +2053,10 @@ impl Engine {
         &self.proven_empty
     }
 
-    /// Files every test of which is unresolved, the most tests first, then by path.
+    /// Blind files, ordered by decreasing unresolved count and then by path.
     pub fn blind_files(&self) -> Vec<BlindFile> {
         let mut blind = self.blind.clone();
-        blind.sort_by(|a, b| b.tests.cmp(&a.tests).then_with(|| a.path.cmp(&b.path)));
+        blind.sort_by(|a, b| a.rank().cmp(&b.rank()));
         blind
     }
 }

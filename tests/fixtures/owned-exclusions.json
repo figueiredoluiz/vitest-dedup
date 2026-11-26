@@ -964,6 +964,21 @@
       "otherReasons": [],
       "testsExcluded": 1
     },
+    "oracle/runner-constructor-refusal/mixed-empty.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [],
+      "testsExcluded": 1
+    },
+    "oracle/runner-constructor-refusal/mixed-live.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [],
+      "testsExcluded": 1
+    },
+    "oracle/runner-constructor-refusal/mixed-todo.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [],
+      "testsExcluded": 1
+    },
     "oracle/truncated-body/truncated.test.ts": {
       "reason": "unresolved-context",
       "otherReasons": [],

@@ -195,7 +195,7 @@ impl From<&AnalysisResult> for JsonReport {
             excluded_files: result
                 .excluded_files
                 .iter()
-                .map(JsonExcludedFile::from)
+                .map(|file| JsonExcludedFile::from_file(file, &result.blind_files))
                 .collect(),
             findings: result.findings.iter().map(JsonFinding::from).collect(),
         }

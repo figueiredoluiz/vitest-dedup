@@ -9,10 +9,11 @@
 //! but cannot forge extra report lines or hide text in an invisible/reordering character.
 
 use crate::model::{
-    AnalysisResult, ExcludedFile, ExclusionReason, ExclusionSummary, Finding, IncompleteCauses,
-    Location, ModeSummary, Severity,
+    AnalysisResult, BlindFile, ExcludedFile, ExclusionReason, ExclusionSummary, Finding,
+    IncompleteCauses, Location, ModeSummary, Severity,
 };
 use serde::Serialize;
+use std::cmp::Reverse;
 use std::path::Path;
 
 /// Strips characters that could rewrite or misrepresent the report when it is displayed.
@@ -315,9 +316,13 @@ pub(super) struct JsonExcludedFile {
     every_test_excluded: bool,
 }
 
-impl From<&ExcludedFile> for JsonExcludedFile {
-    /// Sanitize the path and detail; copy the codes and counts.
-    fn from(file: &ExcludedFile) -> Self {
+impl JsonExcludedFile {
+    /// Sanitize the path and detail, and look up the original file in the ranked blind list.
+    pub(super) fn from_file(file: &ExcludedFile, blind_files: &[BlindFile]) -> Self {
+        let rank = (Reverse(file.tests_excluded), file.path.as_path());
+        let every_test_excluded = blind_files
+            .binary_search_by(|blind| blind.rank().cmp(&rank))
+            .is_ok();
         Self {
             path: report_safe_path(&file.path),
             reason: file.reason,
@@ -325,7 +330,7 @@ impl From<&ExcludedFile> for JsonExcludedFile {
             detail: report_safe(&file.detail),
             tests_excluded: file.tests_excluded,
             tests_total: file.tests_total,
-            every_test_excluded: file.every_test_excluded(),
+            every_test_excluded,
         }
     }
 }

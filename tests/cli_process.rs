@@ -3359,7 +3359,7 @@ mod tests {
         for expected in [
             "the Vitest project map is incomplete",
             "could not be fully analyzed",
-            "had EVERY test excluded",
+            "no comparable test bodies in",
             parse_failure,
             "exceeds the",
             "includeSource",

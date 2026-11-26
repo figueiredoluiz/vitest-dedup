@@ -1274,6 +1274,62 @@ fn a_clean_project_lists_nothing_and_emits_no_record() {
     );
 }
 
+/// Empty and todo tests neither clear nor create a blind file. A comparable pair clears it.
+#[test]
+fn blind_files_ignore_bodyless_tests() {
+    let root =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/oracle/runner-constructor-refusal");
+    let run = analyze(&root, &[]);
+    let summary = run.jsonl.last().unwrap();
+    assert_eq!(summary["type"], "summary");
+    for report in [&run.json, summary] {
+        assert_eq!(report["testsAnalyzed"], 13);
+        assert_eq!(report["unresolvedTests"], 4);
+        assert_eq!(report["blindFiles"], 3);
+    }
+    let expected = [
+        ("constructor.test.ts", 1, true),
+        ("mixed-empty.test.ts", 2, true),
+        ("mixed-live.test.ts", 4, false),
+        ("mixed-todo.test.ts", 2, true),
+    ];
+    let json = run.json["excludedFiles"].as_array().unwrap();
+    let jsonl: Vec<_> = run
+        .jsonl
+        .iter()
+        .filter(|record| record["type"] == "excluded-file")
+        .collect();
+    assert_eq!(json.len(), expected.len());
+    assert_eq!(jsonl.len(), expected.len());
+    for ((file, record), (path, total, blind)) in json.iter().zip(jsonl).zip(expected) {
+        for entry in [file, record] {
+            assert_eq!(entry["path"], path);
+            assert_eq!(entry["reason"], "registered-elsewhere");
+            assert_eq!(entry["testsTotal"], total);
+            assert_eq!(entry["testsExcluded"], 1);
+            assert_eq!(entry["everyTestExcluded"], blind);
+        }
+    }
+    assert!(run.json["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|finding| {
+            let locations = finding["locations"].as_array().unwrap();
+            finding["rule"] == "duplicate-test"
+                && locations.len() == 2
+                && locations
+                    .iter()
+                    .all(|location| location["path"] == "mixed-live.test.ts")
+        }));
+    assert!(run
+        .stderr
+        .contains("no comparable test bodies in 3 file(s)"));
+    assert!(run.stderr.contains("  mixed-empty.test.ts (1 test(s))"));
+    assert!(run.stderr.contains("  mixed-todo.test.ts (1 test(s))"));
+    assert!(!run.stderr.contains("  mixed-live.test.ts (1 test(s))"));
+}
+
 /// More excluded files than the terminal cap are all listed in json and jsonl.
 #[test]
 fn more_excluded_files_than_the_terminal_cap_are_all_listed_in_the_reports() {
@@ -1300,7 +1356,8 @@ fn more_excluded_files_than_the_terminal_cap_are_all_listed_in_the_reports() {
     // The terminal keeps its cap, says how many it left out, and counts every file in the
     // histogram.
     assert!(
-        run.stderr.contains("25 file(s) had EVERY test excluded"),
+        run.stderr
+            .contains("no comparable test bodies in 25 file(s) with excluded tests"),
         "{}",
         run.stderr
     );
