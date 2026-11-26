@@ -8,6 +8,7 @@ use std::path::Path;
 mod array_slots;
 mod export_identity;
 mod import_limits;
+mod imported_sequence;
 mod reach_scaling;
 mod records;
 mod sequence_values;
@@ -42,6 +43,24 @@ fn inventory_with_tree(
     };
     let found = inventory(&path, main, &parsed, setting, &mut Modules::default());
     (found, parsed)
+}
+
+/// A registration route must keep its independent direct control.
+fn sites_with_retained_control(
+    source: &str,
+    files: &[(&str, &str)],
+    globals: bool,
+) -> Vec<super::Site> {
+    let (found, parsed) = inventory_with_tree(source, files, globals);
+    assert_eq!(parsed.parse_errors, 0, "{source}");
+    assert!(
+        found.sites.iter().any(|site| {
+            site.title.as_deref() == Some("retained")
+                && site.kind == SiteKind::Registers(Registers::Test)
+        }),
+        "{source}: {found:?}"
+    );
+    found.sites
 }
 
 /// Each site as `kind@line:column chain provenance`.

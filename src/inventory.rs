@@ -58,6 +58,8 @@ pub enum Export {
     Derived(Registers),
     /// A function or value that registers when called.
     Wrapper(Reach),
+    /// A stable sequence-selected fixture builder, usable through an isolated module chain.
+    StoredSequenceBuilder,
 }
 
 impl Export {
@@ -79,6 +81,7 @@ impl Export {
     fn widest(self, other: Self) -> Self {
         match (self, other) {
             (Self::Wrapper(left), Self::Wrapper(right)) => Self::Wrapper(left.max(right)),
+            (Self::StoredSequenceBuilder, other) | (other, Self::StoredSequenceBuilder) => other,
             (left, right) if left == right => left,
             _ => Self::Wrapper(Reach::Tasks),
         }
@@ -771,7 +774,7 @@ impl crate::memory::HeapBytes for Export {
     /// Cached registration reach is inline; exhaustively account for every export kind.
     fn heap_bytes(&self) -> usize {
         match self {
-            Self::Namespace => 0,
+            Self::Namespace | Self::StoredSequenceBuilder => 0,
             Self::Api { registers, .. } | Self::Derived(registers) => registers.heap_bytes(),
             Self::Wrapper(Reach::Hook | Reach::Hooks | Reach::Tasks) => 0,
         }

@@ -10,6 +10,21 @@
       "otherReasons": [],
       "testsExcluded": 2
     },
+    "oracle/imported-sequence-registration/forward-local.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [],
+      "testsExcluded": 1
+    },
+    "oracle/imported-sequence-registration/named.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [],
+      "testsExcluded": 1
+    },
+    "oracle/imported-sequence-registration/renamed.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [],
+      "testsExcluded": 1
+    },
     "oracle/registration-routes/closed.test.ts": {
       "reason": "registered-elsewhere",
       "otherReasons": ["helper-effects-unproved"],

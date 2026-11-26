@@ -12,17 +12,7 @@ fn wrappers_with_globals(expression: &str, globals: bool) -> usize {
     let source = format!(
         "import {{test as api, test as control, vi}} from 'vitest'; import * as v from 'vitest'; {expression}; control('retained', () => {{}});"
     );
-    let (found, parsed) = inventory_with_tree(&source, &[], globals);
-    assert_eq!(parsed.parse_errors, 0, "{source}");
-    assert!(
-        found.sites.iter().any(|site| {
-            site.title.as_deref() == Some("retained")
-                && site.kind == SiteKind::Registers(Registers::Test)
-        }),
-        "{source}: {found:?}"
-    );
-    found
-        .sites
+    sites_with_retained_control(&source, &[], globals)
         .iter()
         .filter(|site| site.kind == SiteKind::Wrapper(Reach::Tasks))
         .count()
