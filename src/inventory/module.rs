@@ -217,6 +217,21 @@ pub(super) fn analyse(
         .into_iter()
         .map(|(node, span, kind, chain, provenance)| {
             let callee = module.callee(node);
+            let selected = (kind == SiteKind::Registers(Registers::Test))
+                .then(|| module.pure_sequence_test(node, callee))
+                .flatten()
+                .map(|(selected, _)| selected);
+            let (position, from) = if let Some(selected) = selected {
+                let from = module.tree.span(selected).start;
+                let position = module
+                    .tree
+                    .call_arguments_start(source, node)
+                    .unwrap_or(from);
+                (position, from)
+            } else {
+                let position = module.v8_position(callee);
+                (position, module.mapped_from(callee).unwrap_or(position))
+            };
             Site {
                 node,
                 span,
@@ -225,10 +240,8 @@ pub(super) fn analyse(
                 member: module.registration_member(callee),
                 provenance,
                 title: module.title(node),
-                position: module.v8_position(callee),
-                from: module
-                    .mapped_from(callee)
-                    .unwrap_or_else(|| module.v8_position(callee)),
+                position,
+                from,
                 labels: module.labels(node, &calls),
             }
         })
@@ -1242,6 +1255,9 @@ impl<'s> Module<'s> {
                 Provenance::Wrapper,
             ));
         }
+        if let Some((_, provenance)) = self.pure_sequence_test(call, link.input) {
+            return Some((SiteKind::Registers(Registers::Test), Vec::new(), provenance));
+        }
         let resolved = self.resolve(link.input)?;
         let kind = resolved.registration?;
         let chain = resolved.steps[resolved.start..]
@@ -1252,6 +1268,19 @@ impl<'s> Module<'s> {
             })
             .collect();
         Some((kind, chain, resolved.provenance))
+    }
+
+    /// A literal prefix preserves the proved bare test binding at an immediate call.
+    fn pure_sequence_test(&self, call: NodeId, callee: NodeId) -> Option<(NodeId, Provenance)> {
+        if self.tree.kind(call) != "CallExpression" || self.tree.flag(call, "optional") {
+            return None;
+        }
+        let node = self.tree.literal_sequence_result(callee)?;
+        self.proved_registration_binding(node)?;
+        match self.root_origin(node)? {
+            (Origin::Api(Registers::Test), provenance) => Some((node, provenance)),
+            _ => None,
+        }
     }
 
     /// A call through a fresh literal's own value may register through the selected builder.
@@ -2753,8 +2782,23 @@ impl<'s> Module<'s> {
     /// Registration functions read as values rather than called.
     fn escapes(&self, calls: &HashMap<NodeId, SiteKind>, default_wrapper: bool) -> Vec<Escape> {
         let tree = self.tree;
+        // In a proved sequence callee, only the selected identifier is read at runtime.
+        // Every other identifier in that subtree belongs to erased type syntax.
+        let sequence_reads: HashSet<_> = calls
+            .iter()
+            .filter(|&(_, &kind)| kind == SiteKind::Registers(Registers::Test))
+            .filter_map(|(&call, _)| {
+                let callee = self.callee(call);
+                self.pure_sequence_test(call, callee).map(|_| callee)
+            })
+            .flat_map(|callee| tree.descendants(callee))
+            .filter(|&node| tree.kind(node) == "Identifier")
+            .collect();
         let mut escapes = Vec::new();
         for read in self.registration_reads() {
+            if sequence_reads.contains(&read) {
+                continue;
+            }
             let (current, role) = self.registration_read_use(read);
             let escaped = !matches!(
                 role,
