@@ -96,3 +96,44 @@ fn sequence_fixture_builder_keeps_the_independent_duplicate() {
         .iter()
         .all(|location| location.path.as_path() == Path::new("control.test.ts")));
 }
+
+/// The Vitest source keeps every invocation eligible and preserves both equal-body groups.
+#[test]
+fn direct_sequence_corpus_keeps_titles_and_duplicate_participants() {
+    let path = "case.test.ts";
+    let source = include_str!("../../../fixtures/oracle/direct-sequence-registration/case.test.ts");
+    let corpus = corpora(&[(path, source)], &[path]).remove(0);
+    assert_eq!(corpus.parse_errors, 0);
+    assert_eq!(corpus.tests.len(), 6, "{corpus:?}");
+    assert!(corpus.exclusions().is_empty(), "{corpus:?}");
+    let titles: Vec<_> = corpus
+        .tests
+        .iter()
+        .map(|test| test.title.as_deref())
+        .collect();
+    assert_eq!(
+        titles,
+        [
+            Some("selected"),
+            Some("different body"),
+            Some("retained left"),
+            Some("retained right"),
+            Some("asserted"),
+            Some("instantiated"),
+        ]
+    );
+    let outcome = owned_outcome(vec![(path, corpus)]);
+    let duplicates: Vec<_> = outcome
+        .findings
+        .iter()
+        .filter(|finding| finding.rule == crate::model::Rule::DuplicateTest)
+        .map(|finding| {
+            finding
+                .locations
+                .iter()
+                .map(|location| location.span.start.line)
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    assert_eq!(duplicates, [[4, 6], [6, 7], [8, 13]]);
+}

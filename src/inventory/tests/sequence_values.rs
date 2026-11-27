@@ -130,7 +130,6 @@ fn sequence_excluded_final_categories_add_no_invocation() {
         .0
     };
     for header in [
-        "import {test as held} from 'vitest';",
         "import * as held from 'vitest';",
         "import {derived as held} from './derived';",
     ] {
@@ -392,4 +391,109 @@ fn selected_sequence_reads_use_recorded_consumers() {
             .any(|escape| escape.offset as usize == offset && escape.text == "run"),
         "{actual:?}"
     );
+}
+
+/// A literal prefix and a proved bare test retain the exact registration and consume its read.
+#[test]
+fn pure_immediate_sequences_keep_direct_test_registrations() {
+    for binding in ["api", "invoke"] {
+        for prefix in ["0", "'unused'", "false, null"] {
+            for callee in [
+                format!("({prefix}, {binding})"),
+                format!("({prefix}, (null, {binding} satisfies typeof {binding}))"),
+                format!("({prefix}, <typeof {binding}>{binding})"),
+                format!("({prefix}, {binding}<any>)"),
+                format!("(<typeof {binding}>({prefix}, {binding}))"),
+                format!("(({prefix}, {binding})<any>)"),
+                format!("({prefix}, 0 as typeof {binding}, {binding})"),
+            ] {
+                let source = format!("import {{test as api}} from 'vitest'; const invoke = api; {callee}('chosen', () => {{}}); api('retained', () => {{}});");
+                let (found, parsed) = inventory_with_tree(&source, &[], false);
+                assert_eq!(parsed.parse_errors, 0, "{source}");
+                assert_eq!(found.sites.len(), 2, "{source}: {found:?}");
+                assert!(
+                    found.sites.iter().any(|site| {
+                        site.title.as_deref() == Some("chosen")
+                            && site.kind == SiteKind::Registers(Registers::Test)
+                    }),
+                    "{source}: {found:?}"
+                );
+                assert!(retained(&found));
+                assert!(found.escapes.is_empty(), "{source}: {found:?}");
+            }
+        }
+    }
+    let source = "import {test as api} from 'vitest'; (0, api)('chosen', () => {}, api); api('retained', () => {});";
+    let (found, parsed) = inventory_with_tree(source, &[], false);
+    assert_eq!(parsed.parse_errors, 0);
+    assert_eq!(found.sites.len(), 2, "{found:?}");
+    assert!(retained(&found));
+    assert_eq!(found.escapes.len(), 1, "{found:?}");
+    assert_eq!(
+        found.escapes[0].offset as usize,
+        source.find("api);").unwrap()
+    );
+}
+
+/// The raw call and transformed selected-binding positions both locate the same direct test.
+#[test]
+fn sequence_sites_keep_invocation_and_selected_locations() {
+    for (callee, gap) in [
+        ("(0,\n  api\n)", ""),
+        ("(0,\n  api\n)", "\n"),
+        ("(0,\n  api\n)", " /* fake (\n */\n"),
+        ("(0,\n  api\n)", " // fake (\n"),
+        ("(0,\n  api\n)", "<() => void>\n"),
+        ("(<typeof api>(0,\n  api\n))", "\n"),
+    ] {
+        let source = format!("import {{test as api}} from 'vitest';\n{callee}{gap}('chosen', () => {{}});\napi('retained', () => {{}});");
+        let (found, parsed) = inventory_with_tree(&source, &[], false);
+        assert_eq!(parsed.parse_errors, 0, "{source}");
+        assert_eq!(found.sites.len(), 2, "{source}: {found:?}");
+        assert!(retained(&found));
+        let chosen = &found.sites[0];
+        assert_eq!(chosen.title.as_deref(), Some("chosen"), "{source}");
+        assert_eq!(
+            chosen.kind,
+            SiteKind::Registers(Registers::Test),
+            "{source}"
+        );
+        assert_eq!(chosen.position as usize, source.find("('chosen'").unwrap());
+        assert_eq!(chosen.from as usize, source.find("  api\n").unwrap() + 2);
+    }
+}
+
+/// Uses outside the proved immediate test route retain uncertainty.
+#[test]
+fn sequences_require_a_proved_immediate_test_call() {
+    for setup in [
+        "(unknown(), api)('chosen', () => {})",
+        "(api, api)('chosen', () => {})",
+        "(0, api)?.('chosen', () => {})",
+        "const held = (0, api); held('chosen', () => {})",
+        "(0, held)('chosen', () => {}); const held = api",
+        "let held = api; held = () => {}; (0, held)('chosen', () => {})",
+        "{ const api = () => {}; (0, api)('chosen', () => {}) }",
+        "(0, erased)('chosen', () => {})",
+    ] {
+        let source = format!("import {{test as api}} from 'vitest'; import type {{test as erased}} from 'vitest'; {setup}; api('retained', () => {{}});");
+        let (found, parsed) = inventory_with_tree(&source, &[], false);
+        assert_eq!(parsed.parse_errors, 0, "{source}");
+        assert!(retained(&found));
+        assert!(
+            !found.sites.iter().any(|site| {
+                site.title.as_deref() == Some("chosen")
+                    && site.kind == SiteKind::Registers(Registers::Test)
+            }),
+            "{source}: {found:?}"
+        );
+    }
+    for expression in ["(0, api)", "(0, v.test)('chosen', () => {})"] {
+        let source = format!("import {{test as api}} from 'vitest'; import * as v from 'vitest'; {expression}; api('retained', () => {{}});");
+        let (found, parsed) = inventory_with_tree(&source, &[], false);
+        assert_eq!(parsed.parse_errors, 0, "{source}");
+        assert_eq!(found.sites.len(), 1, "{source}: {found:?}");
+        assert!(retained(&found));
+        assert_eq!(found.escapes.len(), 1, "{source}: {found:?}");
+    }
 }

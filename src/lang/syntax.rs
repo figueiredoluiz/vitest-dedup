@@ -285,6 +285,43 @@ impl Tree {
         Some(result)
     }
 
+    /// The final sequence operand when every discarded operand is a primitive literal.
+    pub(crate) fn literal_sequence_result(&self, node: NodeId) -> Option<NodeId> {
+        let mut node = self.inner(node);
+        if self.kind(node) != "SequenceExpression" {
+            return None;
+        }
+        while self.kind(node) == "SequenceExpression" {
+            let (result, mut prefix) = self.sequence_parts(node)?;
+            if !prefix.all(|operand| {
+                operand.is_some_and(|operand| super::primitive(self, self.inner(operand)))
+            }) {
+                return None;
+            }
+            node = self.inner(result);
+        }
+        Some(node)
+    }
+
+    /// The opening argument delimiter after the parsed callee and any erased type arguments.
+    pub(crate) fn call_arguments_start(&self, source: &str, call: NodeId) -> Option<u32> {
+        let before = self
+            .child(call, "typeArguments")
+            .or_else(|| self.child(call, "callee"))?;
+        let end = self.span(call).end;
+        let mut gap = source.get(self.span(before).end as usize..end as usize)?;
+        loop {
+            gap = gap.trim_start_matches(|c: char| c.is_whitespace() || c == '\u{feff}');
+            if let Some(comment) = gap.strip_prefix("//") {
+                gap = &comment[comment.find(['\n', '\r', '\u{2028}', '\u{2029}'])?..];
+            } else if let Some(comment) = gap.strip_prefix("/*") {
+                gap = &comment[comment.find("*/")? + 2..];
+            } else {
+                return gap.starts_with('(').then_some(end - gap.len() as u32);
+            }
+        }
+    }
+
     /// An edge selecting the child's existing value, without proving guards or prefixes inert.
     /// Awaiting and assignments can perform additional operations and establish no such fact.
     pub(crate) fn selects_value(&self, outer: NodeId, inner: NodeId) -> bool {
