@@ -192,13 +192,14 @@ pub(super) fn analyse(
     module.rewritten_globals = module.global_writes();
     module.collect_origins(modules, depth, imports);
     module.alias_phase = AliasPhase::Settled;
-    module.collect_stored_sequence_task_calls();
+    let stored_builder_load = module.collect_stored_sequence_task_calls();
     let found = module.registrations();
     let mut exports = module.exports(modules, depth, &found, imports);
     // A registration outside every wrapper may run while the module loads: at top level, in a
     // getter or an initializer, or in a function this analysis does not see called.
     let bodies = module.wrapper_bodies();
-    if !module.loads.is_empty()
+    if stored_builder_load
+        || !module.loads.is_empty()
         || found
             .iter()
             .any(|(_, span, ..)| !bodies.iter().any(|body| body.contains(*span)))
@@ -1444,30 +1445,42 @@ impl<'s> Module<'s> {
             }));
     }
 
-    /// Prove a stored builder once per declaration, then record its initialized direct calls.
-    fn collect_stored_sequence_task_calls(&mut self) {
+    /// Record initialized local calls and report whether an inline export registers on load.
+    fn collect_stored_sequence_task_calls(&mut self) -> bool {
         let tree = self.tree;
         let mut checked_uses = false;
+        let mut registers_on_load = false;
         for declarator in tree.nodes() {
-            let Some(symbol) = self.stored_sequence_builder_binding(declarator) else {
+            let Some((symbol, inline_export)) = self.stored_sequence_builder_binding(declarator)
+            else {
                 continue;
             };
             if !checked_uses && !self.registration_receivers_have_tracked_uses() {
-                return;
+                return false;
             }
             checked_uses = true;
             let binding = self.parsed.scopes.symbol(symbol);
-            self.direct_task_calls
-                .extend(binding.references.iter().filter_map(|reference| {
-                    let read = reference.node?;
-                    let call = callee_link(tree, tree.outer_parent(read)?)?;
-                    (call.kind == CalleeLinkKind::Call
-                        && tree.inner(call.input) == read
-                        && !tree.flag(call.node, "optional")
-                        && crate::lang::proof::initialized(tree, declarator, read).is_some())
-                    .then_some(call.node)
-                }));
+            let mut calls = binding.references.iter().filter_map(|reference| {
+                let read = reference.node?;
+                let call = callee_link(tree, tree.outer_parent(read)?)?;
+                (call.kind == CalleeLinkKind::Call
+                    && tree.inner(call.input) == read
+                    && !tree.flag(call.node, "optional")
+                    && crate::lang::proof::initialized(tree, declarator, read).is_some())
+                .then_some(call.node)
+            });
+            if inline_export {
+                registers_on_load |= calls.any(|call| {
+                    tree.outer_parent(call).is_some_and(|statement| {
+                        tree.kind(statement) == "ExpressionStatement"
+                            && tree.parent(statement) == Some(tree.root())
+                    })
+                });
+            } else {
+                self.direct_task_calls.extend(calls);
+            }
         }
+        registers_on_load
     }
 
     /// A registration receiver may be changed when it is written or passed to untracked code.
@@ -1705,19 +1718,22 @@ impl<'s> Module<'s> {
             .is_some_and(|statement| tree.kind(statement) == "ExpressionStatement")
     }
 
-    /// A local const whose sequence initializer selects the framework's fixture builder.
-    fn stored_sequence_builder_binding(&self, declarator: NodeId) -> Option<SymbolId> {
+    /// A const whose sequence initializer selects the framework's fixture builder, and whether
+    /// it is an inline export. The export route admits only eager calls at program scope.
+    fn stored_sequence_builder_binding(&self, declarator: NodeId) -> Option<(SymbolId, bool)> {
         let tree = self.tree;
         if tree.kind(declarator) != "VariableDeclarator" {
             return None;
         }
         let declaration = tree.parent(declarator)?;
+        let parent = tree.parent(declaration)?;
+        let scope = tree.kind(parent);
+        let inline_export = scope == "ExportNamedDeclaration"
+            && tree.parent(parent) == Some(tree.root())
+            && !tree.erased_declaration(parent);
         if tree.text(declaration, "kind") != Some("const")
             || tree.erased_declaration(declaration)
-            || !matches!(
-                tree.kind(tree.parent(declaration)?),
-                "Program" | "BlockStatement" | "SwitchCase"
-            )
+            || (!inline_export && !matches!(scope, "Program" | "BlockStatement" | "SwitchCase"))
         {
             return None;
         }
@@ -1735,7 +1751,7 @@ impl<'s> Module<'s> {
         let selected = self.resolve(result)?;
         (self.fixture_extension_result(result, &selected)
             && self.sequence_prefix_preserves_builder(initializer))
-        .then_some(symbol)
+        .then_some((symbol, inline_export))
     }
 
     /// Every discarded operand evaluated on the way to the selected builder preserves it.

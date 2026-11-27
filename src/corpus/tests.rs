@@ -800,6 +800,49 @@ fn what_registers_elsewhere_is_one_excluded_case_per_site() {
     assert_eq!(corpora[1].tests.len(), 1);
 }
 
+/// A proved top-level builder call contributes one load case and retains local comparisons.
+#[test]
+fn inline_exported_builder_records_only_eager_load() {
+    let inputs = [
+        (
+            "load.test.ts",
+            include_str!("../../fixtures/oracle/stored-builder-producer-load/load.test.ts"),
+        ),
+        (
+            "pure.test.ts",
+            include_str!("../../fixtures/oracle/stored-builder-producer-load/pure.test.ts"),
+        ),
+        (
+            "eager.ts",
+            include_str!("../../fixtures/oracle/stored-builder-producer-load/eager.ts"),
+        ),
+        (
+            "deferred.ts",
+            include_str!("../../fixtures/oracle/stored-builder-producer-load/deferred.ts"),
+        ),
+    ];
+    let mut found = corpora(&inputs, &["load.test.ts", "pure.test.ts"]);
+    let load = found.remove(0);
+    assert_eq!(load.tests.len(), 3, "{load:?}");
+    assert_eq!(
+        load.exclusions().get(&Exclusion::RegisteredElsewhere),
+        Some(&1)
+    );
+    assert!(load
+        .sites
+        .iter()
+        .any(|site| site.kind == "module-load" && site.line == 2));
+    let findings = owned_findings("load.test.ts", load).findings;
+    assert_eq!(findings.len(), 1, "{findings:?}");
+    assert_eq!(findings[0].rule, crate::model::Rule::DuplicateTest);
+    assert_eq!(findings[0].titles, ["retained left", "retained right"]);
+
+    let pure = found.remove(0);
+    assert_eq!(pure.tests.len(), 1, "{pure:?}");
+    assert!(pure.exclusions().is_empty());
+    assert!(pure.sites.iter().all(|site| site.kind != "module-load"));
+}
+
 /// Every key of a file is the same whichever files the run read before it.
 #[test]
 fn keys_do_not_depend_on_the_order_files_are_read() {

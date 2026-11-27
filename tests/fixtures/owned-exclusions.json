@@ -1,5 +1,10 @@
 {
   "files": {
+    "oracle/stored-builder-producer-load/load.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [],
+      "testsExcluded": 1
+    },
     "oracle/array-slot-registration/prefix.test.ts": {
       "reason": "registered-elsewhere",
       "otherReasons": ["helper-effects-unproved"],

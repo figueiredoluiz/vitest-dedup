@@ -906,6 +906,33 @@ fn a_wrapper_is_called_by_either_name_and_loads_pass_through_re_exports() {
     );
 }
 
+/// An inline exported builder contributes load only through a proved direct initialized call.
+#[test]
+fn inline_exported_builder_load_requires_the_program_call() {
+    for (before, binding, after, loads) in [
+        ("", "const", "run('eager', () => {});", 1),
+        ("", "const", "(run)('eager', () => {});", 1),
+        ("", "const", "", 0),
+        ("", "const", "if (false) run('guarded', () => {});", 0),
+        ("", "const", "run?.('optional', () => {});", 0),
+        (
+            "",
+            "const",
+            "const result = run('initializer', () => {});",
+            0,
+        ),
+        ("", "let", "run('writable', () => {});", 0),
+        ("run('too early', () => {});", "const", "", 0),
+    ] {
+        let producer = format!(
+            "import {{ test }} from 'vitest'; {before} \
+             export {binding} run = (0, test.extend({{}})); {after}"
+        );
+        let (found, _) = inventory_of("import './producer'", &[("producer.ts", &producer)], false);
+        assert_eq!(found.loads.len(), loads, "{producer}");
+    }
+}
+
 /// Under globals, a free registration function read as a value is an escape, as an imported one is.
 #[test]
 fn a_free_registration_function_read_as_a_value_escapes_under_globals() {
