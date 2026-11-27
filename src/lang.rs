@@ -34,7 +34,8 @@ pub(crate) use sources::query;
 pub use sources::{SourceKind, SourceTree, Sources};
 pub use syntax::{bound_symbols, export_name, member_name, property_name, uses_receiver};
 pub(crate) use syntax::{
-    callee_link, fresh_array_own_slot, logical_results, value_role, CalleeLinkKind, ValueRole,
+    callee_link, fresh_array_own_slot, fresh_object_own_field, logical_results, value_role,
+    CalleeLinkKind, ValueRole,
 };
 pub use tree::{Field, NodeId, Span, Tree};
 
