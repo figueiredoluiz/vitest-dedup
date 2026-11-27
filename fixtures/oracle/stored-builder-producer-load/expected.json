@@ -1,0 +1,10 @@
+{
+  "files": {
+    "load.test.ts": {
+      "tasks": 3,
+      "wrapperSites": [],
+      "next": { "reasons": ["registered-elsewhere"], "testsExcluded": 1 }
+    },
+    "pure.test.ts": { "tasks": 1, "wrapperSites": [], "next": {} }
+  }
+}
