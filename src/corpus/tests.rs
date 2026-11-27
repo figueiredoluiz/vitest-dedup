@@ -429,6 +429,119 @@ fn inventory_record_controls_keep_owned_binding_eligibility() {
     assert_eq!(named[0].exclusion, Some(Exclusion::UnprovedRunner));
 }
 
+/// A forwarding helper's eager call counts once and keeps the ordinary pair eligible.
+#[test]
+fn forwarding_builder_load_keeps_owned_ordinary_duplicate() {
+    let inputs = [
+        (
+            "builder.ts",
+            include_str!("../../fixtures/oracle/stored-builder-forwarding-load/builder.ts"),
+        ),
+        (
+            "helper.ts",
+            include_str!("../../fixtures/oracle/stored-builder-forwarding-load/helper.ts"),
+        ),
+        (
+            "pure-helper.ts",
+            include_str!("../../fixtures/oracle/stored-builder-forwarding-load/pure-helper.ts"),
+        ),
+        (
+            "load.test.ts",
+            include_str!("../../fixtures/oracle/stored-builder-forwarding-load/load.test.ts"),
+        ),
+        (
+            "forward.test.ts",
+            include_str!("../../fixtures/oracle/stored-builder-forwarding-load/forward.test.ts"),
+        ),
+        (
+            "pure.test.ts",
+            include_str!("../../fixtures/oracle/stored-builder-forwarding-load/pure.test.ts"),
+        ),
+        (
+            "initializing-helper.ts",
+            include_str!(
+                "../../fixtures/oracle/stored-builder-forwarding-load/initializing-helper.ts"
+            ),
+        ),
+        (
+            "initializer.test.ts",
+            include_str!("../../fixtures/oracle/stored-builder-forwarding-load/initializer.test.ts"),
+        ),
+        (
+            "exported-initializer-helper.ts",
+            include_str!(
+                "../../fixtures/oracle/stored-builder-forwarding-load/exported-initializer-helper.ts"
+            ),
+        ),
+        (
+            "exported-initializer.test.ts",
+            include_str!(
+                "../../fixtures/oracle/stored-builder-forwarding-load/exported-initializer.test.ts"
+            ),
+        ),
+    ];
+    let mut found = corpora(
+        &inputs,
+        &[
+            "load.test.ts",
+            "forward.test.ts",
+            "pure.test.ts",
+            "initializer.test.ts",
+            "exported-initializer.test.ts",
+        ],
+    );
+    assert_eq!(found.len(), 5);
+    let load = found.remove(0);
+    assert_eq!(load.tests.len(), 3, "{load:?}");
+    assert_eq!(
+        load.exclusions().get(&Exclusion::RegisteredElsewhere),
+        Some(&1)
+    );
+    assert!(load
+        .sites
+        .iter()
+        .any(|site| site.kind == "module-load" && site.line == 2));
+    let findings = owned_findings("load.test.ts", load).findings;
+    assert_eq!(findings.len(), 1, "{findings:?}");
+    assert_eq!(findings[0].rule, crate::model::Rule::DuplicateTest);
+    assert_eq!(findings[0].titles, ["retained left", "retained right"]);
+
+    let forward = found.remove(0);
+    assert_eq!(forward.tests.len(), 2, "{forward:?}");
+    assert_eq!(
+        forward.exclusions().get(&Exclusion::RegisteredElsewhere),
+        Some(&2)
+    );
+    assert_eq!(
+        forward
+            .sites
+            .iter()
+            .map(|site| (site.kind, site.line))
+            .collect::<Vec<_>>(),
+        [("module-load", 2), ("wrapper", 3)]
+    );
+
+    let pure = found.remove(0);
+    assert_eq!(pure.tests.len(), 1, "{pure:?}");
+    assert!(pure.exclusions().is_empty());
+    assert!(pure.sites.iter().all(|site| site.kind != "module-load"));
+
+    for case in found {
+        assert_eq!(case.tests.len(), 2, "{case:?}");
+        assert_eq!(
+            case.exclusions().get(&Exclusion::RegisteredElsewhere),
+            Some(&1)
+        );
+        assert_eq!(
+            case.sites
+                .iter()
+                .map(|site| (site.kind, site.line))
+                .collect::<Vec<_>>(),
+            [("module-load", 2), ("test", 3)]
+        );
+    }
+}
+
 /// Counts extracted and excluded cases from an owned source before any finding assertion.
 fn counted_corpus(source: &str, path: &str, tests: usize, excluded: usize) -> FileCorpus {
     let corpus = corpora(&[(path, source)], &[path]).remove(0);

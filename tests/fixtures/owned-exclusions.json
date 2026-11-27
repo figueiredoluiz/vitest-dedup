@@ -30,6 +30,26 @@
       "otherReasons": [],
       "testsExcluded": 1
     },
+    "oracle/stored-builder-forwarding-load/forward.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [],
+      "testsExcluded": 2
+    },
+    "oracle/stored-builder-forwarding-load/initializer.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [],
+      "testsExcluded": 1
+    },
+    "oracle/stored-builder-forwarding-load/exported-initializer.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [],
+      "testsExcluded": 1
+    },
+    "oracle/stored-builder-forwarding-load/load.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [],
+      "testsExcluded": 1
+    },
     "oracle/object-field-registration/field-order.test.ts": {
       "reason": "registered-elsewhere",
       "otherReasons": [],

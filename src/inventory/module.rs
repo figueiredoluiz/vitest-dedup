@@ -193,7 +193,8 @@ pub(super) fn analyse(
     module.redeclared = module.redeclarations();
     module.evaluates = super::direct_eval(parsed);
     module.rewritten_globals = module.global_writes();
-    let mut stored_builders = module.collect_origins(modules, depth, imports);
+    let (mut stored_builders, imported_builder_load) =
+        module.collect_origins(modules, depth, imports);
     module.alias_phase = AliasPhase::Settled;
     let inline_builder_load = module.collect_stored_sequence_task_calls(&mut stored_builders);
     let found = module.registrations();
@@ -201,7 +202,8 @@ pub(super) fn analyse(
     // A registration outside every wrapper may run while the module loads: at top level, in a
     // getter or an initializer, or in a function this analysis does not see called.
     let bodies = module.wrapper_bodies();
-    if inline_builder_load
+    if imported_builder_load
+        || inline_builder_load
         || !module.loads.is_empty()
         || found
             .iter()
@@ -422,6 +424,37 @@ impl<'s> Module<'s> {
         }
         (tree.kind(parent) == "ExpressionStatement" && tree.parent(parent) == Some(tree.root()))
             .then_some(parent)
+    }
+
+    /// Whether `call` is the whole initializer of a runtime variable at module scope.
+    fn direct_module_initializer(&self, call: NodeId) -> bool {
+        let tree = self.tree;
+        let Some(declarator) = tree.outer_parent(call) else {
+            return false;
+        };
+        if tree.kind(declarator) != "VariableDeclarator"
+            || tree.child(declarator, "init").map(|init| tree.inner(init)) != Some(call)
+        {
+            return false;
+        }
+        let Some(declaration) = tree.parent(declarator) else {
+            return false;
+        };
+        if tree.kind(declaration) != "VariableDeclaration"
+            || !matches!(
+                tree.text(declaration, "kind"),
+                Some("const" | "let" | "var")
+            )
+            || tree.erased_declaration(declaration)
+        {
+            return false;
+        }
+        tree.parent(declaration).is_some_and(|parent| {
+            parent == tree.root()
+                || (tree.kind(parent) == "ExportNamedDeclaration"
+                    && !tree.erased_declaration(parent)
+                    && tree.parent(parent) == Some(tree.root()))
+        })
     }
 
     /// Whether `call` is a statement directly inside the block of an in-source guard,
@@ -1310,13 +1343,14 @@ impl<'s> Module<'s> {
     }
 
     /// Records which imported bindings are the API, its namespace, or a wrapper another module
-    /// exports, then the aliases derived from them.
+    /// exports, then the aliases derived from them. Returns proved stored imports and whether a
+    /// direct call of one can register during this dependency's evaluation.
     fn collect_origins(
         &mut self,
         modules: &mut Modules,
         depth: usize,
         imports: &mut ProjectImports,
-    ) -> HashSet<SymbolId> {
+    ) -> (HashSet<SymbolId>, bool) {
         let tree = self.tree;
         let mut stored_imports = Vec::new();
         for statement in tree.list(tree.root(), "body").into_iter().flatten() {
@@ -1422,26 +1456,37 @@ impl<'s> Module<'s> {
         }
         let mut builders = HashSet::new();
         if stored_imports.is_empty() {
-            return builders;
+            return (builders, false);
         }
         let provider = self.isolated_builder_dependency();
+        let mut first_load_call = None;
         for (source, symbol) in stored_imports {
             if provider != Some(source) {
                 continue;
             }
             builders.insert(symbol);
-            // A helper's module-load accounting needs its own reachability proof.
+            let calls = self
+                .parsed
+                .scopes
+                .symbol(symbol)
+                .references
+                .iter()
+                .filter_map(|reference| direct_call(tree, reference.node?));
             if depth == 0 {
-                let binding = self.parsed.scopes.symbol(symbol);
-                self.direct_task_calls.extend(
-                    binding
-                        .references
-                        .iter()
-                        .filter_map(|reference| direct_call(tree, reference.node?)),
-                );
+                self.direct_task_calls.extend(calls);
+            } else {
+                first_load_call = calls
+                    .filter(|&call| {
+                        self.top_level_statement(call).is_some()
+                            || self.direct_module_initializer(call)
+                    })
+                    .chain(first_load_call)
+                    .min_by_key(|&call| tree.span(call).start);
             }
         }
-        builders
+        // A preceding top-level terminator also blocks every later direct call.
+        let registers_on_load = first_load_call.is_some_and(|call| !self.unreachable(call));
+        (builders, registers_on_load)
     }
 
     /// Match direct invocations against the same export summaries named imports use. A read of a

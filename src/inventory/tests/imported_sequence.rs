@@ -110,6 +110,94 @@ fn named_sequence_export_keeps_its_module_load_separate() {
     assert_eq!(found.sites[0].title.as_deref(), Some("selected"));
 }
 
+/// Only an eager call through the proved imported binding contributes a module load.
+#[test]
+fn forwarding_builder_load_requires_a_live_module_call() {
+    let source = "import {forwarded} from './helper'; forwarded('retained', () => {});";
+    let builder = "import {test} from 'vitest'; export const run = (0, test.extend({}));";
+    for (before, after, loads) in [
+        ("", "local('eager', () => {});", 1),
+        ("", "(local)('eager', () => {});", 1),
+        ("local('hoisted import', () => {});", "", 1),
+        (
+            "",
+            "local('before throw', () => {}); throw 0; local('dead', () => {});",
+            1,
+        ),
+        ("", "", 0),
+        ("", "function later() { local('deferred', () => {}); }", 0),
+        ("", "if (false) local('guarded', () => {});", 0),
+        ("", "local?.('optional', () => {});", 0),
+        (
+            "",
+            "{ const local = () => {}; local('shadowed', () => {}); }",
+            0,
+        ),
+        ("", "throw 0; local('dead', () => {});", 0),
+        ("", "const result = local('initializer', () => {});", 1),
+        (
+            "",
+            "export const result = local('export initializer', () => {});",
+            1,
+        ),
+        (
+            "",
+            "let empty, result = (local('typed initializer', () => {})) as unknown;",
+            1,
+        ),
+        (
+            "",
+            "const result = false && local('guarded initializer', () => {});",
+            0,
+        ),
+        (
+            "",
+            "const result = () => local('deferred initializer', () => {});",
+            0,
+        ),
+        ("", "const result = local?.('optional initializer', () => {});", 0),
+        (
+            "",
+            "if (false) { var result = local('non-module initializer', () => {}); }",
+            0,
+        ),
+        (
+            "",
+            "{ const local = () => {}; const result = local('shadowed initializer', () => {}); }",
+            0,
+        ),
+        (
+            "",
+            "throw 0; const result = local('dead initializer', () => {});",
+            0,
+        ),
+        (
+            "",
+            "throw 0; export const result = local('dead export initializer', () => {});",
+            0,
+        ),
+        (
+            "",
+            "const result = false && local('guarded', () => {}); local('later standalone', () => {});",
+            1,
+        ),
+    ] {
+        let helper = format!(
+            "{before} import {{run as local}} from './builder'; {after} export {{local as forwarded}};"
+        );
+        let (found, parsed) = inventory_with_tree(
+            source,
+            &[("helper.ts", &helper), ("builder.ts", builder)],
+            false,
+        );
+        assert_eq!(parsed.parse_errors, 0);
+        assert_eq!(found.loads.len(), loads, "{helper}");
+        assert_eq!(found.sites.len(), 1, "{helper}");
+        assert_eq!(found.sites[0].kind, SiteKind::Wrapper(Reach::Tasks));
+        assert_eq!(found.sites[0].title.as_deref(), Some("retained"));
+    }
+}
+
 /// A default expression reads the binding even though a named export specifier need not.
 #[test]
 fn named_sequence_export_does_not_prove_a_default_expression_read() {
