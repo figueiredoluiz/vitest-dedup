@@ -1,0 +1,6 @@
+{
+  "files": {
+    "alias.test.ts": { "tasks": 2, "wrapperSites": ["wrapper@3", "wrapper@4"], "next": {} },
+    "interface.test.ts": { "tasks": 2, "wrapperSites": ["wrapper@3", "wrapper@4"], "next": {} }
+  }
+}

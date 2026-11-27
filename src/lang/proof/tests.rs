@@ -71,6 +71,44 @@ fn a_second_runtime_declaration_refuses_immutable() {
     }
 }
 
+/// Same-symbol types erase before the runtime value is read, regardless of declaration order.
+#[test]
+fn type_names_do_not_redeclare_runtime_bindings() {
+    for source in [
+        "type a = number; const a = 1;",
+        "const a = 1; type a = number;",
+        "interface a {} function a() {}",
+        "function a() {} interface a {}",
+        "function read(a: string) { type a = string; return a; }",
+    ] {
+        let parsed = parsed("a.ts", source);
+        assert_eq!(parsed.parse_errors, 0, "{source}");
+        let a = symbol(&parsed, "a", 0);
+        assert_eq!(symbol(&parsed, "a", 1), a, "{source}");
+        let found = declared(&parsed.tree, &parsed.scopes, a);
+        assert_eq!(
+            Declarations::of(&parsed.tree, &parsed.scopes).get(a),
+            found,
+            "{source}"
+        );
+        assert_eq!(found.occurrences, 1, "{source}");
+        assert!(immutable(&parsed.scopes, a, found).is_some(), "{source}");
+    }
+}
+
+/// An erased name without a value cannot prove an immutable runtime binding.
+#[test]
+fn type_only_names_have_no_runtime_declaration() {
+    for source in ["type a = string;", "interface a {}"] {
+        let parsed = parsed("a.ts", source);
+        let a = symbol(&parsed, "a", 0);
+        let found = declared(&parsed.tree, &parsed.scopes, a);
+        assert_eq!(found, Declarations::of(&parsed.tree, &parsed.scopes).get(a));
+        assert_eq!(found.occurrences, 0, "{source}");
+        assert!(immutable(&parsed.scopes, a, found).is_none(), "{source}");
+    }
+}
+
 /// A body `function x` redeclares the parameter `x` without a write: at run time every read sees
 /// the function, so only the declaration count tells the parameter's value is not the argument.
 #[test]

@@ -1210,3 +1210,63 @@ fn an_import_meta_callback_is_compared_while_arguments_stay_refused() {
     );
     assert!(findings_in(corpus, "caller.test.ts").is_empty());
 }
+
+/// Erased names in the helper leave both imported runner calls comparable.
+#[test]
+fn erased_type_names_preserve_imported_runner_duplicates() {
+    let inputs = [
+        (
+            "alias.test.ts",
+            include_str!("../../../fixtures/oracle/erased-type-declarations/alias.test.ts"),
+            "alias-runner.ts",
+            include_str!("../../../fixtures/oracle/erased-type-declarations/alias-runner.ts"),
+            ["alias first", "alias second"],
+        ),
+        (
+            "interface.test.ts",
+            include_str!("../../../fixtures/oracle/erased-type-declarations/interface.test.ts"),
+            "interface-runner.ts",
+            include_str!("../../../fixtures/oracle/erased-type-declarations/interface-runner.ts"),
+            ["interface first", "interface second"],
+        ),
+    ];
+    for (path, caller, runner_path, runner, titles) in inputs {
+        let corpus = corpora(&[(path, caller), (runner_path, runner)], &[path]).remove(0);
+        assert_eq!(corpus.tests.len(), 2, "{path}: {corpus:?}");
+        assert!(corpus.exclusions().is_empty(), "{path}: {corpus:?}");
+        let findings = findings_in(corpus, path);
+        assert_eq!(findings.len(), 1, "{path}: {findings:?}");
+        assert_eq!(findings[0].rule, Rule::DuplicateTest);
+        assert_eq!(findings[0].titles, titles);
+    }
+}
+
+/// The inline function must be the requested runtime export and have an immutable binding.
+#[test]
+fn inline_runtime_function_exports_keep_callable_proof() {
+    let caller = "import { register } from './runner'; register('first'); register('second');";
+    let body = "test(title, () => expect(1).toBe(1));";
+    for (declarations, extra, count) in [
+        ("", "", 1),
+        ("export function register(title: string): void;", "", 1),
+        ("export interface unrelated {}", "", 1),
+        ("export interface register {}", "register = () => {};", 0),
+    ] {
+        let runner = format!(
+            "import {{ expect, test }} from 'vitest'; {declarations} \
+             export function register(title: string) {{ {body} {extra} }}"
+        );
+        let corpus = corpora(
+            &[("caller.test.ts", caller), ("runner.ts", &runner)],
+            &["caller.test.ts"],
+        )
+        .remove(0);
+        assert_eq!(corpus.tests.len(), 2, "{runner}: {corpus:?}");
+        let findings = findings_in(corpus, "caller.test.ts");
+        assert_eq!(findings.len(), count, "{runner}: {findings:?}");
+        if let Some(finding) = findings.first() {
+            assert_eq!(finding.rule, Rule::DuplicateTest);
+            assert_eq!(finding.titles, ["first", "second"]);
+        }
+    }
+}
