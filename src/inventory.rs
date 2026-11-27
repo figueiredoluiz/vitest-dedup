@@ -137,10 +137,10 @@ pub struct Site {
     /// The title, when the first argument is a string the source spells.
     pub title: Option<String>,
     /// Where V8 places the call, which is where Vitest places what it registers: the property of
-    /// a member callee, the `(` of a call whose callee is itself a call, else the callee.
+    /// a member callee, the `(` of a call through a call or pure sequence, else the callee.
     pub position: u32,
     /// Where a transform's source map may place it instead: the callee's start for a call of a
-    /// call, else [`Site::position`].
+    /// call, the selected identifier of a pure sequence, else [`Site::position`].
     pub from: u32,
     /// The lexical facts around it, innermost first.
     pub labels: Vec<Label>,

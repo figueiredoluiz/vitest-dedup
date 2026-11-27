@@ -1,5 +1,10 @@
 {
   "files": {
+    "oracle/stored-builder-producer-load/load.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [],
+      "testsExcluded": 1
+    },
     "oracle/array-slot-registration/prefix.test.ts": {
       "reason": "registered-elsewhere",
       "otherReasons": ["helper-effects-unproved"],
@@ -24,6 +29,31 @@
       "reason": "registered-elsewhere",
       "otherReasons": [],
       "testsExcluded": 1
+    },
+    "oracle/object-field-registration/field-order.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [],
+      "testsExcluded": 7
+    },
+    "oracle/object-field-registration/fields.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [],
+      "testsExcluded": 2
+    },
+    "oracle/object-field-registration/named-prefix.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": ["helper-effects-unproved"],
+      "testsExcluded": 2
+    },
+    "oracle/object-field-registration/prefix.test.ts": {
+      "reason": "named-callback",
+      "otherReasons": [],
+      "testsExcluded": 1
+    },
+    "oracle/object-field-registration/static-keys.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [],
+      "testsExcluded": 2
     },
     "oracle/registration-routes/closed.test.ts": {
       "reason": "registered-elsewhere",
@@ -943,6 +973,11 @@
       "reason": "unresolved-context",
       "otherReasons": [],
       "testsExcluded": 4
+    },
+    "oracle/runner-constructor-refusal/constructor.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [],
+      "testsExcluded": 1
     },
     "oracle/truncated-body/truncated.test.ts": {
       "reason": "unresolved-context",

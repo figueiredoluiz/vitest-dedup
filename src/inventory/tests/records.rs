@@ -549,7 +549,7 @@ fn escape_roles_preserve_records_and_direct_controls() {
         ("`${VALUE}`;", Some("VALUE"), 0),
         ("target = VALUE;", Some("VALUE"), 0),
         ("(VALUE, 0);", Some("VALUE"), 0),
-        ("(0, VALUE)('case', () => {});", Some("VALUE"), 0),
+        ("(unknown(), VALUE)('case', () => {});", Some("VALUE"), 0),
         ("(<any>VALUE)('case', () => {});", Some("VALUE"), 1),
         ("(VALUE<any>)('case', () => {});", Some("VALUE"), 1),
         ("VALUE<any>('case', () => {});", None, 1),

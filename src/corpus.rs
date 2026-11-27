@@ -955,7 +955,16 @@ fn read_parsed(
                 Some(segments.join(" > "))
             };
             record.full_title = record.title.as_deref().and_then(display_title);
-            let callee = tree.child(site.node, "callee");
+            // Inventory proved the call. Read modifiers from the selected bare test binding.
+            let callee = tree.child(site.node, "callee").map(|callee| {
+                if site.kind == SiteKind::Registers(Registers::Test) && site.chain.is_empty() {
+                    return tree
+                        .literal_sequence_result(callee)
+                        .filter(|&result| tree.kind(result) == "Identifier")
+                        .unwrap_or(callee);
+                }
+                callee
+            });
             let modifiers = frame
                 .as_ref()
                 .and_then(|frame| frame.derived.get(&site.node).cloned())

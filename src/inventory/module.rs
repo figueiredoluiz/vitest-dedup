@@ -7,9 +7,9 @@ use super::{
 };
 use crate::framework::{Chain, Mocking, Registers};
 use crate::lang::{
-    bound_symbols, callee_link, export_name, fresh_array_own_slot, logical_results, member_name,
-    property_name, value_role, CalleeLinkKind, Declaration, Imported, Name, NodeId, Parsed, Span,
-    SymbolId, Tree, ValueRole,
+    bound_symbols, callee_link, export_name, fresh_array_own_slot, fresh_object_own_field,
+    logical_results, member_name, property_name, value_role, CalleeLinkKind, Declaration, Field,
+    Imported, Name, NodeId, Parsed, Span, SymbolId, Tree, ValueRole,
 };
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -195,13 +195,14 @@ pub(super) fn analyse(
     module.rewritten_globals = module.global_writes();
     let mut stored_builders = module.collect_origins(modules, depth, imports);
     module.alias_phase = AliasPhase::Settled;
-    stored_builders.extend(module.collect_stored_sequence_task_calls());
+    let inline_builder_load = module.collect_stored_sequence_task_calls(&mut stored_builders);
     let found = module.registrations();
     let mut exports = module.exports(modules, depth, &found, imports, &stored_builders);
     // A registration outside every wrapper may run while the module loads: at top level, in a
     // getter or an initializer, or in a function this analysis does not see called.
     let bodies = module.wrapper_bodies();
-    if !module.loads.is_empty()
+    if inline_builder_load
+        || !module.loads.is_empty()
         || found
             .iter()
             .any(|(_, span, ..)| !bodies.iter().any(|body| body.contains(*span)))
@@ -220,6 +221,21 @@ pub(super) fn analyse(
         .into_iter()
         .map(|(node, span, kind, chain, provenance)| {
             let callee = module.callee(node);
+            let selected = (kind == SiteKind::Registers(Registers::Test))
+                .then(|| module.pure_sequence_test(node, callee))
+                .flatten()
+                .map(|(selected, _)| selected);
+            let (position, from) = if let Some(selected) = selected {
+                let from = module.tree.span(selected).start;
+                let position = module
+                    .tree
+                    .call_arguments_start(source, node)
+                    .unwrap_or(from);
+                (position, from)
+            } else {
+                let position = module.v8_position(callee);
+                (position, module.mapped_from(callee).unwrap_or(position))
+            };
             Site {
                 node,
                 span,
@@ -228,10 +244,8 @@ pub(super) fn analyse(
                 member: module.registration_member(callee),
                 provenance,
                 title: module.title(node),
-                position: module.v8_position(callee),
-                from: module
-                    .mapped_from(callee)
-                    .unwrap_or_else(|| module.v8_position(callee)),
+                position,
+                from,
                 labels: module.labels(node, &calls),
             }
         })
@@ -1237,13 +1251,16 @@ impl<'s> Module<'s> {
     fn registration(&self, call: NodeId) -> Option<(SiteKind, Vec<String>, Provenance)> {
         let link = callee_link(self.tree, call)?;
         if self.direct_task_calls.contains(&call)
-            || (link.kind == CalleeLinkKind::Call && self.array_fixture(link.input))
+            || (link.kind == CalleeLinkKind::Call && self.literal_fixture(link.input))
         {
             return Some((
                 SiteKind::Wrapper(Reach::Tasks),
                 Vec::new(),
                 Provenance::Wrapper,
             ));
+        }
+        if let Some((_, provenance)) = self.pure_sequence_test(call, link.input) {
+            return Some((SiteKind::Registers(Registers::Test), Vec::new(), provenance));
         }
         let resolved = self.resolve(link.input)?;
         let kind = resolved.registration?;
@@ -1257,9 +1274,33 @@ impl<'s> Module<'s> {
         Some((kind, chain, resolved.provenance))
     }
 
-    /// A call through a fresh array's own slot may register through the selected fixture builder.
-    fn array_fixture(&self, callee: NodeId) -> bool {
-        let Some(result) = fresh_array_own_slot(self.tree, callee) else {
+    /// A literal prefix preserves the proved bare test binding at an immediate call.
+    fn pure_sequence_test(&self, call: NodeId, callee: NodeId) -> Option<(NodeId, Provenance)> {
+        if self.tree.kind(call) != "CallExpression" || self.tree.flag(call, "optional") {
+            return None;
+        }
+        let node = self.tree.literal_sequence_result(callee)?;
+        self.proved_registration_binding(node)?;
+        match self.root_origin(node)? {
+            (Origin::Api(Registers::Test), provenance) => Some((node, provenance)),
+            _ => None,
+        }
+    }
+
+    /// A call through a fresh literal's own value may register through the selected builder.
+    fn literal_fixture(&self, callee: NodeId) -> bool {
+        let tree = self.tree;
+        let Some(result) = fresh_array_own_slot(tree, callee).or_else(|| {
+            let (result, preceding) = fresh_object_own_field(tree, callee)?;
+            let preserved = preceding.iter().all(|field| {
+                let Field::Node(property) = *field else {
+                    return false;
+                };
+                tree.child(property, "value")
+                    .is_some_and(|value| self.builder_prefix_preserves_extension(value))
+            });
+            preserved.then_some(result)
+        }) else {
             return false;
         };
         self.member_call(self.tree.inner(result)).is_some()
@@ -1433,12 +1474,12 @@ impl<'s> Module<'s> {
             }));
     }
 
-    /// Prove a stored builder once per declaration, then record its initialized direct calls.
-    fn collect_stored_sequence_task_calls(&mut self) -> HashSet<SymbolId> {
+    /// Record initialized local calls and report whether an inline export registers on load.
+    fn collect_stored_sequence_task_calls(&mut self, builders: &mut HashSet<SymbolId>) -> bool {
         let tree = self.tree;
         let scopes = &self.parsed.scopes;
-        let mut builders = HashSet::new();
         let mut checked_uses = false;
+        let mut registers_on_load = false;
         for declarator in tree.nodes() {
             let Some(symbol) = self.stored_sequence_builder_binding(declarator) else {
                 continue;
@@ -1451,23 +1492,23 @@ impl<'s> Module<'s> {
             if binding.top_level {
                 builders.insert(symbol);
             }
-            // Inline exports supply named capability only. Keep the local-call scope unchanged.
-            if tree
+            let inline_export = tree
                 .parent(declarator)
                 .and_then(|declaration| tree.parent(declaration))
-                .is_some_and(|parent| tree.kind(parent) == "ExportNamedDeclaration")
-            {
-                continue;
+                .is_some_and(|parent| tree.kind(parent) == "ExportNamedDeclaration");
+            let mut calls = binding.references.iter().filter_map(|reference| {
+                let read = reference.node?;
+                let call = direct_call(tree, read)?;
+                crate::lang::proof::initialized(tree, declarator, read)?;
+                Some(call)
+            });
+            if inline_export {
+                registers_on_load |= calls.any(|call| self.top_level_statement(call).is_some());
+            } else {
+                self.direct_task_calls.extend(calls);
             }
-            self.direct_task_calls
-                .extend(binding.references.iter().filter_map(|reference| {
-                    let read = reference.node?;
-                    let call = direct_call(tree, read)?;
-                    crate::lang::proof::initialized(tree, declarator, read)?;
-                    Some(call)
-                }));
         }
-        builders
+        registers_on_load
     }
 
     /// A registration receiver may be changed when it is written or passed to untracked code.
@@ -2813,8 +2854,23 @@ impl<'s> Module<'s> {
     /// Registration functions read as values rather than called.
     fn escapes(&self, calls: &HashMap<NodeId, SiteKind>, default_wrapper: bool) -> Vec<Escape> {
         let tree = self.tree;
+        // In a proved sequence callee, only the selected identifier is read at runtime.
+        // Every other identifier in that subtree belongs to erased type syntax.
+        let sequence_reads: HashSet<_> = calls
+            .iter()
+            .filter(|&(_, &kind)| kind == SiteKind::Registers(Registers::Test))
+            .filter_map(|(&call, _)| {
+                let callee = self.callee(call);
+                self.pure_sequence_test(call, callee).map(|_| callee)
+            })
+            .flat_map(|callee| tree.descendants(callee))
+            .filter(|&node| tree.kind(node) == "Identifier")
+            .collect();
         let mut escapes = Vec::new();
         for read in self.registration_reads() {
+            if sequence_reads.contains(&read) {
+                continue;
+            }
             let (current, role) = self.registration_read_use(read);
             let escaped = !matches!(
                 role,

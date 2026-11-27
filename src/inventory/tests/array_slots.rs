@@ -1,15 +1,6 @@
 //! Fresh array selection keeps the existing registration boundary.
 
 use super::*;
-use crate::inventory::Site;
-
-/// Inspect the final sites for a route beside an independent registration.
-fn sites(imports: &str, expression: &str) -> Vec<Site> {
-    let source = format!(
-        "{imports} import {{test as control}} from 'vitest'; {expression}; control('retained', () => {{}});"
-    );
-    sites_with_retained_control(&source, &[], false)
-}
 
 /// Every occupied own slot with the fixture-extension result gets one conservative site.
 #[test]
@@ -28,7 +19,7 @@ fn own_array_slots_account_for_immediate_fixture_calls() {
                 let expression = format!(
                     "([{before}({builder}{wrap}){after}][{index}])('selected', () => {{}})"
                 );
-                let found = sites(imports, &expression);
+                let found = fixture_call_sites(imports, &expression);
                 assert_eq!(
                     found.len(),
                     if prefix { 3 } else { 2 },
@@ -89,7 +80,7 @@ fn unsupported_array_routes_do_not_become_wrapper_sites() {
         ),
         (type_only, "[api.extend({})][0]('other', () => {})"),
     ] {
-        let found = sites(imports, expression);
+        let found = fixture_call_sites(imports, expression);
         assert_eq!(found.len(), 1, "{expression}: {found:?}");
     }
 }
@@ -100,7 +91,7 @@ fn longer_chain_preserves_the_immediate_slot_call() {
     let imports = "import {test as api} from 'vitest';";
     for suffix in [".unknown", "?.('other', () => {})"] {
         let expression = format!("([api.extend({{}})][0]('selected', () => {{}})){suffix}");
-        let found = sites(imports, &expression);
+        let found = fixture_call_sites(imports, &expression);
         assert_eq!(found.len(), 2, "{expression}: {found:?}");
         assert!(
             found.iter().any(|site| {

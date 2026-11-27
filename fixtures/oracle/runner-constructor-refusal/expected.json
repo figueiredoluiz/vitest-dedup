@@ -1,0 +1,24 @@
+{
+  "files": {
+    "constructor.test.ts": {
+      "tasks": 1,
+      "wrapperSites": [],
+      "next": { "reasons": ["registered-elsewhere"], "testsExcluded": 1 }
+    },
+    "plain.test.ts": {
+      "tasks": 2,
+      "wrapperSites": ["wrapper@3", "wrapper@4"],
+      "next": {}
+    }
+  },
+  "knownSites": [
+    {
+      "path": "constructor.test.ts",
+      "kind": "missing-site",
+      "item": "test@3",
+      "reason": "Vitest registers the constructor call. The analyzer cannot prove the runner's receiver context at that call.",
+      "waitsOn": "constructor registration site accounting with a proved receiver context"
+    }
+  ],
+  "blindUnderCurrent": ["constructor.test.ts"]
+}

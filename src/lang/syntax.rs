@@ -75,13 +75,18 @@ pub fn property_name(tree: &Tree, property: NodeId) -> Option<&str> {
 pub fn member_name(tree: &Tree, member: NodeId) -> Option<&str> {
     let property = tree.child(member, "property")?;
     if tree.flag(member, "computed") {
-        let key = tree.inner(property);
-        (tree.kind(key) == "Literal")
-            .then(|| tree.text(key, "value"))
-            .flatten()
+        computed_string_name(tree, property)
     } else {
         tree.text(property, "name")
     }
+}
+
+/// A computed key whose string literal survives transparent expression wrappers.
+fn computed_string_name(tree: &Tree, key: NodeId) -> Option<&str> {
+    let key = tree.inner(key);
+    (tree.kind(key) == "Literal")
+        .then(|| tree.text(key, "value"))
+        .flatten()
 }
 
 /// The element defined at a literal index on a freshly constructed array.
@@ -127,6 +132,53 @@ pub(crate) fn fresh_array_own_slot(tree: &Tree, member: NodeId) -> Option<NodeId
         .iter()
         .any(|field| matches!(field, Field::Node(node) if tree.kind(*node) == "SpreadElement")))
     .then_some(element)
+}
+
+/// A uniquely named own data field's initializer and the properties evaluated before it.
+/// A spread or unknown key can introduce a competing definition.
+pub(crate) fn fresh_object_own_field(tree: &Tree, member: NodeId) -> Option<(NodeId, &[Field])> {
+    let link = callee_link(tree, member)?;
+    let CalleeLinkKind::Member(Some(name)) = link.kind else {
+        return None;
+    };
+    if tree.flag(link.node, "optional") {
+        return None;
+    }
+    let object = tree.inner(link.input);
+    if tree.kind(object) != "ObjectExpression" {
+        return None;
+    }
+    let Field::List(properties) = tree.field_of(object, "properties") else {
+        return None;
+    };
+    let mut selected = None;
+    for (index, field) in properties.iter().enumerate() {
+        let Field::Node(property) = *field else {
+            return None;
+        };
+        if tree.kind(property) != "Property" {
+            return None;
+        }
+        let computed = tree.flag(property, "computed");
+        let field_name = if computed {
+            computed_string_name(tree, tree.child(property, "key")?)
+        } else {
+            property_name(tree, property)
+        }?;
+        if field_name != name {
+            continue;
+        }
+        let data = !tree.flag(property, "method") && tree.text(property, "kind") == Some("init");
+        // The colon form sets the prototype and supplies no own field.
+        if name == "__proto__" && !computed && data && !tree.flag(property, "shorthand") {
+            continue;
+        }
+        if selected.is_some() || !data {
+            return None;
+        }
+        selected = Some((tree.child(property, "value")?, &properties[..index]));
+    }
+    selected
 }
 
 /// The structural operation between a callee expression and its immediate input.
@@ -231,6 +283,43 @@ impl Tree {
             result = self.inner(next);
         }
         Some(result)
+    }
+
+    /// The final sequence operand when every discarded operand is a primitive literal.
+    pub(crate) fn literal_sequence_result(&self, node: NodeId) -> Option<NodeId> {
+        let mut node = self.inner(node);
+        if self.kind(node) != "SequenceExpression" {
+            return None;
+        }
+        while self.kind(node) == "SequenceExpression" {
+            let (result, mut prefix) = self.sequence_parts(node)?;
+            if !prefix.all(|operand| {
+                operand.is_some_and(|operand| super::primitive(self, self.inner(operand)))
+            }) {
+                return None;
+            }
+            node = self.inner(result);
+        }
+        Some(node)
+    }
+
+    /// The opening argument delimiter after the parsed callee and any erased type arguments.
+    pub(crate) fn call_arguments_start(&self, source: &str, call: NodeId) -> Option<u32> {
+        let before = self
+            .child(call, "typeArguments")
+            .or_else(|| self.child(call, "callee"))?;
+        let end = self.span(call).end;
+        let mut gap = source.get(self.span(before).end as usize..end as usize)?;
+        loop {
+            gap = gap.trim_start_matches(|c: char| c.is_whitespace() || c == '\u{feff}');
+            if let Some(comment) = gap.strip_prefix("//") {
+                gap = &comment[comment.find(['\n', '\r', '\u{2028}', '\u{2029}'])?..];
+            } else if let Some(comment) = gap.strip_prefix("/*") {
+                gap = &comment[comment.find("*/")? + 2..];
+            } else {
+                return gap.starts_with('(').then_some(end - gap.len() as u32);
+            }
+        }
     }
 
     /// An edge selecting the child's existing value, without proving guards or prefixes inert.

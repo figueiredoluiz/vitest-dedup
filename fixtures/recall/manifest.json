@@ -6,6 +6,29 @@
   "recallDestination": 1,
   "cases": [
     {
+      "name": "suite-inline-suppression-count",
+      "path": "suite-inline-suppression-count",
+      "rule": "duplicate-suite",
+      "role": "variant",
+      "origin": "synthetic",
+      "verdict": "generated",
+      "classifiedAt": "2026-11-27",
+      "arguments": ["--rule", "cross-file-duplicate=warning", "--rule", "parameterization-candidate=off"],
+      "expectedTests": 6,
+      "expectedIncomplete": false,
+      "expectedUnresolved": 0,
+      "expectedFindings": [
+        { "rule": "duplicate-suite", "severity": "warning", "titles": ["audit", "audit"] },
+        { "rule": "cross-file-duplicate", "severity": "warning", "titles": ["checks a size", "checks a backup size"] }
+      ],
+      "expectedAbsent": [
+        { "rule": "duplicate-test", "titles": ["audit > reads one", "audit > reads one"] },
+        { "rule": "duplicate-test", "titles": ["audit > reads two", "audit > reads two"] },
+        { "rule": "duplicate-test-name", "titles": ["audit > reads one", "audit > reads one"] },
+        { "rule": "duplicate-test-name", "titles": ["audit > reads two", "audit > reads two"] }
+      ]
+    },
+    {
       "name": "nuxt-generated-tsconfig",
       "path": "nuxt-generated-tsconfig",
       "arguments": ["--rule", "parameterization-candidate=off"],
