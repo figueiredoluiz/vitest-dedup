@@ -87,6 +87,8 @@ pub struct Modifiers {
     /// Whether the chain keeps the test from running (`skip`, `todo`), the way a report marks a
     /// participant inert.
     pub inert: bool,
+    /// Whether a condition on the callee chain may disable the registration.
+    pub conditional_may_skip: bool,
     /// Whether the chain focuses the test (`only`), which overrides its own `skip` or `todo`.
     pub focus: bool,
 }
@@ -172,6 +174,7 @@ impl Normalizer<'_> {
                         break;
                     };
                     let callee = tree.inner(callee);
+                    modifiers.conditional_may_skip |= self.condition_may_skip(current, callee);
                     let table = match (tree.kind(callee), arguments.as_slice()) {
                         ("MemberExpression", [Some(table)])
                             if tree.kind(tree.inner(*table)) == "ArrayExpression" =>
