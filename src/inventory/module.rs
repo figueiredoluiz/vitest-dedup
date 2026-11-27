@@ -7,9 +7,9 @@ use super::{
 };
 use crate::framework::{Chain, Mocking, Registers};
 use crate::lang::{
-    bound_symbols, callee_link, export_name, fresh_array_own_slot, logical_results, member_name,
-    property_name, value_role, CalleeLinkKind, Declaration, Imported, Name, NodeId, Parsed, Span,
-    SymbolId, Tree, ValueRole,
+    bound_symbols, callee_link, export_name, fresh_array_own_slot, fresh_object_own_field,
+    logical_results, member_name, property_name, value_role, CalleeLinkKind, Declaration, Field,
+    Imported, Name, NodeId, Parsed, Span, SymbolId, Tree, ValueRole,
 };
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -1234,7 +1234,7 @@ impl<'s> Module<'s> {
     fn registration(&self, call: NodeId) -> Option<(SiteKind, Vec<String>, Provenance)> {
         let link = callee_link(self.tree, call)?;
         if self.direct_task_calls.contains(&call)
-            || (link.kind == CalleeLinkKind::Call && self.array_fixture(link.input))
+            || (link.kind == CalleeLinkKind::Call && self.literal_fixture(link.input))
         {
             return Some((
                 SiteKind::Wrapper(Reach::Tasks),
@@ -1254,9 +1254,20 @@ impl<'s> Module<'s> {
         Some((kind, chain, resolved.provenance))
     }
 
-    /// A call through a fresh array's own slot may register through the selected fixture builder.
-    fn array_fixture(&self, callee: NodeId) -> bool {
-        let Some(result) = fresh_array_own_slot(self.tree, callee) else {
+    /// A call through a fresh literal's own value may register through the selected builder.
+    fn literal_fixture(&self, callee: NodeId) -> bool {
+        let tree = self.tree;
+        let Some(result) = fresh_array_own_slot(tree, callee).or_else(|| {
+            let (result, preceding) = fresh_object_own_field(tree, callee)?;
+            let preserved = preceding.iter().all(|field| {
+                let Field::Node(property) = *field else {
+                    return false;
+                };
+                tree.child(property, "value")
+                    .is_some_and(|value| self.builder_prefix_preserves_extension(value))
+            });
+            preserved.then_some(result)
+        }) else {
             return false;
         };
         self.member_call(self.tree.inner(result)).is_some()

@@ -1,4 +1,4 @@
-use super::{inventory, Inventory, Label, Modules, Provenance, Reach, Setting, SiteKind};
+use super::{inventory, Inventory, Label, Modules, Provenance, Reach, Setting, Site, SiteKind};
 use crate::framework::vitest::DIALECT;
 use crate::framework::{HookTiming, Registers};
 use crate::lang::{parse, Lines};
@@ -8,6 +8,7 @@ use std::path::Path;
 mod array_slots;
 mod export_identity;
 mod import_limits;
+mod object_fields;
 mod reach_scaling;
 mod records;
 mod sequence_values;
@@ -42,6 +43,23 @@ fn inventory_with_tree(
     };
     let found = inventory(&path, main, &parsed, setting, &mut Modules::default());
     (found, parsed)
+}
+
+/// Inspect a fixture call while retaining an independent direct registration.
+fn fixture_call_sites(imports: &str, expression: &str) -> Vec<Site> {
+    let source = format!(
+        "{imports} import {{test as control}} from 'vitest'; {expression}; control('retained', () => {{}});"
+    );
+    let (found, parsed) = inventory_with_tree(&source, &[], false);
+    assert_eq!(parsed.parse_errors, 0, "{source}");
+    assert!(
+        found.sites.iter().any(|site| {
+            site.title.as_deref() == Some("retained")
+                && site.kind == SiteKind::Registers(Registers::Test)
+        }),
+        "{source}: {found:?}"
+    );
+    found.sites
 }
 
 /// Each site as `kind@line:column chain provenance`.

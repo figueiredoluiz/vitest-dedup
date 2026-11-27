@@ -1,0 +1,34 @@
+{
+  "blindUnderCurrent": ["field-order.test.ts", "fields.test.ts", "named-prefix.test.ts", "prefix.test.ts", "static-keys.test.ts"],
+  "files": {
+    "control.test.ts": { "tasks": 2, "wrapperSites": [], "next": {} },
+    "field-order.test.ts": {
+      "tasks": 1,
+      "wrapperSites": ["wrapper@6"],
+      "next": { "reasons": ["registered-elsewhere"], "testsExcluded": 7 }
+    },
+    "fields.test.ts": {
+      "tasks": 2,
+      "wrapperSites": ["wrapper@3", "wrapper@4"],
+      "next": { "reasons": ["registered-elsewhere"], "testsExcluded": 2 }
+    },
+    "named-prefix.test.ts": {
+      "tasks": 2,
+      "wrapperSites": ["wrapper@3"],
+      "next": { "reasons": ["registered-elsewhere", "helper-effects-unproved"], "testsExcluded": 2 }
+    },
+    "static-keys.test.ts": {
+      "tasks": 2,
+      "wrapperSites": ["wrapper@3", "wrapper@4"],
+      "next": { "reasons": ["registered-elsewhere"], "testsExcluded": 2 }
+    },
+    "prefix.test.ts": {
+      "tasks": 2,
+      "wrapperSites": ["wrapper@4"],
+      "wrapperSitesToday": [],
+      "next": { "reasons": ["registered-elsewhere", "helper-effects-unproved"], "testsExcluded": 2 },
+      "nextToday": { "reasons": ["named-callback"], "testsExcluded": 1 },
+      "waitsOn": "proving the namespace test call and named callback read preserve the fixture builder"
+    }
+  }
+}
