@@ -8,6 +8,7 @@ use std::path::Path;
 mod array_slots;
 mod export_identity;
 mod import_limits;
+mod imported_sequence;
 mod object_fields;
 mod reach_scaling;
 mod records;
@@ -50,7 +51,12 @@ fn fixture_call_sites(imports: &str, expression: &str) -> Vec<Site> {
     let source = format!(
         "{imports} import {{test as control}} from 'vitest'; {expression}; control('retained', () => {{}});"
     );
-    let (found, parsed) = inventory_with_tree(&source, &[], false);
+    sites_with_retained_control(&source, &[], false)
+}
+
+/// A registration route must keep its independent direct control.
+fn sites_with_retained_control(source: &str, files: &[(&str, &str)], globals: bool) -> Vec<Site> {
+    let (found, parsed) = inventory_with_tree(source, files, globals);
     assert_eq!(parsed.parse_errors, 0, "{source}");
     assert!(
         found.sites.iter().any(|site| {

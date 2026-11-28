@@ -136,6 +136,8 @@ struct Module<'s> {
     registration_bindings: HashMap<SymbolId, RegistrationBinding>,
     /// Direct invocations whose selected value may register tasks.
     direct_task_calls: HashSet<NodeId>,
+    /// The sole dependency allowed by the named builder's receiver proof.
+    builder_provider: std::cell::OnceCell<Option<NodeId>>,
     loads: Vec<u32>,
     values: HashSet<NodeId>,
     /// Bindings declared more than once, replacing their value.
@@ -178,6 +180,7 @@ pub(super) fn analyse(
         returners: HashSet::new(),
         registration_bindings: HashMap::new(),
         direct_task_calls: HashSet::new(),
+        builder_provider: std::cell::OnceCell::new(),
         loads: Vec::new(),
         values: HashSet::new(),
         redeclared: HashSet::new(),
@@ -190,15 +193,17 @@ pub(super) fn analyse(
     module.redeclared = module.redeclarations();
     module.evaluates = super::direct_eval(parsed);
     module.rewritten_globals = module.global_writes();
-    module.collect_origins(modules, depth, imports);
+    let (mut stored_builders, imported_builder_load) =
+        module.collect_origins(modules, depth, imports);
     module.alias_phase = AliasPhase::Settled;
-    let stored_builder_load = module.collect_stored_sequence_task_calls();
+    let inline_builder_load = module.collect_stored_sequence_task_calls(&mut stored_builders);
     let found = module.registrations();
-    let mut exports = module.exports(modules, depth, &found, imports);
+    let mut exports = module.exports(modules, depth, &found, imports, &stored_builders);
     // A registration outside every wrapper may run while the module loads: at top level, in a
     // getter or an initializer, or in a function this analysis does not see called.
     let bodies = module.wrapper_bodies();
-    if stored_builder_load
+    if imported_builder_load
+        || inline_builder_load
         || !module.loads.is_empty()
         || found
             .iter()
@@ -419,6 +424,37 @@ impl<'s> Module<'s> {
         }
         (tree.kind(parent) == "ExpressionStatement" && tree.parent(parent) == Some(tree.root()))
             .then_some(parent)
+    }
+
+    /// Whether `call` is the whole initializer of a runtime variable at module scope.
+    fn direct_module_initializer(&self, call: NodeId) -> bool {
+        let tree = self.tree;
+        let Some(declarator) = tree.outer_parent(call) else {
+            return false;
+        };
+        if tree.kind(declarator) != "VariableDeclarator"
+            || tree.child(declarator, "init").map(|init| tree.inner(init)) != Some(call)
+        {
+            return false;
+        }
+        let Some(declaration) = tree.parent(declarator) else {
+            return false;
+        };
+        if tree.kind(declaration) != "VariableDeclaration"
+            || !matches!(
+                tree.text(declaration, "kind"),
+                Some("const" | "let" | "var")
+            )
+            || tree.erased_declaration(declaration)
+        {
+            return false;
+        }
+        tree.parent(declaration).is_some_and(|parent| {
+            parent == tree.root()
+                || (tree.kind(parent) == "ExportNamedDeclaration"
+                    && !tree.erased_declaration(parent)
+                    && tree.parent(parent) == Some(tree.root()))
+        })
     }
 
     /// Whether `call` is a statement directly inside the block of an in-source guard,
@@ -1307,14 +1343,16 @@ impl<'s> Module<'s> {
     }
 
     /// Records which imported bindings are the API, its namespace, or a wrapper another module
-    /// exports, then the aliases derived from them.
+    /// exports, then the aliases derived from them. Returns proved stored imports and whether a
+    /// direct call of one can register during this dependency's evaluation.
     fn collect_origins(
         &mut self,
         modules: &mut Modules,
         depth: usize,
         imports: &mut ProjectImports,
-    ) {
+    ) -> (HashSet<SymbolId>, bool) {
         let tree = self.tree;
+        let mut stored_imports = Vec::new();
         for statement in tree.list(tree.root(), "body").into_iter().flatten() {
             if tree.kind(statement) != "ImportDeclaration"
                 || tree.text(statement, "importKind") == Some("type")
@@ -1395,7 +1433,14 @@ impl<'s> Module<'s> {
                         Some(&Export::Derived(registers)) => {
                             self.origins.insert(symbol, Origin::Derived(registers));
                         }
-                        None => {}
+                        Some(Export::StoredSequenceBuilder)
+                            if tree.kind(specifier) == "ImportSpecifier"
+                                && name != "default"
+                                && !self.reassigned(symbol) =>
+                        {
+                            stored_imports.push((source, symbol));
+                        }
+                        Some(Export::StoredSequenceBuilder) | None => {}
                     },
                 }
             }
@@ -1409,6 +1454,39 @@ impl<'s> Module<'s> {
             self.alias_phase = AliasPhase::Proved;
             self.collect_aliases();
         }
+        let mut builders = HashSet::new();
+        if stored_imports.is_empty() {
+            return (builders, false);
+        }
+        let provider = self.isolated_builder_dependency();
+        let mut first_load_call = None;
+        for (source, symbol) in stored_imports {
+            if provider != Some(source) {
+                continue;
+            }
+            builders.insert(symbol);
+            let calls = self
+                .parsed
+                .scopes
+                .symbol(symbol)
+                .references
+                .iter()
+                .filter_map(|reference| direct_call(tree, reference.node?));
+            if depth == 0 {
+                self.direct_task_calls.extend(calls);
+            } else {
+                first_load_call = calls
+                    .filter(|&call| {
+                        self.top_level_statement(call).is_some()
+                            || self.direct_module_initializer(call)
+                    })
+                    .chain(first_load_call)
+                    .min_by_key(|&call| tree.span(call).start);
+            }
+        }
+        // A preceding top-level terminator also blocks every later direct call.
+        let registers_on_load = first_load_call.is_some_and(|call| !self.unreachable(call));
+        (builders, registers_on_load)
     }
 
     /// Match direct invocations against the same export summaries named imports use. A read of a
@@ -1437,45 +1515,40 @@ impl<'s> Module<'s> {
                 {
                     return None;
                 }
-                let call = callee_link(tree, tree.outer_parent(member.node)?)?;
-                (call.kind == CalleeLinkKind::Call
-                    && tree.inner(call.input) == member.node
-                    && !tree.flag(call.node, "optional"))
-                .then_some(call.node)
+                direct_call(tree, member.node)
             }));
     }
 
     /// Record initialized local calls and report whether an inline export registers on load.
-    fn collect_stored_sequence_task_calls(&mut self) -> bool {
+    fn collect_stored_sequence_task_calls(&mut self, builders: &mut HashSet<SymbolId>) -> bool {
         let tree = self.tree;
+        let scopes = &self.parsed.scopes;
         let mut checked_uses = false;
         let mut registers_on_load = false;
         for declarator in tree.nodes() {
-            let Some((symbol, inline_export)) = self.stored_sequence_builder_binding(declarator)
-            else {
+            let Some(symbol) = self.stored_sequence_builder_binding(declarator) else {
                 continue;
             };
-            if !checked_uses && !self.registration_receivers_have_tracked_uses() {
-                return false;
+            if !checked_uses && !self.registration_receivers_have_tracked_uses(None) {
+                break;
             }
             checked_uses = true;
-            let binding = self.parsed.scopes.symbol(symbol);
+            let binding = scopes.symbol(symbol);
+            if binding.top_level {
+                builders.insert(symbol);
+            }
+            let inline_export = tree
+                .parent(declarator)
+                .and_then(|declaration| tree.parent(declaration))
+                .is_some_and(|parent| tree.kind(parent) == "ExportNamedDeclaration");
             let mut calls = binding.references.iter().filter_map(|reference| {
                 let read = reference.node?;
-                let call = callee_link(tree, tree.outer_parent(read)?)?;
-                (call.kind == CalleeLinkKind::Call
-                    && tree.inner(call.input) == read
-                    && !tree.flag(call.node, "optional")
-                    && crate::lang::proof::initialized(tree, declarator, read).is_some())
-                .then_some(call.node)
+                let call = direct_call(tree, read)?;
+                crate::lang::proof::initialized(tree, declarator, read)?;
+                Some(call)
             });
             if inline_export {
-                registers_on_load |= calls.any(|call| {
-                    tree.outer_parent(call).is_some_and(|statement| {
-                        tree.kind(statement) == "ExpressionStatement"
-                            && tree.parent(statement) == Some(tree.root())
-                    })
-                });
+                registers_on_load |= calls.any(|call| self.top_level_statement(call).is_some());
             } else {
                 self.direct_task_calls.extend(calls);
             }
@@ -1484,12 +1557,12 @@ impl<'s> Module<'s> {
     }
 
     /// A registration receiver may be changed when it is written or passed to untracked code.
-    fn registration_receivers_have_tracked_uses(&self) -> bool {
+    fn registration_receivers_have_tracked_uses(&self, builder_provider: Option<&str>) -> bool {
         let tree = self.tree;
         if !self.mocking_receivers_have_tracked_uses()
             || tree
                 .nodes()
-                .any(|node| self.untracked_framework_access(node))
+                .any(|node| self.untracked_framework_access(node, builder_provider))
         {
             return false;
         }
@@ -1668,14 +1741,13 @@ impl<'s> Module<'s> {
     }
 
     /// Whether a module link or local access may replace the framework receiver.
-    fn untracked_framework_access(&self, node: NodeId) -> bool {
+    fn untracked_framework_access(&self, node: NodeId, builder_provider: Option<&str>) -> bool {
         let tree = self.tree;
         match tree.kind(node) {
             "ImportDeclaration" | "ExportNamedDeclaration" | "ExportAllDeclaration" => {
-                !tree.erased_declaration(node)
-                    && tree
-                        .child(node, "source")
-                        .is_some_and(|source| !self.literal_framework_module(source))
+                self.static_project_module(node).is_some_and(|source| {
+                    builder_provider.is_none() || tree.text(source, "value") != builder_provider
+                })
             }
             "ImportExpression" => {
                 !tree
@@ -1692,6 +1764,36 @@ impl<'s> Module<'s> {
             }
             _ => false,
         }
+    }
+
+    /// The runtime non-framework source of a static module link.
+    fn static_project_module(&self, statement: NodeId) -> Option<NodeId> {
+        let tree = self.tree;
+        if !matches!(
+            tree.kind(statement),
+            "ImportDeclaration" | "ExportNamedDeclaration" | "ExportAllDeclaration"
+        ) || tree.erased_declaration(statement)
+        {
+            return None;
+        }
+        tree.child(statement, "source")
+            .filter(|&source| !self.literal_framework_module(source))
+    }
+
+    /// Only this provider may load project code, and known framework uses stay tracked.
+    fn isolated_builder_dependency(&self) -> Option<&'s str> {
+        let tree = self.tree;
+        let provider = *self.builder_provider.get_or_init(|| {
+            let provider = tree
+                .list(tree.root(), "body")
+                .into_iter()
+                .flatten()
+                .find_map(|statement| self.static_project_module(statement))?;
+            let spelling = tree.text(provider, "value")?;
+            (!self.evaluates && self.registration_receivers_have_tracked_uses(Some(spelling)))
+                .then_some(provider)
+        });
+        tree.text(provider?, "value")
     }
 
     /// A literal module reference to the dialect's own framework package.
@@ -1718,24 +1820,23 @@ impl<'s> Module<'s> {
             .is_some_and(|statement| tree.kind(statement) == "ExpressionStatement")
     }
 
-    /// A const whose sequence initializer selects the framework's fixture builder, and whether
-    /// it is an inline export. The export route admits only eager calls at program scope.
-    fn stored_sequence_builder_binding(&self, declarator: NodeId) -> Option<(SymbolId, bool)> {
+    /// A local const whose sequence initializer selects the framework's fixture builder.
+    fn stored_sequence_builder_binding(&self, declarator: NodeId) -> Option<SymbolId> {
         let tree = self.tree;
         if tree.kind(declarator) != "VariableDeclarator" {
             return None;
         }
         let declaration = tree.parent(declarator)?;
-        let parent = tree.parent(declaration)?;
-        let scope = tree.kind(parent);
-        let inline_export = scope == "ExportNamedDeclaration"
-            && tree.parent(parent) == Some(tree.root())
-            && !tree.erased_declaration(parent);
-        if tree.text(declaration, "kind") != Some("const")
-            || tree.erased_declaration(declaration)
-            || (!inline_export && !matches!(scope, "Program" | "BlockStatement" | "SwitchCase"))
-        {
+        if tree.text(declaration, "kind") != Some("const") || tree.erased_declaration(declaration) {
             return None;
+        }
+        let container = tree.parent(declaration)?;
+        match tree.kind(container) {
+            "Program" | "BlockStatement" | "SwitchCase" => {}
+            "ExportNamedDeclaration"
+                if !tree.erased_declaration(container)
+                    && tree.parent(container) == Some(tree.root()) => {}
+            _ => return None,
         }
         let binding = tree.child(declarator, "id")?;
         if tree.kind(binding) != "Identifier" {
@@ -1751,7 +1852,7 @@ impl<'s> Module<'s> {
         let selected = self.resolve(result)?;
         (self.fixture_extension_result(result, &selected)
             && self.sequence_prefix_preserves_builder(initializer))
-        .then_some((symbol, inline_export))
+        .then_some(symbol)
     }
 
     /// Every discarded operand evaluated on the way to the selected builder preserves it.
@@ -2888,6 +2989,7 @@ impl<'s> Module<'s> {
         depth: usize,
         found: &[Found],
         imports: &mut ProjectImports,
+        stored_builders: &HashSet<SymbolId>,
     ) -> HashMap<String, Export> {
         let tree = self.tree;
         let reaches = ReachIndex::new(found.iter().map(|(_, span, kind, ..)| (*span, *kind)));
@@ -2898,6 +3000,11 @@ impl<'s> Module<'s> {
         let mut star_exports: HashMap<String, Export> = HashMap::new();
         let mut exports: HashMap<String, Export> = HashMap::new();
         let mut add = |name: String, export: Export| {
+            if export == Export::StoredSequenceBuilder
+                && (name == "default" || name.starts_with('\0'))
+            {
+                return;
+            }
             let held = exports.entry(name).or_insert(export);
             *held = held.widest(export);
         };
@@ -2918,6 +3025,13 @@ impl<'s> Module<'s> {
                 Export::Wrapper(Reach::Tasks)
             } else {
                 export
+            })
+        };
+        let named_registers = |symbol| {
+            registers(symbol).or_else(|| {
+                stored_builders
+                    .contains(&symbol?)
+                    .then_some(Export::StoredSequenceBuilder)
             })
         };
         for statement in tree.list(tree.root(), "body").into_iter().flatten() {
@@ -2965,7 +3079,10 @@ impl<'s> Module<'s> {
                         for (local, exported) in specifiers(tree, statement) {
                             let local = export_name(tree, local);
                             let exported = export_name(tree, exported);
-                            if let Some(&export) = theirs.get(&local) {
+                            if let Some(&export) = theirs.get(&local).filter(|&&export| {
+                                export != Export::StoredSequenceBuilder
+                                    || self.isolated_builder_dependency() == Some(source)
+                            }) {
                                 add(exported.clone(), export);
                             }
                             if theirs.contains_key(&unreadable_fixture_export(&local)) {
@@ -2993,14 +3110,14 @@ impl<'s> Module<'s> {
                         };
                         for id in ids {
                             if let (Some(export), Some(name)) =
-                                (registers(self.declares(id)), tree.text(id, "name"))
+                                (named_registers(self.declares(id)), tree.text(id, "name"))
                             {
                                 add(name.to_owned(), export);
                             }
                         }
                     }
                     for (local, exported) in specifiers(tree, statement) {
-                        if let Some(export) = registers(self.read(local)) {
+                        if let Some(export) = named_registers(self.read(local)) {
                             add(export_name(tree, exported), export);
                         }
                     }
@@ -3075,7 +3192,10 @@ impl<'s> Module<'s> {
                             .unwrap_or_default()
                     };
                     for (name, export) in theirs {
-                        if name != "default" && name != unreadable_fixture_export("default") {
+                        if export != Export::StoredSequenceBuilder
+                            && name != "default"
+                            && name != unreadable_fixture_export("default")
+                        {
                             let forwarded = export.through_star(
                                 star_exports.get(&name).copied(),
                                 stars == 0,
@@ -3131,6 +3251,15 @@ impl<'s> Module<'s> {
 /// The private export-cache key recording that a derived test API has unreadable fixtures.
 fn unreadable_fixture_export(name: &str) -> String {
     format!("{UNREADABLE_FIXTURE}:{name}")
+}
+
+/// A direct, non-optional invocation of the expression.
+fn direct_call(tree: &Tree, callee: NodeId) -> Option<NodeId> {
+    let call = callee_link(tree, tree.outer_parent(callee)?)?;
+    (call.kind == CalleeLinkKind::Call
+        && tree.inner(call.input) == callee
+        && !tree.flag(call.node, "optional"))
+    .then_some(call.node)
 }
 
 /// Whether an export statement or specifier is erased: it loads nothing and exports no value.

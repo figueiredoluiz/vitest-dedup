@@ -1,0 +1,22 @@
+{
+  "blindUnderCurrent": ["forward-local.test.ts", "named.test.ts", "renamed.test.ts"],
+  "files": {
+    "control.test.ts": { "tasks": 2, "wrapperSites": [], "next": {} },
+    "forward-local.test.ts": {
+      "tasks": 1,
+      "wrapperSites": ["wrapper@4"],
+      "next": { "reasons": ["registered-elsewhere"], "testsExcluded": 1 }
+    },
+    "named.test.ts": {
+      "tasks": 1,
+      "wrapperSites": ["wrapper@4"],
+      "next": { "reasons": ["registered-elsewhere"], "testsExcluded": 1 }
+    },
+    "order-guard.test.ts": { "tasks": 2, "wrapperSites": [], "next": {} },
+    "renamed.test.ts": {
+      "tasks": 1,
+      "wrapperSites": ["wrapper@4"],
+      "next": { "reasons": ["registered-elsewhere"], "testsExcluded": 1 }
+    }
+  }
+}
