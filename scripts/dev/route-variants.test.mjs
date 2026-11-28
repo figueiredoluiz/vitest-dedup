@@ -4,10 +4,20 @@ import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'n
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { spawnSync } from 'node:child_process'
 import test from 'node:test'
 
 import { expectedProblems } from '../check/lib/oracle-cases.mjs'
-import { CASE_DIR, REGISTRATION_CASE_DIR, registrationVariants, variants, write } from './route-variants.mjs'
+import {
+  CASE_DIR,
+  REGISTRATION_CASE_DIR,
+  STORED_BUILDER_CASE_DIR,
+  registrationVariants,
+  storedBuilderKinds,
+  storedBuilderVariants,
+  variants,
+  write,
+} from './route-variants.mjs'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
 const dir = join(root, CASE_DIR)
@@ -35,6 +45,46 @@ test('generated registration forms have exact oracle pins and a directly compara
   const { files } = expected
   assert.deepEqual(Object.keys(files).sort(), Object.keys(generated).sort())
   assert.deepEqual(files['direct.test.ts'], { tasks: 2, wrapperSites: [], next: {} })
+})
+
+test('stored-builder routes are pinned, and Vitest collects the pair alone exactly on targets', () => {
+  const caseDir = join(root, STORED_BUILDER_CASE_DIR)
+  const generated = storedBuilderVariants()
+  assertGenerated(caseDir, generated)
+  const expected = JSON.parse(readFileSync(join(caseDir, 'expected.json'), 'utf8'))
+  assert.deepEqual(expectedProblems(expected, STORED_BUILDER_CASE_DIR), [])
+  assert.deepEqual(Object.keys(expected.files).sort(), Object.keys(generated).sort())
+  for (const [name, kind] of Object.entries(storedBuilderKinds())) {
+    assert.equal(expected.files[name].tasks, kind === 'target' ? 2 : 3, name)
+    if (kind !== 'target') assert.deepEqual(expected.files[name].next, {}, name)
+  }
+  assert.deepEqual(expected.files['plain--control.test.ts'], { tasks: 3, wrapperSites: [], next: {} })
+})
+
+test('each case flag writes its own generated files into the named directory', () => {
+  const script = join(root, 'scripts', 'dev', 'route-variants.mjs')
+  for (const [flag, generate] of [['--registration', registrationVariants], ['--stored-builder', storedBuilderVariants]]) {
+    const out = mkdtempSync(join(tmpdir(), 'route-variants-cli-'))
+    try {
+      const run = spawnSync(process.execPath, [script, flag, out], { encoding: 'utf8' })
+      assert.equal(run.status, 0, run.stderr)
+      assert.deepEqual(readdirSync(out).sort(), Object.keys(generate()).sort(), flag)
+    } finally {
+      rmSync(out, { recursive: true, force: true })
+    }
+  }
+})
+
+test('an output directory named like an object property writes the loop variants', () => {
+  const script = join(root, 'scripts', 'dev', 'route-variants.mjs')
+  const cwd = mkdtempSync(join(tmpdir(), 'route-variants-cwd-'))
+  try {
+    const run = spawnSync(process.execPath, [script, 'constructor'], { cwd, encoding: 'utf8' })
+    assert.equal(run.status, 0, run.stderr)
+    assert.deepEqual(readdirSync(join(cwd, 'constructor')).sort(), Object.keys(variants()).sort())
+  } finally {
+    rmSync(cwd, { recursive: true, force: true })
+  }
 })
 
 test('every variant is declared in expected.json, and each control is compared unrefused', () => {
