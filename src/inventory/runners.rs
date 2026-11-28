@@ -635,16 +635,36 @@ fn exported(parsed: &Parsed, name: &str) -> Result<Export, Refusal> {
                         )?))
                     }
                 } else if let Some(declaration) = tree.child(statement, "declaration") {
-                    let symbol = parsed.scopes.top_level(name).filter(|&symbol| {
-                        tree.span(declaration)
-                            .contains(parsed.scopes.symbol(symbol).span)
-                    });
-                    symbol
-                        .map(|symbol| {
-                            symbol_callable(parsed, symbol, None, &mut HashSet::new())
-                                .map(Export::Here)
-                        })
-                        .transpose()?
+                    let Some(symbol) = parsed.scopes.top_level(name) else {
+                        continue;
+                    };
+                    if tree.erased_declaration(declaration) {
+                        continue;
+                    }
+                    if tree.kind(declaration) == "FunctionDeclaration" {
+                        // A preceding erased declaration may own the representative span.
+                        let Some(id) = tree.child(declaration, "id") else {
+                            continue;
+                        };
+                        if parsed.scopes.name_at(tree.span(id).start)
+                            != Some(Name::Binding(Some(symbol)))
+                        {
+                            continue;
+                        }
+                        Some(Export::Here(callable(parsed, declaration, None)?))
+                    } else if tree
+                        .span(declaration)
+                        .contains(parsed.scopes.symbol(symbol).span)
+                    {
+                        Some(Export::Here(symbol_callable(
+                            parsed,
+                            symbol,
+                            None,
+                            &mut HashSet::new(),
+                        )?))
+                    } else {
+                        None
+                    }
                 } else {
                     None
                 }

@@ -58,16 +58,19 @@ impl Declared {
     }
 }
 
-/// Binding identifiers that declare a runtime value: an erased overload signature does not.
+/// Binding identifiers that declare a runtime value, omitting erased type and overload names.
 fn runtime_bindings<'a>(
     tree: &'a Tree,
     scopes: &'a Scopes,
 ) -> impl Iterator<Item = (SymbolId, Span)> + 'a {
     tree.nodes().filter_map(move |node| {
         if tree.kind(node) != "Identifier"
-            || tree
-                .parent(node)
-                .is_some_and(|parent| tree.kind(parent) == "TSDeclareFunction")
+            || tree.parent(node).is_some_and(|parent| {
+                matches!(
+                    tree.kind(parent),
+                    "TSDeclareFunction" | "TSInterfaceDeclaration" | "TSTypeAliasDeclaration"
+                ) && tree.erased_declaration(parent)
+            })
         {
             return None;
         }
