@@ -67,32 +67,44 @@ impl Normalizer<'_> {
                 let modifiers = self.modifiers(callee, member(call));
                 let arguments: Vec<NodeId> =
                     tree.list(call, "arguments").into_iter().flatten().collect();
-                self.activation(&modifiers, &arguments).within(enclosing)
+                let mut activation = self.activation(&modifiers, &arguments);
+                activation.may_skip |= modifiers.conditional_may_skip;
+                activation.within(enclosing)
             })
+    }
+
+    /// A conditional modifier only guarantees activation with one enabling boolean literal.
+    pub(super) fn condition_may_skip(&self, call: NodeId, member: NodeId) -> bool {
+        let enabling = match member_name(self.tree, member)
+            .and_then(|name| self.setting.dialect.chain_member(name))
+        {
+            Some(Chain::RunWhen) => true,
+            Some(Chain::SkipWhen) => false,
+            _ => return false,
+        };
+        match self.tree.list(call, "arguments").as_slice() {
+            [Some(argument)] => self.literal_boolean(*argument) != Some(enabling),
+            _ => true,
+        }
+    }
+
+    /// A boolean literal after removing transparent expression wrappers.
+    fn literal_boolean(&self, node: NodeId) -> Option<bool> {
+        match self.tree.field_of(self.tree.inner(node), "value") {
+            Field::Value(Value::Bool(value)) => Some(*value),
+            _ => None,
+        }
     }
 
     /// Requires enabling literal conditions and no option that might skip the suite.
     pub fn active_suite(&self, callee: NodeId, arguments: &[NodeId]) -> bool {
         let tree = self.tree;
-        let boolean = |node| match tree.field_of(tree.inner(node), "value") {
-            Field::Value(Value::Bool(value)) => Some(*value),
-            _ => None,
-        };
         let conditions_hold = std::iter::once(callee)
             .chain(tree.descendants(callee))
             .filter(|&node| tree.kind(node) == "CallExpression")
-            .filter_map(|node| {
-                let member = tree.inner(tree.child(node, "callee")?);
-                let name = member_name(tree, member)?;
-                match self.setting.dialect.chain_member(name)? {
-                    Chain::RunWhen => Some((node, true)),
-                    Chain::SkipWhen => Some((node, false)),
-                    _ => None,
-                }
-            })
-            .all(|(node, enabling)| {
-                let values = tree.list(node, "arguments");
-                values.len() == 1 && values[0].and_then(boolean) == Some(enabling)
+            .all(|node| {
+                tree.child(node, "callee")
+                    .is_none_or(|callee| !self.condition_may_skip(node, tree.inner(callee)))
             });
         if !conditions_hold {
             return false;
@@ -114,7 +126,10 @@ impl Normalizer<'_> {
                                 !matches!(
                                     self.setting.dialect.chain_member(name),
                                     Some(Chain::Skip | Chain::Todo)
-                                ) || tree.child(property, "value").and_then(boolean) == Some(false)
+                                ) || tree
+                                    .child(property, "value")
+                                    .and_then(|value| self.literal_boolean(value))
+                                    == Some(false)
                             })
                         })
                 }

@@ -10,6 +10,11 @@
       "wrapperSites": [],
       "next": {}
     },
+    "conditional-subsumption.test.ts": {
+      "tasks": 23,
+      "wrapperSites": [],
+      "next": {}
+    },
     "unrun-children.test.ts": {
       "tasks": 22,
       "wrapperSites": [],

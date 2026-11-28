@@ -231,6 +231,56 @@ fn owned_suite_conditions_and_options() {
     }
 }
 
+/// A condition on the enclosing suite withholds subsumption only when it might disable the suite.
+#[test]
+fn conditional_suites_refuse_unknown_subsumption() {
+    const PATH: &str = "conditional-subsumption.test.ts";
+    let source =
+        include_str!("../../../fixtures/oracle/duplicate-suites/conditional-subsumption.test.ts");
+    let corpus = read(source, 14);
+    assert!(corpus
+        .tests
+        .iter()
+        .all(|case| { case.exclusion.is_none() && !case.inert && case.trace_complete }));
+    let config = crate::config::Config {
+        root: ".".into(),
+        include: Vec::new(),
+        include_is_explicit: false,
+        exclude: Vec::new(),
+        rules: [(Rule::SubsumedTest, crate::model::Severity::Warning)].into(),
+        threshold: 100,
+        vitest_major: None,
+        source: "test".into(),
+    };
+    let findings =
+        crate::rules::run_with_hooks(&[(PATH.into(), corpus.tests)], &[], &[], &config, &[])
+            .findings;
+    assert!(findings
+        .iter()
+        .all(|finding| finding.rule == Rule::SubsumedTest));
+    let mut pairs: Vec<_> = findings
+        .iter()
+        .map(|finding| finding.titles.as_slice())
+        .collect();
+    pairs.sort();
+    assert_eq!(
+        pairs,
+        [
+            [
+                "literal skip disabled > small",
+                "literal skip disabled > large"
+            ]
+            .as_slice(),
+            [
+                "namespace run enabled > inner > small",
+                "namespace run enabled > inner > large"
+            ]
+            .as_slice(),
+            ["plain callback > small", "plain callback > large"].as_slice(),
+        ]
+    );
+}
+
 /// Renaming suite-local bindings preserves equality while unknown options and conditions refuse it.
 #[test]
 fn suite_local_names_and_unknown_activation() {
