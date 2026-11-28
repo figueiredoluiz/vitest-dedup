@@ -1,0 +1,581 @@
+{
+  "blindUnderCurrent": [
+    "plain--spy-on.test.ts",
+    "sequence--control.test.ts",
+    "sequence--spy-on.test.ts",
+    "sequence--unrelated-object.test.ts"
+  ],
+  "files": {
+    "plain--after-call.test.ts": {
+      "tasks": 3,
+      "wrapperSites": [],
+      "next": {},
+      "nextToday": {
+        "reasons": [
+          "registered-elsewhere"
+        ],
+        "testsExcluded": 1
+      },
+      "waitsOn": "telling a write that cannot reach the captured builder from one that can"
+    },
+    "plain--assigned.test.ts": {
+      "tasks": 2,
+      "wrapperSites": [],
+      "next": {
+        "reasons": [
+          "registered-elsewhere"
+        ],
+        "testsExcluded": 1
+      }
+    },
+    "plain--builder-property.test.ts": {
+      "tasks": 3,
+      "wrapperSites": [],
+      "next": {},
+      "nextToday": {
+        "reasons": [
+          "registered-elsewhere"
+        ],
+        "testsExcluded": 1
+      },
+      "waitsOn": "telling a write that cannot reach the captured builder from one that can"
+    },
+    "plain--called-patch.test.ts": {
+      "tasks": 2,
+      "wrapperSites": [],
+      "next": {
+        "reasons": [
+          "registered-elsewhere"
+        ],
+        "testsExcluded": 1
+      }
+    },
+    "plain--computed-key.test.ts": {
+      "tasks": 2,
+      "wrapperSites": [],
+      "next": {
+        "reasons": [
+          "registered-elsewhere"
+        ],
+        "testsExcluded": 1
+      }
+    },
+    "plain--const-alias.test.ts": {
+      "tasks": 2,
+      "wrapperSites": [],
+      "next": {
+        "reasons": [
+          "registered-elsewhere"
+        ],
+        "testsExcluded": 1
+      }
+    },
+    "plain--control.test.ts": {
+      "tasks": 3,
+      "wrapperSites": [],
+      "next": {}
+    },
+    "plain--dead-branch.test.ts": {
+      "tasks": 3,
+      "wrapperSites": [],
+      "next": {},
+      "nextToday": {
+        "reasons": [
+          "registered-elsewhere"
+        ],
+        "testsExcluded": 1
+      },
+      "waitsOn": "telling a write that cannot reach the captured builder from one that can"
+    },
+    "plain--define-getter-computed.test.ts": {
+      "tasks": 2,
+      "wrapperSites": [],
+      "next": {}
+    },
+    "plain--define-getter.test.ts": {
+      "tasks": 2,
+      "wrapperSites": [],
+      "next": {}
+    },
+    "plain--define-property.test.ts": {
+      "tasks": 2,
+      "wrapperSites": [],
+      "next": {
+        "reasons": [
+          "registered-elsewhere"
+        ],
+        "testsExcluded": 1
+      }
+    },
+    "plain--dynamic-import.test.ts": {
+      "tasks": 2,
+      "wrapperSites": [],
+      "next": {}
+    },
+    "plain--import-actual.test.ts": {
+      "tasks": 2,
+      "wrapperSites": [],
+      "next": {}
+    },
+    "plain--namespace.test.ts": {
+      "tasks": 2,
+      "wrapperSites": [],
+      "next": {
+        "reasons": [
+          "registered-elsewhere"
+        ],
+        "testsExcluded": 1
+      }
+    },
+    "plain--neutral-dynamic-import.test.ts": {
+      "tasks": 3,
+      "wrapperSites": [],
+      "next": {}
+    },
+    "plain--neutral-import.test.ts": {
+      "tasks": 3,
+      "wrapperSites": [],
+      "next": {}
+    },
+    "plain--object-assign.test.ts": {
+      "tasks": 2,
+      "wrapperSites": [],
+      "next": {
+        "reasons": [
+          "registered-elsewhere"
+        ],
+        "testsExcluded": 1
+      }
+    },
+    "plain--project-named.test.ts": {
+      "tasks": 2,
+      "wrapperSites": [],
+      "next": {
+        "reasons": [
+          "registered-elsewhere"
+        ],
+        "testsExcluded": 1
+      }
+    },
+    "plain--project-namespace.test.ts": {
+      "tasks": 2,
+      "wrapperSites": [],
+      "next": {}
+    },
+    "plain--reflect-set.test.ts": {
+      "tasks": 2,
+      "wrapperSites": [],
+      "next": {
+        "reasons": [
+          "registered-elsewhere"
+        ],
+        "testsExcluded": 1
+      }
+    },
+    "plain--replacing-dynamic-import.test.ts": {
+      "tasks": 2,
+      "wrapperSites": [],
+      "next": {}
+    },
+    "plain--replacing-import.test.ts": {
+      "tasks": 2,
+      "wrapperSites": [],
+      "next": {}
+    },
+    "plain--spy-on.test.ts": {
+      "tasks": 2,
+      "wrapperSites": [
+        "wrapper@5"
+      ],
+      "next": {
+        "reasons": [
+          "registered-elsewhere",
+          "helper-effects-unproved"
+        ],
+        "testsExcluded": 5
+      }
+    },
+    "plain--uncalled-patch.test.ts": {
+      "tasks": 3,
+      "wrapperSites": [],
+      "next": {},
+      "nextToday": {
+        "reasons": [
+          "registered-elsewhere"
+        ],
+        "testsExcluded": 1
+      },
+      "waitsOn": "telling a write that cannot reach the captured builder from one that can"
+    },
+    "plain--unrelated-object.test.ts": {
+      "tasks": 3,
+      "wrapperSites": [],
+      "next": {}
+    },
+    "sequence--after-call.test.ts": {
+      "tasks": 3,
+      "wrapperSites": [],
+      "next": {},
+      "nextToday": {
+        "reasons": [
+          "registered-elsewhere"
+        ],
+        "testsExcluded": 1
+      },
+      "waitsOn": "telling a write that cannot reach the captured builder from one that can"
+    },
+    "sequence--assigned.test.ts": {
+      "tasks": 2,
+      "wrapperSites": [],
+      "next": {
+        "reasons": [
+          "registered-elsewhere"
+        ],
+        "testsExcluded": 1
+      }
+    },
+    "sequence--builder-property.test.ts": {
+      "tasks": 3,
+      "wrapperSites": [],
+      "next": {},
+      "nextToday": {
+        "reasons": [
+          "registered-elsewhere"
+        ],
+        "testsExcluded": 1
+      },
+      "waitsOn": "telling a write that cannot reach the captured builder from one that can"
+    },
+    "sequence--called-patch.test.ts": {
+      "tasks": 2,
+      "wrapperSites": [],
+      "next": {
+        "reasons": [
+          "registered-elsewhere"
+        ],
+        "testsExcluded": 1
+      }
+    },
+    "sequence--computed-key.test.ts": {
+      "tasks": 2,
+      "wrapperSites": [],
+      "next": {
+        "reasons": [
+          "registered-elsewhere"
+        ],
+        "testsExcluded": 1
+      }
+    },
+    "sequence--const-alias.test.ts": {
+      "tasks": 2,
+      "wrapperSites": [],
+      "next": {
+        "reasons": [
+          "registered-elsewhere"
+        ],
+        "testsExcluded": 1
+      }
+    },
+    "sequence--control.test.ts": {
+      "tasks": 3,
+      "wrapperSites": [],
+      "next": {},
+      "nextToday": {
+        "reasons": [
+          "registered-elsewhere",
+          "helper-effects-unproved"
+        ],
+        "testsExcluded": 3
+      },
+      "waitsOn": "the stored fixture builder admission keeping the file's independent tests comparable",
+      "wrapperSitesToday": [
+        "wrapper@5"
+      ]
+    },
+    "sequence--dead-branch.test.ts": {
+      "tasks": 3,
+      "wrapperSites": [],
+      "next": {},
+      "nextToday": {
+        "reasons": [
+          "registered-elsewhere"
+        ],
+        "testsExcluded": 1
+      },
+      "waitsOn": "telling a write that cannot reach the captured builder from one that can"
+    },
+    "sequence--define-getter-computed.test.ts": {
+      "tasks": 2,
+      "wrapperSites": [],
+      "next": {}
+    },
+    "sequence--define-getter.test.ts": {
+      "tasks": 2,
+      "wrapperSites": [],
+      "next": {}
+    },
+    "sequence--define-property.test.ts": {
+      "tasks": 2,
+      "wrapperSites": [],
+      "next": {
+        "reasons": [
+          "registered-elsewhere"
+        ],
+        "testsExcluded": 1
+      }
+    },
+    "sequence--dynamic-import.test.ts": {
+      "tasks": 2,
+      "wrapperSites": [],
+      "next": {}
+    },
+    "sequence--import-actual.test.ts": {
+      "tasks": 2,
+      "wrapperSites": [],
+      "next": {}
+    },
+    "sequence--namespace.test.ts": {
+      "tasks": 2,
+      "wrapperSites": [],
+      "next": {
+        "reasons": [
+          "registered-elsewhere"
+        ],
+        "testsExcluded": 1
+      }
+    },
+    "sequence--neutral-dynamic-import.test.ts": {
+      "tasks": 3,
+      "wrapperSites": [],
+      "next": {}
+    },
+    "sequence--neutral-import.test.ts": {
+      "tasks": 3,
+      "wrapperSites": [],
+      "next": {}
+    },
+    "sequence--object-assign.test.ts": {
+      "tasks": 2,
+      "wrapperSites": [],
+      "next": {
+        "reasons": [
+          "registered-elsewhere"
+        ],
+        "testsExcluded": 1
+      }
+    },
+    "sequence--project-named.test.ts": {
+      "tasks": 2,
+      "wrapperSites": [],
+      "next": {
+        "reasons": [
+          "registered-elsewhere"
+        ],
+        "testsExcluded": 1
+      }
+    },
+    "sequence--project-namespace.test.ts": {
+      "tasks": 2,
+      "wrapperSites": [],
+      "next": {}
+    },
+    "sequence--reflect-set.test.ts": {
+      "tasks": 2,
+      "wrapperSites": [],
+      "next": {
+        "reasons": [
+          "registered-elsewhere"
+        ],
+        "testsExcluded": 1
+      }
+    },
+    "sequence--replacing-dynamic-import.test.ts": {
+      "tasks": 2,
+      "wrapperSites": [],
+      "next": {}
+    },
+    "sequence--replacing-import.test.ts": {
+      "tasks": 2,
+      "wrapperSites": [],
+      "next": {}
+    },
+    "sequence--spy-on.test.ts": {
+      "tasks": 2,
+      "wrapperSites": [
+        "wrapper@5"
+      ],
+      "next": {
+        "reasons": [
+          "registered-elsewhere",
+          "helper-effects-unproved"
+        ],
+        "testsExcluded": 4
+      }
+    },
+    "sequence--uncalled-patch.test.ts": {
+      "tasks": 3,
+      "wrapperSites": [],
+      "next": {},
+      "nextToday": {
+        "reasons": [
+          "registered-elsewhere"
+        ],
+        "testsExcluded": 1
+      },
+      "waitsOn": "telling a write that cannot reach the captured builder from one that can"
+    },
+    "sequence--unrelated-object.test.ts": {
+      "tasks": 3,
+      "wrapperSites": [],
+      "next": {},
+      "nextToday": {
+        "reasons": [
+          "registered-elsewhere",
+          "helper-effects-unproved"
+        ],
+        "testsExcluded": 3
+      },
+      "waitsOn": "the stored fixture builder admission keeping the file's independent tests comparable",
+      "wrapperSitesToday": [
+        "wrapper@8"
+      ]
+    }
+  },
+  "knownSites": [
+    {
+      "path": "sequence--after-call.test.ts",
+      "kind": "missing-site",
+      "item": "test@5",
+      "reason": "The sequence capture is refused with no site for the stored call.",
+      "waitsOn": "telling a write that cannot reach the captured builder from one that can"
+    },
+    {
+      "path": "sequence--builder-property.test.ts",
+      "kind": "missing-site",
+      "item": "test@7",
+      "reason": "The sequence capture is refused with no site for the stored call.",
+      "waitsOn": "telling a write that cannot reach the captured builder from one that can"
+    },
+    {
+      "path": "sequence--dead-branch.test.ts",
+      "kind": "missing-site",
+      "item": "test@9",
+      "reason": "The sequence capture is refused with no site for the stored call.",
+      "waitsOn": "telling a write that cannot reach the captured builder from one that can"
+    },
+    {
+      "path": "sequence--neutral-dynamic-import.test.ts",
+      "kind": "missing-site",
+      "item": "test@7",
+      "reason": "A project import makes the sequence admission decline without recording the stored call as unproven.",
+      "waitsOn": "reading project imports that never touch Vitest as unable to replace the builder"
+    },
+    {
+      "path": "sequence--neutral-import.test.ts",
+      "kind": "missing-site",
+      "item": "test@6",
+      "reason": "A project import makes the sequence admission decline without recording the stored call as unproven.",
+      "waitsOn": "reading project imports that never touch Vitest as unable to replace the builder"
+    },
+    {
+      "path": "sequence--uncalled-patch.test.ts",
+      "kind": "missing-site",
+      "item": "test@11",
+      "reason": "The sequence capture is refused with no site for the stored call.",
+      "waitsOn": "telling a write that cannot reach the captured builder from one that can"
+    }
+  ],
+  "knownTitles": [
+    {
+      "path": "plain--define-getter-computed.test.ts",
+      "kind": "extra-test",
+      "item": "extend",
+      "reason": "The direct registration inventory treats the inherited getter-definition method as a test call.",
+      "waitsOn": "distinguishing known registration members from arbitrary receiver methods"
+    },
+    {
+      "path": "plain--define-getter-computed.test.ts",
+      "kind": "extra-test",
+      "item": "stored",
+      "reason": "The plain stored builder is admitted although the define-getter-computed route replaces it before capture.",
+      "waitsOn": "checking receiver uses before admitting a plain stored fixture builder"
+    },
+    {
+      "path": "plain--define-getter.test.ts",
+      "kind": "extra-test",
+      "item": "extend",
+      "reason": "The direct registration inventory treats the inherited getter-definition method as a test call.",
+      "waitsOn": "distinguishing known registration members from arbitrary receiver methods"
+    },
+    {
+      "path": "plain--define-getter.test.ts",
+      "kind": "extra-test",
+      "item": "stored",
+      "reason": "The plain stored builder is admitted although the define-getter route replaces it before capture.",
+      "waitsOn": "checking receiver uses before admitting a plain stored fixture builder"
+    },
+    {
+      "path": "plain--dynamic-import.test.ts",
+      "kind": "extra-test",
+      "item": "stored",
+      "reason": "The plain stored builder is admitted although the dynamic-import route replaces it before capture.",
+      "waitsOn": "checking receiver uses before admitting a plain stored fixture builder"
+    },
+    {
+      "path": "plain--import-actual.test.ts",
+      "kind": "extra-test",
+      "item": "stored",
+      "reason": "The plain stored builder is admitted although the import-actual route replaces it before capture.",
+      "waitsOn": "checking receiver uses before admitting a plain stored fixture builder"
+    },
+    {
+      "path": "plain--project-namespace.test.ts",
+      "kind": "extra-test",
+      "item": "stored",
+      "reason": "The plain stored builder is admitted although the project-namespace route replaces it before capture.",
+      "waitsOn": "checking receiver uses before admitting a plain stored fixture builder"
+    },
+    {
+      "path": "plain--replacing-dynamic-import.test.ts",
+      "kind": "extra-test",
+      "item": "stored",
+      "reason": "The plain stored builder is admitted although the replacing-dynamic-import route replaces it before capture.",
+      "waitsOn": "checking receiver uses before admitting a plain stored fixture builder"
+    },
+    {
+      "path": "plain--replacing-import.test.ts",
+      "kind": "extra-test",
+      "item": "stored",
+      "reason": "The plain stored builder is admitted although the replacing-import route replaces it before capture.",
+      "waitsOn": "checking receiver uses before admitting a plain stored fixture builder"
+    },
+    {
+      "path": "sequence--define-getter-computed.test.ts",
+      "kind": "extra-test",
+      "item": "extend",
+      "reason": "The direct registration inventory treats the inherited getter-definition method as a test call.",
+      "waitsOn": "distinguishing known registration members from arbitrary receiver methods"
+    },
+    {
+      "path": "sequence--define-getter.test.ts",
+      "kind": "extra-test",
+      "item": "extend",
+      "reason": "The direct registration inventory treats the inherited getter-definition method as a test call.",
+      "waitsOn": "distinguishing known registration members from arbitrary receiver methods"
+    },
+    {
+      "path": "sequence--neutral-dynamic-import.test.ts",
+      "kind": "missing-test",
+      "item": "stored",
+      "reason": "A project import makes the sequence admission decline without recording the stored call as unproven.",
+      "waitsOn": "reading project imports that never touch Vitest as unable to replace the builder"
+    },
+    {
+      "path": "sequence--neutral-import.test.ts",
+      "kind": "missing-test",
+      "item": "stored",
+      "reason": "A project import makes the sequence admission decline without recording the stored call as unproven.",
+      "waitsOn": "reading project imports that never touch Vitest as unable to replace the builder"
+    }
+  ]
+}

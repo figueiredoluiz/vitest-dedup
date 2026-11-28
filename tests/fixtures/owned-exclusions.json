@@ -1,5 +1,155 @@
 {
   "files": {
+    "oracle/stored-builder-routes/plain--after-call.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [],
+      "testsExcluded": 1
+    },
+    "oracle/stored-builder-routes/plain--assigned.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [],
+      "testsExcluded": 1
+    },
+    "oracle/stored-builder-routes/plain--builder-property.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [],
+      "testsExcluded": 1
+    },
+    "oracle/stored-builder-routes/plain--called-patch.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [],
+      "testsExcluded": 1
+    },
+    "oracle/stored-builder-routes/plain--computed-key.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [],
+      "testsExcluded": 1
+    },
+    "oracle/stored-builder-routes/plain--const-alias.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [],
+      "testsExcluded": 1
+    },
+    "oracle/stored-builder-routes/plain--dead-branch.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [],
+      "testsExcluded": 1
+    },
+    "oracle/stored-builder-routes/plain--define-property.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [],
+      "testsExcluded": 1
+    },
+    "oracle/stored-builder-routes/plain--namespace.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [],
+      "testsExcluded": 1
+    },
+    "oracle/stored-builder-routes/plain--object-assign.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [],
+      "testsExcluded": 1
+    },
+    "oracle/stored-builder-routes/plain--project-named.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [],
+      "testsExcluded": 1
+    },
+    "oracle/stored-builder-routes/plain--reflect-set.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [],
+      "testsExcluded": 1
+    },
+    "oracle/stored-builder-routes/plain--spy-on.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": ["helper-effects-unproved"],
+      "testsExcluded": 5
+    },
+    "oracle/stored-builder-routes/plain--uncalled-patch.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [],
+      "testsExcluded": 1
+    },
+    "oracle/stored-builder-routes/sequence--after-call.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [],
+      "testsExcluded": 1
+    },
+    "oracle/stored-builder-routes/sequence--assigned.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [],
+      "testsExcluded": 1
+    },
+    "oracle/stored-builder-routes/sequence--builder-property.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [],
+      "testsExcluded": 1
+    },
+    "oracle/stored-builder-routes/sequence--called-patch.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [],
+      "testsExcluded": 1
+    },
+    "oracle/stored-builder-routes/sequence--computed-key.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [],
+      "testsExcluded": 1
+    },
+    "oracle/stored-builder-routes/sequence--const-alias.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [],
+      "testsExcluded": 1
+    },
+    "oracle/stored-builder-routes/sequence--control.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": ["helper-effects-unproved"],
+      "testsExcluded": 3
+    },
+    "oracle/stored-builder-routes/sequence--dead-branch.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [],
+      "testsExcluded": 1
+    },
+    "oracle/stored-builder-routes/sequence--define-property.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [],
+      "testsExcluded": 1
+    },
+    "oracle/stored-builder-routes/sequence--namespace.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [],
+      "testsExcluded": 1
+    },
+    "oracle/stored-builder-routes/sequence--object-assign.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [],
+      "testsExcluded": 1
+    },
+    "oracle/stored-builder-routes/sequence--project-named.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [],
+      "testsExcluded": 1
+    },
+    "oracle/stored-builder-routes/sequence--reflect-set.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [],
+      "testsExcluded": 1
+    },
+    "oracle/stored-builder-routes/sequence--spy-on.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": ["helper-effects-unproved"],
+      "testsExcluded": 4
+    },
+    "oracle/stored-builder-routes/sequence--uncalled-patch.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": [],
+      "testsExcluded": 1
+    },
+    "oracle/stored-builder-routes/sequence--unrelated-object.test.ts": {
+      "reason": "registered-elsewhere",
+      "otherReasons": ["helper-effects-unproved"],
+      "testsExcluded": 3
+    },
     "oracle/stored-builder-producer-load/load.test.ts": {
       "reason": "registered-elsewhere",
       "otherReasons": [],

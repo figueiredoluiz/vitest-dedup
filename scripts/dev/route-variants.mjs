@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Writes generated route variants for the loop and registration oracle cases.
+// Writes generated route variants for the loop, registration and stored-builder oracle cases.
 //
 // The positive is a loop over a `const` array registering a test once per element. Each variant
 // applies one route through which that count stops holding, or may stop holding: the array is
@@ -8,8 +8,12 @@
 // judges each file against `fixtures/oracle/loop-routes/expected.json`: Vitest's count and the
 // analyzer's either agree or the analyzer refuses the file.
 //
-// Usage: node scripts/dev/route-variants.mjs [--registration] [out-dir].
-// Without --registration it rewrites the loop case.
+// The stored-builder case holds a fixture builder in a `const` and registers through it beside a
+// direct duplicate pair. Target routes replace `test.extend` before the capture, so Vitest
+// collects only the pair; neighbour routes write nearby and leave the captured builder intact.
+//
+// Usage: node scripts/dev/route-variants.mjs [--registration | --stored-builder] [out-dir].
+// Without a flag it rewrites the loop case.
 // `route-variants.test.mjs` fails when the committed files differ from what this writes.
 import { mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
@@ -116,6 +120,75 @@ export function registrationVariants() {
   ]))
 }
 
+/** The stored-builder case directory, relative to the checkout. */
+export const STORED_BUILDER_CASE_DIR = 'fixtures/oracle/stored-builder-routes'
+
+/** The two capture forms: the sequence admission and the plain fixture-extension origin. */
+const CAPTURES = { sequence: '(0, test.extend({}))', plain: 'test.extend({})' }
+
+const NOOP_BUILDER = '() => () => {}'
+
+/**
+ * Statements placed before (`before`) or after (`after`) the stored call, and extra imports.
+ * Target routes replace the builder before capture; neighbour routes leave it intact.
+ */
+const BUILDER_ROUTES = {
+  control: { kind: 'control' },
+  assigned: { kind: 'target', before: `test.extend = ${NOOP_BUILDER}` },
+  'computed-key': { kind: 'target', before: `test['extend'] = ${NOOP_BUILDER}` },
+  'define-property': { kind: 'target', before: `Object.defineProperty(test, 'extend', { value: ${NOOP_BUILDER} })` },
+  'object-assign': { kind: 'target', before: `Object.assign(test, { extend: ${NOOP_BUILDER} })` },
+  'reflect-set': { kind: 'target', before: `Reflect.set(test, 'extend', ${NOOP_BUILDER})` },
+  'define-getter': { kind: 'target', before: `test.__defineGetter__('extend', () => ${NOOP_BUILDER})` },
+  'define-getter-computed': { kind: 'target', before: `test['__defineGetter__']('extend', () => ${NOOP_BUILDER})` },
+  'dynamic-import': { kind: 'target', before: `const { test: other } = await import('vitest')\nother.extend = ${NOOP_BUILDER}` },
+  'import-actual': {
+    kind: 'target',
+    imports: "import { vi } from 'vitest'",
+    before: `const { test: other } = await vi.importActual<typeof import('vitest')>('vitest')\nother.extend = ${NOOP_BUILDER}`,
+  },
+  'project-namespace': { kind: 'target', imports: "import * as helper from './project-reexport'", before: `helper.other.extend = ${NOOP_BUILDER}` },
+  'project-named': { kind: 'target', imports: "import { other } from './project-reexport'", before: `other.extend = ${NOOP_BUILDER}` },
+  'replacing-import': { kind: 'target', imports: "import './replace-extend'" },
+  'replacing-dynamic-import': { kind: 'target', before: "await import('./replace-extend')" },
+  'const-alias': { kind: 'target', before: `const alias = test\nalias.extend = ${NOOP_BUILDER}` },
+  namespace: { kind: 'target', imports: "import * as vitest from 'vitest'", before: `vitest.test.extend = ${NOOP_BUILDER}` },
+  'called-patch': { kind: 'target', before: `/** Replaces the fixture builder. */\nfunction patch() {\n  test.extend = ${NOOP_BUILDER}\n}\npatch()` },
+  'spy-on': { kind: 'target', imports: "import { vi } from 'vitest'", before: `vi.spyOn(test, 'extend').mockImplementation(${NOOP_BUILDER})` },
+  'unrelated-object': { kind: 'neighbour', before: `const other = { extend: 1 }\nother.extend = 2` },
+  'after-call': { kind: 'neighbour', after: `test.extend = ${NOOP_BUILDER}` },
+  'uncalled-patch': { kind: 'neighbour', before: `/** Replaces the fixture builder. */\nfunction patch() {\n  test.extend = ${NOOP_BUILDER}\n}\nvoid patch` },
+  'dead-branch': { kind: 'neighbour', before: `if (false) {\n  test.extend = ${NOOP_BUILDER}\n}` },
+  'builder-property': { kind: 'neighbour', before: "Object.defineProperty(test.extend, 'marker', { value: 1 })" },
+  'neutral-import': { kind: 'neighbour', imports: "import './neutral'" },
+  'neutral-dynamic-import': { kind: 'neighbour', before: "await import('./neutral')" },
+}
+
+/** Each builder route through each capture form, with a direct duplicate pair in every file. */
+export function storedBuilderVariants() {
+  const files = {}
+  for (const [route, { kind, imports, before, after }] of Object.entries(BUILDER_ROUTES)) {
+    for (const [form, capture] of Object.entries(CAPTURES)) {
+      const statements = [
+        before,
+        `const run = ${capture}\nrun('stored', () => expect(1).toBe(1))`,
+        after,
+        "test('direct left', () => expect(2).toBe(2))\ntest('direct right', () => expect(2).toBe(2))",
+      ].filter(Boolean)
+      files[`${form}--${route}.test.ts`] =
+        `// Generated by scripts/dev/route-variants.mjs --stored-builder (route ${route}, ${kind}, form ${form}); do not edit.\n` +
+        `import { expect, test } from 'vitest'\n${imports ? `${imports}\n` : ''}\n${statements.join('\n\n')}\n`
+    }
+  }
+  return files
+}
+
+/** The route kind of each stored-builder variant file. */
+export function storedBuilderKinds() {
+  return Object.fromEntries(Object.entries(BUILDER_ROUTES).flatMap(([route, { kind }]) =>
+    Object.keys(CAPTURES).map((form) => [`${form}--${route}.test.ts`, kind])))
+}
+
 /** Rewrites the variant files under `out`, leaving `expected.json` and any other file alone. */
 export function write(out, files = variants()) {
   mkdirSync(out, { recursive: true })
@@ -124,9 +197,14 @@ export function write(out, files = variants()) {
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  const registration = process.argv[2] === '--registration'
-  const files = registration ? registrationVariants() : variants()
-  const out = resolve(process.argv[registration ? 3 : 2] ?? join(ROOT, registration ? REGISTRATION_CASE_DIR : CASE_DIR))
+  const cases = new Map([
+    ['--registration', [registrationVariants, REGISTRATION_CASE_DIR]],
+    ['--stored-builder', [storedBuilderVariants, STORED_BUILDER_CASE_DIR]],
+  ])
+  const flagged = cases.get(process.argv[2])
+  const [generate, caseDir] = flagged ?? [variants, CASE_DIR]
+  const files = generate()
+  const out = resolve(process.argv[flagged ? 3 : 2] ?? join(ROOT, caseDir))
   write(out, files)
   console.log(`${Object.keys(files).length} variants in ${out}`)
 }
