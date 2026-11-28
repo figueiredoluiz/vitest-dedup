@@ -59,12 +59,9 @@
 //! The summary record carries `modes` ([`crate::model::ModeSummary`]) for the same reason
 //! `incomplete` and `unresolvedTests` are there — a silence needs a reason attached to it.
 //!
-//! `blindFiles` counts files in which *every* executable test was excluded. It is separate from
-//! `unresolvedTests` because the two describe different failures: a partially excluded file still
-//! emits findings that carry the qualification with them, while a wholly excluded one emits no
-//! finding at all — among the findings it is indistinguishable, to a consumer, from a file that was
-//! compared and came back clean, which is what the `"excluded-file"` records below are for. The
-//! names are also on stderr, sanitized, for a human; this is the number a gate acts on.
+//! `blindFiles` counts files with a counted exclusion and no comparable test bodies. Empty test
+//! bodies and tests without a callback still contribute to `testsTotal`. The `"excluded-file"`
+//! records and stderr name these files so they are visible even when no finding mentions them.
 //! `withheldUnchanged` counts findings this stream deliberately does **not** contain, and is the
 //! only way a consumer can tell "there is nothing wrong in the files you changed" from "there is
 //! nothing wrong". Both are closed, tool-owned counters, never analyzed-repository text.
@@ -417,7 +414,7 @@ impl Reporter for JsonlReporter {
             let record = JsonlExcludedFileRecord {
                 record_type: "excluded-file",
                 schema_version: JSONL_SCHEMA_VERSION,
-                file: JsonExcludedFile::from(file),
+                file: JsonExcludedFile::from_file(file, &result.blind_files),
                 content_notice: EXCLUDED_FILE_CONTENT_NOTICE,
             };
             serde_json::to_writer(&mut *writer, &record)?;
@@ -1067,7 +1064,7 @@ mod tests {
     /// nothing was excluded.
     #[test]
     fn excluded_file_records_sit_between_the_findings_and_the_summary() {
-        use crate::model::{ExcludedFile, ExclusionReason, ExclusionSummary};
+        use crate::model::{BlindFile, ExcludedFile, ExclusionReason, ExclusionSummary};
         let mut result = sample_result();
         let clean = render_lines(&result);
         assert!(clean.iter().all(|line| line["type"] != "excluded-file"));
@@ -1078,6 +1075,10 @@ mod tests {
             detail: "it calls itself\u{1b}[31m".to_owned(),
             tests_excluded: 2,
             tests_total: 2,
+        }];
+        result.blind_files = vec![BlindFile {
+            path: result.excluded_files[0].path.clone(),
+            tests: 2,
         }];
         result.exclusions = ExclusionSummary {
             files: 1,

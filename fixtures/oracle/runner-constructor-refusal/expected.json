@@ -5,6 +5,26 @@
       "wrapperSites": [],
       "next": { "reasons": ["registered-elsewhere"], "testsExcluded": 1 }
     },
+    "inert-only.test.ts": {
+      "tasks": 2,
+      "wrapperSites": [],
+      "next": {}
+    },
+    "mixed-empty.test.ts": {
+      "tasks": 2,
+      "wrapperSites": [],
+      "next": { "reasons": ["registered-elsewhere"], "testsExcluded": 1 }
+    },
+    "mixed-live.test.ts": {
+      "tasks": 4,
+      "wrapperSites": [],
+      "next": { "reasons": ["registered-elsewhere"], "testsExcluded": 1 }
+    },
+    "mixed-todo.test.ts": {
+      "tasks": 2,
+      "wrapperSites": [],
+      "next": { "reasons": ["registered-elsewhere"], "testsExcluded": 1 }
+    },
     "plain.test.ts": {
       "tasks": 2,
       "wrapperSites": ["wrapper@3", "wrapper@4"],
@@ -18,7 +38,28 @@
       "item": "test@3",
       "reason": "Vitest registers the constructor call. The analyzer cannot prove the runner's receiver context at that call.",
       "waitsOn": "constructor registration site accounting with a proved receiver context"
+    },
+    {
+      "path": "mixed-empty.test.ts",
+      "kind": "missing-site",
+      "item": "test@4",
+      "reason": "Vitest registers the constructor call beside an empty test body.",
+      "waitsOn": "constructor registration site accounting with a proved receiver context"
+    },
+    {
+      "path": "mixed-live.test.ts",
+      "kind": "missing-site",
+      "item": "test@4",
+      "reason": "Vitest registers the constructor call beside comparable body controls.",
+      "waitsOn": "constructor registration site accounting with a proved receiver context"
+    },
+    {
+      "path": "mixed-todo.test.ts",
+      "kind": "missing-site",
+      "item": "test@4",
+      "reason": "Vitest registers the constructor call beside a todo.",
+      "waitsOn": "constructor registration site accounting with a proved receiver context"
     }
   ],
-  "blindUnderCurrent": ["constructor.test.ts"]
+  "blindUnderCurrent": ["constructor.test.ts", "mixed-empty.test.ts", "mixed-todo.test.ts"]
 }

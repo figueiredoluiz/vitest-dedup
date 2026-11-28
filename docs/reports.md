@@ -71,7 +71,7 @@ Lists are bounded with explicit omission counts:
 
 - at most 20 immediate read failures
 - at most 20 deferred diagnostic messages
-- at most 10 wholly excluded files
+- at most 10 blind files
 - at most 10 files containing only statically empty tables
 
 Counts describe all affected messages and files, including omitted entries; display limits do not

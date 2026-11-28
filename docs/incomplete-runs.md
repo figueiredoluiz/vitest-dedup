@@ -15,8 +15,8 @@ How each reporter says so:
 | `json`, `jsonl` | The `incomplete` flag, plus `incompleteCauses`, which enumerates the reasons, counted. Excluded files are listed, up to 10,000; see [Excluded files](#excluded-files). |
 | `sarif` | `runs[0].invocations[0].properties.incomplete` and `incompleteCauses`, keyed as in the `json` report. |
 
-`--fail-on-incomplete` turns the flag into a non-zero exit. A file in which every test was excluded
-is a blind spot; see [Blind spots](#blind-spots).
+`--fail-on-incomplete` turns the flag into a non-zero exit. See [Blind spots](#blind-spots) for
+files with exclusions that leave no comparable test bodies.
 
 Calls through logical expressions with a recognized registration result are counted as unresolved.
 Conditional result arms nested inside those expressions are followed, without evaluating guards.
@@ -70,14 +70,14 @@ drained once per run, so the reports describe one analysis per process.
 
 ### Blind spots
 
-A file in which every test was excluded produced no findings. It is named in the `json` and `jsonl` excluded-file list, but nowhere among the findings.
-Blind spots are named on stderr, worst first, counted in the `blindFiles` field of the `json` and
-`jsonl` summaries, and gated by `--fail-on-incomplete=reads`, since a wholly excluded file is the
-extreme form of an unresolved-context cause.
+A file is blind when it has an excluded test and no comparable test body. Empty bodies and tests
+without callbacks still count toward `testsTotal`. Name rules can still report findings for those
+tests. Blind spots are named on stderr, worst first, and counted in `blindFiles` in the `json` and
+`jsonl` summaries. The unresolved exclusions are gated by `--fail-on-incomplete=reads`.
 
 ### Excluded files
 
-The terminal names at most ten wholly excluded files and twenty diagnostics. The `json` and `jsonl`
+The terminal names at most ten blind files and twenty diagnostics. The `json` and `jsonl`
 reports list the files that were excluded from comparison in whole or in part, up to 10,000 of
 them, each with a reason code, so a run that excluded half a project can be triaged from the report
 alone. Past the cap the files with the fewest excluded tests are left out of the list and counted in
